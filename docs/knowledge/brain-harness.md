@@ -1,6 +1,6 @@
 # 大脑侧链路知识（headless / 按需挂载 / 两段式）
 
-> 手机执行 harness 的设计素材集。执行 harness 本身尚未立项（下一个 brainstorm 重点）；本册记录已验证的链路和已定的原则。
+> 手机执行 harness 的设计素材集；harness 已立项落地（设计：[../specs/2026-07-17-执行harness-design.md](../specs/2026-07-17-执行harness-design.md)，入口 `scripts/dispatch.ps1`）。本册继续记录大脑侧链路的坑与原则。
 
 ## 已验证：headless 派单链路（M0 发现 #11）
 
@@ -28,6 +28,13 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 2. 全量 trace 落盘 `docs/runs/`，只让摘要进派单方上下文。
 3. 每次派单记录 token/成本（JSON 计量），持续校准 [cost.md](cost.md)。
 
-## 待设计（执行 harness 立项时）
+## 执行 harness（2026-07-17 已落地）
 
-派单脚本形态（PowerShell wrapper？）、计量协议、trace 落盘格式、失败重试与步数上限、与 M1 App 确认层的衔接、Codex 对照通道。
+设计与协议全文见 [../specs/2026-07-17-执行harness-design.md](../specs/2026-07-17-执行harness-design.md)。入口 `scripts/dispatch.ps1`，站规 `scripts/prompts/executor-preamble.md`，任务卡 `scripts/tasks/`，台账 `docs/runs/ledger.csv`。
+
+实施期实测的坑（claude 2.1.206）：
+
+- **`--max-turns` 已从 CLI 移除**，机械上限改用 `--max-budget-usd`（wrapper 默认 $2）；轮数只能做站规软预算。
+- **会话内派单的环境卫生**：子进程要清 `CLAUDE*` 环境变量（wrapper 已做），否则子会话带着宿主会话标记跑；`ANTHROPIC_BASE_URL` 有意保留——它是回落通道开关，派单认证异常先查它。
+- 预检不做 npm registry 探测：国内网络假阴性多；版本锁定靠 configs/mobile-mcp.json，server 启不来会体现为首轮 fail。
+- 确认门 `Read-Host` 在非交互 shell 直接抛错（实测）——代理经 Bash/PowerShell 无法代答 CONFIRM，两段式硬门机械成立。

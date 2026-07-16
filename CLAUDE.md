@@ -9,7 +9,7 @@
 ## 铁律
 
 1. **合规红线**：Claude 订阅只经 Claude Code / Agent SDK 官方通道；ChatGPT Plus 只经 Codex CLI 官方登录；永不逆向两家网页端私有接口。
-2. **开发会话不直接操作手机**。mobile MCP server 已不挂载。临时单跑真机：`claude --mcp-config configs/mobile-mcp.json`；成体系跑测等执行 harness 立项（素材：[docs/knowledge/brain-harness.md](docs/knowledge/brain-harness.md)）。
+2. **开发会话不直接操作手机**。mobile MCP server 已不挂载。临时单跑真机：`claude --mcp-config configs/mobile-mcp.json`；成体系跑测走派单 wrapper `scripts/dispatch.ps1`（设计：[docs/specs/2026-07-17-执行harness-design.md](docs/specs/2026-07-17-执行harness-design.md)）。
 3. **危险操作（发送/支付/删除类）永远两段式**：临界动作前停下汇报，人工确认后继续。
 
 ## 文档地图（按需读，不要全读）
@@ -23,6 +23,7 @@
 | 找深链 | [docs/knowledge/deeplinks.md](docs/knowledge/deeplinks.md) |
 | 算成本账 | [docs/knowledge/cost.md](docs/knowledge/cost.md) |
 | 大脑侧链路（headless/挂载/两段式） | [docs/knowledge/brain-harness.md](docs/knowledge/brain-harness.md) |
+| 派单跑真机 / 查台账 | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md) §4–§5；入口 scripts/dispatch.ps1；台账 docs/runs/ledger.csv |
 | 历史跑测记录 | docs/runs/（归档，只写不读） |
 
 ## 会话纪律

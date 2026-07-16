@@ -1,0 +1,5 @@
+# 执行 harness（spec §6，决策点 1）：原始 trace / 暂停件 / 组装提示词只做本地归档，不进 git
+docs/runs/traces/
+
+# 派单并发锁
+scripts/.dispatch.lock

@@ -1,0 +1,2 @@
+time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note
+2026-07-17T05:47:04,"check-bluetooth",1,claude,sonnet,0,0,0,0,0,0,0,preflight-fail,,"","无已授权设备（adb get-state → error: no devices/emulators found）"
