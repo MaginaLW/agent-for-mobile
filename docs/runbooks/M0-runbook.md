@@ -1,5 +1,7 @@
 # M0 Runbook：零代码概念验证
 
+> ⚠️ **2026-07-16 harness 重组后**：mobile server 不再常驻项目 `.mcp.json`（开发会话不挂手机工具）。复跑本 runbook 时，所有 `claude` 命令加 `--mcp-config configs/mobile-mcp.json`（在仓库根运行）。背景见 [brain-harness.md](../knowledge/brain-harness.md)。
+
 目标：用 Claude Code + mobile-mcp + adb 操控真机跑完 5 个验收任务，产出**成功率**和**每任务 token 消耗**两组硬数据。
 预计耗时：手机准备 15 分钟 + 每任务 5–15 分钟。
 
@@ -11,8 +13,8 @@
 | Claude Code 2.1.206 / Codex CLI 0.144.2 | ✅ 已有 |
 | adb 37.0.1（`winget install Google.PlatformTools`） | ✅ 已装 |
 | scrcpy 4.0（测试时镜像手机屏幕，`winget install Genymobile.scrcpy`） | ✅ 已装 |
-| 项目级 [.mcp.json](../.mcp.json)（server 名 `mobile`，官方 npx 写法，版本锁定 0.0.62 保证测试数据可比） | ✅ 已写 |
-| [.claude/settings.json](../.claude/settings.json) 预批准 `mcp__mobile` 全部工具（不然每次 tap 都弹确认） | ✅ 已写 |
+| mobile server 配置 [configs/mobile-mcp.json](../../configs/mobile-mcp.json)（官方 npx 写法，版本锁定 0.0.62 保证测试数据可比；原在项目 .mcp.json，2026-07-16 起按需挂载） | ✅ 已写 |
+| ~~settings.json 预批准 `mcp__mobile`~~（已随 2026-07-16 harness 重组移除；交互会话首次调用批准一次，headless 用 `--allowedTools "mcp__mobile"`） | ⚠️ 已变更 |
 | npx 包缓存预热（`@mobilenext/mobile-mcp@0.0.62`） | ✅ 已做 |
 | `.mcp.json` 直接 npx 写法在本机实测可连（server 已在 Claude 会话里成功启动过） | ✅ 已验证 |
 
@@ -62,8 +64,8 @@ adb devices                  # 先确认显示 <序列号> device
 scrcpy --no-control          # --no-control = 只看不控，防止误点镜像窗把触摸注进手机干扰 agent
 
 # —— 终端 B：跑 agent ——
-cd "D:\OneDrive\agent for mobile"
-claude                       # 首次会弹「是否使用项目 .mcp.json」→ 批准（一次性）
+cd D:\repos\agent-for-mobile
+claude --mcp-config configs/mobile-mcp.json   # 首次工具调用批准一次（或加 --allowedTools "mcp__mobile"）
 ```
 会话内：
 - `/mcp` → 应看到 `mobile` server 已连接及其工具列表。
@@ -74,7 +76,7 @@ claude                       # 首次会弹「是否使用项目 .mcp.json」→
 ## 3. 正式测试流程（每任务标准化，保证数据可比）
 
 每个任务固定五步：
-1. **退出并重新运行 `claude`，开全新会话**（不要用 `/clear`——它可能沿用同一份会话日志，5 个任务的 token 在 ccusage 里会混成一行）；
+1. **退出并重新运行 `claude --mcp-config configs/mobile-mcp.json`，开全新会话**（不要用 `/clear`——它可能沿用同一份会话日志，5 个任务的 token 在 ccusage 里会混成一行）；
 2. 粘贴下方对应提示词开跑（提示词开头带 `[M0-任务N]` 标签，之后对账靠它识别会话）；盯着 scrcpy 镜像看操作；
 3. 中途人工干预过（帮它点了/在手机上划了一下）就记「干预 +1」，任务照常跑完；
 4. 结束立刻跑 `/cost` 抄会话 token 数（若你的版本里 /cost 与 /usage 已合并成一屏，取其中 Session 块；美元数是本地估算，只作相对参考）；抄不到就不纠结，以第 5 步后的 ccusage 总账为准——它读本地日志，永远有数；
@@ -116,7 +118,7 @@ npx ccusage@latest session    # 按会话列 token/成本，与记录表核对
 
 ## 4. 记录表
 
-复制到 `docs/M0-测试记录.md` 填写：
+复制到 `docs/runs/YYYY-MM-DD-M0.md` 填写（M0 首轮记录：[2026-07-16-M0.md](../runs/2026-07-16-M0.md)）：
 
 | # | 任务 | 结果(成/败) | 人工干预次数 | 步数(约) | 耗时 | token(in/out/cache) | 卡点备注 |
 |---|---|---|---|---|---|---|---|
@@ -151,7 +153,7 @@ TOML 小坑：双引号字符串里反斜杠是转义符，写 Windows 路径用
 
 | 症状 | 处理 |
 |---|---|
-| `claude mcp list` / `/mcp` 显示连接失败，但终端手动 `npx -y @mobilenext/mobile-mcp@latest` 能起 | Windows 的 spawn npx ENOENT 问题：把 [.mcp.json](../.mcp.json) 的 `"command": "npx"` 换成 `"command": "cmd", "args": ["/c", "npx", "-y", "@mobilenext/mobile-mcp@0.0.62"]` |
+| `claude mcp list` / `/mcp` 显示连接失败，但终端手动 `npx -y @mobilenext/mobile-mcp@latest` 能起 | Windows 的 spawn npx ENOENT 问题：把 [configs/mobile-mcp.json](../../configs/mobile-mcp.json) 的 `"command": "npx"` 换成 `"command": "cmd", "args": ["/c", "npx", "-y", "@mobilenext/mobile-mcp@0.0.62"]` |
 | MCP 启动超时 | `$env:MCP_TIMEOUT = "60000"; claude` |
 | 工具能列出来但报找不到 adb | MCP 子进程 PATH 与终端不一致（mobile-mcp issue #30）：把 platform-tools 目录加入**系统级** PATH 后重启终端；本机路径 `C:\Users\Magina\AppData\Local\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools` |
 | 中文输入失败/输出 ASCII | §1 第 5 步的 devicekit 没装或没装成功，`adb shell pm list packages devicekit` 验证（应输出 com.mobilenext.devicekit） |
@@ -163,5 +165,5 @@ TOML 小坑：双引号字符串里反斜杠是转义符，写 Windows 路径用
 ## 7. 通过标准与数据去向
 
 - **≥ 3/5 任务无干预成功** → 概念成立，M1（自研执行器）立项；
-- token 实测数据回填 [design note](specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md) §5 的额度模型（校准「Pro $20/月 ≈ 40–130 任务」这个粗估）；
+- token 实测数据回填 [design note](../specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md) §5 的额度模型（校准「Pro $20/月 ≈ 40–130 任务」这个粗估）；
 - 失败任务的卡点截图/描述留档——它们就是 M1 的需求清单（例如中文输入、弹窗处理、a11y 树盲区）。
