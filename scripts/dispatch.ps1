@@ -101,8 +101,11 @@ elseif ($Task) {
 }
 else { throw '需要 -Task / -TaskFile / -Confirm 之一。' }
 
-# ── 组装提示词：站规（注入预算）+ 任务 ─────────────────────────────────────
-$preamble = (Get-Content $PreamblePath -Raw -Encoding utf8) -replace '\{\{BUDGET_USD\}\}', $MaxBudgetUsd
+# ── 组装提示词：站规（注入预算与设备号）+ 任务 ────────────────────────────
+$serial = "$(& adb get-serialno 2>$null)".Trim()
+if (-not $serial) { $serial = 'unknown' }
+$preamble = (Get-Content $PreamblePath -Raw -Encoding utf8) `
+    -replace '\{\{BUDGET_USD\}\}', $MaxBudgetUsd -replace '\{\{DEVICE\}\}', $serial
 $prompt = $preamble + "`n`n" + $TaskText
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -196,11 +199,25 @@ try {
     elseif ("$($resultEvent.subtype)" -match 'budget|max_turns') { $verdict = 'step-cap'; $note = $resultEvent.subtype }
     elseif ("$($resultEvent.subtype)" -ne 'success') { $verdict = 'fail'; $note = $resultEvent.subtype }
     else {
-        $firstLine = "$((($final -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1))".Trim()
-        if ($firstLine.StartsWith('[AWAIT_CONFIRM]')) { $verdict = 'paused' }
-        elseif ($firstLine -match '^结果：失败') { $verdict = 'fail' }
-        elseif ($firstLine -match '^结果：成功') { $verdict = 'success' }
+        # 全文按行首匹配（模型偶尔在报告前多说一句话）；暂停标记优先——宁可误暂停交人看，不可漏暂停
+        if ($final -match '(?m)^\[AWAIT_CONFIRM\]') { $verdict = 'paused' }
+        elseif ($final -match '(?m)^结果：失败') { $verdict = 'fail' }
+        elseif ($final -match '(?m)^结果：成功') { $verdict = 'success' }
         else { $verdict = 'success'; $note = '报告未循例' }
+    }
+
+    # 上限/超时截断时，从 trace 捞末条 assistant 文本——任务可能已完成、只是报告被截断（④ 实测教训）
+    $lastSay = ''
+    if (($verdict -in @('step-cap', 'timeout')) -and (Test-Path $TraceFile)) {
+        foreach ($line in (Get-Content $TraceFile -Tail 200 -Encoding utf8)) {
+            if ($line -notmatch '"type":"assistant"') { continue }
+            try { $evt2 = $line | ConvertFrom-Json } catch { continue }
+            foreach ($c in $evt2.message.content) { if ($c.type -eq 'text' -and $c.text) { $lastSay = $c.text } }
+        }
+        if ($lastSay) {
+            $flat = $lastSay -replace "\s+", " "
+            $note = "$note | 末条报告: " + $flat.Substring(0, [Math]::Min(150, $flat.Length))
+        }
     }
 
     # ── 暂停件（spec §5.1）────────────────────────────────────────────────
@@ -216,6 +233,7 @@ try {
     Write-Host ''
     Write-Host "───── 派单结果：$verdict（$turns 轮 · `$$([math]::Round($cost, 4)) · ${durS}s）─────"
     if ($final) { Write-Host $final }
+    elseif ($lastSay) { Write-Host "（会话被上限截断，以下为末条 assistant 报告）`n$lastSay" }
     if ($note) { Write-Host "note: $note" }
     if ($verdict -eq 'paused') {
         Write-Host ''
