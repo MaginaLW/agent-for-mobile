@@ -57,7 +57,7 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 - 启用：`ime enable dev.magina.gateway/.ime.GatewayIme`（🔵）
 - 设为当前：`ime set dev.magina.gateway/.ime.GatewayIme`（🔵）
 - 纯 settings 等价（需 WRITE_SECURE_SETTINGS）：`settings put secure default_input_method <id>`；`enabled_input_methods` 追加
-- 一次性授权（真机日清单已列）：`pm grant dev.magina.gateway android.permission.WRITE_SECURE_SETTINGS` → 之后网关可自行 settings put 切 IME，摆脱 Shizuku 在线依赖（决策点 1「Shizuku 增强非依赖」的落地抓手）
+- 一次性授权（真机日清单已列）：`pm grant dev.magina.gateway android.permission.WRITE_SECURE_SETTINGS` → 之后网关可自行 settings put 切 IME，摆脱 Shizuku 在线依赖（「Shizuku 增强非依赖」既定约束的落地抓手，M1 spec §11）
 
 ## 7. Shizuku 集成要点（M1b 特权层）
 

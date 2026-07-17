@@ -4,7 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 
 /**
- * 执行器侧技能包（决策点 3）：路由数据（深链注册表 / app 别名 / 分享组件 / 安全词表）。
+ * 执行器侧技能包（既定约束：路由数据下沉执行器，M1 spec §11）：路由数据（深链注册表 / app 别名 / 分享组件 / 安全词表）。
  * 数据源头是 docs/knowledge/apps/（deeplinks.md、各 app 册），入库规程：先真机实测再进 assets。
  */
 class SkillPack(context: Context) {
