@@ -14,6 +14,27 @@
       "expect_package": "com.xingin.xhs",
       "note": "其余 xhs 深链未逐条实测",
       "verified": ""
+    },
+    {
+      "prefix": "taobao://s.taobao.com",
+      "app": "淘宝",
+      "expect_package": "com.taobao.taobao",
+      "note": "搜索 taobao://s.taobao.com?q=<词>（🔵 云端查阅未实测，deeplinks.md）；open_uri 会执行后验前台，假成功即报 E_VERIFY_FAIL",
+      "verified": ""
+    },
+    {
+      "prefix": "openapp.jdmobile://virtual",
+      "app": "京东",
+      "expect_package": "com.jingdong.app.mall",
+      "note": "virtual?params=<urlencoded JSON>，搜索 des=productList/详情 des=productDetail（🔵 云端查阅未实测）",
+      "verified": ""
+    },
+    {
+      "prefix": "openapp.jdmobile://",
+      "app": "京东",
+      "expect_package": "com.jingdong.app.mall",
+      "note": "主 scheme（🔵 未实测）",
+      "verified": ""
     }
   ]
 }

@@ -4,6 +4,9 @@
     "微信": "com.tencent.mm",
     "小红书": "com.xingin.xhs",
     "京东": "com.jingdong.app.mall",
+    "淘宝": "com.taobao.taobao",
+    "天猫": "com.tmall.wireless",
+    "支付宝": "com.eg.android.AlipayGphone",
     "设置": "com.android.settings",
     "相册": "com.vivo.gallery"
   },

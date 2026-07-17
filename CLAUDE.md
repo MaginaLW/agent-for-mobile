@@ -19,6 +19,7 @@
 | 改架构/产品设计 | docs/specs/ 对应篇 |
 | 执行某个操作规程 | docs/runbooks/ 对应篇 |
 | 设备/ROM/adb/输入问题 | [docs/knowledge/devices.md](docs/knowledge/devices.md) |
+| 系统命令（dumpsys/cmd/svc/am/pm/settings）/Shizuku | [docs/knowledge/sys-cli.md](docs/knowledge/sys-cli.md)（🔵 多为查阅未实测） |
 | 微信/小红书/京东特性 | [docs/knowledge/apps.md](docs/knowledge/apps.md) |
 | 找深链 | [docs/knowledge/deeplinks.md](docs/knowledge/deeplinks.md) |
 | 算成本账 | [docs/knowledge/cost.md](docs/knowledge/cost.md) |
