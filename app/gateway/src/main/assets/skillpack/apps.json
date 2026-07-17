@@ -1,0 +1,13 @@
+{
+  "_comment": "app 别名 → 包名（app_launch 的名称解析表），以及分享直达组件（share_file target 命中时优先尝试，失败自动回退系统分享面板）。ShareImgUI 现版本有效性待 Spike S5 确认。",
+  "aliases": {
+    "微信": "com.tencent.mm",
+    "小红书": "com.xingin.xhs",
+    "京东": "com.jingdong.app.mall",
+    "设置": "com.android.settings",
+    "相册": "com.vivo.gallery"
+  },
+  "share_components": {
+    "com.tencent.mm": "com.tencent.mm.ui.tools.ShareImgUI"
+  }
+}

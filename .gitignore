@@ -3,3 +3,8 @@ docs/runs/traces/
 
 # 派单并发锁
 scripts/.dispatch.lock
+
+# Android 工程（app/ 网关、spikes/probe/ 探针）
+**/build/
+**/.gradle/
+**/local.properties

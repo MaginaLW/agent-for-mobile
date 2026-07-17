@@ -1,0 +1,16 @@
+{
+  "_comment": "安全词表与黑名单（spec §10）。danger_words：目标控件文本/描述命中即动作升级为危险级（触发带内确认，覆盖弹出菜单场景——M0 实锤：京东『删除订单』与『查看物流』相邻）。blocked_app_prefixes：敏感 app 前台时拒绝一切写操作。sensitive_targets：联系人/会话/文件关键词，点击目标命中即 E_BLOCKED。",
+  "danger_words": [
+    "删除", "清空", "移除", "卸载",
+    "支付", "付款", "转账", "确认交易", "立即购买", "提交订单",
+    "注销", "退出登录", "解绑", "修改密码",
+    "安装", "格式化", "恢复出厂"
+  ],
+  "send_words": ["发送", "发布", "发表", "评论", "回复"],
+  "send_whitelist_contexts": ["文件传输助手"],
+  "blocked_app_prefixes": [
+    "com.icbc", "com.ccb", "com.chinamworld", "cmb.pb", "com.bankcomm",
+    "com.unionpay", "com.eg.android.AlipayGphone.security"
+  ],
+  "sensitive_targets": []
+}

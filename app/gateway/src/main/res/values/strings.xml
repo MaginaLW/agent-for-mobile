@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">手机 Agent 执行网关的 UI 通道：读取语义树、按 ref 执行动作。仅自用。</string>
+</resources>

@@ -1,0 +1,36 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "dev.magina.gateway"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "dev.magina.gateway"
+        minSdk = 30
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0-m1a"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    packaging {
+        resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // MCP server 传输层（Streamable HTTP）。CIO 引擎轻量、无 netty，适合 Android 内嵌。
+    implementation("io.ktor:ktor-server-core:2.3.12")
+    implementation("io.ktor:ktor-server-cio:2.3.12")
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "深链注册表。来源：docs/knowledge/deeplinks.md（实测入库规程：先真机验证再入库）。open_uri 命中前缀时按 expect_package 做执行后前台校验。",
+  "entries": [
+    {
+      "prefix": "xhsdiscover://search/result",
+      "app": "小红书",
+      "expect_package": "com.xingin.xhs",
+      "note": "keyword 参数需 urlencode；一步直达搜索结果（vivo V2352A 2026-07-16 实测）",
+      "verified": "2026-07-16"
+    },
+    {
+      "prefix": "xhsdiscover://",
+      "app": "小红书",
+      "expect_package": "com.xingin.xhs",
+      "note": "其余 xhs 深链未逐条实测",
+      "verified": ""
+    }
+  ]
+}
