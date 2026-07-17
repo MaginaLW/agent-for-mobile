@@ -6,7 +6,7 @@
 
 ## 0. 探针 App 构建（S1/S3/S4 共用，一次性）
 
-工程在 `spikes/probe/`（**云端产出，未编译过**——首次构建报错属预期内，小修即可）：
+工程在 `spikes/probe/`（云端已编译通过，2026-07-17；APK ~53MB——ML Kit 中文模型打包所致，超会话附件上限，需本地构建一次）：
 
 ```powershell
 # 推荐：Android Studio 打开 spikes/probe/，同步后 Run（Studio 会自动补 gradle wrapper）
