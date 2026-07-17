@@ -1,6 +1,6 @@
 # 大脑侧链路知识（headless / 按需挂载 / 两段式）
 
-> 手机执行 harness 的设计素材集；harness 已立项落地（设计：[../specs/2026-07-17-执行harness-design.md](../specs/2026-07-17-执行harness-design.md)，入口 `scripts/dispatch.ps1`）。本册继续记录大脑侧链路的坑与原则。
+> 手机执行 harness 的设计素材集；harness 已立项落地（设计：[执行harness spec](../../specs/2026-07-17-执行harness-design.md)，入口 `scripts/dispatch.ps1`）。本册继续记录大脑侧链路的坑与原则。
 
 ## 已验证：headless 派单链路（M0 发现 #11）
 
@@ -20,7 +20,7 @@ claude -p "<任务提示词>" --output-format json --mcp-config configs/mobile-m
 claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 ```
 
-配置在 [configs/mobile-mcp.json](../../configs/mobile-mcp.json)，版本锁定 `@mobilenext/mobile-mcp@0.0.62`（保证测试数据可比；升级需有意为之并记录）。中文输入依赖手机侧 devicekit APK（现有机制已死，见 [devices.md](devices.md)）。
+配置在 [configs/mobile-mcp.json](../../../configs/mobile-mcp.json)，版本锁定 `@mobilenext/mobile-mcp@0.0.62`（保证测试数据可比；升级需有意为之并记录）。中文输入依赖手机侧 devicekit APK（现有机制已死，见 [../android/common.md](../android/common.md)）。
 
 ## 已定原则（供执行 harness 设计继承）
 
@@ -30,7 +30,7 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 
 ## 执行 harness（2026-07-17 已落地）
 
-设计与协议全文见 [../specs/2026-07-17-执行harness-design.md](../specs/2026-07-17-执行harness-design.md)。入口 `scripts/dispatch.ps1`，站规 `scripts/prompts/executor-preamble.md`，任务卡 `scripts/tasks/`，台账 `docs/runs/ledger.csv`。
+设计与协议全文见 [执行harness spec](../../specs/2026-07-17-执行harness-design.md)。入口 `scripts/dispatch.ps1`，站规 `scripts/prompts/executor-preamble.md`，任务卡 `scripts/tasks/`，台账 `docs/runs/ledger.csv`。
 
 实施期实测的坑（claude 2.1.206）：
 

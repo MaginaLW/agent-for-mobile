@@ -1,6 +1,6 @@
 # 系统 CLI / API 参考（网关 L1 通道备料）
 
-> **性质：云端查阅整理（2026-07-17），标注 🔵 查阅未实测。** 与 M0 实测证据（[devices.md](devices.md) 等）分区：本册是真机日/ M1b 的候选命令清单与 API 线索，**每条上真机前按对应 runbook 验证并把结论回写 devices.md**。命令生效性强依赖 Android 版本与 ROM（OriginOS 尤甚）。
+> **性质：云端查阅整理（2026-07-17），标注 🔵 查阅未实测。** 与 M0 实测证据（[common.md](common.md) / [vivo-originos.md](vivo-originos.md) 等）分区：本册是真机日/ M1b 的候选命令清单与 API 线索，**每条上真机前按对应 runbook 验证并把结论回写对应册**。命令生效性强依赖 Android 版本与 ROM（OriginOS 尤甚）。
 > 用途：网关 L1「系统通道」工具（system_get/set/verify_state、foreground_app、keyboard_state、media_query、IME 切换）的内部实现在 Kotlin API 拿不到时，走 Shizuku shell 白名单——本册就是那张白名单的备选池 + 真值源对照。
 > 铁律不变：**不暴露裸 shell 给模型**；这些命令只作为类型化工具内部实现，参数校验/白名单/执行后复核在工具内做。
 
@@ -34,7 +34,7 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 - `dumpsys input_method | grep mInputShown` → `mInputShown=true/false`（业界常用判据）
 - 附近字段 `mVisibleBound` / `mLastImeTargetWindow` 可辅助拿键盘区域
 
-> 键盘态是 M0 两次误触主因的感知面（devices.md），a11y 通道已够；dumpsys 仅作 a11y 不可用时的兜底。
+> 键盘态是 M0 两次误触主因的感知面（[common.md](common.md)），a11y 通道已够；dumpsys 仅作 a11y 不可用时的兜底。
 
 ## 4. 启停 app / 打开设置页（对应 app_launch / app_stop / open_uri 兜底）
 
@@ -80,5 +80,5 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 - 蓝牙 CLI 与 dumpsys 状态：adb-shell.com bluetooth_manager；dzone AOSP Bluetooth debugging（STATE_ON=12）
 - 前台 Activity：medium ADB dumpsys 系列；repeato 当前 Activity
 - 键盘态：Appium discuss、androidbugfix（mInputShown）
-- 深链另见 [deeplinks.md](deeplinks.md)
+- 深链另见 [../apps/deeplinks.md](../apps/deeplinks.md)
 - Shizuku：RikkaApps/Shizuku-API、xda-developers implementing-shizuku、HackTricks Shizuku Privileged API

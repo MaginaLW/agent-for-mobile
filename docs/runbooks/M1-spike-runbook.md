@@ -1,7 +1,7 @@
 # M1 Spike 周 Runbook（S1–S5 去险实验）
 
 > 前置：[M1 执行网关设计](../specs/2026-07-17-M1执行网关-design.md) 已批准（2026-07-17）。本 runbook 是其 §11 Spike 清单的可执行版。每项 ≤ 半天；**S1 优先**（决定 OCR 融合层是否进 M1a、成本估算上下限）。
-> 设备：vivo V2352A（Android 16 / OriginOS，1260×2800），USB 调试 + 「USB 模拟点击」已开（见 [devices.md](../knowledge/devices.md)）。
+> 设备：vivo V2352A（Android 16 / OriginOS，1260×2800），USB 调试 + 「USB 模拟点击」已开（见 [vivo-originos.md](../knowledge/android/vivo-originos.md)）。
 > 结果记录：跑完写 `docs/runs/2026-07-XX-M1-spike.md`，实锤结论按册归入 knowledge/，并回填 spec §11/§12 的估算。
 
 ## 0. 探针 App 构建（S1/S3/S4 共用，一次性）
@@ -67,7 +67,7 @@ adb shell svc wifi disable && adb shell dumpsys wifi | findstr /i "Wi-Fi is"
 ## S4 takeScreenshot 延迟与节流（与 S3 同跑）
 
 - 单发：看 logcat `takeScreenshot=` 毫秒数（判据 ≤500ms）。
-- 节流：连发两次 `probe.SHOT`（间隔 <1s），第二次预期 `SHOT failed`（ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT）；再测间隔 1s/2s 找出实际冷却窗口，写进 knowledge/devices.md（网关 `E_RATE_LIMITED` 的冷却值就用它）。
+- 节流：连发两次 `probe.SHOT`（间隔 <1s），第二次预期 `SHOT failed`（ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT）；再测间隔 1s/2s 找出实际冷却窗口，写进 knowledge/android/common.md（网关 `E_RATE_LIMITED` 的冷却值就用它）。
 
 ## S5 微信通知 RemoteInput 与 ShareImgUI 直达组件（半天）
 
@@ -94,6 +94,6 @@ adb shell am start -n com.tencent.mm/.ui.tools.ShareImgUI -a android.intent.acti
 ## 收尾清单
 
 1. `docs/runs/2026-07-XX-M1-spike.md`：五项结论 + 数据（延迟毫秒、节点数、OCR 行数）。
-2. knowledge 归档：S1→apps.md 微信节；S2/S4→devices.md；S5→apps.md + deeplinks.md（ShareImgUI 按深链入库规程记设备与日期）。
+2. knowledge 归档：S1→apps/wechat.md；S2→android/sys-cli.md（转正实测）+vivo-originos.md；S4→android/common.md；S5→apps/wechat.md + apps/deeplinks.md（ShareImgUI 按深链入库规程记设备与日期）。
 3. 回填 spec：§11 的「OCR 融合是否进 M1a」拍板；§12 估算按 S1 结果修正。
 4. 更新 STATUS.md，M1a 动工。

@@ -69,7 +69,7 @@ M0 测试记录的处理：**原件整体归档**入 `runs/`（不改写历史�
 ## 7. MCP 卫生
 
 - `.mcp.json` 删除（唯一内容 mobile server 迁至 `configs/mobile-mcp.json`）。
-- `.claude/settings.json` 删除（唯一内容是对 mobile 的预批准，随 server 摘除而失效；headless 场景本就用 `--allowedTools` 旁路，见 knowledge/brain-harness.md）。
+- `.claude/settings.json` 删除（唯一内容是对 mobile 的预批准，随 server 摘除而失效；headless 场景本就用 `--allowedTools` 旁路，见 knowledge/brain/harness.md）。
 - 效果：开发会话零 MCP 开销，且物理上杜绝误驾手机。
 
 ## 8. 迁移清单
@@ -95,4 +95,4 @@ M0 测试记录的处理：**原件整体归档**入 `runs/`（不改写历史�
 | STATUS.md 忘更新 | 收尾纪律写入 CLAUDE.md；屡犯再加 Stop hook |
 | knowledge 过早拆细 | 先 5 册粗粒度，M1 内容多了再拆 |
 
-开放问题：手机执行 harness 的完整设计（派单脚本形态、计量协议、trace 落盘格式、与 M1 App 确认层的衔接）——下一个 brainstorm 立项，素材已备于 knowledge/brain-harness.md。
+开放问题：手机执行 harness 的完整设计（派单脚本形态、计量协议、trace 落盘格式、与 M1 App 确认层的衔接）——下一个 brainstorm 立项，素材已备于 knowledge/brain/harness.md。

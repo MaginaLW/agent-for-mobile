@@ -18,12 +18,7 @@
 |---|---|
 | 改架构/产品设计 | docs/specs/ 对应篇 |
 | 执行某个操作规程 | docs/runbooks/ 对应篇 |
-| 设备/ROM/adb/输入问题 | [docs/knowledge/devices.md](docs/knowledge/devices.md) |
-| 系统命令（dumpsys/cmd/svc/am/pm/settings）/Shizuku | [docs/knowledge/sys-cli.md](docs/knowledge/sys-cli.md)（🔵 多为查阅未实测） |
-| 微信/小红书/京东特性 | [docs/knowledge/apps.md](docs/knowledge/apps.md) |
-| 找深链 | [docs/knowledge/deeplinks.md](docs/knowledge/deeplinks.md) |
-| 算成本账 | [docs/knowledge/cost.md](docs/knowledge/cost.md) |
-| 大脑侧链路（headless/挂载/两段式） | [docs/knowledge/brain-harness.md](docs/knowledge/brain-harness.md) |
+| 设备/系统命令/App 特性/成本/链路等沉淀知识 | [docs/knowledge/README.md](docs/knowledge/README.md)——**渐进式披露单入口**：按「遇到什么情况→载入哪册」路由，不整目录读 |
 | 派单跑真机 / 查台账 | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md) §4–§5；入口 scripts/dispatch.ps1；台账 docs/runs/ledger.csv |
 | 历史跑测记录 | docs/runs/（归档，只写不读） |
 

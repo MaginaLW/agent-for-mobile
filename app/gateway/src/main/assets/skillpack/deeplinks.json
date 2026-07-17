@@ -1,5 +1,5 @@
 {
-  "_comment": "深链注册表。来源：docs/knowledge/deeplinks.md（实测入库规程：先真机验证再入库）。open_uri 命中前缀时按 expect_package 做执行后前台校验。",
+  "_comment": "深链注册表。来源：docs/knowledge/apps/deeplinks.md（实测入库规程：先真机验证再入库）。open_uri 命中前缀时按 expect_package 做执行后前台校验。",
   "entries": [
     {
       "prefix": "xhsdiscover://search/result",

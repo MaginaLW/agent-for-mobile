@@ -1,6 +1,6 @@
 # M0 Runbook：零代码概念验证
 
-> ⚠️ **2026-07-16 harness 重组后**：mobile server 不再常驻项目 `.mcp.json`（开发会话不挂手机工具）。复跑本 runbook 时，所有 `claude` 命令加 `--mcp-config configs/mobile-mcp.json`（在仓库根运行）。背景见 [brain-harness.md](../knowledge/brain-harness.md)。
+> ⚠️ **2026-07-16 harness 重组后**：mobile server 不再常驻项目 `.mcp.json`（开发会话不挂手机工具）。复跑本 runbook 时，所有 `claude` 命令加 `--mcp-config configs/mobile-mcp.json`（在仓库根运行）。背景见 [brain/harness.md](../knowledge/brain/harness.md)。
 
 目标：用 Claude Code + mobile-mcp + adb 操控真机跑完 5 个验收任务，产出**成功率**和**每任务 token 消耗**两组硬数据。
 预计耗时：手机准备 15 分钟 + 每任务 5–15 分钟。

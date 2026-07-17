@@ -3,7 +3,7 @@
 - 日期：2026-07-17
 - 状态：已批准并实施（2026-07-17，§11 五个决策点均按推荐项批准）；实施期修订两处，见 §4.2「实施注记」与 §7
 - 决策人：Magina（用户）
-- 素材来源：[knowledge/brain-harness.md](../knowledge/brain-harness.md)（已验证链路与已定原则，本设计全部继承）
+- 素材来源：[knowledge/brain/harness.md](../knowledge/brain/harness.md)（已验证链路与已定原则，本设计全部继承）
 
 ## 1. 问题与范围
 
