@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="probe_desc">M1 Spike 探针：广播触发读树/截图/OCR，结果写入 app 外部文件目录。仅自用实验。</string>
+</resources>
