@@ -1,5 +1,5 @@
 {
-  "_comment": "app 别名 → 包名（app_launch 的名称解析表），以及分享直达组件（share_file target 命中时优先尝试，失败自动回退系统分享面板）。ShareImgUI 现版本有效性待 Spike S5 确认。",
+  "_comment": "app 别名 → 包名（app_launch 的名称解析表），以及分享直达组件（share_file target 命中时优先尝试，失败自动回退系统分享面板）。ShareImgUI 现版本有效性 ✅ Spike S5 实测确认（vivo V2352A/2026-07-17，am start SEND image/* 成功拉起选择聊天页）。",
   "aliases": {
     "微信": "com.tencent.mm",
     "小红书": "com.xingin.xhs",

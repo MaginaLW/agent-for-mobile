@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- system_get_state(wifi)=WifiManager.isWifiEnabled 需要（真机日首跑实锤：缺则 SecurityException） -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- 先自用 sideload，不过商店审查 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />

@@ -2,10 +2,10 @@
 
 > 每次会话收尾更新。保持 ≤ 20 行。
 
-- **当前阶段**：执行 harness 已落地并真机验证（2026-07-17）：① 只读 ✅ $0.44/5 轮；③ 预算熔断 ✅；④ 任务成功但触 $2 顶（$2.01/55 轮，三坑对策已固化进站规 v2 与任务卡）；② 两段式暂停 ✅（蓝牙版），待人工 CONFIRM 收口。台账 docs/runs/ledger.csv 六种结果态齐活；cost.md 已校准。
+- **当前阶段**：**M1 真机日已执行（2026-07-17～18，[结论](docs/runs/2026-07-17-M1-spike.md)）**。Spike 定论：**S1 微信树 ❌ 不可读**（自研 a11y flag 拉满仍 root=null，列表/会话/键盘三态一致）→ **OCR 融合拍板提前进 M1a**；S2 `svc`/`cmd` 蓝牙/WiFi 双通道均生效 + Shizuku v13.6.0 激活；S3 OCR 达标（~450ms，中文控件 conf 0.6–0.9，深色/京东重页不塌方）；S4 截图 32–37ms、连发软节流（非硬失败）；S5 ShareImgUI 有效。**网关 M1a bring-up 成功**：22 工具面 L1/L2/L4/L6 零 token smoke 全绿，首跑修 2 真 bug（MainActivity 直读 ENABLED_INPUT_METHODS 崩溃、缺 ACCESS_WIFI_STATE），**中文输入链闭环一次通过**（a11y_set_text readback 与输入完全一致）。本地构建链就位（D:\android：JDK17+Gradle8.11.1+SDK35）。
 - **下一步（按序）**：
-  1. 人工收口两段式第二腿（动作=关蓝牙）：`scripts/dispatch.ps1 -Confirm "docs/runs/traces/20260717-062135-drill-confirm-bt-claude-leg1.pause.md"`，按提示键入 CONFIRM。
-  2. **M1a 网关 App 已写完并云端编译通过（2026-07-17），待真机日一次性验证**：按 docs/runbooks/M1-真机日清单.md 走（上午 Spike S1–S5 + 下午网关首装联调）。工程 app/gateway（22 工具面/信封错误模型/审计/IME/确认层/MCP server）；gateway-debug.apk 已经会话附件发出，探针 APK 需本地构建。OCR 融合层排期等 S1 结果。设计：docs/specs/2026-07-17-M1执行网关-design.md（已批准）。
-  3. 遗留复测（均等 M1 IME 通道）：中文输入 m0-2 卡；消息版演练 drill-confirm.md（已标阻塞）。
-- **知识预习（2026-07-17 云端）**：docs/knowledge/ 重构为阵营/厂商/App 分层（入口 README.md），android/sys-cli.md 新增（系统命令/真值源/Shizuku/IME 切换，🔵 多为查阅未实测）；apps/deeplinks.md 补京东/淘宝/支付宝候选深链（🔵）；技能包 assets 同步。真机日逐条验证后上正表。
-- **障碍**：无。顺手清理：微信文件传输助手输入框留有无害草稿 "harness"。
+  1. **大脑端到端联调**（任务 1 关蓝牙 UI 兜底链 / 任务 4 media_query+share_file）：`configs/gateway-mcp.json` 填 token → `claude --mcp-config configs/gateway-mcp.json`；手工记台账 note=executor:gateway → 回填 spec §12 定量成本。**涉危险动作两段式，用户主导。**
+  2. 遗留补测：S5 RemoteInput（需外部设备发微信消息后 dump）；S2 Shizuku 重启存活（需重启手机 + 解锁）；`open_uri` 小红书深链复核（本次 verify fail，疑深链失效或冷启 >3s）。
+  3. 两段式第二腿收口（`scripts/dispatch.ps1 -Confirm`，人工键入 CONFIRM）。
+- **知识归档**（真机日回填）：sys-cli.md（蓝牙真值源改文本 / svc·cmd 双生效 / Shizuku 激活法 / ACCESSIBILITY_SETTINGS 转正）、common.md（S4 软节流窗口）、vivo-originos.md（settings put 开无障碍 + input tap 无效）、wechat.md（S1 三态不可读 + 键盘感知 + ShareImgUI）、apps.json 同步。
+- **障碍**：无。顺手：微信文件传输助手旧草稿 "harness" 仍在。

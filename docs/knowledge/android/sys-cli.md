@@ -10,8 +10,8 @@
 
 | 状态 | 写（Shizuku shell，🔵 逐条待验） | 真值源（复核，部分已测） | 备注 |
 |---|---|---|---|
-| 蓝牙 | `svc bluetooth enable/disable`；备选 `cmd bluetooth_manager enable/disable` | `dumpsys bluetooth_manager` 找 `state`/`mState`：**12 = STATE_ON**、10 = STATE_OFF（🔵 数值语义查阅所得，真机核对）✅真值源已 M0 实测 | Android 13+ 普通 app API `BluetoothAdapter.disable()` 对 target33+ 失效——写操作必走 shell。`svc` 与 `cmd` 哪条在 Android16/OriginOS 生效 = Spike S2 |
-| WiFi | `svc wifi enable/disable`；`cmd wifi set-wifi-enabled enabled/disabled` | `dumpsys wifi \| grep "Wi-Fi is"` → `enabled/disabled`（🔵） | 同上，Android 10+ 普通 app 不能编程开关 |
+| 蓝牙 | `svc bluetooth enable/disable`；`cmd bluetooth_manager enable/disable`——**两条 Android16/OriginOS6 都生效（S2 实测）** | `dumpsys bluetooth_manager` 顶部 `state:` 字段直接是**文本 `ON`/`OFF`**（✅ S2 实测更正：非数字 12/10；数字 10 是无关的 `mAudioState`） | Android 13+ 普通 app API `BluetoothAdapter.disable()` 对 target33+ 失效——写操作必走 shell。`svc` 未被弱化 |
+| WiFi | `svc wifi enable/disable`；`cmd wifi set-wifi-enabled enabled/disabled`——**两条都生效（S2 实测）** | `dumpsys wifi \| grep "Wi-Fi is"` → `enabled/disabled`（✅ S2 实测） | Android 10+ 普通 app 不能编程开关 |
 | 飞行模式 | `settings put global airplane_mode_on 1/0` **再广播** `am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true`（🔵，settings 单写不触发切换） | `settings get global airplane_mode_on`（此键 M0 未标定可信度，谨慎） | 两步式，漏广播则状态不同步 |
 | 勿扰 | `cmd notification set_dnd on/off/priority`（🔵） | `dumpsys notification \| grep mZenMode`（🔵） | |
 | 亮度 | `settings put system screen_brightness <0-255>`（需 WRITE_SETTINGS）；自动亮度 `settings put system screen_brightness_mode 0/1` | `settings get system screen_brightness` | 亮度这类 settings 键一般可信（非"状态谎报"类） |
@@ -43,7 +43,8 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 - 设置子页 Intent（M0 发现 #1：OriginOS 深链页级不可靠，主设置页可靠）：
   - 主设置 `am start -a android.settings.SETTINGS` ✅M0 实测可靠
   - 蓝牙 `android.settings.BLUETOOTH_SETTINGS` ❌M0 实测 OriginOS 不带到前台
-  - WiFi `android.settings.WIFI_SETTINGS`、应用详情 `android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>`、输入法 `android.settings.INPUT_METHOD_SETTINGS`、无障碍 `android.settings.ACCESSIBILITY_SETTINGS`（🔵 逐个真机验证是否带到前台，OriginOS 前科在先）
+  - 无障碍 `android.settings.ACCESSIBILITY_SETTINGS` ✅**S2 实测可靠带到前台**（OriginOS6）
+  - WiFi `android.settings.WIFI_SETTINGS`、应用详情 `android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>`、输入法 `android.settings.INPUT_METHOD_SETTINGS`（🔵 逐个真机验证是否带到前台，OriginOS 前科在先）
 
 ## 5. 媒体库 / 剪贴板 / 内容提供者（对应 media_query / clipboard）
 
@@ -65,7 +66,7 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 
 - 原理：Shizuku 用 `app_process` 起一个 **shell uid(2000)** 特权 Java 进程，经 Binder 暴露系统 API；等价于"常驻的 adb shell 权限"，无需 root。
 - 现代集成走 **UserService**（不用老的 newProcess）：自己的 AIDL 服务跑在 uid 2000 独立进程，无非 SDK API 限制——网关把 §1–§4 的 shell 命令封进 UserService 即可。
-- 激活：adb `sh /sdcard/.../start.sh` 或无线调试自启；**重启失活是已知痛点**（S2 专项测，M1 期 PC adb 在场可随手重激活）。
+- 激活（S2 实测，v13.6.0）：**start.sh 现版本不落到 external files 目录**（`/sdcard/Android/data/moe.shizuku.privileged.api/` 不存在）；改用 apk 内二进制——`p=$(pm path moe.shizuku.privileged.api 去掉 base.apk)`，`adb shell $p/lib/arm64/libshizuku.so` 直接激活，日志 `shizuku_server pid is ...` 即成功。或用 App 内「查看指令」按钮拿到该路径。无线调试自启是另一路。装完先点开 App 一次（未启动过则 external 数据目录不生成）。**重启失活待测**（S2 专项，M1 期 PC adb 在场可随手重激活）。
 - 权限申请：运行时 `Shizuku.requestPermission()`，用户在 Shizuku 管理器点授权一次。
 - 与 `pm grant WRITE_SECURE_SETTINGS` 的分工：后者一次性拿到就够 IME 切换 + 部分 settings 写；蓝牙/WiFi 的 `svc`/`cmd` 仍需 Shizuku 在线。两者互补，不是二选一。
 

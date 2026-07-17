@@ -2,6 +2,7 @@ package dev.magina.gateway
 
 import android.content.Context
 import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.Audit
 import dev.magina.gateway.core.RetryGuard
@@ -50,9 +51,8 @@ object Gateway {
     }
 
     fun imeEnabled(): Boolean {
-        val enabled = Settings.Secure.getString(
-            appContext.contentResolver, Settings.Secure.ENABLED_INPUT_METHODS
-        ) ?: return false
-        return enabled.contains(appContext.packageName)
+        // 不可直读 Settings.Secure.ENABLED_INPUT_METHODS：targetSdk≥34 抛 SecurityException（真机日首跑实锤）
+        val imm = appContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        return imm.enabledInputMethodList.any { it.packageName == appContext.packageName }
     }
 }
