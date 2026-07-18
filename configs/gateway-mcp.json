@@ -5,7 +5,7 @@
       "type": "http",
       "url": "http://127.0.0.1:8848/mcp",
       "headers": {
-        "Authorization": "Bearer 70a1013ae5d54625879cc00d79fb614f"
+        "Authorization": "Bearer <GATEWAY_TOKEN>"
       }
     }
   }
