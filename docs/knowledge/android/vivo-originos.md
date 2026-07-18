@@ -8,6 +8,10 @@
 - OriginOS 5 有 ADB 白名单：一直 unauthorized 就检查「USB 调试 → 仅允许指定计算机调试」。
 - 保活：网关/探针类 App 需电池白名单 + 后台高耗电允许，防无障碍服务被静默回收。
 - **开发期开无障碍服务免手动，但不持久**（S2/S3 实测，2026-07-17/18）：`adb shell settings put secure enabled_accessibility_services <pkg/svc>` + `settings put secure accessibility_enabled 1` 两键同置，OriginOS6 下**异步生效 ~3s**（同一命令内立即 `get` 读到空是正常，下次读即有），服务随即 `connected`。⚠️ 两个坑：① **`input tap` 点无障碍详情页的启用开关无效**（反自动化拦截），settings 路径可绕过；② **settings 路径开启的服务数小时后被系统撤销**（实测 22:22→01:24 之间两键被清+服务进程回收，疑似午夜/空闲策略）。开发期对策：**每次跑测前重放两条 put**（恢复即时）；持久启用需设置 UI 手动开 + 电池白名单 + 后台高耗电允许（真实用户场景 M2 必须走 UI 引导）。
+- **`adb install -r` 重装两连坑**（M1b 实测，2026-07-19）：① a11y 服务**不自动重绑**，且 settings 值没变化时重放同值 put 无效——须**先清空再重写**（toggle）强制重绑；② **运行时权限被重置**（READ_MEDIA_IMAGES 实测 granted=false，且 MediaStore 无权限时**静默空游标不抛异常**，工具层要显式预检）→ 每次重装后重放 `pm grant`。开发期 bring-up 固定链：install -r → pm grant → a11y toggle → am start 主界面 → tap「启动网关服务」→ adb forward。
+- **网关后台启动三方 app activity 被拦（BAL）**（M1b 实测，2026-07-19）：网关在后台时 `app_launch(微信)`/`share_file` 直达组件**不落前台**（无异常、无 logcat 拦截日志、`foreground_verified:false`），但 `app_launch(设置)`（系统 app）放行；shell `am start` 不受限。与「后台弹出界面」权限同族（Android16 SDK36 收紧 SAW 豁免）。spike 当天 share_file 成功疑因网关刚离开前台仍在 BAL 宽限窗。对策：授 vivo「后台弹出界面」权限（待验）或 M1b Shizuku `am start` 通道。
+- **系统窗口事件污染前台包名跟踪**（M1b 实测）：`TYPE_WINDOW_STATE_CHANGED` 会来自 vivo 悬浮层（pkg=android 等），事件流维护的 fgPackage 短暂错值（实测 ctx.app=android）→ **前台归属判定要用 windows 列表 `type=APPLICATION && isActive`**，不能只信事件流（网关 snapshot 的 OCR 融合触发条件已按此实现）。
+- **充电胶囊/灵动岛是带文本的大 a11y 悬浮节点**，几何上罩住屏幕上部——OCR 融合去重必须按「内容相同」判重，不能按「bbox 包含」判（实锤：「选择聊天/搜索」行被误吞）。
 - **后台应用弹悬浮窗（overlay）被静默拦截**（网关 bring-up 去险实测，2026-07-18）：`SYSTEM_ALERT_WINDOW`（悬浮窗权限）**≠「后台弹出界面」权限**。网关**在后台**（前台是别的 app）时 `WindowManager.addView(TYPE_APPLICATION_OVERLAY)` 被 OriginOS **静默拦截**（`main.post{addView}` 线程正确、不抛异常，但窗口不显示）；**在前台**时正常弹。**影响 `confirm` 确认层**：危险动作跑在真实 app 前台时网关必在后台 → 带内确认卡片弹不出，`confirm` 等满 60s 走 `E_CONFIRM_TIMEOUT` + 带外 `[AWAIT_CONFIRM]`。**对策**：授网关 vivo「后台弹出界面」权限（i 管家/权限设置，或试 appops），或危险动作在 vivo 上直接走带外两段式。
 
 ## 深链 / Intent
