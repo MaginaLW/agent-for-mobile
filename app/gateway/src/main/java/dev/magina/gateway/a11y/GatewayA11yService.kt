@@ -1,7 +1,9 @@
 package dev.magina.gateway.a11y
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.graphics.Bitmap
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.SystemClock
@@ -221,7 +223,7 @@ class GatewayA11yService : AccessibilityService() {
 
     fun perform(target: Target, action: String, params: JSONObject): JSONObject {
         val ok = when (action) {
-            "click" -> clickNode(target.node)
+            "click" -> clickNode(target)
             "long_click" -> target.node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
             "focus" -> target.node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
             "scroll" -> {
@@ -250,15 +252,47 @@ class GatewayA11yService : AccessibilityService() {
         return JSONObject().put("done", true).put("revision_after", revision)
     }
 
-    /** 节点自身不可点时向上找最近可点祖先（微信列表条目常见结构）。 */
-    private fun clickNode(node: AccessibilityNodeInfo): Boolean {
-        var n: AccessibilityNodeInfo? = node
+    /**
+     * 点击：
+     * - 开关/勾选类（isCheckable，如 vivo 系统设置的蓝牙/WiFi Switch）用**坐标手势**点 bounds 中心——
+     *   这类节点对 ACTION_CLICK 返回 true 却不 toggle（vivo 真机实锤：a11y click 无效、input tap 有效），
+     *   dispatchGesture 模拟真实触摸方可切换。
+     * - 其余节点自身不可点时向上找最近可点祖先（微信列表条目常见结构）→ ACTION_CLICK。
+     */
+    private fun clickNode(target: Target): Boolean {
+        if (target.node.isCheckable) {
+            // 开关滑块通常在行右侧；点整行中心会落在文字标签上（vivo 实锤：中心无效、滑块坐标有效）
+            // → 宽行（width > 2*height）点右侧滑块估计位，近方形（滑块本体）点中心。
+            val b = target.bounds
+            val x = if (b.width() > b.height() * 2) b.right - b.height() / 2f else b.exactCenterX()
+            return tapGesture(x, b.exactCenterY())
+        }
+        var n: AccessibilityNodeInfo? = target.node
         var hops = 0
         while (n != null && hops < 5) {
             if (n.isClickable) return n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             n = n.parent; hops++
         }
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        return target.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    /** 坐标手势点击（dispatchGesture）：ACTION_CLICK 对某些 ROM 定制控件无效时的兜底。同步等结果。 */
+    private fun tapGesture(cx: Float, cy: Float): Boolean {
+        val path = Path().apply { moveTo(cx, cy) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+            .build()
+        val done = CompletableFuture<Boolean>()
+        val dispatched = dispatchGesture(
+            gesture,
+            object : GestureResultCallback() {
+                override fun onCompleted(d: GestureDescription?) { done.complete(true) }
+                override fun onCancelled(d: GestureDescription?) { done.complete(false) }
+            },
+            null,
+        )
+        if (!dispatched) return false
+        return runCatching { done.get(2, TimeUnit.SECONDS) }.getOrDefault(false)
     }
 
     private fun scrollable(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
