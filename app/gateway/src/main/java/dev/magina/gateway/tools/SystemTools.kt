@@ -189,6 +189,15 @@ object SystemTools {
         if (type != "image" && type != "screenshot") throw GatewayError(
             ErrorCode.E_INVALID_ARG, "type ∈ image|screenshot（video 待需求）",
         )
+        // MediaStore 无权限时不抛 SecurityException 而是静默空游标（实测：重装后权限被重置，
+        // 工具误报 E_NOT_FOUND）→ 显式预检，报真实的 E_PERM_MISSING
+        if (ctx.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) throw GatewayError(
+            ErrorCode.E_PERM_MISSING, "缺 READ_MEDIA_IMAGES（重装后可能被系统重置）",
+            channel = "api",
+            fallback = "网关主界面点「授予运行权限」；或 adb shell pm grant dev.magina.gateway android.permission.READ_MEDIA_IMAGES",
+        )
         val proj = arrayOf(
             MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.SIZE,

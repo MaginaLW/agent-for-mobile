@@ -167,7 +167,7 @@ object ToolRegistry {
 
         // ---------- L4 UI 层 ----------
         ToolSpec(
-            "ui_snapshot", "当前页面语义元素列表（事件驱动缓存，带 revision；ref 供后续操作寻址）。首选感知工具。",
+            "ui_snapshot", "当前页面语义元素列表（带 revision；树空/稀疏自动融合 OCR，source=a11y|ocr|fused；ref 供后续操作寻址）。首选感知工具。",
             Level.R,
             schema(
                 emptyList(),
@@ -195,7 +195,7 @@ object ToolRegistry {
             )
         },
         ToolSpec(
-            "ui_action", "对 ref 执行动作。点击前二次校验（文本变了拒执行）；命中危险词自动弹带内确认。不接受裸坐标。",
+            "ui_action", "对 ref 执行动作。点击前二次校验（文本变了拒执行）；OCR 元素 click/long_click 走坐标手势；命中危险词自动弹带内确认。不接受裸坐标。",
             Level.W,
             schema(
                 listOf("ref", "action"),
@@ -211,7 +211,7 @@ object ToolRegistry {
             UiTools.uiAction(it.getString("ref"), it.getString("action"), params)
         },
         ToolSpec(
-            "type_text", "输入文本（中文关键路径）：SET_TEXT→自有 IME 字面注入，内置读回验证。永不使用剪贴板机制。",
+            "type_text", "输入文本（中文关键路径）：SET_TEXT→自有 IME 字面注入，内置读回验证（树空场景 OCR 读回）。永不使用剪贴板机制。",
             Level.W,
             schema(
                 listOf("text"),

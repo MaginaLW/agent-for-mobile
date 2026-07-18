@@ -33,4 +33,6 @@ dependencies {
     // MCP server 传输层（Streamable HTTP）。CIO 引擎轻量、无 netty，适合 Android 内嵌。
     implementation("io.ktor:ktor-server-core:2.3.12")
     implementation("io.ktor:ktor-server-cio:2.3.12")
+    // L5 视觉通道：ML Kit 中文 OCR bundled 版（vivo 国行无 GMS 必须 bundled，APK 增重 ~20-40MB；Spike S3 实测达标）
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }
