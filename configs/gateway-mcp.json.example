@@ -1,0 +1,12 @@
+{
+  "_comment": "【模板】复制本文件为同目录 gateway-mcp.json（已 gitignore，不入库），把 <GATEWAY_TOKEN> 换成网关 App 主界面「复制 TOKEN」的值再用。前置：手机端网关服务已启动 + `adb forward tcp:8848 tcp:8848`。切勿把含真实 token 的 gateway-mcp.json 提交（2026-07-18 曾误提交并 push，token 已轮换作废）。",
+  "mcpServers": {
+    "gateway": {
+      "type": "http",
+      "url": "http://127.0.0.1:8848/mcp",
+      "headers": {
+        "Authorization": "Bearer <GATEWAY_TOKEN>"
+      }
+    }
+  }
+}

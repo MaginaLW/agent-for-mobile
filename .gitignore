@@ -4,6 +4,9 @@ docs/runs/traces/
 # 派单并发锁
 scripts/.dispatch.lock
 
+# 大脑侧网关配置含真实 token，不入库；模板见 configs/gateway-mcp.json.example
+configs/gateway-mcp.json
+
 # Android 工程（app/ 网关、spikes/probe/ 探针）
 **/build/
 **/.gradle/
