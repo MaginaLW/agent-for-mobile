@@ -7,7 +7,6 @@
     "安装", "格式化", "恢复出厂"
   ],
   "send_words": ["发送", "发布", "发表", "评论", "回复"],
-  "send_whitelist_contexts": ["文件传输助手"],
   "blocked_app_prefixes": [
     "com.icbc", "com.ccb", "com.chinamworld", "cmb.pb", "com.bankcomm",
     "com.unionpay", "com.eg.android.AlipayGphone.security"

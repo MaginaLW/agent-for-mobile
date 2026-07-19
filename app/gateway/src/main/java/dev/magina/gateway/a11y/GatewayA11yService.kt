@@ -341,13 +341,14 @@ class GatewayA11yService : AccessibilityService() {
             channel = "a11y", fallback = "先 ui_snapshot 再按新 ref 操作",
         )
         val nowText = e.node.text?.toString().orEmpty()
+        val nowDesc = e.node.contentDescription?.toString().orEmpty()
         if (e.text.isNotEmpty() && nowText != e.text) throw GatewayError(
             ErrorCode.E_STALE_REF,
             "ref $ref 文本已从「${e.text.take(30)}」变为「${nowText.take(30)}」，拒绝操作",
             channel = "a11y", fallback = "先 ui_snapshot 确认目标再操作",
         )
         val b = Rect().also { e.node.getBoundsInScreen(it) }
-        return Target(e.node, nowText.ifEmpty { e.label }, e.desc, b, e.source)
+        return Target(e.node, nowText.ifEmpty { e.label }, nowDesc, b, e.source)
     }
 
     /**

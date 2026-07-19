@@ -6,13 +6,13 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.SafetyTarget
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.ocr.OcrEngine
-import dev.magina.gateway.overlay.ConfirmOverlay
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** L4/L5/L6 工具实现：snapshot/find/action/输入链/按键/等待/受控截图/确认。 */
+/** L4/L5/L6 工具实现：snapshot/find/action/输入链/按键/等待/受控截图。 */
 object UiTools {
 
     private val CAPTURE_REASONS = setOf(
@@ -60,25 +60,19 @@ object UiTools {
         return JSONObject().put("matches", matches).put("scrolls", scrolls)
     }
 
-    fun uiAction(ref: String, action: String, params: JSONObject): JSONObject {
+    fun uiAction(ref: String, action: String, params: JSONObject, expected: SafetyTarget): JSONObject {
         val a11y = GatewayA11yService.require()
         val target = a11y.resolve(ref)
-
-        // 危险控件动态升级（spec §5 分级 + safety.json 词表；覆盖弹出菜单场景）
-        if (action == "click" || action == "long_click") {
-            val label = "${target.text} ${target.desc}".trim()
-            val hit = Gateway.skills.dangerHit(label) { a11y.screenTexts() }
-            if (hit != null) {
-                val okd = ConfirmOverlay.ask(
-                    Gateway.appContext,
-                    "点击「${label.take(40)}」（命中危险词「$hit」）\n前台：${a11y.foregroundPackage()}",
-                )
-                if (!okd) throw GatewayError(
-                    ErrorCode.E_BLOCKED, "用户拒绝了危险操作：$label",
-                    channel = "overlay", fallback = "按站规输出报告收尾，不要换路重试同一危险动作",
-                )
-            }
-        }
+        val bounds = "[${target.bounds.left},${target.bounds.top}][${target.bounds.right},${target.bounds.bottom}]"
+        if (
+            expected.ref != ref || expected.text != target.text || expected.description != target.desc ||
+            expected.bounds != bounds || expected.source != target.source
+        ) throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "执行前 UI 目标与安全门复核证据不一致",
+            channel = "safety",
+            fallback = "重新感知当前页面和目标后再发起一次新调用",
+        )
         return a11y.perform(target, action, params)
     }
 
@@ -203,16 +197,20 @@ object UiTools {
             .put("readback", readback ?: JSONObject.NULL)
             .put("verified", verified)
 
-    fun pressKey(key: String): JSONObject {
+    fun pressKey(key: String, expectedFocusedInputId: String?): JSONObject {
         val a11y = GatewayA11yService.require()
         val ok = when (key) {
             "enter" -> {
-                // 焦点节点 IME_ENTER 动作优先，IME 桥兜底
+                // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
                 val focused = a11y.focusedEditable()
-                val viaNode = focused?.performAction(
+                requireFocusedInput(expectedFocusedInputId, focused)
+                val viaNode = focused!!.performAction(
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-                ) ?: false
-                viaNode || ImeBridge.enter()
+                )
+                viaNode || run {
+                    requireFocusedInput(expectedFocusedInputId, a11y.focusedEditable())
+                    ImeBridge.enter()
+                }
             }
             "del" -> ImeBridge.deleteBack(1)
             else -> a11y.globalKey(key)
@@ -223,6 +221,32 @@ object UiTools {
             fallback = if (key == "enter" || key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
         )
         return JSONObject().put("done", true)
+    }
+
+    fun focusedInputId(a11y: GatewayA11yService): String? =
+        focusedInputId(a11y.focusedEditable())
+
+    private fun requireFocusedInput(expected: String?, node: AccessibilityNodeInfo?) {
+        val actual = focusedInputId(node)
+        if (expected.isNullOrBlank() || actual.isNullOrBlank() || expected != actual) throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "执行 Enter 前焦点输入框已变化或无法识别",
+            channel = "safety",
+            fallback = "重新感知并聚焦输入框后再发起一次新调用",
+        )
+    }
+
+    private fun focusedInputId(node: AccessibilityNodeInfo?): String? {
+        node ?: return null
+        if (!node.refresh()) return null
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        return listOf(
+            node.windowId.toString(),
+            node.viewIdResourceName.orEmpty(),
+            node.className?.toString().orEmpty(),
+            node.packageName?.toString().orEmpty(),
+            "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}",
+        ).joinToString("|")
     }
 
     fun waitFor(condition: String, args: JSONObject, timeoutMs: Long): JSONObject =
@@ -242,11 +266,6 @@ object UiTools {
             else -> null
         }
         return a11y.screenshotPngBase64(rect).put("reason", reason)
-    }
-
-    fun confirm(actionDesc: String): JSONObject {
-        val ok = ConfirmOverlay.ask(Gateway.appContext, actionDesc)
-        return JSONObject().put("confirmed", ok)
     }
 
     fun macroRun(@Suppress("UNUSED_PARAMETER") name: String): JSONObject = throw GatewayError(

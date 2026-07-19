@@ -6,14 +6,17 @@ import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.Level
+import dev.magina.gateway.core.SafetyContext
+import dev.magina.gateway.core.SafetyGate
+import dev.magina.gateway.core.SafetyPolicy
+import dev.magina.gateway.core.SafetyTarget
+import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
 import org.json.JSONArray
 import org.json.JSONObject
-
-/** 动作分级（spec §5）：R 只读 / W 普通写 / D 危险（工具级默认值；目标级升级在工具内部做）。 */
-enum class Level { R, W, D }
 
 class ToolSpec(
     val name: String,
@@ -41,6 +44,10 @@ object ToolRegistry {
 
     private fun stub(msg: String, fallback: String): (JSONObject) -> JSONObject = {
         throw GatewayError(ErrorCode.E_CHANNEL_DOWN, msg, fallback = fallback)
+    }
+
+    private fun gatedOnly(name: String): (JSONObject) -> JSONObject = {
+        throw GatewayError(ErrorCode.E_INTERNAL, "$name 只能由统一安全门执行")
     }
 
     val tools: List<ToolSpec> = listOf(
@@ -195,7 +202,7 @@ object ToolRegistry {
             )
         },
         ToolSpec(
-            "ui_action", "对 ref 执行动作。点击前二次校验（文本变了拒执行）；OCR 元素 click/long_click 走坐标手势；命中危险词自动弹带内确认。不接受裸坐标。",
+            "ui_action", "对 ref 执行动作。点击前二次校验；OCR 元素 click/long_click 走坐标手势；危险目标由统一安全门确认。不接受裸坐标。",
             Level.W,
             schema(
                 listOf("ref", "action"),
@@ -204,12 +211,8 @@ object ToolRegistry {
                 "text" to prop("string", "set_text 用"),
                 "direction" to prop("string", "scroll 用：forward/backward"),
             ),
-        ) {
-            val params = JSONObject()
-                .put("text", it.optString("text"))
-                .put("direction", it.optString("direction", "forward"))
-            UiTools.uiAction(it.getString("ref"), it.getString("action"), params)
-        },
+            handler = gatedOnly("ui_action"),
+        ),
         ToolSpec(
             "type_text", "输入文本（中文关键路径）：SET_TEXT→自有 IME 字面注入，内置读回验证（树空场景 OCR 读回）。永不使用剪贴板机制。",
             Level.W,
@@ -227,7 +230,8 @@ object ToolRegistry {
                 listOf("key"),
                 "key" to prop("string", "按键", listOf("back", "home", "recents", "notifications", "enter", "del")),
             ),
-        ) { UiTools.pressKey(it.getString("key")) },
+            handler = gatedOnly("press_key"),
+        ),
         ToolSpec(
             "wait_for", "等待条件（网关内轮询，不烧大脑轮次）。",
             Level.R,
@@ -261,12 +265,7 @@ object ToolRegistry {
             ),
         ) { UiTools.screenCapture(it.getString("reason"), it.optString("ref").ifEmpty { null }, it.optJSONArray("region")) },
 
-        // ---------- 确认与宏 ----------
-        ToolSpec(
-            "confirm", "危险动作带内确认：悬浮窗卡片等人点头（60s 超时→按 [AWAIT_CONFIRM] 走带外）。",
-            Level.R,
-            schema(listOf("action_desc"), "action_desc" to prop("string", "一句话说清将要执行什么")),
-        ) { UiTools.confirm(it.getString("action_desc")) },
+        // ---------- 宏 ----------
         ToolSpec(
             "macro_run", "宏回放（M3 占位）。",
             Level.W, schema(listOf("name"), "name" to prop("string", "宏名")),
@@ -275,7 +274,7 @@ object ToolRegistry {
 
     private val byName = tools.associateBy { it.name }
 
-    /** 敏感 app 前台时仍放行的工具（撤离与纯感知）。 */
+    /** 敏感 app 前台时仍放行的工具（撤离与纯感知）；press_key 另限安全撤离键。 */
     private val BLOCKED_APP_ALLOWED = setOf(
         "device_info", "foreground_app", "keyboard_state", "press_key", "app_launch", "wait_for",
     )
@@ -297,7 +296,7 @@ object ToolRegistry {
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
         val spec = byName[name]
-        val fingerprint = args.toString()
+        val fingerprint = SafetyPolicy.fingerprint(args)
 
         fun ctxNow(): JSONObject =
             GatewayA11yService.instance?.ctx(Gateway.caps())
@@ -306,8 +305,13 @@ object ToolRegistry {
                     .put("caps", JSONArray(Gateway.caps()))
                     .put("note", "a11y 未开启，ctx 降级")
 
+        var safetyNote = ""
+
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
-            Gateway.audit.write(auditId, name, args, code, channel, SystemClock.elapsedRealtime() - start)
+            Gateway.audit.write(
+                auditId, name, args, code, channel, SystemClock.elapsedRealtime() - start,
+                note = safetyNote,
+            )
             return ToolResult(env, image)
         }
 
@@ -319,14 +323,51 @@ object ToolRegistry {
         return try {
             // 敏感 app 黑名单闸（spec §10）：银行类前台时只许感知与撤离
             val fg = GatewayA11yService.instance?.foregroundPackage()
-            if (Gateway.skills.isBlockedApp(fg) && name !in BLOCKED_APP_ALLOWED) {
+            if (Gateway.skills.isBlockedApp(fg) && !blockedAppAllows(name, args)) {
                 throw GatewayError(
                     ErrorCode.E_BLOCKED, "前台是敏感 app（$fg），默认拒绝一切读写",
                     fallback = "press_key(home) 离开后继续任务，并在报告中说明",
                 )
             }
-            Gateway.retryGuard.checkAllowed(name, fingerprint)
-            val data = spec.handler(args)
+            var contextReads = 0
+            val gate = SafetyGate(
+                policy = SafetyPolicy(
+                    dangerWords = Gateway.skills.dangerWords,
+                    sendWords = Gateway.skills.sendWords,
+                    sensitiveTargets = Gateway.skills.sensitiveTargets,
+                ),
+                confirmer = { decision ->
+                    safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
+                    try {
+                        ConfirmOverlay.ask(Gateway.appContext, decision.cardText()).also { confirmed ->
+                            safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
+                        }
+                    } catch (error: Throwable) {
+                        safetyNote += ";confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}"
+                        throw error
+                    }
+                },
+                contextProvider = { frozenArgs ->
+                    contextReads += 1
+                    safetyContext(name, frozenArgs).also {
+                        if (contextReads > 1) safetyNote += ";context=rechecked"
+                    }
+                },
+                onExecutionFailure = { error ->
+                    if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
+                        Gateway.retryGuard.recordFailure(name, fingerprint)
+                    }
+                },
+            )
+            val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
+                Gateway.retryGuard.checkAllowed(name, fingerprint)
+                val result = executeValidated(spec, frozenArgs, validatedContext)
+                runCatching { Gateway.retryGuard.recordSuccess(name, fingerprint) }
+                    .onFailure { error ->
+                        safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
+                    }
+                result
+            }
 
             // screen_capture 的图走 MCP image content，不塞 JSON 信封（token 考量）
             var image: String? = null
@@ -334,15 +375,10 @@ object ToolRegistry {
                 image = data.optString("base64").ifEmpty { null }
                 data.remove("base64")
             }
-            Gateway.retryGuard.recordSuccess(name, fingerprint)
             finish(Envelope.ok(data, ctxNow(), auditId), "OK", channelOf(name), image)
         } catch (e: GatewayError) {
-            if (e.code != ErrorCode.E_RETRY_EXHAUSTED && e.code != ErrorCode.E_CONFIRM_TIMEOUT) {
-                Gateway.retryGuard.recordFailure(name, fingerprint)
-            }
             finish(Envelope.err(e, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), e.code.name, e.channel)
         } catch (e: Exception) {
-            Gateway.retryGuard.recordFailure(name, fingerprint)
             val ge = GatewayError(ErrorCode.E_INTERNAL, "${e.javaClass.simpleName}: ${e.message}")
             finish(Envelope.err(ge, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), "E_INTERNAL", "")
         }
@@ -353,7 +389,62 @@ object ToolRegistry {
         name.startsWith("system_") || name in setOf("device_info", "clipboard", "media_query", "foreground_app", "keyboard_state") -> "api"
         name in setOf("open_uri", "intent_send", "share_text", "share_file", "app_launch") -> "intent"
         name == "screen_capture" -> "vision"
-        name == "confirm" -> "overlay"
         else -> ""
+    }
+
+    private fun blockedAppAllows(name: String, args: JSONObject): Boolean = when {
+        name !in BLOCKED_APP_ALLOWED -> false
+        name == "press_key" -> args.optString("key") in setOf("back", "home", "recents")
+        else -> true
+    }
+
+    /** 每次调用都重新读取；确认前后分别解析 ref/焦点，不依赖 revision 硬相等。 */
+    private fun safetyContext(name: String, args: JSONObject): SafetyContext {
+        val a11y = GatewayA11yService.instance ?: return SafetyContext("", "", -1)
+        val ctx = a11y.ctx(Gateway.caps())
+        val target = when {
+            name == "ui_action" -> {
+                val ref = args.getString("ref")
+                val resolved = a11y.resolve(ref)
+                SafetyTarget(
+                    ref = ref,
+                    text = resolved.text,
+                    description = resolved.desc,
+                    bounds = "[${resolved.bounds.left},${resolved.bounds.top}][${resolved.bounds.right},${resolved.bounds.bottom}]",
+                    source = resolved.source,
+                )
+            }
+            name == "press_key" && args.optString("key").equals("enter", ignoreCase = true) ->
+                SafetyTarget(focusedInputId = focusedInputId(a11y))
+            else -> null
+        }
+        return SafetyContext(
+            packageName = ctx.optString("app"),
+            activityName = ctx.optString("activity"),
+            revision = ctx.optLong("revision", -1),
+            target = target,
+        )
+    }
+
+    private fun focusedInputId(a11y: GatewayA11yService): String? {
+        return UiTools.focusedInputId(a11y)
+    }
+
+    private fun executeValidated(
+        spec: ToolSpec,
+        args: JSONObject,
+        validatedContext: SafetyContext,
+    ): JSONObject = when (spec.name) {
+        "ui_action" -> {
+            val params = JSONObject()
+                .put("text", args.optString("text"))
+                .put("direction", args.optString("direction", "forward"))
+            val expected = validatedContext.target ?: throw GatewayError(
+                ErrorCode.E_STALE_REF, "安全门未提供已复核的 UI 目标", channel = "safety",
+            )
+            UiTools.uiAction(args.getString("ref"), args.getString("action"), params, expected)
+        }
+        "press_key" -> UiTools.pressKey(args.getString("key"), validatedContext.target?.focusedInputId)
+        else -> spec.handler(args)
     }
 }

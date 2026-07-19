@@ -38,3 +38,13 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 - **会话内派单的环境卫生**：子进程要清 `CLAUDE*` 环境变量（wrapper 已做），否则子会话带着宿主会话标记跑；`ANTHROPIC_BASE_URL` 有意保留——它是回落通道开关，派单认证异常先查它。
 - 预检不做 npm registry 探测：国内网络假阴性多；版本锁定靠 configs/mobile-mcp.json，server 启不来会体现为首轮 fail。
 - 确认门 `Read-Host` 在非交互 shell 直接抛错（实测）——代理经 Bash/PowerShell 无法代答 CONFIRM，两段式硬门机械成立。
+
+## 危险动作统一硬门（2026-07-19 离线测试）
+
+- **风险等级只作元数据会产生旁路**：把 `Level.D` 写进工具注册信息并不会机械阻止 handler；统一安全门必须位于所有 handler 之前，静态等级和动态目标风险都在这里判定。
+- **逐工具确认必然漏接**：只在 `ui_action` 等个别工具里弹确认，新工具、IME 回车或其他执行通道仍可能绕过。确认策略应集中，具体工具只负责执行已放行的本次动作。
+- **自由文本 `confirm(action_desc)` 不是授权**：模型填写的描述无法绑定随后真正调用的工具，会形成“确认 A、执行 B”旁路。确认卡必须由网关根据实际工具、冻结参数以及当前 App/Activity/目标控件上下文生成，并在最终执行前复核。
+- **安全失败不计 retry**：拒绝、超时、上下文或目标失效属于安全控制结果，不得累计为执行失败，否则可能诱导大脑换路或重试危险动作。
+- **成功记账失败不能反向诱发动作重试**：动作 executor 已成功后，retry guard 的成功记账应 best-effort；记账异常只进审计，不能把已发生的动作包装成失败交给上层重试。
+
+本轮已离线通过 `SafetyGate` 12 条、`SafetyPolicy` 7 条单测及 gateway debug 构建；未连接手机，三项 P0 真机 smoke 待验。

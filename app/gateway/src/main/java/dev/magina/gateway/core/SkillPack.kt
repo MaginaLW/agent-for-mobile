@@ -16,7 +16,6 @@ class SkillPack(context: Context) {
     val shareComponents: Map<String, String>     // 包名 → 直达分享组件类名
     val dangerWords: List<String>
     val sendWords: List<String>
-    val sendWhitelistContexts: List<String>
     val blockedAppPrefixes: List<String>
     val sensitiveTargets: List<String>
 
@@ -43,7 +42,6 @@ class SkillPack(context: Context) {
         fun arr(k: String) = safety.getJSONArray(k).let { a -> (0 until a.length()).map { a.getString(it) } }
         dangerWords = arr("danger_words")
         sendWords = arr("send_words")
-        sendWhitelistContexts = arr("send_whitelist_contexts")
         blockedAppPrefixes = arr("blocked_app_prefixes")
         sensitiveTargets = arr("sensitive_targets")
     }
@@ -57,16 +55,4 @@ class SkillPack(context: Context) {
     fun isBlockedApp(pkg: String?): Boolean =
         pkg != null && blockedAppPrefixes.any { pkg.startsWith(it) }
 
-    /** 目标文本命中危险词 → 需要带内确认；命中发送词但白名单上下文可见 → 放行。 */
-    fun dangerHit(targetText: String, visibleTexts: () -> List<String>): String? {
-        val t = targetText.trim()
-        if (t.isEmpty()) return null
-        dangerWords.firstOrNull { t.contains(it) }?.let { return it }
-        sendWords.firstOrNull { t.contains(it) }?.let { hit ->
-            val whitelisted = sendWhitelistContexts.any { wl -> visibleTexts().any { v -> v.contains(wl) } }
-            return if (whitelisted) null else hit
-        }
-        sensitiveTargets.firstOrNull { t.contains(it) }?.let { return it }
-        return null
-    }
 }
