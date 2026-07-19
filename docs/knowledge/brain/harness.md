@@ -24,7 +24,7 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 
 ## 已定原则（供执行 harness 设计继承）
 
-1. **危险操作两段式派单**（用户 2026-07-16 批准）：执行器停在临界动作（发送/支付/删除）前、汇报屏幕状态后结束；人工确认后用 `--resume <session-id>` 或二次派单继续（手机屏幕状态本身就停在原地，二次派单可行）。
+1. **危险操作必须由人确认**（用户 2026-07-16 批准，2026-07-19 细化）：mobile 执行器在临界动作前停下，人工键盘确认后才走第二腿；gateway 在首次危险工具调用中等待现场人操作手机确认卡。gateway 只有在危险工具尚未调用时遇到纯人工前置条件，才允许暂停后恢复。
 2. 全量 trace 落盘 `docs/runs/`，只让摘要进派单方上下文。
 3. 每次派单记录 token/成本（JSON 计量），持续校准 [cost.md](cost.md)。
 
@@ -48,3 +48,12 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 - **成功记账失败不能反向诱发动作重试**：动作 executor 已成功后，retry guard 的成功记账应 best-effort；记账异常只进审计，不能把已发生的动作包装成失败交给上层重试。
 
 本轮已离线通过 `SafetyGate` 12 条、`SafetyPolicy` 7 条单测及 gateway debug 构建；未连接手机，三项 P0 真机 smoke 待验。
+
+## 双 executor 派单接线（2026-07-19 离线测试）
+
+- `dispatch.ps1 -Executor mobile|gateway` 共用锁、trace、ledger 和结果解析；默认仍是 `mobile`。gateway 的本地配置只允许放在已 gitignore 的 `configs/gateway-mcp.json`，仓库仅保存 example。
+- **DryRun 的位置是安全契约**：必须在任何 adb 调用、私密配置内容读取、锁创建和 trace/暂停件/ledger 落盘之前返回。否则“无手机离线验装配”会意外触碰设备、凭据或台账。
+- **暂停件必须持久化 executor**：确认腿自动继承原 profile，显式跨 profile 必须 fail-fast；无 executor 的旧暂停件只按 `mobile` 兼容，不能猜测或自动迁移到 gateway。
+- **凭据不进入观测面**：gateway token 与 Authorization 不得写入 trace、ledger、错误消息、TEMP fixture 或测试快照。离线夹具只使用合成值，且不得读取工作区可能存在的真实私密配置。
+- **发送无白名单**：旧 harness 的“文件传输助手免确认”已取消；自收消息也要通过相同安全门，任务卡不得保留豁免暗示。
+- **safety terminal 没有第二腿**：gateway 的拒绝、确认超时、`E_STALE_REF`、blocked、缺权限/通道等结果必须常规失败；不得写成 `[AWAIT_CONFIRM]`，不得用 `-Confirm` 重试。AWAIT 仅用于危险工具尚未调用时的纯人工前置条件。
