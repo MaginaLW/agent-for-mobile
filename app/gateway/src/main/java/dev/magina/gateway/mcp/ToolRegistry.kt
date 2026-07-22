@@ -300,7 +300,8 @@ object ToolRegistry {
 
         fun ctxNow(): JSONObject =
             GatewayA11yService.instance?.ctx(Gateway.caps())
-                ?: JSONObject().put("app", "").put("revision", -1)
+                ?: JSONObject().put("app", "").put("activity", "")
+                    .put("foreground_known", false).put("revision", -1)
                     .put("keyboard", JSONObject().put("visible", false).put("height", 0))
                     .put("caps", JSONArray(Gateway.caps()))
                     .put("note", "a11y 未开启，ctx 降级")
@@ -400,8 +401,20 @@ object ToolRegistry {
 
     /** 每次调用都重新读取；确认前后分别解析 ref/焦点，不依赖 revision 硬相等。 */
     private fun safetyContext(name: String, args: JSONObject): SafetyContext {
-        val a11y = GatewayA11yService.instance ?: return SafetyContext("", "", -1)
+        val a11y = GatewayA11yService.instance
+            ?: return SafetyContext("", "", -1, foregroundKnown = false)
         val ctx = a11y.ctx(Gateway.caps())
+        val packageName = ctx.optString("app")
+        val activityName = ctx.optString("activity")
+        val revision = ctx.optLong("revision", -1)
+        val foregroundKnown = ctx.optBoolean("foreground_known", false)
+        if (!foregroundKnown) return SafetyContext(
+            packageName = packageName,
+            activityName = activityName,
+            revision = revision,
+            foregroundKnown = false,
+            target = null,
+        )
         val target = when {
             name == "ui_action" -> {
                 val ref = args.getString("ref")
@@ -419,9 +432,10 @@ object ToolRegistry {
             else -> null
         }
         return SafetyContext(
-            packageName = ctx.optString("app"),
-            activityName = ctx.optString("activity"),
-            revision = ctx.optLong("revision", -1),
+            packageName = packageName,
+            activityName = activityName,
+            revision = revision,
+            foregroundKnown = true,
             target = target,
         )
     }

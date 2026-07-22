@@ -47,8 +47,7 @@ class GatewayA11yService : AccessibilityService() {
     }
 
     private val rev = AtomicLong(0)
-    @Volatile private var fgPackage: String = ""
-    @Volatile private var fgActivity: String = ""
+    private val foregroundWindowTracker = ForegroundWindowTracker()
 
     /**
      * ref 表项。node=null 表示 OCR 来源（无节点，坐标手势操作）。
@@ -88,23 +87,24 @@ class GatewayA11yService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 rev.incrementAndGet()
-                event.packageName?.toString()?.let { pkg ->
-                    // IME/系统窗口不算前台 app 切换
-                    if (windows.none { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD && it.root?.packageName == event.packageName }) {
-                        fgPackage = pkg
-                        fgActivity = event.className?.toString() ?: ""
-                    }
-                }
+                foregroundWindowTracker.onWindowStateChanged(
+                    eventWindowId = event.windowId,
+                    packageName = event.packageName?.toString(),
+                    activityName = event.className?.toString(),
+                    windows = foregroundWindows(),
+                )
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> rev.incrementAndGet()
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> rev.incrementAndGet()
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                rev.incrementAndGet()
+                foregroundWindowTracker.onWindowsChanged(foregroundWindows())
+            }
         }
     }
 
     // ---------- ctx ----------
 
-    fun foregroundPackage(): String =
-        fgPackage.ifEmpty { rootInActiveWindow?.packageName?.toString() ?: "" }
+    fun foregroundPackage(): String = currentForeground().packageName
 
     fun keyboardState(): JSONObject {
         val ime = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
@@ -115,13 +115,52 @@ class GatewayA11yService : AccessibilityService() {
             .put("height", if (ime != null) b.height() else 0)
     }
 
-    fun ctx(caps: List<String>): JSONObject = JSONObject()
-        .put("app", foregroundPackage())
-        .put("activity", fgActivity)
-        .put("revision", revision)
-        .put("keyboard", keyboardState())
-        .put("screen", "on") // 服务在收事件即亮屏；灭屏感知 M1b 接 PowerManager
-        .put("caps", JSONArray(caps))
+    fun ctx(caps: List<String>): JSONObject {
+        // 同一次已接受事件原子地产生 package/activity，避免 ctx 拼出跨窗口身份。
+        val foreground = currentForeground()
+        return JSONObject()
+            .put("app", foreground.packageName)
+            .put("activity", foreground.activityName)
+            .put("foreground_known", foreground.known)
+            .put("revision", revision)
+            .put("keyboard", keyboardState())
+            .put("screen", "on") // 服务在收事件即亮屏；灭屏感知 M1b 接 PowerManager
+            .put("caps", JSONArray(caps))
+    }
+
+    /**
+     * 冷启动仅从活动应用窗口取 package-only 后备；overlay/IME root 不参与，root 为空则保持未知。
+     */
+    private fun currentForeground(): ResolvedForeground {
+        val currentWindow = applicationWindow()
+        return resolveForeground(
+            identity = foregroundWindowTracker.current(),
+            applicationWindowId = currentWindow?.id,
+            applicationWindowPackageName = currentWindow?.root?.packageName?.toString(),
+        )
+    }
+
+    private fun foregroundWindows(): List<ForegroundWindow> = windows.map { window ->
+        ForegroundWindow(
+            id = window.id,
+            type = when (window.type) {
+                AccessibilityWindowInfo.TYPE_APPLICATION -> ForegroundWindowType.APPLICATION
+                AccessibilityWindowInfo.TYPE_INPUT_METHOD -> ForegroundWindowType.INPUT_METHOD
+                else -> ForegroundWindowType.OTHER
+            },
+            isActive = window.isActive,
+            isFocused = window.isFocused,
+        )
+    }
+
+    private fun applicationWindow(): AccessibilityWindowInfo? {
+        val currentWindows = windows
+        return currentWindows.firstOrNull {
+            it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive
+        } ?: currentWindows.firstOrNull {
+            it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
+        }
+    }
 
     // ---------- snapshot / find ----------
 
@@ -295,10 +334,7 @@ class GatewayA11yService : AccessibilityService() {
     fun screenTexts(): List<String> = visibleTexts(withOcr = fgSparse())
 
     /** 活动应用窗口 id（type=APPLICATION 且 active/focused；vivo 灵动岛等悬浮窗不算前台归属）。 */
-    private fun appWindowId(): Int =
-        windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive }?.id
-            ?: windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused }?.id
-            ?: -1
+    private fun appWindowId(): Int = applicationWindow()?.id ?: -1
 
     /** 活动应用窗口的可读节点是否稀疏（达到阈值即提前返回，代价仅一次浅遍历）。 */
     private fun fgSparse(): Boolean {

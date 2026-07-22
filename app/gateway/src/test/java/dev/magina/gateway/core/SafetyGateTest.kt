@@ -238,6 +238,94 @@ class SafetyGateTest {
         assertEquals("home", executorKey)
     }
 
+    @Test
+    fun `unknown foreground blocks Level W before confirmation and execution`() {
+        assertUnknownForegroundBlocked(Level.W)
+    }
+
+    @Test
+    fun `unknown foreground blocks Level D before confirmation and execution`() {
+        assertUnknownForegroundBlocked(Level.D)
+    }
+
+    @Test
+    fun `unknown foreground still allows Level R execution`() {
+        var confirmerCalls = 0
+        var executorCalls = 0
+        var failureRecords = 0
+        val unknown = SafetyContext("fallback.package", "", -1, foregroundKnown = false)
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; false },
+            contextProvider = { unknown },
+            onExecutionFailure = { failureRecords++ },
+        )
+
+        val result = gate.execute("device_info", Level.R, JSONObject()) { _, context ->
+            executorCalls++
+            context.foregroundKnown
+        }
+
+        assertEquals(false, result)
+        assertEquals(0, confirmerCalls)
+        assertEquals(1, executorCalls)
+        assertEquals(0, failureRecords)
+    }
+
+    @Test
+    fun `foreground becoming unknown after confirmation blocks before execution`() {
+        var contextReads = 0
+        var confirmerCalls = 0
+        var executorCalls = 0
+        var failureRecords = 0
+        val unknown = initialContext.copy(foregroundKnown = false)
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; true },
+            contextProvider = {
+                contextReads++
+                if (contextReads == 1) initialContext else unknown
+            },
+            onExecutionFailure = { failureRecords++ },
+        )
+
+        val error = expectGatewayError(ErrorCode.E_BLOCKED) {
+            gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+        }
+
+        assertEquals("safety", error.channel)
+        assertEquals(2, contextReads)
+        assertEquals(1, confirmerCalls)
+        assertEquals(0, executorCalls)
+        assertEquals(0, failureRecords)
+    }
+
+    private fun assertUnknownForegroundBlocked(level: Level) {
+        var confirmerCalls = 0
+        var contextReads = 0
+        var executorCalls = 0
+        var failureRecords = 0
+        val unknown = SafetyContext("fallback.package", "", -1, foregroundKnown = false)
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; true },
+            contextProvider = { contextReads++; unknown },
+            onExecutionFailure = { failureRecords++ },
+        )
+
+        val error = expectGatewayError(ErrorCode.E_BLOCKED) {
+            gate.execute("unknown_foreground_test", level, JSONObject()) { _, _ ->
+                executorCalls++
+            }
+        }
+
+        assertEquals("safety", error.channel)
+        assertEquals(1, contextReads)
+        assertEquals(0, confirmerCalls)
+        assertEquals(0, executorCalls)
+        assertEquals(0, failureRecords)
+    }
+
     private fun assertContextChangeIsStale(changedContext: SafetyContext) {
         var contextReads = 0
         var executorCalls = 0

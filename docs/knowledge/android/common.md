@@ -9,6 +9,12 @@
 - Android 13+ 普通 app 无法编程开关蓝牙/WiFi（shell 位阶专属，见 [sys-cli.md](sys-cli.md)）。
 - 无障碍 `takeScreenshot`（API 30+）：单发极快 **32–37ms**（vivo V2352A/Android16 实测，远优于 500ms 判据）。连发（~400ms 间隔）触发**软节流**——第二次**不报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`，而是 `takeScreenshot` 延迟到 **~750ms** 后成功返回；冷却 ~2s 后回落常速（Spike S4 实测，未精确二分冷却边界）。**与常见文档所述「硬失败」不同**，OriginOS6 是拖延返回。网关 `E_RATE_LIMITED` 冷却窗口参考 ~800ms（或容忍单次 ~750ms 延迟，不必判失败）。**M1b 补充（2026-07-19）：更紧的连发（<300ms，OCR 融合 snapshot 紧跟点击校验）也会硬报 INTERVAL_TIME_SHORT**——软/硬两种形态都存在；网关内部视觉通道已吸收（等 ~900ms 重试一次），`screen_capture` 工具仍向大脑透出 E_RATE_LIMITED 语义。
 
+## AccessibilityService 窗口身份（vivo/Android 16，2026-07-22）
+
+- `TYPE_APPLICATION_OVERLAY` 也会产生 `TYPE_WINDOW_STATE_CHANGED`；事件携带的 package/class（实测 class 为 `FrameLayout`）只描述事件窗口，不能直接当作当前前台身份。必须用 `event.windowId` 归属到 windows 列表中的 active `TYPE_APPLICATION`，没有 active 时才保守后备到 focused `TYPE_APPLICATION`；已知 overlay、IME 或 inactive 窗口事件直接忽略。
+- **防御性乱序场景（已有离线回归覆盖，尚无单独真机时序证据）**：事件若短暂早于 windows 列表更新，仅对尚未出现在列表中的 windowId 暂存候选，等 `TYPE_WINDOWS_CHANGED` 后复核归属再发布，不能把候选先写成前台。
+- 前台身份必须显式区分 `Known` / `Unknown`；root 仅给出 package 的 fallback 不等于已验证窗口身份。`Unknown` 时只读 R 可用于诊断，写入 W 与危险 D 动作必须 fail-closed。
+
 ## ML Kit 中文 OCR 实战（M1b 融合层，vivo V2352A/Android16，2026-07-19）
 
 - **深色模式灰底灰字漏识 ~40%**（微信搜索框/留言框占位符实锤；同屏正常对比度文本稳定命中）：临界对比度文本不可依赖单发识别。对策：整屏 OCR 缓存加 **2s TTL 重识**给抖动翻盘机会（revision 缓存对事件静默 app 会把单次漏识钉死）；关键锚点尽量选正常对比度文本。

@@ -9,6 +9,7 @@ data class SafetyContext(
     val packageName: String,
     val activityName: String,
     val revision: Long,
+    val foregroundKnown: Boolean = packageName.isNotEmpty(),
     val target: SafetyTarget? = null,
 )
 
@@ -147,6 +148,7 @@ class SafetyGate(
         val frozenArgs = deepCopy(args)
         val initialArgsFingerprint = SafetyPolicy.fingerprint(frozenArgs)
         val initialContext = contextProvider(deepCopy(frozenArgs))
+        requireKnownForeground(toolName, level, initialContext)
         val decision = policy.assess(toolName, level, deepCopy(frozenArgs), initialContext)
 
         val validatedContext = when (decision) {
@@ -165,6 +167,7 @@ class SafetyGate(
                 } catch (error: Throwable) {
                     stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
                 }
+                requireKnownForeground(toolName, level, currentContext)
                 validateContext(toolName, frozenArgs, initialContext, currentContext)
                 currentContext
             }
@@ -182,6 +185,20 @@ class SafetyGate(
             if (!safetyFailure) runCatching { onExecutionFailure(error) }
             throw error
         }
+    }
+
+    private fun requireKnownForeground(
+        toolName: String,
+        level: Level,
+        context: SafetyContext,
+    ) {
+        if (level == Level.R || context.foregroundKnown) return
+        throw GatewayError(
+            ErrorCode.E_BLOCKED,
+            "前台 APPLICATION 身份未知，拒绝执行 $level 级工具：$toolName",
+            channel = "safety",
+            fallback = "等待有效的 APPLICATION 前台窗口事件后重新感知并重试",
+        )
     }
 
     private fun validateContext(
