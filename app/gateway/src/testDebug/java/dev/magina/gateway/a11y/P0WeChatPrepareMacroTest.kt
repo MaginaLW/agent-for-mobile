@@ -32,14 +32,33 @@ class P0WeChatPrepareMacroTest {
     }
 
     @Test
-    fun `fails closed when search entry is absent`() {
+    fun `low confidence chat list title is still recognized as chat list`() {
+        // 真机实测：微信聊天列表顶部「微信」标题 OCR 置信度常落在 0.51~0.61，低于动作级门槛
+        // 0.65（2026-07-23）。识别门槛放宽后应能正常识别为聊天列表，不再在 unrecognized_entry
+        // 就 fail-closed；但既无可信目标也无可信搜索入口时，仍必须在真正点击前止步。
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(
+                snapshot(element("title", "微信", source = "ocr", confidence = 0.55, centerX = 500, centerY = 100)),
+            ),
+        )
+
+        val error = expectError(ErrorCode.E_NOT_FOUND) { macro(adapter).run() }
+
+        assertTrue(error.message.orEmpty().contains("搜索入口"))
+        assertEquals(emptyList<String>(), adapter.clicks)
+    }
+
+    @Test
+    fun `fails closed when neither target nor search entry is found`() {
+        // 微信搜索入口是纯图标、无 OCR 可读文字，聊天列表识别不再要求预先找到它
+        // （2026-07-23 真机实锤）；没有可点目标时仍必须在尝试点击搜索前 fail-closed。
         val adapter = FakeAdapter(
             snapshots = mutableListOf(snapshot(element("title", "微信", centerX = 500, centerY = 100))),
         )
 
-        val error = expectError(ErrorCode.E_BLOCKED) { macro(adapter).run() }
+        val error = expectError(ErrorCode.E_NOT_FOUND) { macro(adapter).run() }
 
-        assertTrue(error.message.orEmpty().contains("非敏感"))
+        assertTrue(error.message.orEmpty().contains("搜索入口"))
         assertEquals(emptyList<String>(), adapter.clicks)
     }
 
@@ -64,7 +83,10 @@ class P0WeChatPrepareMacroTest {
         )
         val adapter = FakeAdapter(snapshots = mutableListOf(list))
 
-        expectError(ErrorCode.E_BLOCKED) { macro(adapter).run() }
+        // 置信度 0.64 低于 MIN_ACTION_OCR_CONFIDENCE(0.65)：搜索入口识别阶段（低门槛）能看到
+        // 聊天列表标题，但真正尝试定位可点目标时 findSearchEntry 仍按动作级门槛拒绝，
+        // fail-closed 于 E_NOT_FOUND，核心安全属性（从不点击）不变。
+        expectError(ErrorCode.E_NOT_FOUND) { macro(adapter).run() }
 
         assertEquals(emptyList<String>(), adapter.clicks)
     }

@@ -232,7 +232,13 @@ internal object P0FocusProbeValidator {
         sensitiveSurfaceWords: List<String>,
     ): Boolean {
         if (snapshot.blockingOverlay) return true
-        val signals = snapshot.elements.map { normalized(it.text + it.description) }
+        // 只扫真实弹窗/对话框会用的原生 a11y 节点；WeChat 聊天列表行本身 a11y 稀疏（root=null
+        // 常见），其可读文字来自 OCR 融合（fusion=ocr/fused），混入无关会话预览、官方账号
+        // （如「微信支付」）、转账/到账系统横幅，会让整页扫描对任何真实账号必然误报（2026-07-23
+        // 真机实锤：聊天列表干净无弹窗，仅因存在「微信支付」入口即命中危险词「支付」）。
+        val signals = snapshot.elements
+            .filter { it.source == "a11y" }
+            .map { normalized(it.text + it.description) }
             .filter(String::isNotEmpty)
         if (SafetyPolicy.hasSensitiveSurfaceSemantics(signals, sensitiveSurfaceWords)) return true
         if (signals.any { it.contains("发送给") || it.contains("确认发送") }) return true
@@ -631,7 +637,13 @@ internal class P0WeChatPrepareMacro(
             "sensitive_entry",
         )
         val recognizedConversation = isConversationSurface(snapshot)
-        val recognizedChatList = hasTopTitle(snapshot, "微信") && findSearchEntry(snapshot) != null
+        // 微信聊天列表的搜索入口是纯图标、无 OCR 可读文字（2026-07-23 真机实锤：47 个
+        // OCR 元素里不存在任何「搜索」候选，不是置信度问题，是压根没有文字可识别）；
+        // 要求"能在此阶段就找到可信搜索入口"这条precondition 永远无法满足。真正的点击
+        // 安全性不受影响——真要点搜索入口时 clickOrFail 仍会独立走
+        // P0StageRefActionValidator.find 的 MIN_ACTION_OCR_CONFIDENCE 复核，找不到就在
+        // 那一步 fail-closed；这里只需确认"看起来是微信自己的聊天列表页"。
+        val recognizedChatList = hasTopTitle(snapshot, "微信")
         val recognizedSearch = isSearchSurface(snapshot) && findTargetConversation(snapshot) != null
         if (!recognizedConversation && !recognizedChatList && !recognizedSearch) throw macroError(
             ErrorCode.E_BLOCKED,
@@ -682,12 +694,22 @@ internal class P0WeChatPrepareMacro(
         }
     }
 
+    /** 仅用于页面识别，不用于任何点击目标；置信度门槛见 [MIN_RECOGNITION_OCR_CONFIDENCE]。 */
+    private fun trustedForRecognition(element: P0MacroElement, snapshot: P0MacroSnapshot): Boolean =
+        when (element.source) {
+            "a11y" -> true
+            "ocr", "fused" -> element.confidence?.let {
+                it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
+            } == true
+            else -> false
+        } && validBounds(element.bounds, snapshot.screenWidth, snapshot.screenHeight)
+
     private fun hasTopTitle(snapshot: P0MacroSnapshot, title: String): Boolean {
         val w = snapshot.screenWidth
         val h = snapshot.screenHeight
         return snapshot.elements.any { element ->
             (normalized(element.text) == title || normalized(element.description) == title) &&
-                trustedRef(element, snapshot) && element.stage == P0ElementStage.TOOLBAR &&
+                trustedForRecognition(element, snapshot) && element.stage == P0ElementStage.TOOLBAR &&
                 element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
                 element.bounds.centerX in (w * 0.3).toInt()..(w * 0.7).toInt()
         }

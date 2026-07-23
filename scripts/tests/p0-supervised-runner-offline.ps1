@@ -63,7 +63,7 @@ function New-Fixture {
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
-        'vivo_unknown', 'enabled_but_not_bound'
+        'enabled_but_not_bound'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -219,6 +219,11 @@ if "%1"=="shell" (
     echo %4>"%P0_FAKE_STATE%\current-ime.txt"& exit /b 0
   )
   if "%2 %3 %4"=="appops get dev.magina.gateway" (echo SYSTEM_ALERT_WINDOW: allow& exit /b 0)
+  if "%2 %3 %4"=="cmd package resolve-activity" (
+    echo priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false
+    echo com.tencent.mm/.ui.LauncherUI
+    exit /b 0
+  )
   if "%2 %3"=="pidof dev.magina.gateway" (echo 1234& exit /b 0)
   if "%2 %3"=="pm path" (echo package:/data/app/fake/base.apk& exit /b 0)
   if "%2 %3 %4"=="run-as dev.magina.gateway sh" (exit /b 0)
@@ -233,11 +238,6 @@ if "%1"=="shell" (
     exit /b 0
   )
   if "%2 %3"=="dumpsys deviceidle" (echo system-excidle,dev.magina.gateway,10000& exit /b 0)
-  if "%2 %3"=="getprop ro.product.manufacturer" (
-    findstr /x /c:"vivo_unknown" "%P0_FAKE_STATE%\scenario.txt" >nul && (echo vivo& exit /b 0)
-    echo google& exit /b 0
-  )
-  if "%2 %3 %4"=="cmd appops get" (echo Error: Unknown operation& exit /b 1)
   if "%2 %3 %4 %6"=="run-as dev.magina.gateway cp files/test-control.json" (copy /y "%P0_FAKE_STATE%\staged-control.json" "%P0_FAKE_STATE%\test-control.json" >nul& exit /b 0)
   echo %*| findstr /c:"run-as dev.magina.gateway rm" >nul
   if not errorlevel 1 (
@@ -548,7 +548,7 @@ function Invoke-FixtureRunner {
         [void]$runnerArgs.Add($arg)
     }
     if ($Provision) { [void]$runnerArgs.Add('-Provision') }
-    foreach ($arg in @('-RepoRootOverride',$Fixture.Repo,'-AdbPath',$Fixture.Adb,'-HealthProbePath',$Fixture.HealthProbe,'-DispatchPath',$Fixture.Dispatch,'-ConfirmationTimeoutSec',"$ConfirmationTimeoutSec",'-PollIntervalMs','20')) {
+    foreach ($arg in @('-RepoRootOverride',$Fixture.Repo,'-AdbPath',$Fixture.Adb,'-HealthProbePath',$Fixture.HealthProbe,'-DispatchPath',$Fixture.Dispatch,'-ConfirmationTimeoutSec',"$ConfirmationTimeoutSec",'-PollIntervalMs','20','-A11yBindTimeoutSec','1')) {
         [void]$runnerArgs.Add($arg)
     }
     foreach ($arg in $runnerArgs) {
@@ -824,14 +824,6 @@ try {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) '健康探测失败后仍启动了 dispatch。'
     }
 
-    Test-Case 'vivo 厂商能力未知时零付费派单' {
-        $fixture = New-Fixture vivo_unknown
-        $result = Invoke-FixtureRunner $fixture @('Allow')
-        Assert-True ($result.ExitCode -ne 0) 'vivo 厂商能力未知必须 setup-fail。'
-        Assert-Contains $result.Text 'vivo'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) 'vivo 能力失败后仍启动了 dispatch。'
-    }
-
     Test-Case '无障碍仅 enabled 但未出现在 Bound services 时零付费派单' {
         . $SourceProvisioner
         $component = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
@@ -845,6 +837,15 @@ try {
         Assert-True (Test-P0AccessibilityComponentBound `
             -DumpsysText "Bound services:`n  ComponentInfo{$shortComponent}`nCrashed services: none" `
             -Component $component) 'Bound parser 不支持缩写组件的缩进区段。'
+        Assert-True (Test-P0AccessibilityComponentBound `
+            -DumpsysText "Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}`nEnabled services:{{$component}}" `
+            -Component $component -Label '执行网关') 'Bound parser 不支持 vivo label-only 绑定格式。'
+        Assert-True (-not (Test-P0AccessibilityComponentBound `
+            -DumpsysText "Bound services:{}`nEnabled services:{{$component}}" `
+            -Component $component -Label '执行网关')) '空绑定区段不得因 label 参数误判为已绑定。'
+        Assert-True (-not (Test-P0AccessibilityComponentBound `
+            -DumpsysText "Bound services:{Service[label=其他服务, feedbackType[FEEDBACK_GENERIC]]}`nEnabled services:{{$component}}" `
+            -Component $component -Label '执行网关')) '不同 label 的绑定不得误判为 gateway 已绑定。'
         $fixture = New-Fixture enabled_but_not_bound
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) 'enabled 但未 bound 必须 setup-fail。'

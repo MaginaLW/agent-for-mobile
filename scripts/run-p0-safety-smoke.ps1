@@ -18,6 +18,7 @@ param(
     [int]$ConfirmationTimeoutSec = 120,
     [int]$DispatchTimeoutMin = 15,
     [int]$PollIntervalMs = 500,
+    [int]$A11yBindTimeoutSec = 45,
     [switch]$DryRun
 )
 
@@ -28,6 +29,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 if ($ConfirmationTimeoutSec -lt 1 -or $ConfirmationTimeoutSec -gt 240) { throw 'ConfirmationTimeoutSec 必须为 1..240。' }
 if ($DispatchTimeoutMin -lt 1 -or $DispatchTimeoutMin -gt 60) { throw 'DispatchTimeoutMin 必须为 1..60。' }
 if ($PollIntervalMs -lt 10 -or $PollIntervalMs -gt 5000) { throw 'PollIntervalMs 必须为 10..5000。' }
+if ($A11yBindTimeoutSec -lt 1 -or $A11yBindTimeoutSec -gt 300) { throw 'A11yBindTimeoutSec 必须为 1..300。' }
 
 $RepoRoot = if ([string]::IsNullOrWhiteSpace($RepoRootOverride)) { Split-Path $PSScriptRoot -Parent } else { $RepoRootOverride }
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
@@ -616,7 +618,7 @@ function Test-P0SensitivePayload {
 
 function Assert-P0NoSensitiveFiles {
     param(
-        [Parameter(Mandatory)][string[]]$Paths,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Paths,
         [Parameter(Mandatory)]$SensitiveValues
     )
     foreach ($path in $Paths) {
@@ -805,7 +807,7 @@ try {
     $lockStream = New-P0RunnerLock -Path $lockPath -RunId $runId
     New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
     $session = Start-P0DeviceProvision -RepoRoot $RepoRoot -AdbPath $AdbPath -Provision:$Provision `
-        -HealthProbePath $HealthProbePath
+        -HealthProbePath $HealthProbePath -A11yBindTimeoutSec $A11yBindTimeoutSec
 
     foreach ($leg in $orderedLegs) {
         Clear-P0DebugArtifacts -Session $session

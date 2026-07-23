@@ -340,7 +340,7 @@ class GatewayA11yService : AccessibilityService() {
             .put("vision_generation", usedVisionGeneration)
             .put("capture_revision", usedCaptureRevision)
             .put("foreground_window_id", fgWinId)
-            .put("blocking_overlay", hasBlockingOverlay(ws))
+            .put("blocking_overlay", hasBlockingOverlay(ws, fgWinId))
             .put("ime_visible", windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD })
             .put("system_bottom_inset", systemBottomInset())
             .put("elements", elements)
@@ -561,7 +561,14 @@ class GatewayA11yService : AccessibilityService() {
         val titleBand = Rect((w * 0.25).toInt(), (h * 0.04).toInt(), (w * 0.75).toInt(), (h * 0.22).toInt())
         val probeBand = Rect((w * 0.24).toInt(), (h * 0.84).toInt(), (w * 0.76).toInt(), (h * 0.94).toInt())
         return exposed.any { window ->
-            if (window.id == primaryId || window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return@any false
+            // 状态栏/导航栏是常驻 TYPE_SYSTEM 窗口：状态栏满宽、y 落在 0..~系统栏高度，
+            // 与 titleBand（y 4%~22%）必然几何相交——不排除会让本判定在任意前台 App 上恒为
+            // true（2026-07-23 真机实锤，本设备 1260x2800，状态栏 bounds=(0,0)-(1260,133)
+            // 与 titleBand=(315,112)-(945,616) 相交）。TYPE_SYSTEM 从不代表遮挡内容的对话框。
+            if (window.id == primaryId ||
+                window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+                window.type == AccessibilityWindowInfo.TYPE_SYSTEM
+            ) return@any false
             val bounds = Rect().also(window::getBoundsInScreen)
             bounds.width() > 0 && bounds.height() > 0 &&
                 (Rect.intersects(bounds, titleBand) || Rect.intersects(bounds, probeBand))

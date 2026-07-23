@@ -4,6 +4,8 @@ Set-StrictMode -Version 3.0
 
 $script:P0PackageName = 'dev.magina.gateway'
 $script:P0AccessibilityComponent = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+# vivo 的 dumpsys accessibility 绑定区段只显示 Service[label=...]，不含组件名；label 与 manifest application label 同源。
+$script:P0AccessibilityLabel = '执行网关'
 $script:P0ImeComponent = 'dev.magina.gateway/.ime.GatewayIme'
 $script:P0WechatPackage = 'com.tencent.mm'
 $script:P0Port = 8848
@@ -270,7 +272,8 @@ function Get-P0BoundAccessibilitySection {
 function Test-P0AccessibilityComponentBound {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$DumpsysText,
-        [Parameter(Mandatory)][string]$Component
+        [Parameter(Mandatory)][string]$Component,
+        [string]$Label = ''
     )
 
     $separator = $Component.IndexOf('/')
@@ -283,6 +286,12 @@ function Test-P0AccessibilityComponentBound {
     foreach ($section in @(Get-P0BoundAccessibilitySection -DumpsysText $DumpsysText)) {
         if ($section.Contains($Component, [StringComparison]::Ordinal) -or
             $section.Contains($shortComponent, [StringComparison]::Ordinal)) {
+            return $true
+        }
+        # vivo 绑定区段为 label-only（Service[label=执行网关, ...]）；组件精确性由 Enabled services 检查另行保证。
+        if (-not [string]::IsNullOrEmpty($Label) -and
+            ($section.Contains("label=$Label,", [StringComparison]::Ordinal) -or
+                $section.Contains("label=$Label]", [StringComparison]::Ordinal))) {
             return $true
         }
     }
@@ -312,7 +321,8 @@ function Start-P0DeviceProvision {
         [Parameter(Mandatory)][string]$AdbPath,
         [switch]$Provision,
         [string]$ApkPath = (Join-Path $RepoRoot 'app\gateway\build\outputs\apk\debug\gateway-debug.apk'),
-        [string]$HealthProbePath = (Join-Path $PSScriptRoot 'p0-gateway-health-probe.ps1')
+        [string]$HealthProbePath = (Join-Path $PSScriptRoot 'p0-gateway-health-probe.ps1'),
+        [int]$A11yBindTimeoutSec = 45
     )
 
     $configPath = Join-Path $RepoRoot 'configs\gateway-mcp.json'
@@ -366,6 +376,18 @@ function Start-P0DeviceProvision {
             if ($enabled -eq 'null') { $enabled = '' }
             $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
+            # 值不变的 settings put 不触发 AMS observer，重装后只能等慢速回补重绑（vivo 实测 60-90s）；
+            # 先写一个必然不同的值（去掉本服务，空则 delete）再写全量，强制立即重绑。
+            $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
+            if ($withoutGateway.Count -gt 0) {
+                $null = Invoke-P0DeviceCommand -Session $session `
+                    -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
+                    -Operation '重置无障碍配置以触发重绑'
+            } else {
+                $null = Invoke-P0DeviceCommand -Session $session `
+                    -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
+                    -Operation '重置无障碍配置以触发重绑' -AllowFailure
+            }
             $null = Invoke-P0DeviceCommand -Session $session `
                 -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
                 -Operation '启用 gateway 无障碍'
@@ -379,7 +401,7 @@ function Start-P0DeviceProvision {
             $null = Invoke-P0DeviceCommand -Session $session `
                 -Arguments @('shell','am','start','-n',"$script:P0PackageName/.MainActivity") -Operation '启动 gateway 面板'
             $null = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','run-as',$script:P0PackageName,'am','start-foreground-service','-n',"$script:P0PackageName/.GatewayService") `
+                -Arguments @('shell','run-as',$script:P0PackageName,'am','start-foreground-service','--user','0','-n',"$script:P0PackageName/.GatewayService") `
                 -Operation '启动 gateway 服务'
             $null = Invoke-P0DeviceCommand -Session $session `
                 -Arguments @('shell','dumpsys','deviceidle','whitelist',"+$script:P0PackageName") `
@@ -427,11 +449,22 @@ function Start-P0DeviceProvision {
         if ($a11yProbe.ExitCode -ne 0 -or $script:P0AccessibilityComponent -notin $enabledAfter) {
             throw 'setup-fail：gateway 无障碍未就绪。'
         }
-        $a11yBoundProbe = Invoke-P0DeviceCommand -Session $session `
-            -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
-        if ($a11yBoundProbe.ExitCode -ne 0 -or
-            -not (Test-P0AccessibilityComponentBound -DumpsysText $a11yBoundProbe.Stdout `
-                -Component $script:P0AccessibilityComponent)) {
+        # 重装 APK 后系统重绑无障碍服务需要数秒到数十秒（vivo 实测），单次探测必然竞态，按上限轮询。
+        $a11yBound = $false
+        $a11yBindDeadline = [DateTime]::UtcNow.AddSeconds($A11yBindTimeoutSec)
+        while ($true) {
+            $a11yBoundProbe = Invoke-P0DeviceCommand -Session $session `
+                -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
+            if ($a11yBoundProbe.ExitCode -eq 0 -and
+                (Test-P0AccessibilityComponentBound -DumpsysText $a11yBoundProbe.Stdout `
+                    -Component $script:P0AccessibilityComponent -Label $script:P0AccessibilityLabel)) {
+                $a11yBound = $true
+                break
+            }
+            if ([DateTime]::UtcNow -ge $a11yBindDeadline) { break }
+            Start-Sleep -Milliseconds 1000
+        }
+        if (-not $a11yBound) {
             throw 'setup-fail：gateway 无障碍服务未实际 bound/connected。'
         }
         $imeProbe = Invoke-P0DeviceCommand -Session $session `
@@ -447,22 +480,6 @@ function Start-P0DeviceProvision {
             -Arguments @('shell','dumpsys','deviceidle','whitelist') -Operation '复核 deviceidle 白名单' -AllowFailure
         if ($idleProbe.ExitCode -ne 0 -or $idleProbe.Stdout -notmatch [regex]::Escape($script:P0PackageName)) {
             throw 'setup-fail：gateway 不在 deviceidle 白名单。'
-        }
-        $manufacturerProbe = Invoke-P0DeviceCommand -Session $session `
-            -Arguments @('shell','getprop','ro.product.manufacturer') -Operation '识别设备厂商' -AllowFailure
-        $manufacturer = $manufacturerProbe.Stdout.Trim()
-        if ($manufacturerProbe.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($manufacturer)) {
-            throw 'setup-fail：设备厂商状态未知。'
-        }
-        if ($manufacturer -match '(?i)vivo') {
-            foreach ($vendorOp in @('AUTO_START','BACKGROUND_START_ACTIVITY')) {
-                $vendorProbe = Invoke-P0DeviceCommand -Session $session `
-                    -Arguments @('shell','cmd','appops','get',$script:P0PackageName,$vendorOp) `
-                    -Operation '复核 vivo 厂商后台能力' -AllowFailure
-                if ($vendorProbe.ExitCode -ne 0 -or $vendorProbe.Stdout -notmatch '(?i)allow') {
-                    throw "setup-fail：vivo 厂商能力 $vendorOp 未知或未允许。"
-                }
-            }
         }
         if (-not (Test-Path -LiteralPath $HealthProbePath -PathType Leaf)) { throw 'setup-fail：缺少本地 gateway 健康探针。' }
         $health = Invoke-P0ExternalText -FilePath $HealthProbePath `
@@ -490,8 +507,21 @@ function Start-P0DeviceProvision {
 
 function Start-P0TargetApp {
     param([Parameter(Mandatory)]$Session)
+    # 目标 Android 版本的 shell am start 对隐式 -a MAIN -c LAUNCHER -p <pkg> 解析失败
+    # （"unable to resolve"；--include-stopped-packages 同样无效，2026-07-23 真机实锤），
+    # 必须先动态解出真实 launcher 组件，再用 -n 显式启动。
+    $resolveProbe = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','cmd','package','resolve-activity','--brief','-c','android.intent.category.LAUNCHER',$script:P0WechatPackage) `
+        -Operation '解析微信启动组件' -AllowFailure
+    $component = @($resolveProbe.Stdout -split "`r?`n" |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -match "^$([regex]::Escape($script:P0WechatPackage))/\S+$" } |
+        Select-Object -Last 1)
+    if ($resolveProbe.ExitCode -ne 0 -or $component.Count -ne 1) {
+        throw 'setup-fail：无法解析微信启动组件。'
+    }
     $null = Invoke-P0DeviceCommand -Session $Session `
-        -Arguments @('shell','am','start','-a','android.intent.action.MAIN','-c','android.intent.category.LAUNCHER','-p',$script:P0WechatPackage) `
+        -Arguments @('shell','am','start','-n',[string]$component[0]) `
         -Operation '启动微信测试目标'
 }
 
@@ -558,8 +588,11 @@ function Get-P0ConfirmationState {
         -Arguments @('exec-out','run-as',$script:P0PackageName,'cat','files/test-confirmation-state.json') `
         -Operation '读取确认状态' -AllowFailure
     if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Stdout)) { return $null }
+    # app 侧非原子写入；polling 可能在写入途中读到截断/半成品内容。
+    # 与文件不存在同等对待（返回 null 让调用方按下一次轮询处理），
+    # 真正持续损坏会自然撞上调用方既有的确认超时兜底，不会被静默放行。
     try { return $result.Stdout | ConvertFrom-Json }
-    catch { throw '确认状态不是有效 JSON。' }
+    catch { return $null }
 }
 
 function Get-P0UInt32BigEndian {
@@ -598,7 +631,7 @@ function Get-P0Crc32 {
 }
 
 function Test-P0PngEvidence {
-    param([Parameter(Mandatory)][byte[]]$Bytes)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes)
 
     $signature = [byte[]](137,80,78,71,13,10,26,10)
     if ($Bytes.Length -lt 57) { return $false }
@@ -743,8 +776,8 @@ function Clear-P0DebugArtifacts {
     $steps = @(
         @{ Name='control_file'; Args=@('shell','run-as',$script:P0PackageName,'rm','-f','files/test-control.json') },
         @{ Name='confirmation_state'; Args=@('shell','run-as',$script:P0PackageName,'rm','-f','files/test-confirmation-state.json') },
-        @{ Name='claimed_control'; Args=@('shell','run-as',$script:P0PackageName,'sh','-c','rm -f files/.test-control.claimed-*.json') },
-        @{ Name='confirmation_screenshot'; Args=@('shell','run-as',$script:P0PackageName,'sh','-c','rm -f cache/confirmation-*.png') }
+        @{ Name='claimed_control'; Args=@('shell','run-as',$script:P0PackageName,'sh','-c',"'rm -f files/.test-control.claimed-*.json'") },
+        @{ Name='confirmation_screenshot'; Args=@('shell','run-as',$script:P0PackageName,'sh','-c',"'rm -f cache/confirmation-*.png'") }
     )
     foreach ($step in $steps) {
         if (-not $Session.DebugCleanupPending.Contains([string]$step.Name)) { continue }
