@@ -1,5 +1,6 @@
 package dev.magina.gateway.mcp
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
@@ -11,12 +12,25 @@ import dev.magina.gateway.core.SafetyContext
 import dev.magina.gateway.core.SafetyGate
 import dev.magina.gateway.core.SafetyPolicy
 import dev.magina.gateway.core.SafetyTarget
+import dev.magina.gateway.core.sanitizeAuditArgs
+import dev.magina.gateway.core.invalidateInputEvidenceForMutation
+import dev.magina.gateway.core.invalidatePreparedTargetForMutation
+import dev.magina.gateway.core.shouldSerializeUiCall
+import dev.magina.gateway.core.preparedTargetSurvivesTypeText
+import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
 import dev.magina.gateway.overlay.ConfirmOverlay
+import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
+import dev.magina.gateway.testing.InactiveTestControlSession
+import dev.magina.gateway.testing.ConfirmationIdGenerator
+import dev.magina.gateway.testing.TestConfirmationAttempt
+import dev.magina.gateway.testing.TestControlSession
+import dev.magina.gateway.testing.TestForeground
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 
 class ToolSpec(
     val name: String,
@@ -264,13 +278,7 @@ object ToolRegistry {
                 "region" to prop("array", "[l,t,r,b] 物理像素裁剪区"),
             ),
         ) { UiTools.screenCapture(it.getString("reason"), it.optString("ref").ifEmpty { null }, it.optJSONArray("region")) },
-
-        // ---------- 宏 ----------
-        ToolSpec(
-            "macro_run", "宏回放（M3 占位）。",
-            Level.W, schema(listOf("name"), "name" to prop("string", "宏名")),
-        ) { UiTools.macroRun(it.getString("name")) },
-    )
+    ) + MacroToolCatalog.tools
 
     private val byName = tools.associateBy { it.name }
 
@@ -293,10 +301,40 @@ object ToolRegistry {
     }
 
     fun call(name: String, args: JSONObject): ToolResult {
+        val spec = byName[name]
+        val mutatesUi = shouldSerializeUiCall(
+            spec?.level,
+            name,
+            args.optBoolean("scroll_search", false),
+        )
+        return if (mutatesUi) {
+            Gateway.uiMutationCoordinator.runExclusive { callInternal(name, args) }
+        } else {
+            callInternal(name, args)
+        }
+    }
+
+    private fun callInternal(name: String, args: JSONObject): ToolResult {
+        val spec = byName[name]
+        invalidateInputEvidenceForMutation(
+            store = Gateway.inputCommitEvidence,
+            level = spec?.level,
+            toolName = name,
+            key = args.optString("key").ifEmpty { null },
+            action = args.optString("action").ifEmpty { null },
+            scrollSearch = args.optBoolean("scroll_search", false),
+        )
+        invalidatePreparedTargetForMutation(
+            store = Gateway.preparedTargetEvidence,
+            level = spec?.level,
+            toolName = name,
+            key = args.optString("key").ifEmpty { null },
+            scrollSearch = args.optBoolean("scroll_search", false),
+        )
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
-        val spec = byName[name]
         val fingerprint = SafetyPolicy.fingerprint(args)
+        val auditArgs = sanitizeAuditArgs(name, args)
 
         fun ctxNow(): JSONObject =
             GatewayA11yService.instance?.ctx(Gateway.caps())
@@ -310,7 +348,7 @@ object ToolRegistry {
 
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
             Gateway.audit.write(
-                auditId, name, args, code, channel, SystemClock.elapsedRealtime() - start,
+                auditId, name, auditArgs, code, channel, SystemClock.elapsedRealtime() - start,
                 note = safetyNote,
             )
             return ToolResult(env, image)
@@ -322,6 +360,13 @@ object ToolRegistry {
         }
 
         return try {
+            if (name == "type_text") {
+                guardPreparedTargetTypeTextArgs(
+                    args = args,
+                    preparedStore = Gateway.preparedTargetEvidence,
+                    inputStore = Gateway.inputCommitEvidence,
+                )
+            }
             // 敏感 app 黑名单闸（spec §10）：银行类前台时只许感知与撤离
             val fg = GatewayA11yService.instance?.foregroundPackage()
             if (Gateway.skills.isBlockedApp(fg) && !blockedAppAllows(name, args)) {
@@ -331,6 +376,8 @@ object ToolRegistry {
                 )
             }
             var contextReads = 0
+            var testSession: TestControlSession = InactiveTestControlSession
+            var testAttempt: TestConfirmationAttempt? = null
             val gate = SafetyGate(
                 policy = SafetyPolicy(
                     dangerWords = Gateway.skills.dangerWords,
@@ -339,8 +386,38 @@ object ToolRegistry {
                 ),
                 confirmer = { decision ->
                     safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
+                    val attempt = TestConfirmationAttempt(
+                        confirmationId = ConfirmationIdGenerator.next(),
+                        toolName = decision.toolName,
+                        action = decision.action,
+                        initialPackage = decision.initialPackage,
+                        inputLength = decision.inputLength,
+                        inputSha256 = decision.inputSha256,
+                    )
+                    testAttempt = attempt
                     try {
-                        ConfirmOverlay.ask(Gateway.appContext, decision.cardText()).also { confirmed ->
+                        ConfirmOverlay.ask(
+                            context = Gateway.appContext,
+                            actionDesc = decision.cardText(attempt.confirmationId),
+                            onShownBeforeButtonsEnabled = {
+                                testSession = Gateway.testControl.onConfirmationShown(attempt) {
+                                    val bitmap = GatewayA11yService.require().captureBitmap()
+                                    ByteArrayOutputStream().use { output ->
+                                        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                                            throw GatewayError(
+                                                ErrorCode.E_CHANNEL_DOWN,
+                                                "确认卡 PNG 编码失败",
+                                                channel = "overlay",
+                                            )
+                                        }
+                                        output.toByteArray()
+                                    }
+                                }
+                            },
+                            onDecisionObserved = { observed ->
+                                Gateway.testControl.onConfirmationDecision(testSession, observed)
+                            },
+                        ).also { confirmed ->
                             safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
                         }
                     } catch (error: Throwable) {
@@ -357,6 +434,34 @@ object ToolRegistry {
                 onExecutionFailure = { error ->
                     if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
                         Gateway.retryGuard.recordFailure(name, fingerprint)
+                    }
+                },
+                afterConfirmationAllowed = { confirmedTool, confirmedArgs, initialContext ->
+                    val attempt = testAttempt ?: throw GatewayError(
+                        ErrorCode.E_INTERNAL,
+                        "确认完成但缺少同一次确认编号",
+                        channel = "safety",
+                    )
+                    val a11y = GatewayA11yService.require()
+                    Gateway.testControl.afterAllowed(
+                        session = testSession,
+                        attempt = attempt,
+                        performHome = { a11y.globalKey("home") },
+                        foreground = {
+                            val current = a11y.ctx(Gateway.caps())
+                            TestForeground(
+                                known = current.optBoolean("foreground_known", false),
+                                packageName = current.optString("app"),
+                            )
+                        },
+                    )
+                },
+                afterExecutionSuccess = { executedTool, executedContext ->
+                    if (
+                        executedTool == "press_key" &&
+                        executedContext.target?.preparedTargetEvidence != null
+                    ) {
+                        Gateway.preparedTargetEvidence.clear()
                     }
                 },
             )
@@ -378,8 +483,10 @@ object ToolRegistry {
             }
             finish(Envelope.ok(data, ctxNow(), auditId), "OK", channelOf(name), image)
         } catch (e: GatewayError) {
+            if (name == "type_text") Gateway.preparedTargetEvidence.clear()
             finish(Envelope.err(e, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), e.code.name, e.channel)
         } catch (e: Exception) {
+            if (name == "type_text") Gateway.preparedTargetEvidence.clear()
             val ge = GatewayError(ErrorCode.E_INTERNAL, "${e.javaClass.simpleName}: ${e.message}")
             finish(Envelope.err(ge, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), "E_INTERNAL", "")
         }
@@ -428,7 +535,24 @@ object ToolRegistry {
                 )
             }
             name == "press_key" && args.optString("key").equals("enter", ignoreCase = true) ->
-                SafetyTarget(focusedInputId = focusedInputId(a11y))
+                UiTools.focusedInputSnapshot(a11y).let { focused ->
+                    val bounds = focused.bounds?.let(::boundsString)
+                    SafetyTarget(
+                        focusedInputId = focused.id,
+                        focusedInputBounds = bounds,
+                        imeSessionId = ImeBridge.focusedInputId,
+                        inputCommitEvidence = Gateway.inputCommitEvidence.current(
+                            focused.id,
+                            focused.readableText,
+                        ),
+                        preparedTargetEvidence = Gateway.preparedTargetEvidence.current(
+                            packageName,
+                            focused.id,
+                            bounds,
+                            ImeBridge.focusedInputId,
+                        ),
+                    )
+                }
             else -> null
         }
         return SafetyContext(
@@ -438,10 +562,6 @@ object ToolRegistry {
             foregroundKnown = true,
             target = target,
         )
-    }
-
-    private fun focusedInputId(a11y: GatewayA11yService): String? {
-        return UiTools.focusedInputId(a11y)
     }
 
     private fun executeValidated(
@@ -458,7 +578,77 @@ object ToolRegistry {
             )
             UiTools.uiAction(args.getString("ref"), args.getString("action"), params, expected)
         }
-        "press_key" -> UiTools.pressKey(args.getString("key"), validatedContext.target?.focusedInputId)
+        "press_key" -> UiTools.pressKey(
+            args.getString("key"),
+            validatedContext.target?.focusedInputId,
+            validatedContext.target?.inputCommitEvidence,
+            validatedContext.target?.focusedInputBounds,
+            validatedContext.target?.preparedTargetEvidence,
+            validatedContext.target?.imeSessionId,
+        )
+        "type_text" -> executeTypeTextWithPreparedTargetValidation(spec, args)
         else -> spec.handler(args)
     }
+
+    private fun executeTypeTextWithPreparedTargetValidation(
+        spec: ToolSpec,
+        args: JSONObject,
+    ): JSONObject {
+        val expected = Gateway.preparedTargetEvidence.peekActive()
+        if (expected == null) return spec.handler(args)
+        val before = currentPreparedTarget()
+        if (before != expected) {
+            Gateway.preparedTargetEvidence.clear()
+            Gateway.inputCommitEvidence.clear()
+            throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "type_text 前节点焦点、位置、前台包或 IME 会话已变化",
+                channel = "safety",
+                retryable = false,
+            )
+        }
+        return try {
+            val result = spec.handler(args)
+            val after = currentPreparedTarget()
+            val input = after?.let { Gateway.inputCommitEvidence.current(it.focusedInputId) }
+            if (!preparedTargetSurvivesTypeText(before, after, input, succeeded = true)) {
+                Gateway.preparedTargetEvidence.clear()
+                Gateway.inputCommitEvidence.clear()
+                throw GatewayError(
+                    ErrorCode.E_STALE_REF,
+                    "type_text 后节点焦点、位置、前台包、IME 会话或输入证据已变化",
+                    channel = "safety",
+                    retryable = false,
+                )
+            }
+            result
+        } catch (error: Throwable) {
+            Gateway.preparedTargetEvidence.clear()
+            Gateway.inputCommitEvidence.clear()
+            throw error
+        }
+    }
+
+    private fun currentPreparedTarget(): dev.magina.gateway.core.PreparedTargetEvidence? {
+        val a11y = GatewayA11yService.instance ?: run {
+            Gateway.preparedTargetEvidence.clear()
+            return null
+        }
+        val ctx = a11y.ctx(Gateway.caps())
+        if (!ctx.optBoolean("foreground_known", false)) {
+            Gateway.preparedTargetEvidence.clear()
+            return null
+        }
+        val focused = UiTools.focusedInputSnapshot(a11y)
+        val bounds = focused.bounds?.let(::boundsString)
+        return Gateway.preparedTargetEvidence.current(
+            ctx.optString("app"),
+            focused.id,
+            bounds,
+            ImeBridge.focusedInputId,
+        )
+    }
+
+    private fun boundsString(bounds: android.graphics.Rect): String =
+        "[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]"
 }

@@ -7,6 +7,25 @@ import org.junit.Test
 
 class SafetyPolicyTest {
     private val policy = SafetyPolicy()
+    private val inputEvidence = InputCommitEvidence(
+        commitId = 7,
+        preview = "P0 安全硬门测试",
+        length = "P0 安全硬门测试".length,
+        sha256 = InputCommitEvidence.sha256("P0 安全硬门测试"),
+        focusedInputId = "chat-input",
+        committedAtMs = 1_000,
+        expiresAtMs = 61_000,
+    )
+    private val preparedTarget = PreparedTargetEvidence(
+        preparedId = 3,
+        label = "文件传输助手",
+        packageName = "com.tencent.mm",
+        focusedInputId = "chat-input",
+        bounds = "[10,20][100,80]",
+        imeSessionId = "ime|0123456789abcdef01234567",
+        preparedAtMs = 1_000,
+        expiresAtMs = 61_000,
+    )
     private val normalContext = SafetyContext(
         packageName = "com.tencent.mm",
         activityName = ".ui.LauncherUI",
@@ -45,10 +64,29 @@ class SafetyPolicyTest {
             "press_key",
             Level.W,
             JSONObject().put("key", "enter"),
-            normalContext.copy(target = SafetyTarget(focusedInputId = "chat-input")),
+            normalContext.copy(
+                target = SafetyTarget(
+                    focusedInputId = "chat-input",
+                    focusedInputBounds = "[10,20][100,80]",
+                    imeSessionId = "ime|0123456789abcdef01234567",
+                    inputCommitEvidence = inputEvidence,
+                    preparedTargetEvidence = preparedTarget,
+                ),
+            ),
         )
 
         assertTrue(enter is SafetyDecision.ConfirmationRequired)
+        enter as SafetyDecision.ConfirmationRequired
+        assertEquals(inputEvidence.length, enter.inputLength)
+        assertEquals(inputEvidence.sha256, enter.inputSha256)
+        val card = enter.cardText("c-123456")
+        assertTrue(card.contains("确认编号：c-123456"))
+        assertTrue(card.contains("目标会话：文件传输助手"))
+        assertTrue(card.contains("实际输入预览：P0 安全硬门测试"))
+        assertTrue(card.contains("输入长度：${inputEvidence.length}"))
+        assertTrue(card.contains("输入 SHA-256：${inputEvidence.sha256}"))
+        assertTrue(card.contains("焦点输入：chat-input"))
+        assertTrue("卡片不得暴露内部 commit id", !card.contains("commitId"))
         listOf("back", "home", "del").forEach { key ->
             val decision = policy.assess(
                 "press_key",
@@ -57,6 +95,45 @@ class SafetyPolicyTest {
                 normalContext,
             )
             assertTrue("press_key($key) 不应升级为危险动作", decision is SafetyDecision.Allowed)
+        }
+    }
+
+    @Test
+    fun `enter without matching prepared target is blocked before confirmation`() {
+        val validTarget = SafetyTarget(
+            focusedInputId = "chat-input",
+            focusedInputBounds = "[10,20][100,80]",
+            imeSessionId = "ime|0123456789abcdef01234567",
+            inputCommitEvidence = inputEvidence,
+            preparedTargetEvidence = preparedTarget,
+        )
+        val invalidTargets = listOf(
+            validTarget.copy(preparedTargetEvidence = null),
+            validTarget.copy(
+                preparedTargetEvidence = preparedTarget.copy(packageName = "other.package"),
+            ),
+            validTarget.copy(
+                preparedTargetEvidence = preparedTarget.copy(focusedInputId = "other-input"),
+            ),
+            validTarget.copy(
+                preparedTargetEvidence = preparedTarget.copy(bounds = "[0,0][1,1]"),
+            ),
+            validTarget.copy(
+                preparedTargetEvidence = preparedTarget.copy(
+                    imeSessionId = "ime|fedcba9876543210fedcba98",
+                ),
+            ),
+        )
+
+        invalidTargets.forEach { target ->
+            val decision = policy.assess(
+                "press_key",
+                Level.W,
+                JSONObject().put("key", "enter"),
+                normalContext.copy(target = target),
+            )
+            assertTrue(decision is SafetyDecision.Blocked)
+            assertEquals(ErrorCode.E_BLOCKED, (decision as SafetyDecision.Blocked).code)
         }
     }
 

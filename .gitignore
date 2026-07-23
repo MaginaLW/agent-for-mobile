@@ -1,11 +1,15 @@
 # 执行 harness（spec §6，决策点 1）：原始 trace / 暂停件 / 组装提示词只做本地归档，不进 git
 docs/runs/traces/
+docs/runs/evidence/
 
 # 派单并发锁
 scripts/.dispatch.lock
+scripts/.p0-safety-smoke.lock
 
 # 大脑侧网关配置含真实 token，不入库；模板见 configs/gateway-mcp.json.example
 configs/gateway-mcp.json
+configs/.gateway-mcp.*.tmp
+configs/gateway-mcp.json.restore-*.tmp
 
 # Android 工程（app/ 网关、spikes/probe/ 探针）
 **/build/

@@ -30,3 +30,15 @@
 - 软键盘弹出导致坐标错位（M0 两次误触的主因之一）。→ M1 需求：键盘状态感知、点击前二次校验（网关已内建）。
 - **mobile-mcp 截图是缩放图**（实测约 360×800），而 click 工具吃物理坐标（1260×2800）——直接按截图坐标点击必偏约 ×3.5（M0.5 复测实锤）。规程：先 `get_screen_size` 拿物理分辨率再换算；站规 v2 已写入。M1 网关坐标主权收归执行器侧，此坑架构性消灭。
 - 手机黑屏用 `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防靠「充电时屏幕不休眠」+ 临时关锁屏。
+
+## 监督式真机跑测控制面（2026-07-23，离线实现）
+
+- **确认状态可观察不等于确认可写**：debug runner 只用 `run-as` 写入一次性 `test-control.json`（run/leg/nonce/目标/过期时间/stale 开关），字段集合严格校验且不含 `allowed/denied`；PC 只读 `test-confirmation-state.json`。状态中的决定来自手机按钮回调，不能增加“测试方便”的 decision 写接口。release 必须使用 no-op 控制面且没有可用 stale 注入能力。
+- **`run-as` 是 debuggable 私有取证边界**：token、确认状态、app cache 截图都不经过 exported provider/网络接口。外部命令异常不得拼接 adb stdout；token 只短暂驻留内存，配置原子替换、结束恢复，截图拉取后校验 PNG 并清设备副本。
+- **自有 overlay 必须从执行面排除**：确认卡若进入 `windows/snapshot/ref`，Agent 可能通过 `ui_action` 机械自确认。窗口遍历、ref 注册和动作解析都要统一拒绝 gateway 自有窗口；仅把按钮回调作为真人决定源。
+- **危险 Enter 不能只绑定抽象焦点**：成功 `type_text` 后登记短 TTL 的输入证据，绑定预览、长度、SHA-256 与 focused-input 指纹（包含 view/class/bounds）。确认卡展示预览/长度/哈希/焦点位置，最终执行前再比较；audit 只记长度/哈希，不落正文。
+- **准备宏还要绑定业务目标，不只绑定输入**：宏成功后短时保存进程内 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`；只允许沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 都先使其失效。Enter 前后必须同时复核 label、包、焦点与 bounds，避免已进入“文件传输助手”的旧证据被其他导航复用。
+- **同一确认必须有机械关联键**：12 位 confirm ID 同时显示在卡片、写入只读 confirmation state，并绑定该卡截图文件；runner 校验同一 ID，不能靠“时间接近”猜测截图与 allowed 状态属于同一张卡。用户只读卡上的编号，不负责计算输入哈希。
+- **OCR ref 用前必须 fresh，不只是“缓存没过期”**：准备宏每个可变阶段先强制新截图并递增视觉世代，再按 capture revision、前台 windowId、置信度和 bounds 校验；resolve 可能触发慢 OCR，返回后还要快速原子复检再 perform。旧缓存或跨截图拼出的语义不能授权点击。
+- **焦点身份有两套合法命名空间，不能强行相等**：a11y 节点 producer 生成 `windowId|viewId|class|package|bounds`，IME InputConnection 生成 `ime|<24hex>` session id。预备目标证据必须同时保存两套并分别复核（节点 id 绑 UI 树/bounds，IME id 绑输入通道）；任何“统一成一个 id 再比较”的捷径会让真实合法宏必然 `E_STALE_REF`（fail-closed 误杀）。节点 id 生成要收敛到单一共享 producer（`FocusedInputIdentity`），并用真实 producer 格式写契约测试——测试桩把所有 id 手工设成同一个值会掩盖编码差异，离线全绿也发现不了（2026-07-23 规格复审实锤）。
+- **runner 离线套件必须在空闲机器上单独跑**：`p0-supervised-runner-offline.ps1` 的 fixture 用例对子 runner 有 `WaitForExit(15000)` 硬超时，与 gradle 全量编译或杀软扫描并发时子进程冷启动被拖垮，会成片报“runner 离线测试超时”的假失败（同机同代码：并发 28/32 → 空闲 32/32，2026-07-23 实锤）。判定套件结果前先确认无并发重负载；假超时重跑即可，不要当回归修。

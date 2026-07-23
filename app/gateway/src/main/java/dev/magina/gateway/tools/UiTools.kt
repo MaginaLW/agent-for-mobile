@@ -4,16 +4,31 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.a11y.FocusedInputIdentity
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.InputCommitEvidence
+import dev.magina.gateway.core.PreparedTargetEvidence
 import dev.magina.gateway.core.SafetyTarget
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.ocr.OcrEngine
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal fun inputVerificationMismatchMessage(expected: String, actual: String): String =
+    "读回不符：期望长度=${expected.length} SHA-256=${InputCommitEvidence.sha256(expected)}；" +
+        "实际长度=${actual.length} SHA-256=${InputCommitEvidence.sha256(actual)}"
+
 /** L4/L5/L6 工具实现：snapshot/find/action/输入链/按键/等待/受控截图。 */
 object UiTools {
+
+    data class FocusedInputSnapshot(
+        val id: String?,
+        /** null 表示节点文本不可读；空字符串表示明确读到空输入。 */
+        val readableText: String?,
+        /** null 表示当前没有可由 a11y 复核的真实 focused editable bounds。 */
+        val bounds: Rect?,
+    )
 
     private val CAPTURE_REASONS = setOf(
         "low_confidence", "unknown_page", "icon_unrecognized", "layout_changed", "risk_review",
@@ -57,10 +72,24 @@ object UiTools {
             channel = "a11y",
             fallback = "ui_snapshot 看全量；树空则 screen_capture(reason=unknown_page)",
         )
-        return JSONObject().put("matches", matches).put("scrolls", scrolls)
+        val metrics = a11y.resources.displayMetrics
+        val focusedInput = focusedInputSnapshot(a11y)
+        return JSONObject()
+            .put("matches", matches)
+            .put("scrolls", scrolls)
+            .put("screen_width", metrics.widthPixels)
+            .put("screen_height", metrics.heightPixels)
+            .put("focused_input_id", focusedInput.id ?: JSONObject.NULL)
+            .put(
+                "focused_input_bounds",
+                focusedInput.bounds?.let {
+                    JSONArray(listOf(it.left, it.top, it.right, it.bottom))
+                } ?: JSONObject.NULL,
+            )
     }
 
     fun uiAction(ref: String, action: String, params: JSONObject, expected: SafetyTarget): JSONObject {
+        if (action == "set_text") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
         val target = a11y.resolve(ref)
         val bounds = "[${target.bounds.left},${target.bounds.top}][${target.bounds.right},${target.bounds.bottom}]"
@@ -81,12 +110,17 @@ object UiTools {
      * 内置读回验证；剪贴板机制永不使用。
      */
     fun typeText(text: String, ref: String?, mode: String): JSONObject {
+        // 新输入尝试先使上一份证据失效，避免失败输入后复用旧内容确认发送。
+        Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
         val target = ref?.let { a11y.resolve(it) }
         val node: AccessibilityNodeInfo? = if (ref != null) target?.node else a11y.focusedEditable()
         if (node == null) {
             // 无节点通道（OCR ref / 微信树空无焦点节点）：IME 字面注入 + 输入区 OCR 读回（spec §8）
-            return typeTextNoNode(a11y, text, target, mode)
+            return typeTextNoNode(a11y, text, target, mode).also {
+                // append 无法读取既有全文时不能声称掌握“实际输入”；保持 fail-closed。
+                if (mode == "replace") recordInputEvidence(a11y, text)
+            }
         }
 
         val before = node.text?.toString().orEmpty()
@@ -106,7 +140,9 @@ object UiTools {
             if (!ImeBridge.active) {
                 if (committed && readback == null) {
                     // 无 IME 兜底：OCR 读回尽力验证后如实上报，由大脑决定是否视觉复核
-                    return ocrReadbackResult(a11y, node, channel, text)
+                    return ocrReadbackResult(a11y, node, channel, expected).also {
+                        recordInputEvidence(a11y, expected)
+                    }
                 }
                 throw GatewayError(
                     ErrorCode.E_CHANNEL_DOWN,
@@ -126,14 +162,24 @@ object UiTools {
             readback = readback(node)
         }
 
-        if (readback == null) return ocrReadbackResult(a11y, node, channel, text)
+        if (readback == null) return ocrReadbackResult(a11y, node, channel, expected).also {
+            recordInputEvidence(a11y, expected)
+        }
         if (readback != expected) throw GatewayError(
             ErrorCode.E_VERIFY_FAIL,
-            "读回不符：期望「${expected.take(40)}」实际「${readback.take(40)}」",
+            inputVerificationMismatchMessage(expected, readback),
             channel = channel, retryable = true,
             fallback = "type_text(mode=replace) 覆盖重输一次；再失败则报告",
         )
-        return result(channel, true, readback, verified = true)
+        return result(channel, true, readback, verified = true).also {
+            recordInputEvidence(a11y, expected)
+        }
+    }
+
+    private fun recordInputEvidence(a11y: GatewayA11yService, committedText: String) {
+        focusedInputId(a11y)?.let { focusedId ->
+            Gateway.inputCommitEvidence.record(committedText, focusedId)
+        }
     }
 
     /** a11y 读不回（微信树空场景）→ OCR 对输入框区域裁剪读回验证（spec §8 验证闭环）。 */
@@ -197,18 +243,44 @@ object UiTools {
             .put("readback", readback ?: JSONObject.NULL)
             .put("verified", verified)
 
-    fun pressKey(key: String, expectedFocusedInputId: String?): JSONObject {
+    fun pressKey(
+        key: String,
+        expectedFocusedInputId: String?,
+        expectedInputCommitEvidence: InputCommitEvidence? = null,
+        expectedFocusedInputBounds: String? = null,
+        expectedPreparedTargetEvidence: PreparedTargetEvidence? = null,
+        expectedImeSessionId: String? = null,
+    ): JSONObject {
+        if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
         val ok = when (key) {
             "enter" -> {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
                 val focused = a11y.focusedEditable()
-                requireFocusedInput(expectedFocusedInputId, focused)
-                val viaNode = focused!!.performAction(
-                    AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                val snapshot = focusedInputSnapshot(focused)
+                requireFocusedInput(expectedFocusedInputId, snapshot.id)
+                requireInputEvidence(expectedInputCommitEvidence, snapshot)
+                requirePreparedTargetEvidence(
+                    expectedPreparedTargetEvidence,
+                    expectedFocusedInputBounds,
+                    snapshot,
+                    a11y,
+                    expectedImeSessionId,
                 )
+                val viaNode = focused?.performAction(
+                    AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                ) ?: false
                 viaNode || run {
-                    requireFocusedInput(expectedFocusedInputId, a11y.focusedEditable())
+                    val current = focusedInputSnapshot(a11y)
+                    requireFocusedInput(expectedFocusedInputId, current.id)
+                    requireInputEvidence(expectedInputCommitEvidence, current)
+                    requirePreparedTargetEvidence(
+                        expectedPreparedTargetEvidence,
+                        expectedFocusedInputBounds,
+                        current,
+                        a11y,
+                        expectedImeSessionId,
+                    )
                     ImeBridge.enter()
                 }
             }
@@ -220,14 +292,75 @@ object UiTools {
             channel = "a11y", retryable = true,
             fallback = if (key == "enter" || key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
         )
+        if (key == "enter") Gateway.inputCommitEvidence.clear()
         return JSONObject().put("done", true)
     }
 
-    fun focusedInputId(a11y: GatewayA11yService): String? =
-        focusedInputId(a11y.focusedEditable())
+    private fun requireInputEvidence(expected: InputCommitEvidence?, focused: FocusedInputSnapshot) {
+        val actual = Gateway.inputCommitEvidence.current(focused.id, focused.readableText)
+        if (expected == null || actual == null || expected != actual) throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "执行 Enter 前短时输入提交证据已过期或变化",
+            channel = "safety",
+            fallback = "重新输入内容并核对确认卡后再发起一次新调用",
+        )
+    }
 
-    private fun requireFocusedInput(expected: String?, node: AccessibilityNodeInfo?) {
-        val actual = focusedInputId(node)
+    private fun requirePreparedTargetEvidence(
+        expected: PreparedTargetEvidence?,
+        expectedBounds: String?,
+        focused: FocusedInputSnapshot,
+        a11y: GatewayA11yService,
+        expectedImeSessionId: String?,
+    ) {
+        val actualBounds = focused.bounds?.let {
+            "[${it.left},${it.top}][${it.right},${it.bottom}]"
+        }
+        val context = a11y.ctx(Gateway.caps())
+        val actual = Gateway.preparedTargetEvidence.current(
+            packageName = context.optString("app").takeIf {
+                context.optBoolean("foreground_known", false)
+            },
+            focusedInputId = focused.id,
+            bounds = actualBounds,
+            imeSessionId = ImeBridge.focusedInputId,
+        )
+        if (
+            expected == null || expectedBounds.isNullOrBlank() ||
+            expectedImeSessionId.isNullOrBlank() ||
+            ImeBridge.focusedInputId != expectedImeSessionId ||
+            actualBounds != expectedBounds || actual == null || actual != expected
+        ) throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "执行 Enter 前短时目标会话证据已过期或变化",
+            channel = "safety",
+            fallback = "重新运行目标准备宏并输入内容后，再发起一次新调用",
+        )
+    }
+
+    fun focusedInputId(a11y: GatewayA11yService): String? =
+        focusedInputSnapshot(a11y).id
+
+    fun focusedInputSnapshot(a11y: GatewayA11yService): FocusedInputSnapshot =
+        focusedInputSnapshot(a11y.focusedEditable())
+
+    private fun focusedInputSnapshot(node: AccessibilityNodeInfo?): FocusedInputSnapshot {
+        if (node != null && node.refresh()) {
+            val bounds = Rect().also { node.getBoundsInScreen(it) }
+            return FocusedInputSnapshot(
+                id = focusedInputIdFromRefreshedNode(node),
+                readableText = node.text?.toString(),
+                bounds = bounds.takeIf { it.width() > 0 && it.height() > 0 },
+            )
+        }
+        return FocusedInputSnapshot(
+            id = ImeBridge.focusedInputId.takeIf { ImeBridge.active },
+            readableText = null,
+            bounds = null,
+        )
+    }
+
+    private fun requireFocusedInput(expected: String?, actual: String?) {
         if (expected.isNullOrBlank() || actual.isNullOrBlank() || expected != actual) throw GatewayError(
             ErrorCode.E_STALE_REF,
             "执行 Enter 前焦点输入框已变化或无法识别",
@@ -239,14 +372,11 @@ object UiTools {
     private fun focusedInputId(node: AccessibilityNodeInfo?): String? {
         node ?: return null
         if (!node.refresh()) return null
-        val bounds = Rect().also { node.getBoundsInScreen(it) }
-        return listOf(
-            node.windowId.toString(),
-            node.viewIdResourceName.orEmpty(),
-            node.className?.toString().orEmpty(),
-            node.packageName?.toString().orEmpty(),
-            "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}",
-        ).joinToString("|")
+        return focusedInputIdFromRefreshedNode(node)
+    }
+
+    private fun focusedInputIdFromRefreshedNode(node: AccessibilityNodeInfo): String {
+        return FocusedInputIdentity.fromRefreshedNode(node)
     }
 
     fun waitFor(condition: String, args: JSONObject, timeoutMs: Long): JSONObject =
@@ -268,7 +398,5 @@ object UiTools {
         return a11y.screenshotPngBase64(rect).put("reason", reason)
     }
 
-    fun macroRun(@Suppress("UNUSED_PARAMETER") name: String): JSONObject = throw GatewayError(
-        ErrorCode.E_CHANNEL_DOWN, "宏系统按主设计排期 M3", fallback = "走常规工具链",
-    )
+    fun macroRun(args: JSONObject): JSONObject = MacroRunner.run(args)
 }

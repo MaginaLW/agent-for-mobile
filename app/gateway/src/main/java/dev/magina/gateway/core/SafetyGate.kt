@@ -20,17 +20,29 @@ data class SafetyTarget(
     val bounds: String = "",
     val source: String = "",
     val focusedInputId: String? = null,
+    val focusedInputBounds: String? = null,
+    val imeSessionId: String? = null,
+    val inputCommitEvidence: InputCommitEvidence? = null,
+    val preparedTargetEvidence: PreparedTargetEvidence? = null,
 )
 
 sealed interface SafetyDecision {
     data object Allowed : SafetyDecision
 
     data class ConfirmationRequired(
+        val toolName: String,
+        val action: String,
+        val initialPackage: String,
         val actionSummary: String,
         val evidence: List<String>,
         val argsFingerprint: String,
+        val inputLength: Int? = null,
+        val inputSha256: String? = null,
     ) : SafetyDecision {
-        fun cardText(): String = buildString {
+        fun cardText(confirmationId: String): String = buildString {
+            require(confirmationId.isNotBlank()) { "confirmationId 不能为空" }
+            append("确认编号：").append(confirmationId)
+            append("\n")
             append(actionSummary)
             evidence.forEach { append("\n").append(it) }
             append("\n参数指纹：").append(argsFingerprint.take(12))
@@ -55,8 +67,30 @@ class SafetyPolicy(
         args: JSONObject,
         context: SafetyContext,
     ): SafetyDecision {
+        val enterPressed = toolName == "press_key" &&
+            args.optString("key").equals("enter", ignoreCase = true)
+        if (enterPressed) {
+            val target = context.target
+            val input = target?.inputCommitEvidence
+            val prepared = target?.preparedTargetEvidence
+            if (
+                target?.focusedInputId.isNullOrBlank() ||
+                target?.focusedInputBounds.isNullOrBlank() ||
+                target?.imeSessionId.isNullOrBlank() ||
+                input == null || input.focusedInputId != target?.focusedInputId ||
+                prepared == null || prepared.label.isBlank() ||
+                prepared.packageName != context.packageName ||
+                prepared.focusedInputId != target?.focusedInputId ||
+                prepared.bounds != target?.focusedInputBounds ||
+                prepared.imeSessionId != target?.imeSessionId
+            ) return SafetyDecision.Blocked(
+                ErrorCode.E_BLOCKED,
+                "当前焦点输入框没有匹配的短时输入与目标会话证据，拒绝按下 Enter",
+            )
+        }
+
         val dynamicReason = when {
-            toolName == "press_key" && args.optString("key").equals("enter", ignoreCase = true) ->
+            enterPressed ->
                 "按下 Enter，可能发送或提交当前输入内容"
 
             toolName == "ui_action" && args.optString("action") in setOf("click", "long_click") -> {
@@ -74,9 +108,14 @@ class SafetyPolicy(
 
         val reason = dynamicReason ?: "工具静态风险等级为 D"
         return SafetyDecision.ConfirmationRequired(
+            toolName = toolName,
+            action = if (toolName == "press_key") args.optString("key") else args.optString("action"),
+            initialPackage = context.packageName,
             actionSummary = "工具：$toolName\n动作：$reason",
             evidence = confirmationEvidence(toolName, args, context),
             argsFingerprint = fingerprint(args),
+            inputLength = context.target?.inputCommitEvidence?.length,
+            inputSha256 = context.target?.inputCommitEvidence?.sha256,
         )
     }
 
@@ -92,7 +131,13 @@ class SafetyPolicy(
             add("位置：${target.bounds} source=${target.source}")
         } else if (toolName == "press_key") {
             add("按键：${args.optString("key")}")
+            add("目标会话：${target?.preparedTargetEvidence?.label ?: "不可识别"}")
             add("焦点输入：${target?.focusedInputId ?: "不可识别"}")
+            target?.inputCommitEvidence?.let { input ->
+                add("实际输入预览：${input.preview}")
+                add("输入长度：${input.length}")
+                add("输入 SHA-256：${input.sha256}")
+            }
         } else {
             val keys = args.keys().asSequence().toList().sorted()
             add("关键参数：${keys.joinToString(", ") { key -> safeArg(key, args.opt(key)) }}")
@@ -110,6 +155,22 @@ class SafetyPolicy(
             "注销", "退出登录", "解绑", "修改密码", "安装", "格式化", "恢复出厂",
         )
         private val DEFAULT_SEND_WORDS = listOf("发送", "发布", "发表", "评论", "回复")
+
+        /**
+         * 页面级 fail-closed 判定供受控导航复用。与针对单个点击目标的 [assess] 共用
+         * 危险词源，并允许调用方叠加技能包词表；发送类普通页面文案不在这里一概拦截，
+         * 确认弹窗由调用方结合页面结构判断。
+         */
+        internal fun hasSensitiveSurfaceSemantics(
+            signals: Iterable<String>,
+            additionalWords: Iterable<String> = emptyList(),
+        ): Boolean {
+            val words = (
+                DEFAULT_DANGER_WORDS + additionalWords +
+                    listOf("密码", "收款", "风险", "警告")
+                ).filter(String::isNotBlank).distinct()
+            return signals.any { signal -> words.any { word -> signal.contains(word, ignoreCase = true) } }
+        }
 
         fun fingerprint(args: JSONObject): String {
             val canonical = canonicalJson(args)
@@ -138,6 +199,8 @@ class SafetyGate(
     private val confirmer: (SafetyDecision.ConfirmationRequired) -> Boolean,
     private val contextProvider: (JSONObject) -> SafetyContext,
     private val onExecutionFailure: (Throwable) -> Unit,
+    private val afterConfirmationAllowed: (String, JSONObject, SafetyContext) -> Unit = { _, _, _ -> },
+    private val afterExecutionSuccess: (String, SafetyContext) -> Unit = { _, _ -> },
 ) {
     fun <T> execute(
         toolName: String,
@@ -162,6 +225,7 @@ class SafetyGate(
                     fallback = "按站规收尾，不要换路重试同一危险动作",
                 )
                 if (SafetyPolicy.fingerprint(args) != initialArgsFingerprint) stale("确认后工具参数已变化")
+                afterConfirmationAllowed(toolName, deepCopy(frozenArgs), initialContext)
                 val currentContext = try {
                     contextProvider(deepCopy(frozenArgs))
                 } catch (error: Throwable) {
@@ -173,7 +237,7 @@ class SafetyGate(
             }
         }
 
-        return try {
+        val result = try {
             executor(deepCopy(frozenArgs), validatedContext)
         } catch (error: Throwable) {
             val safetyFailure = error is GatewayError && error.code in setOf(
@@ -185,6 +249,8 @@ class SafetyGate(
             if (!safetyFailure) runCatching { onExecutionFailure(error) }
             throw error
         }
+        afterExecutionSuccess(toolName, validatedContext)
+        return result
     }
 
     private fun requireKnownForeground(
@@ -225,6 +291,26 @@ class SafetyGate(
                 val after = current.target?.focusedInputId
                 if (before.isNullOrBlank() || after.isNullOrBlank() || before != after) {
                     stale("确认后焦点输入框已变化或无法识别")
+                }
+                val beforeBounds = initial.target.focusedInputBounds
+                val afterBounds = current.target?.focusedInputBounds
+                if (beforeBounds.isNullOrBlank() || afterBounds.isNullOrBlank() || beforeBounds != afterBounds) {
+                    stale("确认后焦点输入框位置已变化或无法识别")
+                }
+                val beforeIme = initial.target.imeSessionId
+                val afterIme = current.target?.imeSessionId
+                if (beforeIme.isNullOrBlank() || afterIme.isNullOrBlank() || beforeIme != afterIme) {
+                    stale("确认后 IME 输入会话已变化或无法识别")
+                }
+                val beforeInput = initial.target.inputCommitEvidence
+                val afterInput = current.target?.inputCommitEvidence
+                if (beforeInput == null || afterInput == null || beforeInput != afterInput) {
+                    stale("确认后短时输入提交证据已过期或变化")
+                }
+                val beforeTarget = initial.target.preparedTargetEvidence
+                val afterTarget = current.target?.preparedTargetEvidence
+                if (beforeTarget == null || afterTarget == null || beforeTarget != afterTarget) {
+                    stale("确认后短时目标会话证据已过期或变化")
                 }
             }
         }

@@ -5,9 +5,14 @@ import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.Audit
+import dev.magina.gateway.core.InputCommitEvidenceStore
+import dev.magina.gateway.core.PreparedTargetEvidenceStore
 import dev.magina.gateway.core.RetryGuard
 import dev.magina.gateway.core.SkillPack
+import dev.magina.gateway.core.UiMutationCoordinator
 import dev.magina.gateway.ime.ImeBridge
+import dev.magina.gateway.testing.TestControl
+import dev.magina.gateway.testing.TestControlProvider
 import java.util.UUID
 
 /** L0 全局装配：技能包、审计、重试守卫、能力位、token/端口。 */
@@ -21,13 +26,19 @@ object Gateway {
         private set
     lateinit var audit: Audit
         private set
+    lateinit var testControl: TestControl
+        private set
     val retryGuard = RetryGuard()
+    val inputCommitEvidence = InputCommitEvidenceStore()
+    val preparedTargetEvidence = PreparedTargetEvidenceStore()
+    val uiMutationCoordinator = UiMutationCoordinator()
 
     fun init(context: Context) {
         if (::appContext.isInitialized) return
         appContext = context.applicationContext
         skills = SkillPack(appContext)
         audit = Audit(appContext)
+        testControl = TestControlProvider.create(appContext)
     }
 
     val token: String

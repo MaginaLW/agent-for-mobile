@@ -1,7 +1,7 @@
 # 设计说明：手机执行 harness（派单通道 v0.5）
 
 - 日期：2026-07-17
-- 状态：已批准并实施（2026-07-17）；2026-07-19 增补 `mobile|gateway` 双 profile 与安全终态规则，见 §4–§5
+- 状态：已批准并实施（2026-07-17）；2026-07-19 增补 `mobile|gateway` 双 profile 与安全终态规则；2026-07-23 增补 P0 Agent 主控监督式 runner，见 §4–§6
 - 决策人：Magina（用户）
 - 素材来源：[knowledge/brain/harness.md](../knowledge/brain/harness.md)（已验证链路与已定原则，本设计全部继承）
 
@@ -124,6 +124,22 @@ cost_usd, dur_s, result, session_id, trace_file, note
 - **原始 trace 不进 git**【决策点 1】：stream-json 含 base64 截图，单任务几十 MB 量级，进 git 会撑爆仓库。这是对「全量 trace 落盘 docs/runs/」原则的一处细化：落盘 = 本地磁盘归档；git 只收台账与人写的跑测记录。
 - codex 腿 cost_usd 留空（订阅无单价），tokens/轮次照记。
 - cost.md 校准节律：每完成一批跑测（≥3 单）或里程碑收尾时，从台账汇总更新。
+
+### 6.1 P0 Agent 主控监督式 runner（2026-07-23）
+
+P0 Allow/Stale 的标准入口是：
+
+```powershell
+pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale -Executor gateway -Provision
+```
+
+该入口由 Agent 在独立真机执行会话运行，用户只在手机确认卡核对“目标会话：文件传输助手”、明文输入预览和 12 位确认编号并点击真人决定，不运行命令、不预聚焦、不按 Home、不截图或整理日志，也不对照/心算长度与哈希。输入长度/SHA-256、focused-input ID/bounds 和 confirm ID 绑定由 runner 机械验证。runner 当前只接受 `Allow|Stale`，按 Allow→Stale 严格串行；任一 setup、派单、证据、语义或 cleanup 失败都停止整组，不重试当前危险动作。
+
+runner 每腿动态生成带随机 marker 的任务卡，再调用既有 `dispatch.ps1 -Executor gateway`。真实业务动作仍是 `dispatch → gateway MCP → ToolRegistry → SafetyGate → executor`；ADB 只用于设备发现、安装/权限、进程/服务、IME、端口、启动目标包、`run-as` 私有控制/只读证据和清理，禁止用 ADB UI 输入代替导航、输入、发送或确认。
+
+本地证据写入 gitignored `docs/runs/evidence/<run_id>/`，每腿保留确认卡 PNG、dispatch trace 与 gateway audit 增量，根目录写 `run-manifest.json`。manifest 记录 run/leg/slug、退出码、ledger 结果、确认状态、safety code、危险调用次数、输入长度/哈希、证据相对路径与哈希、发送后置条件及 cleanup 结果，但不复制输入明文、token、Authorization 或私密配置。slug 含 `run_id`，runner 严格关联 ledger/trace 文件名，并拒绝 `.pause.md`、`-Confirm`、第二次危险调用或证据不全。
+
+`-Provision` 经 `run-as` 读取 app 私有 token，只在内存中组装本地 gitignored 配置且不打印敏感值；结束时恢复原配置。debug `test-control.json` 只武装证据与确认后 stale 故障注入，不含确认决定；确认状态只有只读通道，`allowed/denied` 仍只来自手机按钮。`finally` 清控制文件/截图/中转文件、恢复原 IME、移除端口转发、恢复私密配置、删除临时任务并释放锁；任何清理失败都会将整组改判失败。
 
 ## 7. 失败与上限
 
