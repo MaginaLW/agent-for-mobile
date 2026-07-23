@@ -680,12 +680,17 @@ internal class P0WeChatPrepareMacro(
         return conversationTitle(snapshot) != null
     }
 
+    /**
+     * 仅用于"是否在会话页"识别，从不作为点击目标（唯一调用方 [isConversationSurface]）；
+     * 因此和 [hasTopTitle] 同理使用识别专用的 [MIN_RECOGNITION_OCR_CONFIDENCE]。
+     * 真正的点击目标（[findTargetConversation]）独立走 [MIN_ACTION_OCR_CONFIDENCE]，不受此影响。
+     */
     private fun conversationTitle(snapshot: P0MacroSnapshot): P0MacroElement? {
         val w = snapshot.screenWidth
         val h = snapshot.screenHeight
         if (w <= 0 || h <= 0) return null
         return snapshot.elements.firstOrNull { element ->
-            isTargetLabel(element) && trustedVisualEvidence(element) &&
+            isTargetLabel(element) && trustedForRecognition(element, snapshot) &&
                 element.stage == P0ElementStage.TOOLBAR &&
                 validBounds(element.bounds, w, h) &&
                 element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
