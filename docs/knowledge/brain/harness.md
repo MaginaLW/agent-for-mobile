@@ -42,8 +42,15 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 ## Claude Code 会话本地构建工具链（2026-07-24 补装）
 
 - 这个仓库从未提交 gradle wrapper，本机也没装 Android Studio；此前"263 tests 全绿""debug APK 已重装验证"等构建结论都是在 Codex CLI 沙箱里跑出来的。2026-07-24 发现 Claude Code 会话本地跑不了任何 gradle task 后，征得用户同意下载官方 `gradle-8.9-bin.zip`（`https://services.gradle.org/distributions/gradle-8.9-bin.zip`）装到 `%USERPROFILE%\.local-tools\gradle-8.9`（本机已有 JDK 21，够用），再用它在 `app/` 下跑了一次 `gradle wrapper --gradle-version 8.9` 生成 `gradlew`/`gradlew.bat`/`gradle/wrapper/`。
-- 现在 Claude Code 会话可以直接在 `app/` 目录用 `./gradlew testDebugUnitTest testReleaseUnitTest`、`./gradlew assembleDebug` 等自行验证改动，不必再等 Codex CLI 额度或求助 Android Studio；这几个 wrapper 文件目前还没提交 git（`.gitignore` 只排除了 `**/build/`、`**/.gradle/`、`**/local.properties`，wrapper 本身不受影响），要不要入库是单独的决定，入库前问一下用户。
+- 现在 Claude Code 会话可以直接在 `app/` 目录用 `./gradlew testDebugUnitTest testReleaseUnitTest`、`./gradlew assembleDebug` 等自行验证改动，不必再等 Codex CLI 额度或求助 Android Studio；这几个 wrapper 文件用户已自行提交入库（commit "Gradle"，2026-07-24）。
 - 测试结果统计走 `build/reports/tests/<variant>/index.html` 里的 `class="counter"`（tests/failures/ignored 三个数字），比 gradle 控制台默认输出（只报 BUILD SUCCESSFUL，不报具体条数）更可靠；单个测试类的结果在 `build/reports/tests/<variant>/classes/<全限定类名>.html`。
+
+## 真机调试：单次只读诊断优于反复整套重跑（2026-07-24）
+
+- **改完代码想验证某个真机猜测，先用 `dispatch.ps1 -Task "..." -Executor gateway` 派一个几毛钱、几十秒的只读诊断任务，别直接重跑整套 `run-p0-safety-smoke.ps1`**：后者每轮都带 `-Provision`（重装 APK+权限/IME 重建，还会消耗用户一次手动操作手机的配合），一次盲猜失败的成本是"用户等几十秒+跑一轮 provision"；而 `dispatch.ps1` 直接派单不需要 `-Provision`（前提是设备此前已被某次 `-Provision` 跑过，gateway 进程/无障碍绑定还在——只是 IME 和端口转发这类会被跑测收尾清理掉的状态需要重新建立，`dispatch.ps1` 自己会重建端口转发），几毛钱一次，能反复试。
+- **只读诊断要在提示词里显式禁止写入/危险工具**（"不得调用 macro_run/type_text/press_key/ui_action/notification_reply 等"），否则子代理可能"顺便"多做事；同时明确"输出完就结束，不做任何其他动作"，避免子代理自作主张追加步骤。
+- **`ui_snapshot()` 只读文字元素列表，看不出截图本身是否陈旧**——如果怀疑视觉管线返回的不是真实当前画面（例如连续两次读数完全一样、且和用户口头描述的画面对不上），改派一个只调用 `screen_capture()`、让子代理直接用自己的视觉描述截图内容（标题栏文字、中间主要内容类型、底部有没有输入框/按钮）的诊断任务，不要调用 `ui_snapshot`。两者结果一致说明截图管线本身没问题、缺的是 OCR 提取；结果不一致才需要往截图/视觉管线本身查。
+- **诊断提示词里对可能含真实敏感信息（代理/VPN 订阅链接、密钥等）的元素要求脱敏**（如替换成 `[REDACTED-LEN=n]`），因为诊断结果会原样进入派单方的对话上下文和本地 trace；这类要求要写在派单提示词里，不能事后再补救——子代理只服从这一轮收到的指令。
 
 ## 危险动作统一硬门（2026-07-19 离线测试）
 

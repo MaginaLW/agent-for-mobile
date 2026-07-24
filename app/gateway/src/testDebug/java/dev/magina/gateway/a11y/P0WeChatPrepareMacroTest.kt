@@ -362,9 +362,14 @@ class P0WeChatPrepareMacroTest {
 
     @Test
     fun `low-confidence OCR title blocks probe`() {
+        // 0.64 曾经是这条用例的"低置信度"（低于点击级门槛 0.65）；2026-07-24 起 probe 的
+        // 标题识别改用识别级门槛 MIN_RECOGNITION_OCR_CONFIDENCE=0.45（同 hasTopTitle/
+        // conversationTitle，真机实锤该标题只有约 0.55，过不了 0.65 导致空白输入框场景永远
+        // 卡死；这里的标题只证明"在哪个会话"，从不是点击目标，真正的盲点坐标是固定算出的
+        // 底栏区域）。这条用例改为验证真正过不了识别级门槛的情况仍然 fail-closed。
         val unsafe = snapshot(
             element(
-                "o-title", "文件传输助手", source = "ocr", confidence = 0.64,
+                "o-title", "文件传输助手", source = "ocr", confidence = 0.3,
                 centerX = 500, centerY = 100,
             ),
         )
@@ -372,6 +377,26 @@ class P0WeChatPrepareMacroTest {
 
         expectError(ErrorCode.E_BLOCKED) { macro(adapter).run() }
         assertEquals(0, adapter.probeCalls)
+    }
+
+    @Test
+    fun `recognition-tier confidence below click-tier still builds coordinate probe`() {
+        // 0.64 低于点击级门槛 0.65 但高于识别级门槛 0.45：这条用例锁定 2026-07-24 的新行为——
+        // 标题只用于证明"在文件传输助手会话里"，不是点击目标，所以这个置信度足以让宏往下走到
+        // 真正尝试盲点坐标（不再在 focus_probe_validation 就 fail-closed）。这里没有配置
+        // focusStates，所以盲点"成功"后等真实焦点会永远等不到，最终在完全独立的
+        // waitForReadyFocus 超时机制上结束——这恰好证明卡点已经从标题置信度挪走了。
+        val unsafe = snapshot(
+            element(
+                "o-title", "文件传输助手", source = "ocr", confidence = 0.64,
+                centerX = 500, centerY = 100,
+            ),
+        )
+        val adapter = FakeAdapter(snapshots = mutableListOf(unsafe), repeatedSnapshot = unsafe)
+
+        val error = expectError(ErrorCode.E_TIMEOUT) { macro(adapter).run() }
+        assertTrue(error.message.orEmpty().contains("焦点不是底部聊天输入框"))
+        assertEquals(1, adapter.probeCalls)
     }
 
     @Test

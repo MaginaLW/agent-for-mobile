@@ -131,7 +131,16 @@ internal interface P0WeChatPrepareAdapter {
 
 /** title-only 坐标探针的共享纯验证器；宏预检和 Android 动作瞬间复用同一规则。 */
 internal object P0FocusProbeValidator {
-    private val MIN_OCR_CONFIDENCE = MIN_ACTION_OCR_CONFIDENCE.toDouble()
+    /**
+     * 这里的 title 只用于"证明当前在文件传输助手会话里"，从不是点击目标本身——真正的
+     * 盲点坐标是 [build] 里独立算出的固定底栏区域，不依赖标题的位置/置信度。因此和
+     * [conversationTitle]/[hasTopTitle] 同理使用识别专用阈值，而不是点击级的
+     * [MIN_ACTION_OCR_CONFIDENCE]（2026-07-24 真机实锤：该标题置信度约 0.55，
+     * 过不了点击级门槛，导致空白输入框场景下宏永远无法进入这条已有的坐标兜底路径）。
+     * 这里的置信度会进入 [P0FocusProof]/`PreparedTargetEvidence`，但危险 Enter 前
+     * 仍会独立复核 label/包名/bounds，这条证据链本身不会因为这处阈值降低而失去保护。
+     */
+    private val MIN_OCR_CONFIDENCE = MIN_RECOGNITION_OCR_CONFIDENCE.toDouble()
 
     fun build(snapshot: P0MacroSnapshot, sensitiveSurfaceWords: List<String>): P0FocusProbe? {
         val w = snapshot.screenWidth

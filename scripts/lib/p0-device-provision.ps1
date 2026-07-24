@@ -505,8 +505,27 @@ function Start-P0DeviceProvision {
     }
 }
 
+function Test-P0TargetAppForeground {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Session)
+    # 只读探测；探测本身失败或结果不明确时返回 $false（退回原行为：调用方仍会 am start），
+    # 不能因为探测失败而误判"已在前台"进而跳过启动。
+    $probe = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','dumpsys','activity','activities') `
+        -Operation '查询当前前台 Activity' -AllowFailure
+    if ($probe.ExitCode -ne 0) { return $false }
+    $pkg = [regex]::Escape($script:P0WechatPackage)
+    return [bool]($probe.Stdout -match "(?:mResumedActivity|topResumedActivity)\s*[:=].*\b$pkg/")
+}
+
 function Start-P0TargetApp {
     param([Parameter(Mandatory)]$Session)
+    # 微信已在前台时不重新 am start：runbook §3.0 要求用户预先手动导航到「文件传输助手」
+    # 会话页（必要时预聚焦输入框），盲目 relaunch 会清掉这个人工建立的状态——画面可能不变，
+    # 但输入焦点/IME 连接会丢（2026-07-24 真机实锤：连续多腿在 focus_probe_validation 撞同一堵
+    # 墙，与用户是否刚点过输入框无关，直到确认画面未被冲掉才定位到是这里）。只有微信确实不在
+    # 前台（例如被系统清理）时才需要拉起它。
+    if (Test-P0TargetAppForeground -Session $Session) { return }
     # 目标 Android 版本的 shell am start 对隐式 -a MAIN -c LAUNCHER -p <pkg> 解析失败
     # （"unable to resolve"；--include-stopped-packages 同样无效，2026-07-23 真机实锤），
     # 必须先动态解出真实 launcher 组件，再用 -n 显式启动。
