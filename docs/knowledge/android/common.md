@@ -23,6 +23,7 @@
 - **两行长标签拆成两个 OCR 行**（「文件传输/助手」实锤）→ 查询用短子串（find「文件传输」而非全名）。
 - **手势后必须主动失效 OCR 缓存**：事件静默 app（微信）点击/滑动后 revision 不动，不失效就读旧屏。
 - bundled 中文 client 常驻进程：冷加载 ~700ms 一次性；整屏 ~300–700ms 随文本密度（列表页低、图文重页高）。
+- **深色模式灰底灰字漏识的直接对症修法：灰度化+对比度拉伸后再识别一遍，取更高置信度合并**（2026-07-24，[OcrEngine.kt](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt)）。此前只在下游（宏代码里）调阈值治标；真机实锤过某些实例的置信度直接跌破 `MIN_CONF=0.5` 这个 `OcrEngine.recognize()` 内部的基础过滤——阈值再怎么调也够不着连候选池都进不去的文字，只能从识别源头治本。做法：原图识别一遍、`ColorMatrix`（`setSaturation(0)`+围绕中灰点的对比度矩阵）增强后再识别一遍，按文字+位置重叠（IoU≥0.5）判定"同一处"，取置信度更高者合并，两遍互不覆盖只取优——不是替换原图识别，避免对本来就清晰的文字造成回退。**`OcrEngine.kt` 全仓库零单测**（依赖真实 `Bitmap`/ML Kit 推理，项目未配 Robolectric，`android.graphics.*` 在纯 JVM 单测下方法体是 stub 会直接抛异常），只能靠真机 dispatch 验证效果，效果未达预期时优先调 `CONTRAST_BOOST` 常量或改用自适应阈值/局部直方图均衡（比全局线性拉伸更贴近成因但实现和验证成本都更高）。
 
 ## adb / uiautomator 工具链
 

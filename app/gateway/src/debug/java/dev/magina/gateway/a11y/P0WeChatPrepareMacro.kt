@@ -154,7 +154,11 @@ internal object P0FocusProbeValidator {
         if (hasSensitiveOrBlockingSurface(snapshot, sensitiveSurfaceWords)) return null
 
         val title = snapshot.elements.firstOrNull { element ->
-            normalized(element.text) == P0_FILE_TRANSFER_ASSISTANT &&
+            // 2026-07-24 真机实锤：OCR 把标题识别成"文件传输助手8"（尾随多识别出一个字符，
+            // confidence 完全正常，不是置信度问题）；这里只用于"证明在文件传输助手会话里"
+            // 这一识别判断，从不是点击目标（真正的盲点坐标是下面独立算出的固定 region），
+            // 严格相等在这类 OCR 附加字符场景下会永远漏判，改用 contains。
+            normalized(element.text).contains(P0_FILE_TRANSFER_ASSISTANT) &&
                 element.source in setOf("ocr", "fused") &&
                 element.confidence?.let { it.isFinite() && it >= MIN_OCR_CONFIDENCE } == true &&
                 element.stage == P0ElementStage.TOOLBAR &&
@@ -300,10 +304,14 @@ internal object P0FixedQueryValidator {
                     else -> false
                 }
         }
+        // 守卫判断（"是否已经在目标会话所以该拒绝提交搜索"），从不是点击目标；用 contains
+        // 而非严格相等，同 P0FocusProbeValidator 的标题识别一样对付 OCR 附加字符
+        // （2026-07-24 真机实锤"文件传输助手8"）。放宽只会让这道守卫更容易触发（更保守），
+        // 不会削弱它本来的保护意图。
         val targetToolbarPresent = snapshot.elements.any {
             it.stage == P0ElementStage.TOOLBAR &&
-                (it.text.replace(" ", "") == P0_FILE_TRANSFER_ASSISTANT ||
-                    it.description.replace(" ", "") == P0_FILE_TRANSFER_ASSISTANT)
+                (it.text.replace(" ", "").contains(P0_FILE_TRANSFER_ASSISTANT) ||
+                    it.description.replace(" ", "").contains(P0_FILE_TRANSFER_ASSISTANT))
         }
         if (
             !foreground.known || foreground.packageName != P0_WECHAT_PACKAGE ||
@@ -406,6 +414,15 @@ internal data class P0WeChatPrepareConfig(
     val stableSamples: Int = 2,
     /** 来自执行器技能包的附加危险/敏感词；基础词与 SafetyPolicy 共源。 */
     val sensitiveSurfaceWords: List<String> = emptyList(),
+    /**
+     * 纯感知阶段（还没做任何点击/盲点）的重试次数：OCR 漏识有实测抖动（深色模式灰底灰字
+     * 约 40%，2026-07-24 真机对比度增强修复后仍会偶发），重新截屏给抖动翻盘机会。只覆盖
+     * "识别当前在哪"（`unrecognized_entry`/`sensitive_entry`）和"能否构建盲点探针"
+     * （`focus_probe_validation`）——一旦尝试了点击或坐标盲点，"故意不重试"继续有效，
+     * 不受这个字段影响。
+     */
+    val perceptionRetryAttempts: Int = 3,
+    val perceptionRetryDelayMs: Long = 800,
 )
 
 internal data class P0WeChatPrepareResult(
@@ -439,13 +456,12 @@ internal class P0WeChatPrepareMacro(
     init {
         require(config.stableSamples >= 2) { "focused fingerprint 至少连续采样两次" }
         require(config.pollIntervalMs > 0) { "pollIntervalMs 必须为正数" }
+        require(config.perceptionRetryAttempts >= 1) { "perceptionRetryAttempts 至少为 1" }
     }
 
     fun run(): P0WeChatPrepareResult {
         requireWeChatForeground(initial = true)
-        var current = adapter.snapshot()
-        requireSnapshotGeometry(current)
-        requireRecognizedNonSensitiveEntry(current)
+        var current = requireRecognizedEntryWithRetry(adapter.snapshot())
 
         if (!isConversationSurface(current)) {
             val directTarget = findTargetConversation(current)
@@ -493,7 +509,7 @@ internal class P0WeChatPrepareMacro(
         } else if (input != null) {
             clickOrFail(current, P0RefStage.INPUT_FIELD, "输入框")
         } else {
-            val plannedProbe = buildFocusProbe(current) ?: throw macroError(
+            val plannedProbe = buildFocusProbeWithRetry(current) ?: throw macroError(
                 ErrorCode.E_BLOCKED,
                 "空白输入框没有 ref，且屏幕/会话标题/输入候选区校验失败",
                 "focus_probe_validation",
@@ -661,6 +677,26 @@ internal class P0WeChatPrepareMacro(
         )
     }
 
+    /**
+     * 还没做任何点击/输入，纯粹是"这一屏看起来是什么"的判断，重试是安全的——重新截屏给
+     * OCR 抖动翻盘机会，不属于"故意不重试"约束的范围（那条只管点击/盲点之后）。
+     */
+    private fun requireRecognizedEntryWithRetry(initial: P0MacroSnapshot): P0MacroSnapshot {
+        var snapshot = initial
+        repeat(config.perceptionRetryAttempts) { attempt ->
+            requireSnapshotGeometry(snapshot)
+            try {
+                requireRecognizedNonSensitiveEntry(snapshot)
+                return snapshot
+            } catch (error: GatewayError) {
+                if (attempt == config.perceptionRetryAttempts - 1) throw error
+                adapter.sleep(config.perceptionRetryDelayMs)
+                snapshot = adapter.forceFreshVision()
+            }
+        }
+        error("unreachable：repeat 循环要么 return 要么在最后一次抛出")
+    }
+
     private fun clickOrFail(snapshot: P0MacroSnapshot, stage: P0RefStage, label: String) {
         val action = P0StageRefActionValidator.build(stage, snapshot)
         if (!adapter.clickStage(action)) throw macroError(
@@ -699,7 +735,7 @@ internal class P0WeChatPrepareMacro(
         val h = snapshot.screenHeight
         if (w <= 0 || h <= 0) return null
         return snapshot.elements.firstOrNull { element ->
-            isTargetLabel(element) && trustedForRecognition(element, snapshot) &&
+            isTargetLabelLoosely(element) && trustedForRecognition(element, snapshot) &&
                 element.stage == P0ElementStage.TOOLBAR &&
                 validBounds(element.bounds, w, h) &&
                 element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
@@ -749,9 +785,24 @@ internal class P0WeChatPrepareMacro(
             }
             .minByOrNull { it.bounds.centerY }
 
+    /**
+     * 点击目标用的严格标签匹配：原文必须完全等于目标文本，不接受任何近似——唯一调用方
+     * [findTargetConversation] 是 knowledge #14 里"点击安全"决定所保护的对象，改这个函数
+     * 本身需要重新征得同意。
+     */
     private fun isTargetLabel(element: P0MacroElement): Boolean =
         normalized(element.text) == P0_FILE_TRANSFER_ASSISTANT ||
             normalized(element.description) == P0_FILE_TRANSFER_ASSISTANT
+
+    /**
+     * 纯识别用途的宽松标签匹配：只要求包含目标文本。2026-07-24 真机实锤：OCR 把标题识别成
+     * "文件传输助手8"（尾随多识别出一个字符，confidence 完全正常，不是置信度问题），严格
+     * 相等在这类场景下永远漏判。唯一调用方 [conversationTitle] 只用于"这是不是会话页"的
+     * 识别判断，从不是点击目标——点击目标的严格匹配（[isTargetLabel]）不受影响。
+     */
+    private fun isTargetLabelLoosely(element: P0MacroElement): Boolean =
+        normalized(element.text).contains(P0_FILE_TRANSFER_ASSISTANT) ||
+            normalized(element.description).contains(P0_FILE_TRANSFER_ASSISTANT)
 
     private fun findInput(snapshot: P0MacroSnapshot): P0MacroElement? =
         snapshot.elements
@@ -769,6 +820,23 @@ internal class P0WeChatPrepareMacro(
 
     private fun buildFocusProbe(snapshot: P0MacroSnapshot): P0FocusProbe? {
         return P0FocusProbeValidator.build(snapshot, config.sensitiveSurfaceWords)
+    }
+
+    /**
+     * 还没有任何盲点尝试，纯粹是"能不能构建出探针"——重试安全，重新截屏给 OCR 抖动
+     * 翻盘机会。一旦拿到探针进入 [P0FocusProbeValidator.revalidateForAction]/实际
+     * `probeFocus` 调用，"故意不重试"继续有效，不受这里影响。
+     */
+    private fun buildFocusProbeWithRetry(initial: P0MacroSnapshot): P0FocusProbe? {
+        var snapshot = initial
+        repeat(config.perceptionRetryAttempts) { attempt ->
+            buildFocusProbe(snapshot)?.let { return it }
+            if (attempt < config.perceptionRetryAttempts - 1) {
+                adapter.sleep(config.perceptionRetryDelayMs)
+                snapshot = adapter.forceFreshVision()
+            }
+        }
+        return null
     }
 
     private fun trustedVisualEvidence(element: P0MacroElement): Boolean = when (element.source) {

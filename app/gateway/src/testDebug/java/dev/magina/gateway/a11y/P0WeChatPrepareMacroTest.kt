@@ -63,6 +63,24 @@ class P0WeChatPrepareMacroTest {
     }
 
     @Test
+    fun `recovers from a transient unrecognized-entry miss via perception retry`() {
+        // 2026-07-24：还没做任何点击/输入的纯感知阶段（unrecognized_entry/focus_probe_validation）
+        // 允许重试给 OCR 抖动翻盘机会。首帧空白页无法识别，重试后第二帧被识别为聊天列表并
+        // 找到目标——验证宏没有在第一次漏识就终止，而是重新截屏后成功往下走。
+        val blank = snapshot()
+        val list = chatListWithTarget()
+        val adapter = FakeAdapter(snapshots = mutableListOf(blank, list), repeatedSnapshot = list)
+
+        // 后续在 conversation_surface 上等待超时是预期行为（list 里「文件传输助手」只是
+        // CONTENT 阶段的列表行，不是会话页 TOOLBAR 标题）；这里只关心有没有闯过第一关。
+        val error = expectError(ErrorCode.E_TIMEOUT) { macro(adapter).run() }
+
+        assertTrue(error.message.orEmpty().contains("会话页"))
+        assertEquals(listOf("target"), adapter.clicks)
+        assertTrue(adapter.forceFreshCalls >= 1)
+    }
+
+    @Test
     fun `same target text in message body cannot impersonate toolbar title`() {
         val otherConversation = snapshot(
             element("toolbar", "张三", source = "ocr", confidence = 0.94, centerX = 500, centerY = 100),
