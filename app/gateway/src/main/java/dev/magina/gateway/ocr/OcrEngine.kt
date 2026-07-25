@@ -15,6 +15,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * L5 视觉通道 OCR 端（spec §9）：ML Kit 中文 bundled 版（vivo 国行无 GMS，必须 bundled）。
@@ -29,11 +31,21 @@ object OcrEngine {
     const val MIN_CONF = 0.5f
 
     /**
-     * 灰度化+对比度拉伸的强度：2026-07-24 真机实锤深色模式灰底灰字漏识（部分实例置信度
-     * 跌破 [MIN_CONF]，连候选都不存在，不是单纯阈值问题）。数值取自常见对比度增强经验值，
-     * 未做设备专项调参——如后续真机验证效果不足或误伤正常对比度文字，优先调这个常量。
+     * 灰度化+伽马校正+对比度拉伸的强度：2026-07-24 真机实锤深色模式灰底灰字漏识（部分实例
+     * 置信度跌破 [MIN_CONF]，连候选都不存在，不是单纯阈值问题）。数值取自常见图像增强经验值，
+     * 未做设备专项调参——如后续真机验证效果不足或误伤正常对比度文字，优先调这两个常量。
      */
     private const val CONTRAST_BOOST = 1.8f
+
+    /**
+     * 2026-07-25 网络调研（Appium OCR 插件真实预处理链：灰度→归一化→锐化→伽马校正→
+     * 中值降噪→二值化）参照加入的一步：伽马 <1 会非线性拉亮中间调，专门放大临界灰阶
+     * （深色模式灰底灰字）之间原本很小的亮度差异，和线性对比度拉伸互补，不是重复。
+     * 没有照抄锐化/中值降噪/二值化——二值化对小号 CJK 字符的抗锯齿边缘信息破坏较大，
+     * 中值降噪主要对付传感器噪声（这里是纯数字截屏，不适用）；如果这版效果仍不够，
+     * 下一步再考虑锐化。
+     */
+    private const val GAMMA = 0.6f
 
     /** 同一段文字被两遍识别都命中时，判定为"同一处"所需的最小重叠占比（并集面积计）。 */
     private const val SAME_REGION_IOU = 0.5
@@ -79,22 +91,35 @@ object OcrEngine {
         }
     }
 
-    /** 灰度化（文字可读性本质是亮度对比，色相无关）+ 围绕中灰点做对比度拉伸。 */
+    /** i/255 → 伽马校正 → 围绕中灰点做线性对比度拉伸，预计算成查找表，逐像素只做一次数组查表。 */
+    private val enhancementLut: IntArray by lazy {
+        IntArray(256) { i ->
+            val gammaCorrected = 255.0 * (i / 255.0).pow(GAMMA.toDouble())
+            val contrasted = (gammaCorrected - 128.0) * CONTRAST_BOOST + 128.0
+            contrasted.roundToInt().coerceIn(0, 255)
+        }
+    }
+
+    /**
+     * 灰度化（文字可读性本质是亮度对比，色相无关）+ 伽马校正 + 对比度拉伸。灰度化用
+     * `ColorMatrix`（Android 原生、GPU 路径），伽马+对比度用查找表逐像素应用（`ColorMatrix`
+     * 只能表达线性变换，伽马是非线性幂函数，做不到）。
+     */
     private fun contrastEnhanced(bmp: Bitmap): Bitmap {
-        val grayscale = ColorMatrix().apply { setSaturation(0f) }
-        val translate = (1 - CONTRAST_BOOST) * 128f
-        val contrast = ColorMatrix(
-            floatArrayOf(
-                CONTRAST_BOOST, 0f, 0f, 0f, translate,
-                0f, CONTRAST_BOOST, 0f, 0f, translate,
-                0f, 0f, CONTRAST_BOOST, 0f, translate,
-                0f, 0f, 0f, 1f, 0f,
-            ),
+        val grayscale = Bitmap.createBitmap(bmp.width, bmp.height, Bitmap.Config.ARGB_8888)
+        Canvas(grayscale).drawBitmap(
+            bmp, 0f, 0f,
+            Paint().apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) },
         )
-        grayscale.postConcat(contrast)
-        val out = Bitmap.createBitmap(bmp.width, bmp.height, Bitmap.Config.ARGB_8888)
-        Canvas(out).drawBitmap(bmp, 0f, 0f, Paint().apply { colorFilter = ColorMatrixColorFilter(grayscale) })
-        return out
+        val pixels = IntArray(grayscale.width * grayscale.height)
+        grayscale.getPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
+        for (i in pixels.indices) {
+            // 灰度化后 R=G=B，任取一个通道查表即可；alpha 原样保留。
+            val level = enhancementLut[(pixels[i] ushr 16) and 0xFF]
+            pixels[i] = (pixels[i] and 0xFF000000.toInt()) or (level shl 16) or (level shl 8) or level
+        }
+        grayscale.setPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
+        return grayscale
     }
 
     /**

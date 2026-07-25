@@ -300,9 +300,12 @@ class P0WeChatPrepareMacroTest {
     @Test
     fun `low confidence OCR input ref is never clicked or probed`() {
         val conversation = conversationSnapshot(
+            // centerY 取 1945：2026-07-25 盲点安全区改为锚定系统底部 inset 推算后，
+            // 1000x2000/inset=0 的夹具对应区域是 y=1900..1990（旧值 1680..1880）。
+            // 用例意图不变——低置信度输入框既不能被点击，其文字落在候选区内也必须挡下盲点。
             element(
                 "input", "输入消息", role = "input", source = "ocr", confidence = 0.64,
-                centerX = 500, centerY = 1_780,
+                centerX = 500, centerY = 1_945,
             ),
         )
         val adapter = FakeAdapter(snapshots = mutableListOf(conversation))
@@ -517,9 +520,10 @@ class P0WeChatPrepareMacroTest {
     @Test
     fun `text inside proposed blank input region blocks coordinate fallback`() {
         val unsafe = conversationSnapshot(
+            // 同上：坐标随安全区改为 inset 锚定而迁移到 y=1900..1990 区间内，用例意图不变。
             element(
                 "input-text", "尚未清空", source = "ocr", confidence = 0.88,
-                centerX = 500, centerY = 1_780,
+                centerX = 500, centerY = 1_945,
             ),
         )
         val adapter = FakeAdapter(snapshots = mutableListOf(unsafe))

@@ -167,13 +167,10 @@ internal object P0FocusProbeValidator {
                 element.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
         } ?: return null
 
-        // 固定屏幕比例的中心安全底栏：避开左侧语音与右侧表情/加号图标区。
-        val region = P0MacroRect(
-            left = (w * 0.24).toInt(),
-            top = (h * 0.84).toInt(),
-            right = (w * 0.76).toInt(),
-            bottom = minOf((h * 0.94).toInt(), h - snapshot.systemBottomInset),
-        )
+        // 中心安全底栏，几何由 [p0FocusProbeRegion] 统一计算——Android 侧
+        // performValidatedFocusProbe 用自己独立获得的 inset 调同一函数复核，两边必然一致。
+        val box = p0FocusProbeRegion(w, h, snapshot.systemBottomInset)
+        val region = P0MacroRect(left = box[0], top = box[1], right = box[2], bottom = box[3])
         if (!validBounds(region, w, h) || region.width < w * 0.40 || region.height < 40) return null
 
         // 空白输入框没有 OCR 文本；候选区出现任何可见文字时拒绝猜测。

@@ -36,13 +36,20 @@ internal object P0PreparedTargetRecorderValidator {
         val snapshot = state.snapshot
         val w = snapshot.screenWidth
         val h = snapshot.screenHeight
+        // 同 P0FocusProbeValidator / GatewayA11yService.performValidatedFocusProbe：这里的标题
+        // 只用于"证明身处文件传输助手会话"这一识别判断，不是点击目标，故用 contains + 识别级
+        // 门槛。真机实锤两个毛病都会各自独立卡死本校验：OCR 把标题识别成"文件传输助手8"
+        // （尾随多字符、置信度正常）使严格 == 永远不成立；置信度实测 0.59 亦过不了 0.65。
+        // 属 knowledge #15 同类的"改动遗漏"（contains 与识别级门槛两项决定均已获同意，
+        // 此处当时未同步），非新的设计取舍。目标身份的真正保障在于：确认卡向真人展示目标会话，
+        // 且下方 stableFreshProof/focusValid 仍逐项强校验 revision/窗口/焦点/bounds。
         val exactTitle = snapshot.elements.any { element ->
-            val exact = element.text.trim() == P0_FILE_TRANSFER_ASSISTANT ||
-                element.description.trim() == P0_FILE_TRANSFER_ASSISTANT
+            val exact = element.text.trim().contains(P0_FILE_TRANSFER_ASSISTANT) ||
+                element.description.trim().contains(P0_FILE_TRANSFER_ASSISTANT)
             val trusted = element.source == "a11y" ||
                 (element.source in setOf("ocr", "fused") &&
                     element.confidence?.let {
-                        it.isFinite() && it >= MIN_ACTION_OCR_CONFIDENCE
+                        it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
                     } == true)
             exact && trusted && element.stage == P0ElementStage.TOOLBAR &&
                 validBounds(element.bounds, w, h) &&

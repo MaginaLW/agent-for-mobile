@@ -64,6 +64,13 @@ class GatewayA11yService : AccessibilityService() {
     private val foregroundWindowTracker = ForegroundWindowTracker()
 
     /**
+     * 系统装饰栏（状态栏/导航栏，[AccessibilityWindowInfo.TYPE_SYSTEM]）的窗口 id 快照。
+     * 只在窗口增删事件里刷新，让高频的内容变化事件走 O(1) 查表而不是每次 `getWindows()`。
+     * 初始为空 = 一律按"未知"处理照常递增 revision，故障方向偏向多失效而非漏失效。
+     */
+    @Volatile private var systemChromeWindowIds: Set<Int> = emptySet()
+
+    /**
      * ref 表项。node=null 表示 OCR 来源（无节点，坐标手势操作）。
      * text 是 a11y 节点当时的文本（staleness 指纹；OCR/挂载条目留空），label 是展示与危险词判定文本。
      */
@@ -106,6 +113,7 @@ class GatewayA11yService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 rev.incrementAndGet()
+                refreshSystemChromeWindowIds()
                 foregroundWindowTracker.onWindowStateChanged(
                     eventWindowId = event.windowId,
                     packageName = event.packageName?.toString(),
@@ -113,12 +121,27 @@ class GatewayA11yService : AccessibilityService() {
                     windows = foregroundWindows(),
                 )
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> rev.incrementAndGet()
+            // 状态栏时钟/网速这类系统装饰栏文本每秒都在刷新并发出内容变化事件，若照单全收，
+            // 全局 revision 在完全静默的屏幕上也会持续上涨（2026-07-25 真机实测：无任何操作
+            // 时每约 2 秒 +3~4），导致所有"动作前后 revision 必须一致"的新鲜度校验几乎必败
+            // （实测 `P0FocusProbeValidator.revalidateForAction` 因此永远过不去）。装饰栏内容
+            // 与被操作的 App 界面无关，不该被当成"我要点的东西变了"。同 knowledge #11
+            // （`hasBlockingOverlay` 未排除 TYPE_SYSTEM 导致恒判有遮挡）是同一病根的另一处发作。
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ->
+                if (event.windowId !in systemChromeWindowIds) rev.incrementAndGet()
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 rev.incrementAndGet()
+                refreshSystemChromeWindowIds()
                 foregroundWindowTracker.onWindowsChanged(foregroundWindows())
             }
         }
+    }
+
+    /** 只认明确为 [AccessibilityWindowInfo.TYPE_SYSTEM] 的窗口；取不到窗口列表时清空（回到全部照常递增）。 */
+    private fun refreshSystemChromeWindowIds() {
+        systemChromeWindowIds = runCatching {
+            windows.filter { it.type == AccessibilityWindowInfo.TYPE_SYSTEM }.map { it.id }.toSet()
+        }.getOrDefault(emptySet())
     }
 
     // ---------- ctx ----------
@@ -915,12 +938,10 @@ class GatewayA11yService : AccessibilityService() {
         )
         requireFreshActionState(captureRevision, expectedWindowId, expectedPackage, imeMustBeHidden = true)
         val metrics = resources.displayMetrics
-        val expectedRegion = Rect(
-            (screenWidth * 0.24).toInt(),
-            (screenHeight * 0.84).toInt(),
-            (screenWidth * 0.76).toInt(),
-            (screenHeight * 0.94).toInt(),
-        )
+        // inset 在此独立重算（不取调用方传入值），与宏侧共用 [p0FocusProbeRegion] 同一几何算法：
+        // 算法一致保证两侧结论可比，输入独立保证这道纵深校验不退化成"信调用方"。
+        val expectedBox = p0FocusProbeRegion(screenWidth, screenHeight, systemBottomInset())
+        val expectedRegion = Rect(expectedBox[0], expectedBox[1], expectedBox[2], expectedBox[3])
         val geometryMatches = screenWidth == metrics.widthPixels &&
             screenHeight == metrics.heightPixels && region == expectedRegion &&
             x == expectedRegion.centerX() && y == expectedRegion.centerY()
@@ -929,8 +950,14 @@ class GatewayA11yService : AccessibilityService() {
             titleBounds.width() > 0 && titleBounds.height() > 0 &&
             titleBounds.centerY() in (screenHeight * 0.02).toInt()..(screenHeight * 0.12).toInt() &&
             titleBounds.centerX() in (screenWidth * 0.30).toInt()..(screenWidth * 0.70).toInt()
+        // 这里的标题只用于"证明身处文件传输助手会话"，从不是点击目标（真正落点是上面按屏幕
+        // 几何独立算出并已由 geometryMatches 复核的 expectedRegion），故与宏侧同名校验
+        // P0FocusProbeValidator 一样使用识别级门槛。2026-07-24 已就宏侧改动取得项目所有者同意，
+        // 但这处 Android 侧的纵深防御镜像当时漏改，导致宏侧放宽实际不生效——真机实测标题
+        // 置信度 0.59，宏侧放行后仍在此被 0.65 挡回（2026-07-25 实锤）。属 knowledge #15 同类
+        // 的"改动遗漏"，非新的设计取舍。
         val proofValid = titleConfidence.isFinite() &&
-            titleConfidence >= MIN_ACTION_OCR_CONFIDENCE && visionGeneration > 0 && proofSafe && titleInBand &&
+            titleConfidence >= MIN_RECOGNITION_OCR_CONFIDENCE && visionGeneration > 0 && proofSafe && titleInBand &&
             !hasBlockingOverlay(exposedWindows())
         if (!geometryMatches || !proofValid || revision != snapshotRevision) throw GatewayError(
             if (revision != snapshotRevision) ErrorCode.E_STALE_REF else ErrorCode.E_BLOCKED,
