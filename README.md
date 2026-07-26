@@ -12,6 +12,19 @@
 | | 内容 | 状态 |
 |---|---|---|
 | M0 | mobile-mcp 真机跑通 5 个验收任务，拿到成功率/token 数据 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)·[runbook](docs/runbooks/M0-runbook.md)） |
-| M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | ⬜ |
+| M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 进行中——网关已在真机跑通（a11y + IME + OCR 融合 + 内嵌 MCP server），P0 安全硬门见下 |
 | M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ |
+
+### P0 · 危险动作安全硬门（M1 内的验收门）
+
+发送/支付/删除类动作必须**两段式**：网关停下弹确认卡，真人在手机上决定，确认前后各复核一次上下文。
+监督式真机跑测由 [scripts/run-p0-safety-smoke.ps1](scripts/run-p0-safety-smoke.ps1) 驱动（[runbook](docs/runbooks/P0-safety-hard-gate-smoke.md)）。
+
+| 腿 | 验证什么 | 状态 |
+|---|---|---|
+| Allow | 真人允许后动作执行且只执行一次 | 🟡 链路已通（2026-07-26 真机：确认卡→允许→放行→只读复核全绿），发送本身待验 |
+| Stale | 确认后上下文变了就必须拒绝执行 | 🟡 待在新链路下复跑 |
+| Deny | 真人拒绝后绝不执行 | ⬜ runner 尚无入口 |
+
+进度与卡点以 [STATUS.md](STATUS.md) 为准。

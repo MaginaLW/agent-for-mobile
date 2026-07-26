@@ -15,3 +15,7 @@ configs/gateway-mcp.json.restore-*.tmp
 **/build/
 **/.gradle/
 **/local.properties
+
+# 构建/工具日志：落盘后 grep 用，不入库（曾误提交 4 个 .codex-task1-quality-*.log）
+*.log
+!docs/runs/**/*.log

@@ -1,38 +1,18 @@
-# 手机 Agent 项目 · 开发指南
+# 手机 Agent 项目 · Codex 侧入口
 
-把已付费 AI 订阅（Codex Pro / ChatGPT Plus）变成能替用户操作手机各 App 的托管助手。
-架构一句话：手机 = 无障碍执行器 + MCP server；大脑 = Codex / Codex CLI（官方订阅通道）。
-完整设计：[docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
+**开发指南只有一份：[CLAUDE.md](CLAUDE.md)。** 铁律、文档地图、会话纪律、命名与提交约定全部以它为准，
+本文件不复制正文——此前这里是 CLAUDE.md 的机器替换副本，把「Claude→Codex」全局替换后
+产出了三处事实错误（不存在的「Codex Pro」、把 Anthropic 的 Agent SDK 写成 Codex 通道、
+以及 `Codex --mcp-config` 这种不存在的调用形态），而被替换歪的正是**合规红线**那一条。
 
-@STATUS.md
+## Codex 侧与 CLAUDE.md 的差异
 
-## 铁律
-
-1. **合规红线**：Codex 订阅只经 Codex / Agent SDK 官方通道；ChatGPT Plus 只经 Codex CLI 官方登录；永不逆向两家网页端私有接口。
-2. **开发会话不直接操作手机**。mobile MCP server 已不挂载。临时单跑真机：`Codex --mcp-config configs/mobile-mcp.json`；成体系跑测走派单 wrapper `scripts/dispatch.ps1`（设计：[docs/specs/2026-07-17-执行harness-design.md](docs/specs/2026-07-17-执行harness-design.md)）。
-3. **危险操作（发送/支付/删除类）永远两段式**：临界动作前停下汇报，人工确认后继续。
-
-## 文档地图（按需读，不要全读）
-
-| 要做什么 | 读什么 |
+| 项 | Codex 侧的实际情况 |
 |---|---|
-| 改架构/产品设计 | docs/specs/ 对应篇 |
-| 执行某个操作规程 | docs/runbooks/ 对应篇 |
-| 设备/系统命令/App 特性/成本/链路等沉淀知识 | [docs/knowledge/README.md](docs/knowledge/README.md)——**渐进式披露单入口**：按「遇到什么情况→载入哪册」路由，不整目录读 |
-| 派单跑真机 / 查台账 | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md) §4–§5；入口 scripts/dispatch.ps1；台账 docs/runs/ledger.csv |
-| 历史跑测记录 | docs/runs/（归档，只写不读） |
+| 订阅与通道 | ChatGPT Plus 只经 **Codex CLI 官方登录**；永不逆向网页端私有接口。这是铁律 1 在 Codex 侧的形态，红线本身不变。 |
+| 派单 | `scripts/dispatch.ps1 -Brain codex`；harness 与 Claude 侧共用同一套 trace / ledger / 两段式确认。 |
+| 临时单跑真机 | mobile MCP 的 `configs/mobile-mcp.json` 是 **Claude Code 的 `--mcp-config` 格式**，Codex CLI 不吃这份文件；Codex 侧走 dispatch wrapper，不要照抄那条命令。 |
+| 额度 | 见 [docs/knowledge/brain/cost.md](docs/knowledge/brain/cost.md)。 |
 
-## 会话纪律
-
-1. 一个会话一个主题；跨主题开新会话。
-2. 广探索、长文阅读派子代理（Explore 类），只让结论进主上下文。
-3. 构建日志、logcat、长命令输出先落盘（重定向到文件）再 grep/尾读，不整段读入。
-4. 大文件按行区间读，不整读。
-5. 会话收尾两件事：更新 STATUS.md；新踩的坑写入对应 knowledge 册。
-
-## 约定
-
-- 文档与交流用中文。
-- 设计说明命名：`docs/specs/YYYY-MM-DD-主题-design.md`。
-- 跑测 trace 与记录进 `docs/runs/`，命名 `YYYY-MM-DD-主题.md`。
-- 提交信息中文，一次逻辑变更一次提交。
+其余一切（三条铁律的内容、docs/ 结构、一个会话一个主题、大文件按行区间读、
+收尾更新 STATUS.md 与 knowledge 册）与 CLAUDE.md 完全一致，请直接读那一份。
