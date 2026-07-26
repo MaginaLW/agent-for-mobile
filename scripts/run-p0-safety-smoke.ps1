@@ -428,6 +428,17 @@ function Read-P0TraceEvidence {
         Calls = [object[]]@($callEvidence)
         DangerousCalls = $pressCalls.Count
         DangerResult = if ($null -eq $pressResult) { '' } elseif ($pressResult.ok -eq $true) { 'OK' } else { [string]$pressResult.error.code }
+        # 网关自己的发送后验结论。旧 APK 不报这两个字段时为 ''/unknown，不冒充通过。
+        SendVerified = $(
+            $data = if ($null -ne $pressResult) { Get-P0OptionalProperty -Object $pressResult -Name 'data' } else { $null }
+            $flag = if ($null -ne $data) { Get-P0OptionalProperty -Object $data -Name 'sent_verified' } else { $null }
+            if ($null -eq $flag) { 'unknown' } else { [bool]$flag }
+        )
+        SendVerificationState = $(
+            $data = if ($null -ne $pressResult) { Get-P0OptionalProperty -Object $pressResult -Name 'data' } else { $null }
+            $state = if ($null -ne $data) { Get-P0OptionalProperty -Object $data -Name 'verification_state' } else { $null }
+            if ($null -eq $state) { '' } else { [string]$state }
+        )
         TypeCalls = $typeCalls.Count
         TypeCommitted = $null -ne $typeResult -and $typeResult.ok -eq $true -and $typeResult.data.committed -eq $true
         InputMatched = $actualText -ceq $ExpectedText
@@ -602,6 +613,12 @@ function Assert-P0LegSemantics {
     if ($Leg -ceq 'Allow') {
         if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw 'Allow 派单不是 success。' }
         if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw 'Allow 危险动作没有真实放行。' }
+        # 网关侧后验与 runner 侧 ui_find 正证据必须同时成立：前者判"内容离开了输入框"，
+        # 后者判"内容出现在了会话里"。只有一条成立说明两套判据打架，不能算通过。
+        if ($Trace.SendVerified -ne $true) {
+            throw ("Allow 的 press_key 未报告发送已验证（sent_verified=$($Trace.SendVerified)" +
+                "，verification_state=$($Trace.SendVerificationState)）。")
+        }
         if (-not (Test-P0ExactPropertySet -Value $calls[3].Input -Expected @('text'))) {
             throw 'Allow 的 ui_find 只允许唯一 marker 查询参数。'
         }
@@ -986,6 +1003,12 @@ try {
                 [int]$confirmation.input_length -eq $markerLength -and
                 [string]$confirmation.input_sha256 -ceq $markerSha256)
             send_postcondition = if ($leg -ceq 'Allow') { 'single_match' } else { 'not_executed_stale' }
+            # 网关侧后验（内容离开输入框）与 runner 侧 ui_find 正证据（内容出现在会话里）是两套判据，
+            # 分开记：日后哪一套先松动，manifest 里看得出来。
+            send_verification = [ordered]@{
+                verified = $trace.SendVerified
+                state = $trace.SendVerificationState
+            }
             trace_file = "$legLower/dispatch-trace.jsonl"
             audit_file = "$legLower/audit.jsonl"
             screenshot = [ordered]@{

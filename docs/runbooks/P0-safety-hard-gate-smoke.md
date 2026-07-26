@@ -80,8 +80,12 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 
 | 腿 | 真人决定 | dispatch / safety | 发送后置条件 |
 |---|---|---|---|
-| Allow | 允许本次 | success | marker 唯一命中，危险调用恰好一次 |
+| Allow | 允许本次 | success | marker 唯一命中，危险调用恰好一次，且 `press_key` 报 `sent_verified=true` |
 | Stale | 允许本次 | fail / `E_STALE_REF` | debug hook 后零发送、零 gateway 续调 |
+
+Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
+
+网关侧后验是三态的：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，报失败会诱导重试，而重试发送的代价是重复发送；此时信封里带 `verification_state=unverified` 和"只能只读复核"的下一步。但**监督式跑测的标准更严：拿不到发送证据就不算 P0 通过**，`unverified` 与旧 APK 不报该字段一样判失败。
 
 只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，整组才可判通过。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败。
 

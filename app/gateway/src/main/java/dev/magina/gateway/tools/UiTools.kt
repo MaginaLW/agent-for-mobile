@@ -1,6 +1,7 @@
 package dev.magina.gateway.tools
 
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
@@ -11,6 +12,9 @@ import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.InputCommitEvidence
 import dev.magina.gateway.core.PreparedTargetEvidence
 import dev.magina.gateway.core.SafetyTarget
+import dev.magina.gateway.core.SendVerdict
+import dev.magina.gateway.core.SendVerdictPolicy
+import dev.magina.gateway.core.SendVerification
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.ocr.OcrEngine
 import org.json.JSONArray
@@ -318,6 +322,7 @@ object UiTools {
                 geometry?.let { g ->
                     add(
                         "region=${g.region.left},${g.region.top},${g.region.right},${g.region.bottom}" +
+                            " src=${g.regionSource}" +
                             " shot=${g.screenWidth}x${g.screenHeight}" +
                             " metrics=${g.metricsWidth}x${g.metricsHeight}" +
                             " inset=${g.bottomInset}",
@@ -390,48 +395,86 @@ object UiTools {
         )
         if (key != "enter") return JSONObject().put("done", true)
         // 后验要在清证据之前取基线：它是"应当消失的那串字"的唯一可靠来源。
-        val verdict = verifyEnterSent(a11y, expectedInputCommitEvidence)
+        val verdict = verifyEnterSent(a11y, expectedInputCommitEvidence, expectedFocusedInputBounds)
         Gateway.inputCommitEvidence.clear()
         // Enter 是"发送"，返回值不能只看通道调用是否被受理：`performEditorAction` 只要
         // InputConnection 还活着就返回 true，微信不理会 IME_ACTION_SEND 时照样返回 true。
         // 2026-07-26 真机实锤：press_key 返回 done:true、确认卡也走完了，而 marker 原封不动
         // 躺在输入框里，消息根本没发出去——危险动作谎报成功比失败更糟。
-        if (!verdict.sent) throw GatewayError(
+        if (verdict.state == SendVerification.NOT_SENT) throw GatewayError(
             ErrorCode.E_VERIFY_FAIL,
             "Enter 已投递但输入框内容未消失，无法证明已发送（后验读回：${verdict.detail}）",
-            channel = "a11y",
+            channel = verdict.channel,
             retryable = false,
             fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
         )
-        return JSONObject().put("done", true).put("sent_verified", true)
+        // UNVERIFIED 不当失败报：判不了 ≠ 没发出去，报失败会诱导重试，而重试发送等于冒重复发送。
+        // 如实把"没有发送证据"带进信封，下一步只能是只读复核。
+        return JSONObject()
+            .put("done", true)
+            .put("sent_verified", verdict.state == SendVerification.SENT)
+            .put("verification_state", verdict.state.name.lowercase())
+            .put("verification_channel", verdict.channel)
+            .put("verification_detail", verdict.detail)
+            .apply {
+                if (verdict.state == SendVerification.UNVERIFIED) put(
+                    "next_step",
+                    "本次发送没有机械证据。只能只读复核会话最后一条消息判断是否已发出；不得重按 Enter。",
+                )
+            }
     }
-
-    private data class EnterVerdict(val sent: Boolean, val detail: String)
 
     /**
      * 发送后验：刚提交的那串内容应当已经从输入栏消失。**只判定、绝不重试发送**——
-     * 后验失败时可能已经发出去了，换通道再来一次的风险是重复发送。
+     * 判不了时可能已经发出去了，换通道再来一次的风险是重复发送。判据分层见 [SendVerdictPolicy]。
      *
-     * 基线必须是**已提交的确切文本**（取自输入证据，长度未超 `PREVIEW_LIMIT` 时 preview
-     * 就是原文），不能拿"Enter 之前那次 OCR 读回的字符串"当基线——OCR 每次的噪声都不同
-     * （实测同一屏读出 `") POALLOW-…F20 ) POALLOW-…F2C"` 与 `"POALLOW-…F2C"`），
-     * 拿噪声串做 contains 比较，任何一次抖动都会被判成"内容已消失"，也就是**谎报发送成功**
-     * （2026-07-26 真机实锤：`sent_verified:true`，而 marker 还好端端在框里）。
+     * 轮询而不是固定睡一觉：UI 清空的时机随消息大小与网络抖动，睡死 600ms 在慢一点的场景下
+     * 会读到"内容还在"，也就是把成功的发送谎报成失败。任一轮判定已发送即刻返回。
      */
-    private fun verifyEnterSent(a11y: GatewayA11yService, committed: InputCommitEvidence?): EnterVerdict {
-        val expected = committed?.takeIf { it.length <= InputCommitEvidence.PREVIEW_LIMIT }?.preview
-        val wanted = OcrEngine.norm(expected.orEmpty())
-        if (wanted.length < MIN_ENTER_VERIFY_CHARS) {
-            return EnterVerdict(false, "没有可用于后验的已提交文本基线")
+    private fun verifyEnterSent(
+        a11y: GatewayA11yService,
+        committed: InputCommitEvidence?,
+        expectedFocusedInputBounds: String?,
+    ): SendVerdict {
+        val preferredRegion = parseBoundsString(expectedFocusedInputBounds)
+        val deadline = SystemClock.elapsedRealtime() + ENTER_VERIFY_TIMEOUT_MS
+        var verdict = SendVerdict(SendVerification.UNVERIFIED, "none", "后验未取得任何读回")
+        while (true) {
+            verdict = readEnterVerdict(a11y, committed, preferredRegion)
+            if (verdict.state == SendVerification.SENT) return verdict
+            if (SystemClock.elapsedRealtime() >= deadline) return verdict
+            // OCR 那一轮要截屏，而系统对 a11y 截图有节流：催得太紧只会撞上限，不会更快拿到结论。
+            Thread.sleep(
+                if (verdict.channel == "ocr") ENTER_VERIFY_OCR_POLL_MS else ENTER_VERIFY_POLL_MS,
+            )
         }
-        Thread.sleep(600)
+    }
+
+    /** 一轮读回：a11y 拿得到输入框真实文本就用它，拿不到才降级 OCR。 */
+    private fun readEnterVerdict(
+        a11y: GatewayA11yService,
+        committed: InputCommitEvidence?,
+        preferredRegion: Rect?,
+    ): SendVerdict {
+        // a11y 腿更可靠：读的是输入框文本本身，没有长度上限、不吃屏幕几何假设。
+        // 但 readableText 为 null 表示"这个节点没有 text 可读"而不是"框里是空的"
+        // （微信屏蔽 a11y 树时正是如此），必须降级而不是当成已清空。
+        val readable = focusedInputSnapshot(a11y).readableText
+        if (readable != null) return SendVerdictPolicy.fromAccessibilityText(committed, readable)
         val after = try {
-            a11y.ocrReadInputBarRegion().text
+            a11y.ocrReadInputBarRegion(preferredRegion).text
         } catch (e: Throwable) {
-            return EnterVerdict(false, "读回异常=${e.javaClass.simpleName}")
+            return SendVerdict(SendVerification.UNVERIFIED, "ocr", "读回异常=${e.javaClass.simpleName}")
         }
-        val stillThere = OcrEngine.norm(after.orEmpty()).contains(wanted)
-        return EnterVerdict(!stillThere, if (stillThere) "输入栏仍显示已提交内容" else "输入栏已不再显示已提交内容")
+        return SendVerdictPolicy.fromOcrReadback(committed, after, OcrEngine::norm)
+    }
+
+    /** `[l,t][r,b]` → Rect；格式不符一律返回 null，由调用方退回默认输入栏带。 */
+    private fun parseBoundsString(bounds: String?): Rect? {
+        val m = BOUNDS_PATTERN.matchEntire(bounds?.trim().orEmpty()) ?: return null
+        val (l, t, r, b) = m.destructured
+        val rect = Rect(l.toInt(), t.toInt(), r.toInt(), b.toInt())
+        return rect.takeIf { it.width() > 0 && it.height() > 0 }
     }
 
     private fun requireInputEvidence(expected: InputCommitEvidence?, focused: FocusedInputSnapshot) {
@@ -544,6 +587,11 @@ object UiTools {
 
     fun macroRun(args: JSONObject): JSONObject = MacroRunner.run(args)
 
-    /** 少于这么多字符的基线不足以判断"内容是否消失"（OCR 在空输入栏上也会捡到一两个符号）。 */
-    private const val MIN_ENTER_VERIFY_CHARS = 4
+    /** 发送后验的轮询上限与间隔：UI 清空的时机随消息大小与网络抖动，固定睡一觉会读出假阴性。 */
+    private const val ENTER_VERIFY_TIMEOUT_MS = 2_000L
+    private const val ENTER_VERIFY_POLL_MS = 250L
+    /** OCR 腿每轮要截屏，系统对 a11y 截图有节流，间隔放宽。 */
+    private const val ENTER_VERIFY_OCR_POLL_MS = 600L
+
+    private val BOUNDS_PATTERN = Regex("""\[(-?\d+),(-?\d+)]\[(-?\d+),(-?\d+)]""")
 }

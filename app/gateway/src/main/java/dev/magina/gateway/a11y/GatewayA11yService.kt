@@ -1288,6 +1288,8 @@ class GatewayA11yService : AccessibilityService() {
         val metricsWidth: Int,
         val metricsHeight: Int,
         val bottomInset: Int,
+        /** 区域是怎么来的：`focused_bounds`（已知焦点几何）或 `bottom_band`（写死的兜底带）。 */
+        val regionSource: String = "bottom_band",
     )
 
     /**
@@ -1298,14 +1300,26 @@ class GatewayA11yService : AccessibilityService() {
      * 而裁剪发生在位图坐标系里，用错坐标系会把整条输入栏裁掉。
      * 读回带比盲点带更高（[INPUT_BAR_READBACK_HEIGHT_PX]）：盲点只需要一个可点的中心，
      * 读回要覆盖整条输入栏，包括基线落在 inset 之下的文字。
+     *
+     * [preferredBounds] 是**已知的焦点输入框几何**：有它就按它裁，那条写死的底部带只是兜底。
+     * 底部带隐含了"竖屏 + 输入栏贴底 + 左右各留 6%"三条假设，全是这台机器上微信会话页的样子；
+     * 换 App 或换姿势就不成立，所以但凡有真几何就别用它。
      */
-    internal fun ocrReadInputBarRegion(): InputBarReadback {
+    internal fun ocrReadInputBarRegion(preferredBounds: Rect? = null): InputBarReadback {
         val metrics = resources.displayMetrics
         val inset = systemBottomInset()
         val full = captureBitmapRetry()
+        val preferred = preferredBounds?.let { wanted ->
+            Rect(
+                wanted.left.coerceIn(0, full.width - 1),
+                wanted.top.coerceIn(0, full.height - 1),
+                wanted.right.coerceIn(1, full.width),
+                wanted.bottom.coerceIn(1, full.height),
+            ).takeIf { it.width() > 0 && it.height() > 0 }
+        }
         val bottom = full.height
         val top = (bottom - INPUT_BAR_READBACK_HEIGHT_PX).coerceAtLeast(0)
-        val region = Rect(
+        val region = preferred ?: Rect(
             (full.width * 0.06).toInt(),
             top,
             (full.width * 0.94).toInt(),
@@ -1320,6 +1334,7 @@ class GatewayA11yService : AccessibilityService() {
             metricsWidth = metrics.widthPixels,
             metricsHeight = metrics.heightPixels,
             bottomInset = inset,
+            regionSource = if (preferred != null) "focused_bounds" else "bottom_band",
         )
     }
 

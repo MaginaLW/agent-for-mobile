@@ -68,7 +68,7 @@ function New-Fixture {
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
-        'card_not_captured'
+        'card_not_captured', 'send_unverified', 'legacy_no_send_field'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -425,7 +425,14 @@ $result = 'success'; $exit = 0; $code = 'OK'; $note = 'confirmation=allowed;cont
 if ($leg -eq 'stale') { $result='fail'; $exit=1; $code='E_STALE_REF' }
 if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1; $code='E_VERIFY_FAIL' }
 if ($code -eq 'OK') {
-    ToolResult 'p1' @{ok=$true;data=@{done=$true}}
+    # 网关侧发送后验：正常腿报 sent，send_unverified 腿报"判不了"（ok 但无发送证据），
+    # legacy_no_send_field 腿模拟不带该字段的旧 APK。
+    $pressData = switch ($scenario) {
+        'send_unverified' { @{done=$true;sent_verified=$false;verification_state='unverified';verification_channel='ocr'} }
+        'legacy_no_send_field' { @{done=$true} }
+        default { @{done=$true;sent_verified=$true;verification_state='sent';verification_channel='a11y'} }
+    }
+    ToolResult 'p1' @{ok=$true;data=$pressData}
     if ($scenario -eq 'unknown_post_tool') {
         ToolUse 'u1' 'future_write' @{value='x'}
         ToolResult 'u1' @{ok=$true;data=@{done=$true}}
@@ -596,7 +603,10 @@ function Invoke-FixtureRunner {
         if (-not $process.Start()) { throw '无法启动 runner' }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(15000)) { $process.Kill($true); throw 'runner 离线测试超时' }
+        # 这个预算是**防挂死**的墙钟保险，不是性能断言：一次 fixture 跑测实测 8–9 秒
+        # （每腿都要起 pwsh 子进程、造临时仓库、走假 adb/dispatch），15 秒余量太薄，
+        # 机器一有负载波动就成片假超时——2026-07-26 一轮里 39 条挂了 28 条，全是这个。
+        if (-not $process.WaitForExit(60000)) { $process.Kill($true); throw 'runner 离线测试超时' }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         [pscustomobject]@{ ExitCode=$process.ExitCode; Text=$stdout+"`n"+$stderr; Stdout=$stdout; Stderr=$stderr }
@@ -748,6 +758,18 @@ try {
         Assert-NotMatches $manifestRaw ([regex]::Escape($fixture.Token))
         Assert-NotMatches $manifestRaw 'P0ALLOW-SENSITIVE-TEXT'
         Assert-NotMatches $result.Text ([regex]::Escape($fixture.Token))
+    }
+
+    Test-Case 'Allow 腿要求网关侧发送后验为已验证' {
+        # 「判不了」在网关侧按 ok 返回（判不了 ≠ 没发出去，报失败会诱导重试→重复发送），
+        # 但监督式跑测的判定标准更严：拿不到发送证据就不算 P0 通过。
+        # 旧 APK 不带该字段时同样不放行，不冒充通过。
+        foreach ($scenario in @('send_unverified','legacy_no_send_field')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 必须判失败。"
+            Assert-Contains $result.Text '未报告发送已验证'
+        }
     }
 
     Test-Case '首腿失败立即停止且不重试' {
