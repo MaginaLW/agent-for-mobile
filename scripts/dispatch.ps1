@@ -39,6 +39,8 @@ $LockFile     = Join-Path $PSScriptRoot '.dispatch.lock'
 $LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note'
 $ProfileHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-profile.ps1'
 . $ProfileHelperPath
+$LockHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
+. $LockHelperPath
 
 function CsvQuote([string]$s) { '"' + ("$s" -replace '"', '""') + '"' }
 
@@ -211,8 +213,7 @@ New-Item -ItemType Directory -Force -Path $TracesDir | Out-Null
 # ── 单机单派锁（spec §4.2）────────────────────────────────────────────────
 $lockFs = $null
 try {
-    try { $lockFs = [IO.File]::Open($LockFile, 'CreateNew', 'Write', 'None') }
-    catch { throw "疑似另一次派单进行中（锁 $LockFile 已存在）。确认无并发后手动删除锁文件重试。" }
+    $lockFs = Open-DispatchLock -Path $LockFile -Owner "$Slug/leg$Leg/$Executor"
 
     # ── 派单 ──────────────────────────────────────────────────────────────
     Set-Content -Path $PromptFile -Value $prompt -Encoding utf8
@@ -224,9 +225,15 @@ try {
     Get-ChildItem Env: | Where-Object { $_.Name -like 'CLAUDE*' } |
         ForEach-Object { Remove-Item "Env:$($_.Name)" -ErrorAction SilentlyContinue }
 
+    # --allowedTools 只是"免确认"名单，不阻止别的工具（2026-07-26 实测执行器在派单里
+    # 真的跑起了本机 Bash）。执行器的职责只有驱动手机，本机 shell / 文件 / 网络一律拒绝：
+    # 仓库里就放着 gateway 私密 token，让它能读本机文件等于给证据脱敏链开后门。
+    # ToolSearch 不在此列——延迟注册的 MCP 工具要靠它加载 schema，禁掉 gateway 工具就没法调。
+    $LocalToolDenyList = 'Bash,BashOutput,KillShell,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent'
     $argList = @('-p', '--output-format', 'stream-json', '--verbose',
                  '--mcp-config', $McpConfig, '--strict-mcp-config',
                  '--allowedTools', $AllowedTools,
+                 '--disallowedTools', $LocalToolDenyList,
                  '--max-budget-usd', "$MaxBudgetUsd", '--model', $Model)
     Write-Host "派单：$Slug · 第 $Leg 腿 · $Executor · $Model · ≤`$$MaxBudgetUsd · ≤${TimeoutMin}min ..."
     $sw = [Diagnostics.Stopwatch]::StartNew()

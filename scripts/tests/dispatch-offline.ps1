@@ -450,6 +450,57 @@ session_id: offline
         Assert-NoRepoEffects $before
     }
 
+    # ── 单机单派锁（残锁自清 vs 活锁必拒）────────────────────────────────────
+    $fixtureLockHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
+    Assert-True (Test-Path -LiteralPath $fixtureLockHelper -PathType Leaf) `
+        '测试设施错误：fixture 缺少 dispatch lock helper。'
+    . $fixtureLockHelper
+    $lockProbeDir = Join-Path $TestRoot 'lock-probe'
+    New-Item -ItemType Directory -Path $lockProbeDir -Force | Out-Null
+
+    Test-Case '无锁时正常取得并写入可读的持有者信息' {
+        $path = Join-Path $lockProbeDir 'fresh.lock'
+        $stream = Open-DispatchLock -Path $path -Owner 'offline/leg1/gateway'
+        try {
+            Assert-True (Test-Path -LiteralPath $path -PathType Leaf) '取锁后锁文件不存在。'
+            $holder = Get-DispatchLockHolder -Path $path
+            Assert-True $holder.Active '自己持有句柄期间应判为活锁。'
+        }
+        finally { $stream.Close(); Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case '崩溃残留的锁自动清理后取锁成功' {
+        $path = Join-Path $lockProbeDir 'stale.lock'
+        # 上一次派单崩溃：文件留下，句柄已被 OS 回收。
+        Set-Content -LiteralPath $path -Value 'pid=999999 owner=crashed/leg1/gateway at=2026-07-26T00:00:00' -Encoding utf8
+        $stream = Open-DispatchLock -Path $path -Owner 'offline/leg1/gateway'
+        try {
+            Assert-True ($null -ne $stream) '残锁未被自动清理。'
+        }
+        finally { $stream.Close() }
+        # 持锁期间独占，内容只能等释放后核对：旧残锁已被换成本次派单的记录。
+        $content = [IO.File]::ReadAllText($path)
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        Assert-Contains $content 'owner=offline/leg1/gateway'
+        Assert-NotMatches $content 'crashed'
+    }
+
+    Test-Case '仍被持有的锁必拒且不删锁文件' {
+        $path = Join-Path $lockProbeDir 'active.lock'
+        $held = [IO.File]::Open($path, 'CreateNew', 'Write', 'None')
+        try {
+            $threw = $false
+            try { Open-DispatchLock -Path $path -Owner 'offline/leg1/gateway' | Out-Null }
+            catch {
+                $threw = $true
+                Assert-Contains $_.Exception.Message '疑似另一次派单进行中'
+            }
+            Assert-True $threw '活锁未被拒绝。'
+            Assert-True (Test-Path -LiteralPath $path -PathType Leaf) '活锁被错误删除。'
+        }
+        finally { $held.Close(); Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    }
+
     Test-Case '全部 DryRun 汇总后仍无仓库副作用' {
         Assert-NoRepoEffects $before
         foreach ($tool in $ExternalTools) {

@@ -53,7 +53,8 @@ function New-Fixture {
         'happy', 'fail_allow', 'timeout', 'missing_screenshot', 'missing_trace', 'missing_ledger',
         'wrong_text', 'wrong_hash', 'unrelated_find', 'unknown_post_tool', 'stale_read_after',
         'find_input', 'find_bottom', 'find_ocr_input', 'find_focus_missing', 'find_focus_changed',
-        'trace_malformed', 'trace_non_gateway', 'result_malformed',
+        'trace_malformed', 'trace_non_gateway', 'trace_tool_search', 'trace_local_bash_after_block',
+        'result_malformed',
         'result_orphan', 'audit_malformed', 'audit_missing_field',
         'ledger_traversal', 'ledger_absolute', 'ledger_wrong_slug', 'ledger_legacy_slug',
         'ledger_wrong_brain', 'ledger_wrong_leg', 'ledger_symlink',
@@ -313,7 +314,7 @@ while (-not (Test-Path -LiteralPath (Join-Path $state 'test-control.json'))) {
 $control = Get-Content -LiteralPath (Join-Path $state 'test-control.json') -Raw | ConvertFrom-Json
 $leg = if ($Slug -match 'stale') { 'stale' } else { 'allow' }
 $evidenceName = "confirmation-$($control.nonce).png"
-if ($scenario -ne 'missing_screenshot') {
+if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
     $validPngBase64 =
         'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAqElEQVR4nOXOIQEAAAwEoetf+hcDMYGnas/xgMYDGg9oPKDxgMYD' +
         'Gg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9o' +
@@ -378,6 +379,11 @@ if ($scenario -eq 'wrong_order') {
     if ($scenario -eq 'trace_non_gateway') {
         Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='x0';name='mcp__other__foreground_app';input=@{}})}}
         ToolResult 'x0' @{ok=$true;data=@{package='com.tencent.mm'}}
+    }
+    # 延迟注册的 MCP 工具必须先靠 ToolSearch 载入 schema：纯文本结果、不进调用序列。
+    if ($scenario -eq 'trace_tool_search') {
+        Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='s0';name='ToolSearch';input=@{query='select:mcp__gateway__macro_run'}})}}
+        Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='s0';content=@(@{type='text';text='<functions>...</functions>'})})}}
     }
     Emit-Macro
     if ($scenario -eq 'extra_read') {
@@ -446,6 +452,11 @@ if ($code -eq 'OK') {
     }
 }
 if ($scenario -eq 'result_orphan') { ToolResult 'orphan-result' @{ok=$true;data=@{done=$true}} }
+# 复刻 2026-07-26：Enter 被安全门拦住、确认卡从未出现，执行器随后调了一次本机 Bash。
+if ($scenario -eq 'trace_local_bash_after_block') {
+    Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='b0';name='Bash';input=@{command='true'}})}}
+    Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='b0';content=@(@{type='text';text='(no output)'})})}}
+}
 Add-Event @{type='result';subtype='success';result=if($result -eq 'success'){'结果：成功'}else{'结果：失败'}}
 if ($scenario -eq 'trace_secret') {
     Add-Event @{type='assistant';message=@{content=@(@{type='text';text="token=$fixtureToken"})}}
@@ -800,6 +811,27 @@ try {
             if ($scenario -like 'audit_*') { Assert-Contains $result.Text 'audit' }
             else { Assert-Contains $result.Text 'trace' }
         }
+    }
+
+    Test-Case 'ToolSearch 加载 schema 不算越权也不进调用序列' {
+        $fixture = New-Fixture trace_tool_search
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "ToolSearch 不该让腿失败：`n$($result.Text)"
+        Assert-Contains $result.Text '语义判定通过'
+    }
+
+    Test-Case '腿失败也照样查出执行器越权调用本机工具' {
+        $fixture = New-Fixture trace_local_bash_after_block
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '缺确认截图必须失败。'
+        Assert-Contains $result.Text '越权'
+        Assert-Contains $result.Text 'Bash'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'Bash') `
+            "manifest 未记录越权工具，实际：$($manifestJson.tool_policy_violations)"
     }
 
     Test-Case 'Stale 返回后任何只读续调也失败' {

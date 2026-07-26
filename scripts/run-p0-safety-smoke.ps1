@@ -234,6 +234,34 @@ function Test-P0ExactPropertySet {
     return $actualSignature -ceq $expectedSignature
 }
 
+# 唯一允许出现在 trace 里的非 gateway 工具：只用来加载延迟注册的 MCP 工具 schema，
+# 不接触本机文件、shell 或网络，也不进入调用序列判定。除此之外一律视为越权。
+$script:P0InfrastructureTools = @('ToolSearch')
+
+<#
+只回答"执行器有没有碰 gateway 以外的工具"，不解析任何语义证据，因此在腿失败、
+甚至根本没走到确认卡时也能跑（2026-07-26：Allow 腿被 E_BLOCKED 打断后执行器调了
+一次本机 Bash，而完整审计因为提前抛错压根没看这份 trace）。返回越权工具名数组。
+#>
+function Get-P0NonGatewayToolUses {
+    param([Parameter(Mandatory)][string]$TracePath)
+
+    $offenders = [Collections.Generic.List[string]]::new()
+    foreach ($line in Get-Content -LiteralPath $TracePath -Encoding utf8) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try { $event = $line | ConvertFrom-Json -Depth 30 }
+        catch { continue }
+        if ([string]$event.type -cne 'assistant') { continue }
+        foreach ($content in @($event.message.content)) {
+            if ([string]$content.type -cne 'tool_use') { continue }
+            $name = [string]$content.name
+            if ($name -cin $script:P0InfrastructureTools) { continue }
+            if ($name -notmatch '^mcp__gateway__') { [void]$offenders.Add($name) }
+        }
+    }
+    return $offenders.ToArray()
+}
+
 function Read-P0TraceEvidence {
     param(
         [Parameter(Mandatory)][string]$TracePath,
@@ -242,6 +270,7 @@ function Read-P0TraceEvidence {
 
     $calls = [Collections.Generic.List[object]]::new()
     $results = @{}
+    $infrastructureCallIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $final = ''
     $finalOrdinal = [int]::MaxValue
     $timelineOrdinal = 0
@@ -255,9 +284,14 @@ function Read-P0TraceEvidence {
                 if ($content.type -ne 'tool_use') { continue }
                 $timelineOrdinal++
                 $rawName = [string]$content.name
+                # schema 加载工具不产生副作用，也不算一次执行动作，从调用序列里整条略过。
+                if ($rawName -cin $script:P0InfrastructureTools) {
+                    [void]$infrastructureCallIds.Add([string]$content.id)
+                    continue
+                }
                 $toolNameMatch = [regex]::Match($rawName, '^mcp__gateway__(.+)$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
                 if (-not $toolNameMatch.Success) {
-                    throw 'trace 包含非 gateway 或未知 channel 的 tool_use。'
+                    throw "trace 包含非 gateway 或未知 channel 的 tool_use：$rawName"
                 }
                 $calls.Add([pscustomobject]@{
                     RawName = $rawName
@@ -272,9 +306,11 @@ function Read-P0TraceEvidence {
             foreach ($content in @($event.message.content)) {
                 if ($content.type -ne 'tool_result') { continue }
                 $timelineOrdinal++
+                $id = [string]$content.tool_use_id
+                # schema 加载工具的结果是纯文本，既不该被当作证据信封解析，也不算孤儿。
+                if ($infrastructureCallIds.Contains($id)) { continue }
                 $envelope = Get-ToolResultEnvelope -Content $content.content
                 if ($null -eq $envelope) { throw 'trace 包含无法唯一解析的 tool_result。' }
-                $id = [string]$content.tool_use_id
                 if ([string]::IsNullOrWhiteSpace($id)) { throw 'trace 包含缺失 id 的 tool_result。' }
                 if (-not $results.ContainsKey($id)) { $results[$id] = [Collections.Generic.List[object]]::new() }
                 $results[$id].Add([pscustomobject]@{ TimelineOrdinal=$timelineOrdinal; Envelope=$envelope })
@@ -974,6 +1010,25 @@ catch {
     $manifest.failure = $_.Exception.Message
     if ($_.Exception.Data.Contains('P0CleanupIssues')) {
         $cleanupErrors += @([string]$_.Exception.Data['P0CleanupIssues'] -split ',' | Where-Object { $_ })
+    }
+    # 完整语义审计只在腿走到确认卡之后才跑；"执行器有没有碰 gateway 以外的工具"
+    # 必须无论怎么失败都查一遍，否则越权调用会随着提前抛错一起被吞掉。
+    if ($currentScanSlug) {
+        try {
+            $scanTrace = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'docs\runs\traces') `
+                -Filter "*$currentScanSlug*.jsonl" -File -ErrorAction Stop |
+                Sort-Object LastWriteTimeUtc) | Select-Object -Last 1
+            if ($null -ne $scanTrace) {
+                $offenders = @(Get-P0NonGatewayToolUses -TracePath $scanTrace.FullName | Select-Object -Unique)
+                if ($offenders.Count -gt 0) {
+                    $offenderText = $offenders -join ','
+                    $manifest['tool_policy_violations'] = $offenderText
+                    if ($null -ne $activeLegRecord) { $activeLegRecord['tool_policy_violations'] = $offenderText }
+                    Write-Host "执行器越权调用了 gateway 以外的工具：$offenderText" -ForegroundColor Red
+                }
+            }
+        }
+        catch { $cleanupErrors += 'trace 工具越权扫描失败' }
     }
     if ($null -ne $activeLegRecord) {
         $activeLegRecord['finished_at'] = [DateTime]::UtcNow.ToString('o')
