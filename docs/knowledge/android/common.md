@@ -119,6 +119,8 @@
       - **危险动作谎报成功比失败更糟**：发送/支付/删除这类动作的返回值必须由**后验**决定，不能由"通道调用被受理"决定。现在 Enter 前后各读一次输入栏 OCR，内容没消失就 `E_VERIFY_FAIL`。
       - **后验失败时绝不换通道重试**：那时有可能其实已经发出去了，"再试一条通道"的代价是重复发送。这与站规"不得重试同一危险动作"是同一条原则在网关侧的落实。
       - 顺带：零 UI IME 下微信输入栏右侧**不会出现 发送 按钮**（它只在键盘弹起时替换 ⊕），所以也不能指望"点发送按钮"这条现成路径凭空存在。
+      - **诊断办法：问我们自己的 IME，别猜。** `onStartInput` 收到的 `EditorInfo` 就是权威答案，已做成 R 级只读工具 `ime_editor_info`（只输出 imeOptions/inputType/action，不含 hintText/initialText 这类可能带内容的字段），零 token 直接问。本机实测微信聊天输入框：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行 TEXT|CAP_SENTENCES）、`no_enter_action=false`——**契约上两条路都该通**，所以失败原因不在契约。
+      - **改法：按契约选通道，且只送一次。** 单行框直接送物理回车键事件（单行 `TextView` 会自己把回车转成它声明的 editor action，与真实键盘按 Enter 完全同一条路径，比我们代劳 `performEditorAction` 更可靠）；多行框回车是换行，才显式调 editor action。`KeyEvent` 要用带 downTime/eventTime 的完整构造函数，别用只有 action+code 的那个。
   21. **自家确认卡是「可获焦 overlay」，它抢走窗口输入焦点会连累两处安全判据**（2026-07-26 真机先后各撞一次，同一病根）。`ConfirmOverlay` 原先只设了 `FLAG_NOT_TOUCH_MODAL`，窗口是可获焦的：
       - 症状一：卡显示期间 App 窗口既非 `isActive` 也非 `isFocused`，`applicationWindow()` 取不到活动应用窗口 → 前台身份判 unknown → **确认后的第二次 `requireKnownForeground` 直接 `E_BLOCKED`**（人已经点了「允许本次」才翻车）。
       - 症状二：被操作 App 的 InputConnection 被拆掉重建，**IME 会话 id 换新** → 确认后焦点身份复核 `E_STALE_REF`。降级链是 IME 单命名空间，身份就是这个 session id，等于整条链被自家的卡打断。

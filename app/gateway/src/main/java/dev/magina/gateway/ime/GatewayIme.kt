@@ -1,6 +1,7 @@
 package dev.magina.gateway.ime
 
 import android.inputmethodservice.InputMethodService
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -55,6 +56,16 @@ class GatewayIme : InputMethodService() {
         ImeBridge.startSession(
             focusedInputId,
             attribute?.packageName?.toString(),
+            attribute?.let {
+                // 只留输入框的 IME 契约（决定 Enter 该怎么送），不留 hintText/initialText
+                // 这类可能含用户内容的字段。
+                ImeEditorContract(
+                    inputType = it.inputType,
+                    imeOptions = it.imeOptions,
+                    actionId = it.actionId,
+                    actionLabel = it.actionLabel?.toString(),
+                )
+            },
         ) { currentInputConnection }
     }
 
@@ -83,6 +94,43 @@ data class ImeSessionIdentity(
         connected && packageName == expectedPackage
 }
 
+/**
+ * 当前输入框对 IME 声明的契约——**它决定 Enter 到底该怎么送**。
+ *
+ * 2026-07-26 真机：`performEditorAction(IME_ACTION_SEND)` 只要连接活着就返回 true，
+ * App 完全可以不理会；要判断"这个框能不能靠 Enter 发送"，必须看它自己声明的
+ * imeOptions/inputType，而不是看调用返回值。只保留契约字段，不含任何内容。
+ */
+data class ImeEditorContract(
+    val inputType: Int,
+    val imeOptions: Int,
+    val actionId: Int,
+    val actionLabel: String?,
+) {
+    /** `EditorInfo.IME_MASK_ACTION` 取出的动作码。 */
+    val actionCode: Int get() = imeOptions and EditorInfo.IME_MASK_ACTION
+
+    /** 置位后 IME 不该提供"回车动作"，此时 `performEditorAction` 基本等于空转。 */
+    val noEnterAction: Boolean get() = (imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
+
+    /** 多行输入框上的物理回车是换行，不是提交。 */
+    val multiLine: Boolean
+        get() = (inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 ||
+            (inputType and android.text.InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE) != 0
+
+    fun actionName(): String = when (actionCode) {
+        EditorInfo.IME_ACTION_UNSPECIFIED -> "unspecified"
+        EditorInfo.IME_ACTION_NONE -> "none"
+        EditorInfo.IME_ACTION_GO -> "go"
+        EditorInfo.IME_ACTION_SEARCH -> "search"
+        EditorInfo.IME_ACTION_SEND -> "send"
+        EditorInfo.IME_ACTION_NEXT -> "next"
+        EditorInfo.IME_ACTION_DONE -> "done"
+        EditorInfo.IME_ACTION_PREVIOUS -> "previous"
+        else -> "unknown($actionCode)"
+    }
+}
+
 /** 网关进程内的 IME 桥：工具实现经它注入文本。 */
 object ImeBridge {
     private val sessionLock = Any()
@@ -96,15 +144,21 @@ object ImeBridge {
     @Volatile var sessionPackage: String? = null
         private set
 
+    /** 当前输入框声明的 IME 契约；只读诊断用，决定 Enter 通道该怎么选。 */
+    @Volatile var editorContract: ImeEditorContract? = null
+        private set
+
     internal fun startSession(
         focusedInputId: String?,
         sessionPackage: String?,
+        editorContract: ImeEditorContract?,
         connection: () -> InputConnection?,
     ) {
         synchronized(sessionLock) {
             this.connection = connection
             this.focusedInputId = focusedInputId
             this.sessionPackage = sessionPackage
+            this.editorContract = editorContract
             active = true
         }
     }
@@ -114,6 +168,7 @@ object ImeBridge {
             active = false
             focusedInputId = null
             sessionPackage = null
+            editorContract = null
             connection = null
         }
     }
@@ -166,13 +221,37 @@ object ImeBridge {
         }
     }
 
+    /**
+     * 送出一次"回车"。**按输入框自己声明的契约选通道，且只送一次**。
+     *
+     * 不再"先 performEditorAction 失败再退回按键"：`performEditorAction` 只要连接活着就
+     * 返回 true（2026-07-26 真机实锤，微信不理会该动作时照样 true），那条链等于永远走
+     * 第一条、兜底成死代码；而在发送这种危险动作上"换条通道再来一次"的代价是重复发送。
+     *
+     * 选择依据（本机实测微信聊天框：`imeOptions=0x4`(SEND)、单行、未禁用回车动作）：
+     * - 单行输入框：直接送物理回车键事件。单行 `TextView` 会自己把回车转成它声明的
+     *   editor action，这与真实键盘上按 Enter 的路径完全一致，比我们代劳更可靠。
+     * - 多行输入框：回车在框里是换行而不是提交，只能显式调 editor action。
+     *
+     * 返回值只表示"这次投递被受理"，**不代表 App 真的发送了**——是否发出由调用方后验。
+     */
     fun enter(): Boolean {
         synchronized(sessionLock) {
             val c = ic() ?: return false
-            // 优先编辑器动作（微信发送键等注册了 IME_ACTION 的场景），退回物理回车键事件
-            if (c.performEditorAction(EditorInfo.IME_ACTION_SEND)) return true
-            return c.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)) &&
-                c.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+            val contract = editorContract
+            val actionable = contract != null && !contract.noEnterAction &&
+                contract.actionCode != EditorInfo.IME_ACTION_NONE &&
+                contract.actionCode != EditorInfo.IME_ACTION_UNSPECIFIED
+            if (contract != null && contract.multiLine) {
+                if (!actionable) return false
+                return c.performEditorAction(contract.actionCode)
+            }
+            val now = SystemClock.uptimeMillis()
+            return c.sendKeyEvent(
+                KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0),
+            ) && c.sendKeyEvent(
+                KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0),
+            )
         }
     }
 

@@ -40,5 +40,17 @@ internal object MacroToolCatalog {
                 .put("additionalProperties", false),
             handler = MacroRunnerFactory::probeRegionState,
         ),
+        ToolSpec(
+            name = "ime_editor_info",
+            description = "只读诊断：当前输入框对 IME 声明的契约（imeOptions/inputType/action），" +
+                "用来判断 Enter 能不能发送。只含契约字段，不含任何输入内容。",
+            level = Level.R,
+            inputSchema = JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject())
+                .put("required", JSONArray())
+                .put("additionalProperties", false),
+            handler = { MacroRunnerFactory.imeEditorInfo() },
+        ),
     )
 }

@@ -102,6 +102,35 @@ internal object MacroRunnerFactory {
             )
     }
 
+    /**
+     * 只读诊断：当前输入会话与输入框的 IME 契约。
+     *
+     * 存在的理由：`performEditorAction` 返回 true 不代表 App 做了任何事，判断"这个框能不能
+     * 靠 Enter 发送"只能看它自己声明的 imeOptions/inputType（2026-07-26 真机：确认卡走完、
+     * press_key 报成功，消息却没发出去）。只输出契约字段，不含任何输入内容。
+     */
+    fun imeEditorInfo(): JSONObject {
+        val session = ImeBridge.session()
+        val contract = ImeBridge.editorContract
+        val json = JSONObject()
+            .put("ime_active", ImeBridge.active)
+            .put("input_connection_available", ImeBridge.hasInputConnection())
+            .put("session_id", session?.id ?: JSONObject.NULL)
+            .put("session_package", session?.packageName ?: JSONObject.NULL)
+        if (contract == null) return json.put("editor", JSONObject.NULL)
+        return json.put(
+            "editor",
+            JSONObject()
+                .put("ime_options_hex", "0x%08x".format(contract.imeOptions))
+                .put("input_type_hex", "0x%08x".format(contract.inputType))
+                .put("action", contract.actionName())
+                .put("action_id", contract.actionId)
+                .put("action_label", contract.actionLabel ?: JSONObject.NULL)
+                .put("no_enter_action", contract.noEnterAction)
+                .put("multi_line", contract.multiLine),
+        )
+    }
+
     fun run(args: JSONObject): JSONObject {
         Gateway.preparedTargetEvidence.clear()
         val keys = args.keys().asSequence().toSet()
