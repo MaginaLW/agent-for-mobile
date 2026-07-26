@@ -7,7 +7,9 @@ import org.junit.Test
 
 class BearerAuthGuardTest {
 
-    private val token = "0123456789abcdef0123456789abcdef"
+    // 故意不做成 32 位裸十六进制：那正是真 token 的形态，凭据扫描会（正确地）把它当泄漏报出来。
+    // 测试夹具本来也不该长得像真凭据。
+    private val token = "fixture-token-NOT-A-REAL-SECRET"
 
     @Test
     fun `正确的 Bearer 放行且不产生延迟`() {

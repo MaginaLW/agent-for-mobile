@@ -563,7 +563,9 @@ function Set-P0PrivateControlFile {
         throw '测试控制字段集合不匹配。'
     }
     if ($Control.ContainsKey('decision')) { throw '测试控制文件禁止包含确认决定。' }
-    if ($Control.leg -notin @('allow','stale') -or $Control.tool -cne 'press_key' -or
+    # deny 腿与 allow 一样不制造上下文变化（stale_after_allow=false）；
+    # 它与 allow 的区别只在真人按了哪个按钮，而那个决定 runner 与 debug hook 都写不进来。
+    if ($Control.leg -notin @('allow','stale','deny') -or $Control.tool -cne 'press_key' -or
         $Control.action -cne 'enter' -or $Control.initial_package -cne $script:P0WechatPackage -or
         [bool]$Control.stale_after_allow -ne ($Control.leg -ceq 'stale')) {
         throw '测试控制值不在固定白名单。'

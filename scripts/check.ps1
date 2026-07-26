@@ -163,8 +163,12 @@ Invoke-Check '凭据扫描' {
     & git -C $RepoRoot check-ignore -q -- 'configs/gateway-mcp.json'
     if ($LASTEXITCODE -ne 0) { $issues.Add('configs/gateway-mcp.json 未被 gitignore 覆盖。') }
 
-    # 网关 token 是去掉短横的 UUID：恰好 32 位裸 hex。当前仓库零命中，任何新命中都要人看一眼。
-    $hits = @(& git -C $RepoRoot grep -nIE '\b[0-9a-f]{32}\b' -- . 2>$null)
+    # 网关 token 是 32 位裸 hex。当前仓库零命中，任何新命中都要人看一眼。
+    #
+    # --untracked 不能省：git grep 默认只搜已跟踪文件，于是新写的文件要等**提交之后**才被扫到——
+    # 这个扫描就只能事后报警、拦不住提交。2026-07-27 实锤：BearerAuthGuardTest 里的假 token
+    # 恰好是 32 位十六进制，批次 D 跑 check 时它还没入库、报了全绿，提交完才被抓出来。
+    $hits = @(& git -C $RepoRoot grep -nIE --untracked '\b[0-9a-f]{32}\b' -- . 2>$null)
     if ($LASTEXITCODE -notin @(0, 1)) { throw 'git grep 执行失败。' }
     if ($hits.Count -gt 0) {
         $issues.Add("疑似 token 形态（32 位裸 hex）命中 $($hits.Count) 处：`n    " +

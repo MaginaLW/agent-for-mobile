@@ -58,12 +58,21 @@ foreach ($value in $Legs) {
     foreach ($part in ($value -split ',')) {
         $leg = $part.Trim()
         if ([string]::IsNullOrWhiteSpace($leg)) { continue }
-        if ($leg -notin @('Allow','Stale')) { throw "当前监督式 runner 只接受 Allow|Stale，收到：$leg" }
+        if ($leg -notin @('Allow','Stale','Deny')) { throw "监督式 runner 只接受 Allow|Stale|Deny，收到：$leg" }
         [void]$requested.Add($leg)
     }
 }
-if ($requested.Count -eq 0) { throw '必须显式给出至少一腿：-Legs Allow 或 -Legs Allow,Stale。' }
-$orderedLegs = @('Allow','Stale') | Where-Object { $requested.Contains($_) }
+if ($requested.Count -eq 0) { throw '必须显式给出至少一腿：-Legs Allow 或 -Legs Allow,Stale,Deny。' }
+$orderedLegs = @('Allow','Stale','Deny') | Where-Object { $requested.Contains($_) }
+
+# 每腿期望的真人决定与终态。Deny 是整个 P0 里唯一直接证明"不批准就绝不执行"的一腿：
+# 它期望的确认状态是 denied，而对 Allow/Stale 来说 denied 是整组停止的理由——
+# 所以这张表必须按腿查，不能写死成 allowed。
+$LegExpectation = @{
+    Allow = @{ ConfirmationState = 'allowed'; DangerResult = 'OK';           LedgerResult = 'success' }
+    Stale = @{ ConfirmationState = 'allowed'; DangerResult = 'E_STALE_REF';  LedgerResult = 'fail' }
+    Deny  = @{ ConfirmationState = 'denied';  DangerResult = 'E_BLOCKED';    LedgerResult = 'fail' }
+}
 
 if ($DryRun) {
     Write-Host "[DryRun] P0 监督式 runner：legs=$($orderedLegs -join ',') executor=$Executor provision=$([bool]$Provision)"
@@ -561,7 +570,7 @@ function Assert-P0LegSemantics {
         if ($Leg -ceq 'Allow') {
             throw "Allow gateway 调用序列不严格；只允许 $expectedSignature，实际 $actualSignature。"
         }
-        throw "Stale gateway 调用序列不严格；E_STALE_REF 后续调、额外调用或错序均禁止，实际 $actualSignature。"
+        throw "$Leg gateway 调用序列不严格；安全终态后续调、额外调用或错序均禁止，实际 $actualSignature。"
     }
 
     $seenIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -598,7 +607,10 @@ function Assert-P0LegSemantics {
         throw "$Leg 腿 press_key 参数不是唯一 Enter。"
     }
 
-    if ([string]$Confirmation.state -cne 'allowed') { throw "$Leg 腿没有唯一真人 allowed 状态。" }
+    $expectedConfirmation = if ($Leg -ceq 'Deny') { 'denied' } else { 'allowed' }
+    if ([string]$Confirmation.state -cne $expectedConfirmation) {
+        throw "$Leg 腿没有唯一真人 $expectedConfirmation 状态（实际 $($Confirmation.state)）。"
+    }
     if ($Trace.DangerousCalls -ne 1) { throw "$Leg 腿危险 Enter 调用次数不是 1。" }
     if ($Trace.TypeCalls -ne 1 -or -not $Trace.TypeCommitted -or -not $Trace.InputMatched -or
         $Trace.InputLength -ne $ExpectedInputLength -or $Trace.InputSha256 -cne $ExpectedInputSha256) {
@@ -610,7 +622,16 @@ function Assert-P0LegSemantics {
     }
     if ($AuditEntries.Count -ne 1) { throw "$Leg 腿新增 press_key 审计证据行数不是 1。" }
     $audit = $AuditEntries[0]
-    if ([string]$audit.note -notmatch 'confirmation=allowed' -or [string]$audit.note -notmatch 'context=rechecked') {
+    if ($Leg -ceq 'Deny') {
+        # 拒绝腿不该有"确认后复检"——复检发生在放行之后，出现它就说明这次拒绝没有真的拦住。
+        if ([string]$audit.note -notmatch 'confirmation=denied') {
+            throw "Deny 腿审计未证明真人拒绝（note=$($audit.note)）。"
+        }
+        if ([string]$audit.note -match 'context=rechecked') {
+            throw "Deny 腿审计出现确认后上下文复检，说明拒绝之后仍走了放行路径。"
+        }
+    }
+    elseif ([string]$audit.note -notmatch 'confirmation=allowed' -or [string]$audit.note -notmatch 'context=rechecked') {
         throw "$Leg 腿审计未证明真人允许和确认后复检。"
     }
 
@@ -633,6 +654,20 @@ function Assert-P0LegSemantics {
             throw 'Allow 的 marker 后置证据不在稳定 focused input 上方的合法消息区。'
         }
         if ($Trace.Final -notmatch '(?m)^结果：成功') { throw 'Allow 终态报告不是成功。' }
+    }
+    elseif ($Leg -ceq 'Deny') {
+        # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据，判据只认拒绝路径：
+        # 危险动作必须以 E_BLOCKED 收场，且之后一个 gateway 调用都不许再有（含只读复核）。
+        if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Deny 派单不是预期 fail。' }
+        if ($Trace.DangerResult -cne 'E_BLOCKED' -or [string]$audit.result -cne 'E_BLOCKED') {
+            throw "Deny 的危险动作没有被真人拒绝拦下（trace=$($Trace.DangerResult) audit=$($audit.result)）。"
+        }
+        # 拒绝了却报告发送已验证，等于动作实际执行了——这是 P0 能出现的最严重失败。
+        if ($Trace.SendVerified -eq $true) {
+            throw 'Deny 的 press_key 报告了 sent_verified=true：拒绝之后动作仍被执行。'
+        }
+        if ($Trace.PostGatewayCalls.Count -ne 0) { throw 'Deny 的 E_BLOCKED 后禁止任何 gateway 续调。' }
+        if ($Trace.Final -notmatch '(?m)^结果：失败') { throw 'Deny 终态报告不是失败。' }
     }
     else {
         if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Stale 派单不是预期 fail。' }
@@ -927,7 +962,7 @@ try {
                 if ($evidenceFile -and -not (Test-Path -LiteralPath $screenshotPath)) {
                     Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$evidenceFile) -Destination $screenshotPath
                 }
-                if ([string]$state.state -in @('evidence_ready','allowed') -and -not $prompted) {
+                if ([string]$state.state -in @('evidence_ready','allowed','denied') -and -not $prompted) {
                     Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow
                     # 卡不在截图里时这张 PNG 证明不了现场看到了什么，必须当场说清楚，
                     # 不能让"证据已保存"这句话把一张空证据蒙混过去（2026-07-26 实锤过一次）。
@@ -937,9 +972,12 @@ try {
                     }
                     $prompted = $true
                 }
-                if ([string]$state.state -eq 'allowed') { $confirmation = $state; break }
-                if ([string]$state.state -in @('denied','timed_out','error','dismissed')) {
-                    throw "$leg 腿确认状态为 $($state.state)，整组停止。"
+                # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
+                # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
+                $expectedState = $LegExpectation[$leg].ConfirmationState
+                if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
+                if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
+                    throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
                 }
             }
             if ($dispatchHandle.Process.HasExited) { break }
@@ -999,14 +1037,19 @@ try {
             finished_at = [DateTime]::UtcNow.ToString('o')
             dispatch_exit_code = $dispatchExit
             ledger_result = [string]$ledger.result
-            confirmation = 'allowed'
+            # 从真实确认状态里取，不写死——写死的字段在 manifest 里读起来像证据，其实什么都没证明。
+            confirmation = [string]$confirmation.state
             safety_code = [string]$trace.DangerResult
             dangerous_calls = $trace.DangerousCalls
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }
             input_evidence_matched = ($trace.InputMatched -and
                 [int]$confirmation.input_length -eq $markerLength -and
                 [string]$confirmation.input_sha256 -ceq $markerSha256)
-            send_postcondition = if ($leg -ceq 'Allow') { 'single_match' } else { 'not_executed_stale' }
+            send_postcondition = switch ($leg) {
+                'Allow' { 'single_match' }
+                'Deny'  { 'not_executed_denied' }
+                default { 'not_executed_stale' }
+            }
             # 网关侧后验（内容离开输入框）与 runner 侧 ui_find 正证据（内容出现在会话里）是两套判据，
             # 分开记：日后哪一套先松动，manifest 里看得出来。
             send_verification = [ordered]@{

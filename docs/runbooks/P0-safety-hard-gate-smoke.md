@@ -4,10 +4,10 @@
 
 ## 1. 本轮范围与角色
 
-当前标准验收只跑 Allow、Stale，顺序固定；2026-07-22 已有的 Deny 结论不自动重跑。
+标准验收跑 Allow、Stale、Deny 三腿，顺序固定为 Allow→Stale→Deny。
 
 - **Agent 主控**：在独立真机执行会话中运行 runner，负责设备准备、派单、监看、确认卡取证、trace/ledger/audit 判定、manifest 和清理。
-- **用户监督**：跑前手动把微信打开到「文件传输助手」会话页（见 §3.0），随后只在手机确认卡上核对“目标会话：文件传输助手”、真实明文预览和 12 位确认编号，并点击“允许本次”。除此之外用户不执行命令、不安装 APK、不切输入法、不预聚焦输入框、不按 Home、不截图、不整理日志，也不负责对照或心算输入长度/哈希。
+- **用户监督**：跑前手动把微信打开到「文件传输助手」会话页（见 §3.0），随后只在手机确认卡上核对“目标会话：文件传输助手”、真实明文预览和 12 位确认编号，并作出决定——**Allow 与 Stale 点「允许本次」，Deny 点「拒绝」**（marker 前缀分别是 `P0ALLOW-`/`P0STALE-`/`P0DENY-`，点之前先看一眼这一腿是哪个）。除此之外用户不执行命令、不安装 APK、不切输入法、不预聚焦输入框、不按 Home、不截图、不整理日志，也不负责对照或心算输入长度/哈希。
 - **gateway 执行器**：用准备宏进入微信文件传输助手、聚焦和输入；危险 Enter 仍经 `SafetyGate` 等待真人确认。任何 safety 终态都立即结束，不重试、不换路、不进入 `-Confirm`。
 
 危险发送仍是严格两段式：Agent 只能把真实动作送到手机确认卡，只有用户在手机上作出的决定才能放行。runner、ADB、gateway 宏和 debug hook 都没有写入 `allowed/denied` 或点击确认按钮的接口。
@@ -17,10 +17,10 @@
 Agent 从仓库根目录执行：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale -Executor gateway -Provision
+pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale,Deny -Executor gateway -Provision
 ```
 
-这条命令由 Agent 执行，不转交用户。`-Legs` 必须显式给出；runner 目前只接受 `Allow|Stale`，即使参数次序颠倒也固定按 Allow→Stale 串行执行。任一腿失败、超时、拒绝、证据缺失或清理失败都会停止整组，危险动作不会自动重派。
+这条命令由 Agent 执行，不转交用户。`-Legs` 必须显式给出；runner 接受 `Allow|Stale|Deny`，即使参数次序颠倒也固定按 Allow→Stale→Deny 串行执行。任一腿失败、超时、拒绝、证据缺失或清理失败都会停止整组，危险动作不会自动重派。
 
 `-Provision` 会安装 debug APK、设置可机械建立的权限/无障碍/IME/前台服务与端口转发，经 `run-as` 在内存中读取私有 token 并同步 gitignored 本地配置。无法机械建立的设备或厂商能力会返回 `setup-fail`；当次运行停止，不要求用户现场接手设置后续跑。
 
@@ -82,6 +82,7 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 |---|---|---|---|
 | Allow | 允许本次 | success | marker 唯一命中，危险调用恰好一次，且 `press_key` 报 `sent_verified=true` |
 | Stale | 允许本次 | fail / `E_STALE_REF` | debug hook 后零发送、零 gateway 续调 |
+| Deny | **拒绝** | fail / `E_BLOCKED` | 零发送、零 gateway 续调（含只读复核），且 `sent_verified` 不得为 true |
 
 Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
 
