@@ -64,7 +64,7 @@ function New-Fixture {
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
-        'enabled_but_not_bound'
+        'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -277,6 +277,20 @@ findstr /x /c:"config_delete_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && (
 echo {"ok":true,"protocol":"mcp-ping"}
 exit /b 0
 '@ | Set-Content -LiteralPath $fakeHealth -Encoding ascii
+
+    # 候选区只读预检：默认判空放行；probe_region_dirty 场景模拟上一轮残留文字。
+    $fakePrecheck = Join-Path $bin 'fake-probe-precheck.cmd'
+    @'
+@echo off
+echo precheck>>"%P0_FAKE_STATE%\precheck.log"
+findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":false,"leftovers":["fake-leftover@100,2600,900,2700"]}
+  exit /b 2
+)
+findstr /x /c:"probe_region_unavailable" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 1
+echo {"ok":true,"empty":true}
+exit /b 0
+'@ | Set-Content -LiteralPath $fakePrecheck -Encoding ascii
 
     $fakeDispatch = Join-Path $repo 'scripts\fake-dispatch.ps1'
     @'
@@ -535,6 +549,7 @@ exit $exit
         Adb = $fakeAdb
         HealthProbe = $fakeHealth
         Dispatch = $fakeDispatch
+        Precheck = $fakePrecheck
         Token = $fakeToken
     }
 }
@@ -559,7 +574,7 @@ function Invoke-FixtureRunner {
         [void]$runnerArgs.Add($arg)
     }
     if ($Provision) { [void]$runnerArgs.Add('-Provision') }
-    foreach ($arg in @('-RepoRootOverride',$Fixture.Repo,'-AdbPath',$Fixture.Adb,'-HealthProbePath',$Fixture.HealthProbe,'-DispatchPath',$Fixture.Dispatch,'-ConfirmationTimeoutSec',"$ConfirmationTimeoutSec",'-PollIntervalMs','20','-A11yBindTimeoutSec','1')) {
+    foreach ($arg in @('-RepoRootOverride',$Fixture.Repo,'-AdbPath',$Fixture.Adb,'-HealthProbePath',$Fixture.HealthProbe,'-ProbeRegionPrecheckPath',$Fixture.Precheck,'-DispatchPath',$Fixture.Dispatch,'-ConfirmationTimeoutSec',"$ConfirmationTimeoutSec",'-PollIntervalMs','20','-A11yBindTimeoutSec','1')) {
         [void]$runnerArgs.Add($arg)
     }
     foreach ($arg in $runnerArgs) {
@@ -811,6 +826,24 @@ try {
             if ($scenario -like 'audit_*') { Assert-Contains $result.Text 'audit' }
             else { Assert-Contains $result.Text 'trace' }
         }
+    }
+
+    Test-Case '候选区残留文字在开跑前零付费拦下' {
+        $fixture = New-Fixture probe_region_dirty
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '候选区非空必须失败。'
+        Assert-Contains $result.Text '清空微信输入框'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) `
+            '候选区非空仍启动了付费派单。'
+    }
+
+    Test-Case '候选区预检不可用只警告不阻断' {
+        $fixture = New-Fixture probe_region_unavailable
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "预检不可用不该阻断跑测：`n$($result.Text)"
+        Assert-Contains $result.Text '预检不可用'
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log')) `
+            '预检不可用时应照常派单。'
     }
 
     Test-Case 'ToolSearch 加载 schema 不算越权也不进调用序列' {

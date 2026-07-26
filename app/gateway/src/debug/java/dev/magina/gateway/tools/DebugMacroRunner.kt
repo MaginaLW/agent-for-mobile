@@ -32,6 +32,58 @@ import dev.magina.gateway.ime.ImeBridge
 import org.json.JSONObject
 
 internal object MacroRunnerFactory {
+    /**
+     * 只读预检：盲点候选区（输入栏带）当前是否视觉为空。
+     *
+     * 存在的理由是省钱与省人力，不是新增能力——上一轮失败的 `type_text` 会把 marker
+     * 留在微信输入框，而盲点探针**按设计**要求候选区为空，于是下一轮跑测必然在
+     * `focus_probe_validation` 白烧一整轮派单。跑测前零 token 直接问一句就能提前拦下。
+     * 判据与 [P0FocusProbeValidator.build] 的放行条件共用同一实现，不另写一份几何。
+     */
+    fun probeRegionState(args: JSONObject): JSONObject {
+        if (args.keys().asSequence().toSet().isNotEmpty()) throw GatewayError(
+            ErrorCode.E_INVALID_ARG,
+            "p0_probe_region_state 不接受任何参数",
+            channel = "macro",
+            retryable = false,
+        )
+        val service = GatewayA11yService.require()
+        val adapter = AndroidP0WeChatPrepareAdapter(
+            service = service,
+            sensitiveSurfaceWords = Gateway.skills.dangerWords + Gateway.skills.sensitiveTargets,
+        )
+        val snapshot = adapter.forceFreshVision()
+        val texts = P0FocusProbeValidator.probeRegionTexts(snapshot)
+        val sendControl = P0FocusProbeValidator.visibleSendControl(snapshot)
+        val box = dev.magina.gateway.a11y.p0FocusProbeRegion(
+            snapshot.screenWidth,
+            snapshot.screenHeight,
+            snapshot.systemBottomInset,
+        )
+        return JSONObject()
+            .put("empty", texts.isEmpty() && !sendControl)
+            .put("visible_send_control", sendControl)
+            .put("region", org.json.JSONArray(box.toList()))
+            .put("system_bottom_inset", snapshot.systemBottomInset)
+            .put(
+                "texts",
+                org.json.JSONArray(
+                    texts.map {
+                        JSONObject()
+                            .put("text", it.text.take(24))
+                            .put("desc", it.description.take(24))
+                            .put("source", it.source)
+                            .put(
+                                "bounds",
+                                org.json.JSONArray(
+                                    listOf(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom),
+                                ),
+                            )
+                    },
+                ),
+            )
+    }
+
     fun run(args: JSONObject): JSONObject {
         Gateway.preparedTargetEvidence.clear()
         val keys = args.keys().asSequence().toSet()

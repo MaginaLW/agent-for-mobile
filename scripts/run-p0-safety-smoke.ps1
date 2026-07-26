@@ -14,6 +14,7 @@ param(
     [string]$RepoRootOverride,
     [string]$AdbPath = 'adb',
     [string]$HealthProbePath,
+    [string]$ProbeRegionPrecheckPath,
     [string]$DispatchPath,
     [int]$ConfirmationTimeoutSec = 120,
     [int]$DispatchTimeoutMin = 15,
@@ -37,6 +38,9 @@ if ([string]::IsNullOrWhiteSpace($DispatchPath)) { $DispatchPath = Join-Path $Re
 $ProvisionerPath = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
+}
+if ([string]::IsNullOrWhiteSpace($ProbeRegionPrecheckPath)) {
+    $ProbeRegionPrecheckPath = Join-Path $RepoRoot 'scripts\lib\p0-probe-region-precheck.ps1'
 }
 
 function Get-P0OptionalProperty {
@@ -858,6 +862,21 @@ try {
     foreach ($leg in $orderedLegs) {
         Clear-P0DebugArtifacts -Session $session
         Start-P0TargetApp -Session $session
+        # 上一轮失败的 type_text 会把 marker 留在微信输入框，而盲点探针按设计要求候选区
+        # 视觉为空（这条安全属性不放宽），于是下一轮必然在 focus_probe_validation 白烧一轮。
+        # 零 token 先问一句，把隐性的人工步骤变成显式的、开跑前的失败。
+        if (Test-Path -LiteralPath $ProbeRegionPrecheckPath -PathType Leaf) {
+            $precheck = Invoke-P0ExternalText -FilePath $ProbeRegionPrecheckPath `
+                -Arguments @('-ConfigPath', $session.ConfigPath) `
+                -Operation '候选区只读预检' -AllowFailure -TimeoutSec 40
+            if ($precheck.ExitCode -eq 2) {
+                throw "$leg 腿候选区非空（多半是上一轮残留文字）：$($precheck.Stdout.Trim())；请在手机上清空微信输入框后重跑。"
+            }
+            if ($precheck.ExitCode -ne 0) {
+                # 探针不可用（旧 APK / 协议异常）只警告：它是省钱的优化，不该新增阻断条件。
+                Write-Host "[$leg] 候选区只读预检不可用，按原流程继续。" -ForegroundColor Yellow
+            }
+        }
         $legLower = $leg.ToLowerInvariant()
         $legStarted = [DateTime]::UtcNow
         $nonce = [guid]::NewGuid().ToString('N')

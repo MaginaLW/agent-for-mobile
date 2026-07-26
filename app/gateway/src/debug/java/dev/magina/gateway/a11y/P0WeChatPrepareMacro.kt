@@ -200,6 +200,25 @@ internal object P0FocusProbeValidator {
     private val MIN_OCR_CONFIDENCE = MIN_RECOGNITION_OCR_CONFIDENCE.toDouble()
 
     /**
+     * 候选区（盲点落点所在的输入栏带）里所有可见文字元素。空白输入框应当为空列表。
+     * [build] 的放行判据、[rejectionReason] 的说明和只读预检工具三处共用这一个实现，
+     * 避免"同一条几何判据在三个地方各写一遍"（p0FocusProbeRegion 立此规矩的同一理由）。
+     */
+    fun probeRegionTexts(snapshot: P0MacroSnapshot): List<P0MacroElement> {
+        val box = p0FocusProbeRegion(snapshot.screenWidth, snapshot.screenHeight, snapshot.systemBottomInset)
+        val region = P0MacroRect(box[0], box[1], box[2], box[3])
+        return snapshot.elements.filter {
+            normalized(it.text + it.description).isNotEmpty() && intersects(it.bounds, region)
+        }
+    }
+
+    /** 底部可见「发送」控件同样意味着输入框可能已有内容。 */
+    fun visibleSendControl(snapshot: P0MacroSnapshot): Boolean = snapshot.elements.any {
+        it.bounds.centerY >= snapshot.screenHeight * 0.72 &&
+            normalized(it.text + it.description).contains("发送")
+    }
+
+    /**
      * 只在 [build] 返回 null 后用于**说明原因**，不参与放行判定（放行仍完全由 [build] 决定）。
      * 三次真机排查都因为"七八个条件合并成一句话"而额外烧掉一轮派单，这里逐条点名。
      */
@@ -241,21 +260,14 @@ internal object P0FocusProbeValidator {
             if (!validBounds(region, w, h) || region.width < w * 0.40 || region.height < 40) {
                 add("候选区几何无效($region)")
             }
-            val texts = snapshot.elements.filter {
-                normalized(it.text + it.description).isNotEmpty() && intersects(it.bounds, region)
-            }
+            val texts = probeRegionTexts(snapshot)
             if (texts.isNotEmpty()) {
                 add(
                     "候选区有可见文字（空白输入框才允许盲点）：" +
                         texts.joinToString("，") { "「${it.text.take(12)}」@${it.bounds}" },
                 )
             }
-            if (
-                snapshot.elements.any {
-                    it.bounds.centerY >= h * 0.72 &&
-                        normalized(it.text + it.description).contains("发送")
-                }
-            ) add("底部出现可见「发送」控件（输入框可能已有内容）")
+            if (visibleSendControl(snapshot)) add("底部出现可见「发送」控件（输入框可能已有内容）")
         }
         return problems.ifEmpty { listOf("未知（各分项均通过，疑为竞态）") }.joinToString("；")
     }
@@ -292,15 +304,7 @@ internal object P0FocusProbeValidator {
         if (!validBounds(region, w, h) || region.width < w * 0.40 || region.height < 40) return null
 
         // 空白输入框没有 OCR 文本；候选区出现任何可见文字时拒绝猜测。
-        val textInRegion = snapshot.elements.any { element ->
-            normalized(element.text + element.description).isNotEmpty() &&
-                intersects(element.bounds, region)
-        }
-        val visibleSendControl = snapshot.elements.any { element ->
-            element.bounds.centerY >= h * 0.72 &&
-                normalized(element.text + element.description).contains("发送")
-        }
-        if (textInRegion || visibleSendControl) return null
+        if (probeRegionTexts(snapshot).isNotEmpty() || visibleSendControl(snapshot)) return null
 
         return P0FocusProbe(
             screenWidth = w,
