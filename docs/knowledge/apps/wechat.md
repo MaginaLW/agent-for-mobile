@@ -12,6 +12,12 @@
 - ⚠️ **树空但 `findFocus(FOCUS_INPUT)` 可拿到焦点输入节点**（选择页搜索框实锤）——微信屏蔽树内容但焦点节点可获取；不过 **`ACTION_SET_TEXT` 报 true 不生效且读回 null**（与 Switch 假点击同族），**必须 IME 通道**（网关 typeText 已按「readback==null 也降级 IME + OCR 裁剪读回」实现）。
 - ⭐ **会话页聊天输入框全链探明（2026-07-22 P0 smoke，文传助手实锤）**：MMEditText（id `bkk`）聚焦后 findFocus 可取、`focusedInputId` 非空 → `press_key(enter)` 三道焦点复核可走通；SET_TEXT 假成功+节点读回 null 在此框复现，IME commit 生效；**type_text 的输入条 OCR 读回因小裁剪塌方恒 null → `verified` 不可达**，输入证据链改用「`committed=true` + `ime_commit` 通道 + 只读 `ui_find` 命中（O/0 归一）」；**空白输入框树空且无字可 OCR，任何通道拿不到 ref**——须现场人/前置动作先聚焦，再无 ref 调 `type_text`（打进文字后 OCR 才有锚点）。微信「使用回车键发送消息」开启时 `ACTION_IME_ENTER` 触发发送。
 
+- ⭐ **发送通道：Enter 能不能发，取决于微信自己的「使用回车键发送消息」开关，不取决于输入框契约**（2026-07-26 真机连撞两轮后确认）。
+  - 用 R 级只读工具 `ime_editor_info`（读我们自己 IME 在 `onStartInput` 拿到的 `EditorInfo`）实测该聊天框：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行 TEXT|CAP_SENTENCES）、`no_enter_action=false`。**契约上两条路都该通，但 `performEditorAction(IME_ACTION_SEND)` 与 `KEYCODE_ENTER` 微信都不响应**——因为该开关关着时，微信压根没把回车接到发送上。契约只决定键盘画什么键，不决定 App 怎么处理。
+  - 佐证：零 UI IME 下微信输入栏右侧**不渲染「发送」按钮**（它只在键盘弹起时替换 ⊕），所以"点发送按钮"这条路也不是凭空存在的。
+  - **跑测前置条件**：微信 设置 → 聊天 → **使用回车键发送消息** 必须开启，否则整条 Enter 发送链在这台设备上不可能成立。本册 2026-07-22 那条早已写过这一点，后来排查时只读了 `android/common.md` 没读本册，为此多烧了两轮真机——**文档地图存在的意义就是按 app 路由，别只读通用册。**
+  - `performEditorAction()` 返回 true 只表示调用被投递到了活着的输入连接，**不代表 App 做了任何事**；发送这类危险动作的返回值必须由后验决定（详见 [../android/common.md](../android/common.md)）。
+
 ## 操作坑（实测）
 
 - M0 发生 2 次误触（点开联系人资料页、点开聊天内敏感 PDF），均立即退出无改动。成因：键盘弹出坐标错位 + 视觉定位偏差。→ 网关已内建：敏感对话/文件黑名单、点击前二次校验、键盘状态感知。

@@ -32,6 +32,8 @@ pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale -Executo
 
 **输入框必须是空的，且必须真的停在会话页**：盲点探针按设计要求候选区（底部输入栏带）视觉为空，上一轮失败的 `type_text` 会把 marker 留在框里；停在聊天列表则会在 `search_entry` 直接失败（2026-07-26 实测各烧掉一轮）。2026-07-26 起 runner 在每腿开跑前做零 token 只读预检（`scripts/lib/p0-probe-region-precheck.ps1` → 网关 R 级工具 `p0_probe_region_state`，判据与宏的 `P0FocusProbeValidator.build` 共用同一实现，并同样带 OCR 抖动重试），不满足就**在派单之前**失败：残留文字会回显具体文字并提示清空输入框，其他情况回显宏自己的逐条原因并提示把微信停回「文件传输助手」会话页。预检本身不可用（例如装的是不含该工具的旧 APK）只警告不阻断。
 
+**微信必须开启「使用回车键发送消息」**（设置 → 聊天）：关着时微信不把回车接到发送上，`performEditorAction(IME_ACTION_SEND)` 与 `KEYCODE_ENTER` 都不会发出消息，Allow 腿必然停在发送后验（`E_VERIFY_FAIL`）。这是一次性的设备设置，跑测前核对一次即可。
+
 ### 3.1 确认卡核对
 
 每腿确认卡出现前，用户只需在旁观察。runner 保存确认卡证据后会提示“请只在手机上核对并点击决定；无需操作电脑”。
