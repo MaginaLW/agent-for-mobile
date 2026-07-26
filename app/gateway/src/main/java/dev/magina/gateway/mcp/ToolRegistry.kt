@@ -19,7 +19,6 @@ import dev.magina.gateway.core.shouldSerializeUiCall
 import dev.magina.gateway.core.preparedTargetSurvivesTypeText
 import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
 import dev.magina.gateway.overlay.ConfirmOverlay
-import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
@@ -538,18 +537,16 @@ object ToolRegistry {
                 UiTools.focusedInputSnapshot(a11y).let { focused ->
                     val bounds = focused.bounds?.let(::boundsString)
                     SafetyTarget(
-                        focusedInputId = focused.id,
+                        focusIdentity = focused.identity,
                         focusedInputBounds = bounds,
-                        imeSessionId = ImeBridge.focusedInputId,
                         inputCommitEvidence = Gateway.inputCommitEvidence.current(
-                            focused.id,
+                            focused.identity,
                             focused.readableText,
                         ),
                         preparedTargetEvidence = Gateway.preparedTargetEvidence.current(
                             packageName,
-                            focused.id,
+                            focused.identity,
                             bounds,
-                            ImeBridge.focusedInputId,
                         ),
                     )
                 }
@@ -580,11 +577,10 @@ object ToolRegistry {
         }
         "press_key" -> UiTools.pressKey(
             args.getString("key"),
-            validatedContext.target?.focusedInputId,
+            validatedContext.target?.focusIdentity,
             validatedContext.target?.inputCommitEvidence,
             validatedContext.target?.focusedInputBounds,
             validatedContext.target?.preparedTargetEvidence,
-            validatedContext.target?.imeSessionId,
         )
         "type_text" -> executeTypeTextWithPreparedTargetValidation(spec, args)
         else -> spec.handler(args)
@@ -598,11 +594,13 @@ object ToolRegistry {
         if (expected == null) return spec.handler(args)
         val before = currentPreparedTarget()
         if (before != expected) {
+            // 逐条点名差异：合并成一句四选一时，真机排查每次都要额外烧一轮派单才能定位。
+            val why = preparedTargetDrift(expected)
             Gateway.preparedTargetEvidence.clear()
             Gateway.inputCommitEvidence.clear()
             throw GatewayError(
                 ErrorCode.E_STALE_REF,
-                "type_text 前节点焦点、位置、前台包或 IME 会话已变化",
+                "type_text 前已准备目标已变化：$why",
                 channel = "safety",
                 retryable = false,
             )
@@ -610,13 +608,26 @@ object ToolRegistry {
         return try {
             val result = spec.handler(args)
             val after = currentPreparedTarget()
-            val input = after?.let { Gateway.inputCommitEvidence.current(it.focusedInputId) }
+            val input = after?.let { Gateway.inputCommitEvidence.current(it.identity) }
             if (!preparedTargetSurvivesTypeText(before, after, input, succeeded = true)) {
+                // 同样逐条点名：只输出身份类元数据与读回结论，不输出输入内容本身。
+                val why = when {
+                    after == null || after != before ->
+                        "已准备目标在输入后变化：${preparedTargetDrift(before)}"
+                    input == null && before.identity.degraded ->
+                        "IME-only 降级链没有形成输入提交证据：输入栏 OCR 读回" +
+                            "verified=${result.optBoolean("verified", false)}" +
+                            "，实际读回「${result.optString("readback").take(24)}」" +
+                            "，${result.optString("readback_geometry")}" +
+                            "（读回不过就不记证据，见 design §3.5）"
+                    input == null -> "输入后没有形成可用的输入提交证据"
+                    else -> "输入证据身份与已准备目标不一致"
+                }
                 Gateway.preparedTargetEvidence.clear()
                 Gateway.inputCommitEvidence.clear()
                 throw GatewayError(
                     ErrorCode.E_STALE_REF,
-                    "type_text 后节点焦点、位置、前台包、IME 会话或输入证据已变化",
+                    "type_text 后复核失败：$why",
                     channel = "safety",
                     retryable = false,
                 )
@@ -627,6 +638,36 @@ object ToolRegistry {
             Gateway.inputCommitEvidence.clear()
             throw error
         }
+    }
+
+    /**
+     * 只用于**失败时**说明哪一项对不上；不参与放行判定（放行仍由
+     * [currentPreparedTarget] 的严格相等决定）。不输出输入内容，只输出身份类元数据。
+     */
+    private fun preparedTargetDrift(
+        expected: dev.magina.gateway.core.PreparedTargetEvidence,
+    ): String {
+        val a11y = GatewayA11yService.instance ?: return "无障碍服务不可用"
+        val ctx = runCatching { a11y.ctx(Gateway.caps()) }.getOrNull()
+            ?: return "无法读取前台上下文"
+        if (!ctx.optBoolean("foreground_known", false)) return "前台身份未知"
+        val focused = UiTools.focusedInputSnapshot(a11y)
+        val bounds = focused.bounds?.let(::boundsString)
+        return buildList {
+            val pkg = ctx.optString("app")
+            if (pkg != expected.packageName) add("前台包 ${expected.packageName} → $pkg")
+            val identity = focused.identity
+            when {
+                identity == null -> add("当前取不到任何焦点输入身份（IME 会话可能已结束）")
+                identity.source != expected.identity.source ->
+                    add("身份来源 ${expected.identity.source} → ${identity.source}")
+                identity.imeSessionId != expected.identity.imeSessionId ->
+                    add("IME 会话 ${expected.identity.imeSessionId} → ${identity.imeSessionId}")
+                identity.a11yInputId != expected.identity.a11yInputId ->
+                    add("a11y 节点 ${expected.identity.a11yInputId} → ${identity.a11yInputId}")
+            }
+            if (bounds != expected.bounds) add("焦点位置 ${expected.bounds} → $bounds")
+        }.ifEmpty { listOf("身份逐项一致但短时目标已过期（TTL）") }.joinToString("；")
     }
 
     private fun currentPreparedTarget(): dev.magina.gateway.core.PreparedTargetEvidence? {
@@ -643,9 +684,8 @@ object ToolRegistry {
         val bounds = focused.bounds?.let(::boundsString)
         return Gateway.preparedTargetEvidence.current(
             ctx.optString("app"),
-            focused.id,
+            focused.identity,
             bounds,
-            ImeBridge.focusedInputId,
         )
     }
 

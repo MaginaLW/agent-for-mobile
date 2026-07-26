@@ -7,13 +7,16 @@ import java.util.concurrent.atomic.AtomicLong
  * 一次成功输入提交的短时进程内证据。
  *
  * 不写磁盘；只保留一段有界预览供真人确认，完整内容仅以长度和 SHA-256 表示。
+ * [readbackVerified] 记录"内容确实落进框里"是否被读回机械验证过；IME-only 降级链下
+ * 这是仅剩的落框证据，Enter 门会硬性要求为真（design §3.5）。
  */
 data class InputCommitEvidence(
     val commitId: Long,
     val preview: String,
     val length: Int,
     val sha256: String,
-    val focusedInputId: String,
+    val identity: FocusIdentity,
+    val readbackVerified: Boolean,
     val committedAtMs: Long,
     val expiresAtMs: Long,
 ) {
@@ -34,7 +37,7 @@ data class InputCommitEvidence(
     }
 }
 
-/** 仅持有最近一次提交；焦点不匹配或 TTL 到期一律视为无证据。 */
+/** 仅持有最近一次提交；身份不匹配或 TTL 到期一律视为无证据。 */
 class InputCommitEvidenceStore(
     private val ttlMs: Long = DEFAULT_TTL_MS,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -49,15 +52,19 @@ class InputCommitEvidenceStore(
     }
 
     @Synchronized
-    fun record(text: String, focusedInputId: String): InputCommitEvidence {
-        require(focusedInputId.isNotBlank()) { "focusedInputId 不能为空" }
+    fun record(
+        text: String,
+        identity: FocusIdentity,
+        readbackVerified: Boolean,
+    ): InputCommitEvidence {
         val now = clock()
         return InputCommitEvidence(
             commitId = sequence.incrementAndGet(),
             preview = InputCommitEvidence.preview(text),
             length = text.length,
             sha256 = InputCommitEvidence.sha256(text),
-            focusedInputId = focusedInputId,
+            identity = identity,
+            readbackVerified = readbackVerified,
             committedAtMs = now,
             expiresAtMs = now + ttlMs,
         ).also { latest = it }
@@ -65,7 +72,7 @@ class InputCommitEvidenceStore(
 
     @Synchronized
     fun current(
-        focusedInputId: String?,
+        identity: FocusIdentity?,
         readableText: String? = null,
     ): InputCommitEvidence? {
         val evidence = latest ?: return null
@@ -73,7 +80,7 @@ class InputCommitEvidenceStore(
             latest = null
             return null
         }
-        if (focusedInputId.isNullOrBlank() || evidence.focusedInputId != focusedInputId) return null
+        if (identity == null || evidence.identity != identity) return null
         if (readableText != null && !evidence.matchesReadableText(readableText)) return null
         return evidence
     }

@@ -49,7 +49,13 @@ class GatewayIme : InputMethodService() {
         val focusedInputId = attribute?.let {
             processImeSessionIds.next(it.packageName, it.fieldId, it.fieldName, it.inputType, it.imeOptions)
         }
-        ImeBridge.startSession(focusedInputId) { currentInputConnection }
+        // 会话包名单独留存：它被哈希进 focusedInputId 后就取不回来了，而"这个输入会话
+        // 属于哪个 App"是零 UI IME 下判断会话归属的唯一可用证据（见 knowledge：ime_visible
+        // 在自有 IME 下恒假，不能当活性代理）。只保留包名，不留字段内容。
+        ImeBridge.startSession(
+            focusedInputId,
+            attribute?.packageName?.toString(),
+        ) { currentInputConnection }
     }
 
     override fun onFinishInput() {
@@ -61,6 +67,22 @@ class GatewayIme : InputMethodService() {
     override fun onEvaluateInputViewShown(): Boolean = false
 }
 
+/**
+ * 一次输入会话的身份快照。
+ *
+ * 自有 IME 零 UI（`onEvaluateInputViewShown=false`），因此**永远不会有可见键盘窗口**，
+ * `ime_visible` 不能当作"输入会话是活的"的代理。会话身份本身才是可用证据：
+ * 活性（[connected]）、归属（[packageName]）、以及跨聚焦动作的[id]变化（新鲜度）。
+ */
+data class ImeSessionIdentity(
+    val id: String,
+    val packageName: String?,
+    val connected: Boolean,
+) {
+    fun belongsTo(expectedPackage: String): Boolean =
+        connected && packageName == expectedPackage
+}
+
 /** 网关进程内的 IME 桥：工具实现经它注入文本。 */
 object ImeBridge {
     private val sessionLock = Any()
@@ -70,10 +92,19 @@ object ImeBridge {
     @Volatile var focusedInputId: String? = null
         private set
 
-    internal fun startSession(focusedInputId: String?, connection: () -> InputConnection?) {
+    /** 当前输入会话所属的 App 包名（来自 `EditorInfo.packageName`）。 */
+    @Volatile var sessionPackage: String? = null
+        private set
+
+    internal fun startSession(
+        focusedInputId: String?,
+        sessionPackage: String?,
+        connection: () -> InputConnection?,
+    ) {
         synchronized(sessionLock) {
             this.connection = connection
             this.focusedInputId = focusedInputId
+            this.sessionPackage = sessionPackage
             active = true
         }
     }
@@ -82,8 +113,19 @@ object ImeBridge {
         synchronized(sessionLock) {
             active = false
             focusedInputId = null
+            sessionPackage = null
             connection = null
         }
+    }
+
+    /**
+     * 原子读取会话身份，避免 active/id/package 三个字段被分别读到不同世代。
+     * 返回 null 表示当前没有活的输入会话。
+     */
+    fun session(): ImeSessionIdentity? = synchronized(sessionLock) {
+        if (!active) return null
+        val id = focusedInputId ?: return null
+        ImeSessionIdentity(id, sessionPackage, connection?.invoke() != null)
     }
 
     private fun ic(): InputConnection? = if (active) connection?.invoke() else null

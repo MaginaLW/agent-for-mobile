@@ -416,7 +416,7 @@ class P0WeChatPrepareMacroTest {
         val adapter = FakeAdapter(snapshots = mutableListOf(unsafe), repeatedSnapshot = unsafe)
 
         val error = expectError(ErrorCode.E_TIMEOUT) { macro(adapter).run() }
-        assertTrue(error.message.orEmpty().contains("焦点不是底部聊天输入框"))
+        assertTrue(error.message.orEmpty().contains("IME 未激活"))
         assertEquals(1, adapter.probeCalls)
     }
 
@@ -642,17 +642,151 @@ class P0WeChatPrepareMacroTest {
         assertEquals(0, adapter.probeCalls)
     }
 
+    /**
+     * 页面把焦点给了某个**非输入**控件（focused 却不 editable）：这是真错配，
+     * 既不是严格链也不允许降级，两条链都不给过（design §3.2/§3.3）。
+     */
     @Test
-    fun `times out when focused node never appears after one probe`() {
+    fun `times out when focus lands on a focused non-editable control`() {
         val adapter = FakeAdapter(
             snapshots = mutableListOf(conversationSnapshot()),
-            focusStates = mutableListOf(P0MacroFocus(false, true, true, "fingerprint-a")),
+            focusStates = mutableListOf(
+                P0MacroFocus(
+                    nodePresent = true,
+                    imeActive = true,
+                    inputConnectionAvailable = true,
+                    fingerprint = "fingerprint-a",
+                    focused = true,
+                    editable = false,
+                    stage = P0ElementStage.BOTTOM_INPUT,
+                    nodeSummary = "cls=android.widget.Button pkg=com.tencent.mm",
+                ),
+            ),
         )
 
         val error = expectError(ErrorCode.E_TIMEOUT) { macro(adapter).run() }
 
-        assertTrue(error.message.orEmpty().contains("输入框焦点"))
+        assertTrue(error.message.orEmpty().contains("a11y 焦点证据错配"))
+        assertTrue("错配信息必须带上节点摘要供诊断", error.message.orEmpty().contains("cls="))
         assertEquals(1, adapter.probeCalls)
+    }
+
+    /**
+     * 2026-07-25 真机实测形态：`findFocus(FOCUS_INPUT)` 返回一个既不 focused 也不 editable
+     * 的残留节点（bounds 疑似退化）。它不承载任何可用输入身份，等价于缺失，允许走降级链。
+     */
+    @Test
+    fun `residual non-input node counts as absent a11y identity`() {
+        val residual = P0MacroFocus(
+            nodePresent = true,
+            imeActive = true,
+            inputConnectionAvailable = true,
+            fingerprint = "ime|0123456789abcdef01234567",
+            focused = false,
+            editable = false,
+            stage = P0ElementStage.SEARCH,
+            sessionPackage = P0_WECHAT_PACKAGE,
+        )
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(conversationSnapshot()),
+            focusStates = mutableListOf(
+                P0MacroFocus(false, false, false, null),
+                residual,
+                residual,
+            ),
+        )
+
+        val result = macro(adapter).run()
+
+        assertTrue(result.ready)
+        assertTrue(result.imeOnlyIdentity)
+    }
+
+    /**
+     * 微信会话页对无障碍树不透明时，a11y 三项一致缺失 + IME 三项正常即视为就绪，
+     * 并把降级如实标记出来（design §1/§3.1）。
+     */
+    @Test
+    fun `ime only readiness is accepted and reported as degraded`() {
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(conversationSnapshot()),
+            focusStates = degradedStableFocus("ime|0123456789abcdef01234567"),
+        )
+
+        val result = macro(adapter).run()
+
+        assertTrue(result.ready)
+        assertTrue(result.imeOnlyIdentity)
+        assertEquals("ime_only", result.toJson().getString("identity_source"))
+        assertFalse(result.toJson().getBoolean("input_focused"))
+    }
+
+    /**
+     * 降级链**永远不走 alreadyFocused 短路**：即使动手前就已经有一个属于微信的活会话，
+     * 也必须亲手执行那次已校验的盲点。2026-07-25 真机实测——缺这一条时宏根本不点输入框，
+     * 一路"成功"到记录临界区才被兜底门挡下。
+     *
+     * 注意这里**不**要求会话 id 变化：微信输入框键盘收起后仍持有焦点与 InputConnection，
+     * 对已聚焦的输入框再点一次不会重新触发 onStartInput。
+     */
+    @Test
+    fun `degraded chain never short-circuits on a pre-existing session`() {
+        val liveSession = P0MacroFocus(
+            nodePresent = false,
+            imeActive = true,
+            inputConnectionAvailable = true,
+            fingerprint = "ime|0123456789abcdef01234567",
+            sessionPackage = P0_WECHAT_PACKAGE,
+        )
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(conversationSnapshot()),
+            focusStates = mutableListOf(liveSession),
+        )
+
+        val result = macro(adapter).run()
+
+        assertTrue(result.imeOnlyIdentity)
+        // 关键：会话虽然本来就在，仍然亲手点了一次，而不是直接沿用
+        assertEquals(1, adapter.probeCalls)
+    }
+
+    /** 降级链的会话必须属于目标 App：会话在别的 App 上，键盘再活也不算就绪。 */
+    @Test
+    fun `degraded chain rejects an ime session owned by another app`() {
+        val foreignSession = P0MacroFocus(
+            nodePresent = false,
+            imeActive = true,
+            inputConnectionAvailable = true,
+            fingerprint = "ime|fedcba9876543210fedcba98",
+            sessionPackage = "com.android.launcher",
+        )
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(conversationSnapshot()),
+            focusStates = mutableListOf(foreignSession),
+        )
+
+        val error = expectError(ErrorCode.E_TIMEOUT) { macro(adapter).run() }
+
+        assertTrue(error.message.orEmpty().contains("IME 会话不属于微信"))
+    }
+
+    /** a11y 中途从"一致缺失"变回可见，属于身份来源漂移，必须判失败而不是照单全收。 */
+    @Test
+    fun `identity source drift during stability sampling fails closed`() {
+        val adapter = FakeAdapter(
+            snapshots = mutableListOf(conversationSnapshot()),
+            focusStates = mutableListOf(
+                P0MacroFocus(false, false, false, null),
+                P0MacroFocus(false, true, true, "fingerprint-a", sessionPackage = P0_WECHAT_PACKAGE),
+                P0MacroFocus(
+                    true, true, true, "fingerprint-a",
+                    editable = true, stage = P0ElementStage.BOTTOM_INPUT,
+                    sessionPackage = P0_WECHAT_PACKAGE,
+                ),
+            ),
+        )
+
+        expectError(ErrorCode.E_STALE_REF) { macro(adapter).run() }
     }
 
     @Test
@@ -915,6 +1049,14 @@ class P0WeChatPrepareMacroTest {
             pollIntervalMs = 10,
             stableSamples = 2,
         ),
+    )
+
+    /** a11y 三项一致缺失、IME 三项正常：本机微信会话页的实测形态。 */
+    /** a11y 三项一致缺失、IME 会话属于微信且由本次聚焦动作换新：本机微信会话页的实测形态。 */
+    private fun degradedStableFocus(id: String) = mutableListOf(
+        P0MacroFocus(false, false, false, null),
+        P0MacroFocus(false, true, true, id, sessionPackage = P0_WECHAT_PACKAGE),
+        P0MacroFocus(false, true, true, id, sessionPackage = P0_WECHAT_PACKAGE),
     )
 
     private fun stableFocus(id: String) = mutableListOf(

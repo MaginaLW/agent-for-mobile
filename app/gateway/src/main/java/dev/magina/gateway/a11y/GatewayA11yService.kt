@@ -434,15 +434,23 @@ class GatewayA11yService : AccessibilityService() {
         val fresh = forceFreshVision("interactive", maxElements = 400)
         val captureRevision = fresh.getLong("capture_revision")
         val windowId = fresh.getInt("foreground_window_id")
-        if (
-            captureRevision != fresh.getLong("revision") ||
-            fresh.optLong("vision_generation", 0) <= 0 ||
-            windowId < 0 ||
-            fresh.optBoolean("blocking_overlay", true) ||
-            !fresh.optBoolean("ime_visible", false)
-        ) throw GatewayError(
+        // 逐条命名失败原因：合并成一句话时，真机上排查要额外烧一整轮派单才能定位。
+        val proofProblems = buildList {
+            if (captureRevision != fresh.getLong("revision")) add("capture_revision 与 revision 不一致")
+            if (fresh.optLong("vision_generation", 0) <= 0) add("vision_generation 无效")
+            if (windowId < 0) add("前台窗口 id 无效")
+            if (fresh.optBoolean("blocking_overlay", true)) add("存在遮挡浮层")
+            // 不能用 ime_visible 当活性证据：自有 IME 零 UI，该值恒假（knowledge）。
+            // 改用会话身份本身——活的连接 + 会话属于目标 App。
+            val session = ImeBridge.session()
+            if (session == null) add("没有活的 IME 输入会话")
+            else if (!session.belongsTo(expectedPackage)) {
+                add("IME 输入会话不属于目标 App（session=${session.packageName ?: "未知"}）")
+            }
+        }
+        if (proofProblems.isNotEmpty()) throw GatewayError(
             ErrorCode.E_STALE_REF,
-            "准备目标的 fresh revision/window/overlay/IME proof 无效",
+            "准备目标的 fresh proof 无效：${proofProblems.joinToString("、")}",
             channel = "vision",
             retryable = false,
         )
@@ -457,9 +465,10 @@ class GatewayA11yService : AccessibilityService() {
                 ),
                 current,
             )
-            if (!current.imeVisible) throw GatewayError(
+            // 同上：终验也改看会话身份，不看键盘可见性。
+            if (ImeBridge.session()?.belongsTo(expectedPackage) != true) throw GatewayError(
                 ErrorCode.E_STALE_REF,
-                "准备目标终验时 IME 已隐藏",
+                "准备目标终验时 IME 输入会话已失效或不属于目标 App",
                 channel = "vision",
                 retryable = false,
             )
@@ -468,12 +477,15 @@ class GatewayA11yService : AccessibilityService() {
         fun readInputProof(): FreshPreparedInputProof {
             val node = focusedEditable()
             val present = node?.let { runCatching { it.refresh() }.getOrDefault(false) } == true
-            val bounds = node?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
+            // 与 UiTools.focusedInputSnapshot 同一判据：不可编辑的节点不产出 a11y 身份与几何，
+            // 否则两处对"有没有可用节点"的判断会打架，验证器必然误判错配。
+            val usable = present && node?.isEditable == true
+            val bounds = node?.takeIf { usable }?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
             return FreshPreparedInputProof(
                 captureRevision = captureRevision,
                 foregroundWindowId = windowId,
                 nodePresent = present,
-                nodeId = node?.takeIf { present }?.let(FocusedInputIdentity::fromRefreshedNode),
+                nodeId = node?.takeIf { usable }?.let(FocusedInputIdentity::fromRefreshedNode),
                 imeSessionId = ImeBridge.focusedInputId,
                 focused = present && node?.isFocused == true,
                 editable = present && node?.isEditable == true,
@@ -911,6 +923,14 @@ class GatewayA11yService : AccessibilityService() {
     fun focusedEditable(): AccessibilityNodeInfo? = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
 
     /**
+     * 输入法窗口是否真的弹起（纯窗口判定，不截图不 OCR）。
+     * IME 单命名空间降级链下没有"焦点可编辑节点"这条活性证据，键盘确实在屏上
+     * 是仅剩的"输入会话是活的而非残留 InputConnection"证据。
+     */
+    internal fun imeWindowVisible(): Boolean =
+        windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+
+    /**
      * 仅供 debug 验收 adapter 使用的受约束聚焦探针。完整 proof 已由动作 adapter
      * 用第二份 fresh OCR 重算；这里在 gesture 前再核前台、窗口遮挡、标题带与固定安全区。
      */
@@ -1118,6 +1138,21 @@ class GatewayA11yService : AccessibilityService() {
         )
     }
 
+    /** 已有位图时直接裁剪识别，不再重复截图（读回重试时省掉一次截图与节流风险）。 */
+    private fun ocrReadRegionOf(full: Bitmap, r: Rect): String? {
+        if (r.width() <= 0 || r.height() <= 0) return null
+        val clipped = Rect(
+            r.left.coerceAtLeast(0), r.top.coerceAtLeast(0),
+            r.right.coerceAtMost(full.width), r.bottom.coerceAtMost(full.height),
+        )
+        if (clipped.width() <= 0 || clipped.height() <= 0) return null
+        val piece = Bitmap.createBitmap(full, clipped.left, clipped.top, clipped.width(), clipped.height())
+        val lines = OcrEngine.recognize(piece, 0.25f)
+        if (lines.isEmpty()) return null
+        return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
+            .joinToString(" ") { it.text }
+    }
+
     /** 任意区域 OCR 直读（type_text 树空读回验证用）：返回区域邻域内按位置拼接的文本，无文字 → null。 */
     fun ocrReadRegion(bounds: Rect): String? {
         val full = captureBitmapRetry()
@@ -1134,6 +1169,51 @@ class GatewayA11yService : AccessibilityService() {
         if (lines.isEmpty()) return null
         return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
             .joinToString(" ") { it.text }
+    }
+
+    /** 读回结果连同实际使用的几何一起返回——2026-07-26 排查实测：字明明在框里却读回 null，
+     *  没有几何就只能靠猜。region/screen 只是尺寸数字，不含任何屏幕内容。 */
+    internal data class InputBarReadback(
+        val text: String?,
+        val region: Rect,
+        val screenWidth: Int,
+        val screenHeight: Int,
+        val metricsWidth: Int,
+        val metricsHeight: Int,
+        val bottomInset: Int,
+    )
+
+    /**
+     * IME 单命名空间降级链的读回区域：a11y 拿不到焦点节点时没有 bounds 可用，改用锚定
+     * 系统底部 inset 的输入栏带。这是"打进去的字确实落到框里"的唯一剩余机械证据，不能省。
+     *
+     * **几何以截图位图自身尺寸为准**，不用 `displayMetrics`：两者在本机不一定相等，
+     * 而裁剪发生在位图坐标系里，用错坐标系会把整条输入栏裁掉。
+     * 读回带比盲点带更高（[INPUT_BAR_READBACK_HEIGHT_PX]）：盲点只需要一个可点的中心，
+     * 读回要覆盖整条输入栏，包括基线落在 inset 之下的文字。
+     */
+    internal fun ocrReadInputBarRegion(): InputBarReadback {
+        val metrics = resources.displayMetrics
+        val inset = systemBottomInset()
+        val full = captureBitmapRetry()
+        val bottom = full.height
+        val top = (bottom - INPUT_BAR_READBACK_HEIGHT_PX).coerceAtLeast(0)
+        val region = Rect(
+            (full.width * 0.06).toInt(),
+            top,
+            (full.width * 0.94).toInt(),
+            bottom,
+        )
+        val text = runCatching { ocrReadRegionOf(full, region) }.getOrNull()
+        return InputBarReadback(
+            text = text,
+            region = region,
+            screenWidth = full.width,
+            screenHeight = full.height,
+            metricsWidth = metrics.widthPixels,
+            metricsHeight = metrics.heightPixels,
+            bottomInset = inset,
+        )
     }
 
     fun screenshotPngBase64(region: Rect?): JSONObject {

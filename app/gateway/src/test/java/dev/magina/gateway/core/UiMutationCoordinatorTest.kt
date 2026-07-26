@@ -11,6 +11,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class UiMutationCoordinatorTest {
+    private val imeSessionId = "ime|0123456789abcdef01234567"
+    private val nodeId = "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40"
+    private val strict = FocusIdentity(IdentitySource.A11Y, nodeId, imeSessionId)
+    private val degraded = FocusIdentity(IdentitySource.IME_ONLY, null, imeSessionId)
+
     @Test
     fun `all write calls and scrolling find serialize while snapshots remain readable`() {
         assertTrue(shouldSerializeUiCall(Level.W, "press_key", false))
@@ -25,7 +30,7 @@ class UiMutationCoordinatorTest {
     fun `every write and scrolling find clear evidence except enter`() {
         val store = InputCommitEvidenceStore()
 
-        fun seed() = store.record("待发送内容", "chat-input")
+        fun seed() = store.record("待发送内容", strict, readbackVerified = true)
         listOf("click", "long_click", "dismiss", "scroll", "set_text").forEach { action ->
             seed()
             assertTrue(
@@ -37,14 +42,14 @@ class UiMutationCoordinatorTest {
                     action = action,
                 ),
             )
-            assertEquals(null, store.current("chat-input"))
+            assertEquals(null, store.current(strict))
         }
 
         seed()
         assertTrue(
             invalidateInputEvidenceForMutation(store, Level.W, "type_text"),
         )
-        assertEquals(null, store.current("chat-input"))
+        assertEquals(null, store.current(strict))
 
         seed()
         assertTrue(
@@ -55,7 +60,7 @@ class UiMutationCoordinatorTest {
                 scrollSearch = true,
             ),
         )
-        assertEquals(null, store.current("chat-input"))
+        assertEquals(null, store.current(strict))
 
         val evidence = seed()
         assertFalse(
@@ -66,13 +71,13 @@ class UiMutationCoordinatorTest {
                 key = "enter",
             ),
         )
-        assertEquals(evidence, store.current("chat-input"))
+        assertEquals(evidence, store.current(strict))
 
         val readEvidence = seed()
         assertFalse(
             invalidateInputEvidenceForMutation(store, Level.R, "ui_snapshot"),
         )
-        assertEquals(readEvidence, store.current("chat-input"))
+        assertEquals(readEvidence, store.current(strict))
     }
 
     @Test
@@ -82,9 +87,8 @@ class UiMutationCoordinatorTest {
         fun seed() = store.record(
             label = "文件传输助手",
             packageName = "com.tencent.mm",
-            focusedInputId = "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40",
+            identity = strict,
             bounds = "[1,2][30,40]",
-            imeSessionId = "ime|0123456789abcdef01234567",
         )
 
         val preservedByType = seed()
@@ -93,9 +97,8 @@ class UiMutationCoordinatorTest {
             preservedByType,
             store.current(
                 "com.tencent.mm",
-                "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40",
+                strict,
                 "[1,2][30,40]",
-                "ime|0123456789abcdef01234567",
             ),
         )
 
@@ -112,9 +115,8 @@ class UiMutationCoordinatorTest {
             preservedByEnter,
             store.current(
                 "com.tencent.mm",
-                "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40",
+                strict,
                 "[1,2][30,40]",
-                "ime|0123456789abcdef01234567",
             ),
         )
 
@@ -129,9 +131,8 @@ class UiMutationCoordinatorTest {
             assertNull(
                 store.current(
                     "com.tencent.mm",
-                    "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40",
+                    strict,
                     "[1,2][30,40]",
-                    "ime|0123456789abcdef01234567",
                 ),
             )
         }
@@ -148,9 +149,8 @@ class UiMutationCoordinatorTest {
         assertNull(
             store.current(
                 "com.tencent.mm",
-                "7|id/chat_input|android.widget.EditText|com.tencent.mm|1,2,30,40",
+                strict,
                 "[1,2][30,40]",
-                "ime|0123456789abcdef01234567",
             ),
         )
     }
@@ -161,9 +161,8 @@ class UiMutationCoordinatorTest {
             preparedId = 1,
             label = "文件传输助手",
             packageName = "com.tencent.mm",
-            focusedInputId = "chat-input",
+            identity = strict,
             bounds = "[1,2][30,40]",
-            imeSessionId = "ime|0123456789abcdef01234567",
             preparedAtMs = 1,
             expiresAtMs = 2,
         )
@@ -172,7 +171,8 @@ class UiMutationCoordinatorTest {
             preview = "x",
             length = 1,
             sha256 = InputCommitEvidence.sha256("x"),
-            focusedInputId = "chat-input",
+            identity = strict,
+            readbackVerified = true,
             committedAtMs = 1,
             expiresAtMs = 2,
         )
@@ -182,7 +182,13 @@ class UiMutationCoordinatorTest {
         assertFalse(
             preparedTargetSurvivesTypeText(
                 before,
-                before.copy(focusedInputId = "other-input"),
+                before.copy(
+                    identity = FocusIdentity(
+                        IdentitySource.A11Y,
+                        nodeId.replace("chat_input", "other"),
+                        imeSessionId,
+                    ),
+                ),
                 input,
                 succeeded = true,
             ),
@@ -190,7 +196,13 @@ class UiMutationCoordinatorTest {
         assertFalse(
             preparedTargetSurvivesTypeText(
                 before,
-                before.copy(imeSessionId = "ime|fedcba9876543210fedcba98"),
+                before.copy(
+                    identity = FocusIdentity(
+                        IdentitySource.A11Y,
+                        nodeId,
+                        "ime|fedcba9876543210fedcba98",
+                    ),
+                ),
                 input,
                 succeeded = true,
             ),
@@ -199,7 +211,22 @@ class UiMutationCoordinatorTest {
             preparedTargetSurvivesTypeText(
                 before,
                 before,
-                input.copy(focusedInputId = "other-input"),
+                input.copy(
+                    identity = FocusIdentity(
+                        IdentitySource.A11Y,
+                        nodeId.replace("chat_input", "other"),
+                        imeSessionId,
+                    ),
+                ),
+                succeeded = true,
+            ),
+        )
+        assertFalse(
+            "降级链的输入证据不得为严格链的已准备目标背书",
+            preparedTargetSurvivesTypeText(
+                before,
+                before,
+                input.copy(identity = degraded),
                 succeeded = true,
             ),
         )

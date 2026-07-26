@@ -57,4 +57,4 @@ internal fun preparedTargetSurvivesTypeText(
     input: InputCommitEvidence?,
     succeeded: Boolean,
 ): Boolean = succeeded && before != null && before == after &&
-    input != null && input.focusedInputId == after.focusedInputId
+    input != null && input.identity == after.identity

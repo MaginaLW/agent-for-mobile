@@ -6,6 +6,7 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.a11y.FocusedInputIdentity
 import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.InputCommitEvidence
 import dev.magina.gateway.core.PreparedTargetEvidence
@@ -23,11 +24,14 @@ internal fun inputVerificationMismatchMessage(expected: String, actual: String):
 object UiTools {
 
     data class FocusedInputSnapshot(
-        val id: String?,
+        /** a11y 焦点节点身份；App 屏蔽无障碍树时结构性缺失为 null。 */
+        val a11yId: String?,
         /** null 表示节点文本不可读；空字符串表示明确读到空输入。 */
         val readableText: String?,
         /** null 表示当前没有可由 a11y 复核的真实 focused editable bounds。 */
         val bounds: Rect?,
+        /** 显式身份（含来源）；两侧都取不到时为 null，下游一律 fail-closed。 */
+        val identity: FocusIdentity?,
     )
 
     private val CAPTURE_REASONS = setOf(
@@ -35,7 +39,12 @@ object UiTools {
     )
 
     fun uiSnapshot(scope: String): JSONObject {
-        val snap = GatewayA11yService.require().snapshot(scope)
+        val a11y = GatewayA11yService.require()
+        val snap = a11y.snapshot(scope)
+        // 焦点身份来源随快照透出：a11y 一盲时大脑要能一眼看出走的是哪条链。
+        val focused = focusedInputSnapshot(a11y)
+        snap.put("focused_identity_source", focused.identity?.source?.name?.lowercase() ?: JSONObject.NULL)
+            .put("focused_input_id", focused.a11yId ?: JSONObject.NULL)
         when {
             snap.optString("fusion") == "ocr" -> snap.put(
                 "note",
@@ -79,7 +88,11 @@ object UiTools {
             .put("scrolls", scrolls)
             .put("screen_width", metrics.widthPixels)
             .put("screen_height", metrics.heightPixels)
-            .put("focused_input_id", focusedInput.id ?: JSONObject.NULL)
+            .put("focused_input_id", focusedInput.a11yId ?: JSONObject.NULL)
+            .put(
+                "focused_identity_source",
+                focusedInput.identity?.source?.name?.lowercase() ?: JSONObject.NULL,
+            )
             .put(
                 "focused_input_bounds",
                 focusedInput.bounds?.let {
@@ -114,12 +127,22 @@ object UiTools {
         Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
         val target = ref?.let { a11y.resolve(it) }
-        val node: AccessibilityNodeInfo? = if (ref != null) target?.node else a11y.focusedEditable()
+        // 与身份判据同一把尺子：不可编辑的节点不是输入节点。微信会话页的
+        // findFocus(FOCUS_INPUT) 会返回一个既不 focused 也不 editable、bounds 退化的残留节点，
+        // 当成输入节点会连累两处——SET_TEXT 打不进去，且读回会拿它的退化 bounds 去裁剪，
+        // 直接把 OCR 喂出 "width and height should be at least 32"（2026-07-26 真机实锤）。
+        val node: AccessibilityNodeInfo? = if (ref != null) {
+            target?.node
+        } else {
+            a11y.focusedEditable()?.takeIf { it.refresh() && it.isEditable }
+        }
         if (node == null) {
-            // 无节点通道（OCR ref / 微信树空无焦点节点）：IME 字面注入 + 输入区 OCR 读回（spec §8）
+            // 无节点通道（OCR ref / 微信树空或只剩残留节点）：IME 字面注入 + 输入栏 OCR 读回（spec §8）
             return typeTextNoNode(a11y, text, target, mode).also {
                 // append 无法读取既有全文时不能声称掌握“实际输入”；保持 fail-closed。
-                if (mode == "replace") recordInputEvidence(a11y, text)
+                if (mode == "replace") {
+                    recordInputEvidence(a11y, text, it.optBoolean("verified", false))
+                }
             }
         }
 
@@ -141,7 +164,7 @@ object UiTools {
                 if (committed && readback == null) {
                     // 无 IME 兜底：OCR 读回尽力验证后如实上报，由大脑决定是否视觉复核
                     return ocrReadbackResult(a11y, node, channel, expected).also {
-                        recordInputEvidence(a11y, expected)
+                        recordInputEvidence(a11y, expected, it.optBoolean("verified", false))
                     }
                 }
                 throw GatewayError(
@@ -163,7 +186,7 @@ object UiTools {
         }
 
         if (readback == null) return ocrReadbackResult(a11y, node, channel, expected).also {
-            recordInputEvidence(a11y, expected)
+            recordInputEvidence(a11y, expected, it.optBoolean("verified", false))
         }
         if (readback != expected) throw GatewayError(
             ErrorCode.E_VERIFY_FAIL,
@@ -172,14 +195,22 @@ object UiTools {
             fallback = "type_text(mode=replace) 覆盖重输一次；再失败则报告",
         )
         return result(channel, true, readback, verified = true).also {
-            recordInputEvidence(a11y, expected)
+            recordInputEvidence(a11y, expected, readbackVerified = true)
         }
     }
 
-    private fun recordInputEvidence(a11y: GatewayA11yService, committedText: String) {
-        focusedInputId(a11y)?.let { focusedId ->
-            Gateway.inputCommitEvidence.record(committedText, focusedId)
-        }
+    /**
+     * a11y 一盲则 type_text 会"成功但不留证据"，Enter 必被拦；这里按身份来源分别记录。
+     * IME-only 降级链下读回未通过就不记录——没有落框证据就不该形成可用于 Enter 的一环。
+     */
+    private fun recordInputEvidence(
+        a11y: GatewayA11yService,
+        committedText: String,
+        readbackVerified: Boolean,
+    ) {
+        val identity = focusedInputIdentity(a11y) ?: return
+        if (identity.degraded && !readbackVerified) return
+        Gateway.inputCommitEvidence.record(committedText, identity, readbackVerified)
     }
 
     /** a11y 读不回（微信树空场景）→ OCR 对输入框区域裁剪读回验证（spec §8 验证闭环）。 */
@@ -190,11 +221,61 @@ object UiTools {
         text: String,
     ): JSONObject {
         val b = Rect().also { node.getBoundsInScreen(it) }
-        val got = runCatching { a11y.ocrReadRegion(b) }.getOrNull()
-        return result(
-            "$channel+ocr", true, got,
-            verified = got != null && OcrEngine.norm(got).contains(OcrEngine.norm(text)),
-        )
+        // 几何退化的节点不能用来裁剪（ML Kit 要求边长 ≥32）：退到输入栏带，
+        // 宁可读一条更宽的带，也不要把读回这条唯一的落框证据整个丢掉。
+        val usableBounds = b.width() >= 32 && b.height() >= 32
+        val readback = ocrReadbackWithRetry(text) {
+            if (usableBounds) a11y.ocrReadRegion(b) else a11y.ocrReadInputBarRegion().text
+        }
+        return result("$channel+ocr", true, readback.text, verified = readback.verified)
+            .also { json ->
+                if (readback.verified) return@also
+                val diag = buildList {
+                    if (!usableBounds) add("节点 bounds 退化($b)，已退到输入栏带读回")
+                    readback.error?.let { add("读回异常=$it") }
+                }.joinToString(" ")
+                if (diag.isNotEmpty()) json.put("readback_geometry", diag)
+            }
+    }
+
+    /**
+     * OCR 读回**重试**：单次识别有实测抖动（knowledge：低对比度短文本漏识近四成），
+     * 只读一次就下结论会把"字其实已经落框"误判成失败——2026-07-25 真机实测，期望 7 字
+     * 只读回 4 字，降级链因此拿不到输入证据。这里不放宽判据（仍要求归一后完整包含），
+     * 只给抖动翻盘机会；一旦通过立即返回，失败则返回最后一次读到的内容供诊断。
+     *
+     * 间隔取 500ms：截图连发 <300ms 会触发 OriginOS 的节流（软/硬两种形态，knowledge）。
+     */
+    data class OcrReadback(val text: String?, val verified: Boolean, val error: String?)
+
+    private fun ocrReadbackWithRetry(
+        expected: String,
+        attempts: Int = 2,
+        intervalMs: Long = 900,
+        read: () -> String?,
+    ): OcrReadback {
+        val wanted = OcrEngine.norm(expected)
+        var last: String? = null
+        var error: String? = null
+        repeat(attempts) { attempt ->
+            // 绝不吞异常：读回抛错（截图节流、位图越界…）与"读到空"是完全不同的病，
+            // 2026-07-26 真机就因为 getOrNull() 把异常吃掉而多烧了一轮诊断。
+            val got = try {
+                read()
+            } catch (e: Throwable) {
+                error = "${e.javaClass.simpleName}: ${e.message.orEmpty().take(80)}"
+                null
+            }
+            if (got != null) {
+                last = got
+                error = null
+                if (OcrEngine.norm(got).contains(wanted)) return OcrReadback(got, true, null)
+            }
+            // 间隔取 900ms：截图连发会触发 OriginOS 节流（软/硬两种形态，knowledge），
+            // 而宏刚跑完就已经连做过多次 forceFreshVision，这里必须给足冷却。
+            if (attempt < attempts - 1) Thread.sleep(intervalMs)
+        }
+        return OcrReadback(last, false, error)
     }
 
     /**
@@ -220,15 +301,33 @@ object UiTools {
             channel = "ime", retryable = true, fallback = "点击输入框重建焦点后重试一次",
         )
         Thread.sleep(250)
-        var readback: String? = null
-        var verified = false
-        if (target != null) {
-            runCatching { a11y.ocrReadRegion(target.bounds) }.getOrNull()?.let { got ->
-                readback = got
-                verified = OcrEngine.norm(got).contains(OcrEngine.norm(text))
+        // 有 OCR ref 时读它的 bounds；全树空（IME-only 降级链）时没有任何 bounds 可用，
+        // 退到锚定截图底边的输入栏带读回——降级链不允许"无读回即成链"。
+        var geometry: GatewayA11yService.InputBarReadback? = null
+        val readback = ocrReadbackWithRetry(text) {
+            if (target != null) {
+                a11y.ocrReadRegion(target.bounds)
+            } else {
+                a11y.ocrReadInputBarRegion().also { geometry = it }.text
             }
         }
-        return result("ime_commit_ocr", true, readback, verified)
+        return result("ime_commit_ocr", true, readback.text, readback.verified).also { json ->
+            if (readback.verified) return@also
+            // 读回失败时把实际几何与异常如实带出：只有尺寸数字与异常类型，不含屏幕内容。
+            val diag = buildList {
+                geometry?.let { g ->
+                    add(
+                        "region=${g.region.left},${g.region.top},${g.region.right},${g.region.bottom}" +
+                            " shot=${g.screenWidth}x${g.screenHeight}" +
+                            " metrics=${g.metricsWidth}x${g.metricsHeight}" +
+                            " inset=${g.bottomInset}",
+                    )
+                }
+                readback.error?.let { add("读回异常=$it") }
+                if (isEmpty()) add("读回未抛错也未拿到几何（区域内无可识别文字）")
+            }.joinToString(" ")
+            json.put("readback_geometry", diag)
+        }
     }
 
     private fun readback(node: AccessibilityNodeInfo): String? {
@@ -245,11 +344,10 @@ object UiTools {
 
     fun pressKey(
         key: String,
-        expectedFocusedInputId: String?,
+        expectedFocusIdentity: FocusIdentity?,
         expectedInputCommitEvidence: InputCommitEvidence? = null,
         expectedFocusedInputBounds: String? = null,
         expectedPreparedTargetEvidence: PreparedTargetEvidence? = null,
-        expectedImeSessionId: String? = null,
     ): JSONObject {
         if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
@@ -258,28 +356,26 @@ object UiTools {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
                 val focused = a11y.focusedEditable()
                 val snapshot = focusedInputSnapshot(focused)
-                requireFocusedInput(expectedFocusedInputId, snapshot.id)
+                requireFocusedIdentity(expectedFocusIdentity, snapshot.identity)
                 requireInputEvidence(expectedInputCommitEvidence, snapshot)
                 requirePreparedTargetEvidence(
                     expectedPreparedTargetEvidence,
                     expectedFocusedInputBounds,
                     snapshot,
                     a11y,
-                    expectedImeSessionId,
                 )
                 val viaNode = focused?.performAction(
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
                 ) ?: false
                 viaNode || run {
                     val current = focusedInputSnapshot(a11y)
-                    requireFocusedInput(expectedFocusedInputId, current.id)
+                    requireFocusedIdentity(expectedFocusIdentity, current.identity)
                     requireInputEvidence(expectedInputCommitEvidence, current)
                     requirePreparedTargetEvidence(
                         expectedPreparedTargetEvidence,
                         expectedFocusedInputBounds,
                         current,
                         a11y,
-                        expectedImeSessionId,
                     )
                     ImeBridge.enter()
                 }
@@ -297,7 +393,7 @@ object UiTools {
     }
 
     private fun requireInputEvidence(expected: InputCommitEvidence?, focused: FocusedInputSnapshot) {
-        val actual = Gateway.inputCommitEvidence.current(focused.id, focused.readableText)
+        val actual = Gateway.inputCommitEvidence.current(focused.identity, focused.readableText)
         if (expected == null || actual == null || expected != actual) throw GatewayError(
             ErrorCode.E_STALE_REF,
             "执行 Enter 前短时输入提交证据已过期或变化",
@@ -311,7 +407,6 @@ object UiTools {
         expectedBounds: String?,
         focused: FocusedInputSnapshot,
         a11y: GatewayA11yService,
-        expectedImeSessionId: String?,
     ) {
         val actualBounds = focused.bounds?.let {
             "[${it.left},${it.top}][${it.right},${it.bottom}]"
@@ -321,14 +416,12 @@ object UiTools {
             packageName = context.optString("app").takeIf {
                 context.optBoolean("foreground_known", false)
             },
-            focusedInputId = focused.id,
+            identity = focused.identity,
             bounds = actualBounds,
-            imeSessionId = ImeBridge.focusedInputId,
         )
         if (
-            expected == null || expectedBounds.isNullOrBlank() ||
-            expectedImeSessionId.isNullOrBlank() ||
-            ImeBridge.focusedInputId != expectedImeSessionId ||
+            expected == null || focused.identity == null ||
+            !FocusIdentity.boundsConsistent(focused.identity.source, expectedBounds) ||
             actualBounds != expectedBounds || actual == null || actual != expected
         ) throw GatewayError(
             ErrorCode.E_STALE_REF,
@@ -338,32 +431,41 @@ object UiTools {
         )
     }
 
-    fun focusedInputId(a11y: GatewayA11yService): String? =
-        focusedInputSnapshot(a11y).id
+    fun focusedInputIdentity(a11y: GatewayA11yService): FocusIdentity? =
+        focusedInputSnapshot(a11y).identity
 
     fun focusedInputSnapshot(a11y: GatewayA11yService): FocusedInputSnapshot =
         focusedInputSnapshot(a11y.focusedEditable())
 
     private fun focusedInputSnapshot(node: AccessibilityNodeInfo?): FocusedInputSnapshot {
-        if (node != null && node.refresh()) {
+        val imeSessionId = ImeBridge.focusedInputId.takeIf { ImeBridge.active }
+        // editable 是"这是个输入节点"的判据。findFocus(FOCUS_INPUT) 在本机微信会话页实测
+        // 会返回一个既不 focused 也不 editable 的残留节点（2026-07-25），拿它当 a11y 身份
+        // 比降级更危险——证据会绑到一个根本打不进字的节点上。
+        if (node != null && node.refresh() && node.isEditable) {
             val bounds = Rect().also { node.getBoundsInScreen(it) }
+            val a11yId = focusedInputIdFromRefreshedNode(node)
             return FocusedInputSnapshot(
-                id = focusedInputIdFromRefreshedNode(node),
+                a11yId = a11yId,
                 readableText = node.text?.toString(),
                 bounds = bounds.takeIf { it.width() > 0 && it.height() > 0 },
+                identity = FocusIdentity.of(a11yId, imeSessionId),
             )
         }
+        // a11y 侧拿不到可用输入身份。绝不把 IME 会话 id 顶替成 a11y 节点 id——那会把
+        // 两套命名空间悄悄合成一套；这里显式产出 IME-only 身份。
         return FocusedInputSnapshot(
-            id = ImeBridge.focusedInputId.takeIf { ImeBridge.active },
+            a11yId = null,
             readableText = null,
             bounds = null,
+            identity = FocusIdentity.of(null, imeSessionId),
         )
     }
 
-    private fun requireFocusedInput(expected: String?, actual: String?) {
-        if (expected.isNullOrBlank() || actual.isNullOrBlank() || expected != actual) throw GatewayError(
+    private fun requireFocusedIdentity(expected: FocusIdentity?, actual: FocusIdentity?) {
+        if (expected == null || actual == null || expected != actual) throw GatewayError(
             ErrorCode.E_STALE_REF,
-            "执行 Enter 前焦点输入框已变化或无法识别",
+            "执行 Enter 前焦点输入身份已变化或无法识别",
             channel = "safety",
             fallback = "重新感知并聚焦输入框后再发起一次新调用",
         )

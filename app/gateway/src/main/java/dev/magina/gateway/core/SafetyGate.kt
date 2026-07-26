@@ -19,9 +19,10 @@ data class SafetyTarget(
     val description: String = "",
     val bounds: String = "",
     val source: String = "",
-    val focusedInputId: String? = null,
+    /** 焦点输入身份（含身份来源）；解析不出合法身份时为 null，Enter 门直接拒。 */
+    val focusIdentity: FocusIdentity? = null,
+    /** a11y 可得时的焦点几何；IME-only 降级时一致地缺失。 */
     val focusedInputBounds: String? = null,
-    val imeSessionId: String? = null,
     val inputCommitEvidence: InputCommitEvidence? = null,
     val preparedTargetEvidence: PreparedTargetEvidence? = null,
 )
@@ -73,17 +74,19 @@ class SafetyPolicy(
             val target = context.target
             val input = target?.inputCommitEvidence
             val prepared = target?.preparedTargetEvidence
-            if (
-                target?.focusedInputId.isNullOrBlank() ||
-                target?.focusedInputBounds.isNullOrBlank() ||
-                target?.imeSessionId.isNullOrBlank() ||
-                input == null || input.focusedInputId != target?.focusedInputId ||
-                prepared == null || prepared.label.isBlank() ||
-                prepared.packageName != context.packageName ||
-                prepared.focusedInputId != target?.focusedInputId ||
-                prepared.bounds != target?.focusedInputBounds ||
-                prepared.imeSessionId != target?.imeSessionId
-            ) return SafetyDecision.Blocked(
+            val identity = target?.focusIdentity
+            // 两种身份模式共用同一条硬要求：三处证据的身份（含来源）必须逐字段一致，
+            // 且几何证据与来源一致地存在或缺失——不允许 blank == blank 平凡通过。
+            val chainValid = identity != null &&
+                input != null && input.identity == identity &&
+                prepared != null && prepared.label.isNotBlank() &&
+                prepared.packageName == context.packageName &&
+                prepared.identity == identity &&
+                prepared.bounds == target.focusedInputBounds &&
+                FocusIdentity.boundsConsistent(identity.source, target.focusedInputBounds) &&
+                // IME-only 降级链失去了 a11y 焦点身份与几何，OCR 读回是仅剩的落框机械证据。
+                (identity.source != IdentitySource.IME_ONLY || input.readbackVerified)
+            if (!chainValid) return SafetyDecision.Blocked(
                 ErrorCode.E_BLOCKED,
                 "当前焦点输入框没有匹配的短时输入与目标会话证据，拒绝按下 Enter",
             )
@@ -130,9 +133,23 @@ class SafetyPolicy(
             add("目标：ref=${target.ref} text=${target.text.take(40)} desc=${target.description.take(40)}")
             add("位置：${target.bounds} source=${target.source}")
         } else if (toolName == "press_key") {
+            val identity = target?.focusIdentity
             add("按键：${args.optString("key")}")
             add("目标会话：${target?.preparedTargetEvidence?.label ?: "不可识别"}")
-            add("焦点输入：${target?.focusedInputId ?: "不可识别"}")
+            // 焦点几何不可得时不得静默少展示一项：改为展示 IME 会话身份并标注降级模式，
+            // 让真人清楚知道这一次少了哪一套证据（design §3.6）。
+            when (identity?.source) {
+                IdentitySource.A11Y -> {
+                    add("焦点输入：${identity.a11yInputId}")
+                    add("焦点位置：${target.focusedInputBounds ?: "不可识别"}")
+                }
+                IdentitySource.IME_ONLY -> {
+                    add("焦点输入：a11y 不可见（App 屏蔽无障碍树），已降级为 IME 单命名空间")
+                    add("IME 会话：${identity.imeSessionId}")
+                    add("落框验证：OCR 读回${if (target.inputCommitEvidence?.readbackVerified == true) "已通过" else "未通过"}")
+                }
+                null -> add("焦点输入：不可识别")
+            }
             target?.inputCommitEvidence?.let { input ->
                 add("实际输入预览：${input.preview}")
                 add("输入长度：${input.length}")
@@ -287,20 +304,20 @@ class SafetyGate(
                 ) stale("确认后 UI 目标证据已变化")
             }
             toolName == "press_key" && args.optString("key").equals("enter", ignoreCase = true) -> {
-                val before = initial.target?.focusedInputId
-                val after = current.target?.focusedInputId
-                if (before.isNullOrBlank() || after.isNullOrBlank() || before != after) {
-                    stale("确认后焦点输入框已变化或无法识别")
+                val before = initial.target?.focusIdentity
+                val after = current.target?.focusIdentity
+                // 身份来源本身也参与比较：确认前严格链、确认后降级链一律判 stale。
+                if (before == null || after == null || before != after) {
+                    stale("确认后焦点输入身份已变化或无法识别")
                 }
                 val beforeBounds = initial.target.focusedInputBounds
                 val afterBounds = current.target?.focusedInputBounds
-                if (beforeBounds.isNullOrBlank() || afterBounds.isNullOrBlank() || beforeBounds != afterBounds) {
-                    stale("确认后焦点输入框位置已变化或无法识别")
-                }
-                val beforeIme = initial.target.imeSessionId
-                val afterIme = current.target?.imeSessionId
-                if (beforeIme.isNullOrBlank() || afterIme.isNullOrBlank() || beforeIme != afterIme) {
-                    stale("确认后 IME 输入会话已变化或无法识别")
+                if (
+                    !FocusIdentity.boundsConsistent(before.source, beforeBounds) ||
+                    !FocusIdentity.boundsConsistent(after.source, afterBounds) ||
+                    beforeBounds != afterBounds
+                ) {
+                    stale("确认后焦点输入框位置已变化或与身份来源不一致")
                 }
                 val beforeInput = initial.target.inputCommitEvidence
                 val afterInput = current.target?.inputCommitEvidence

@@ -3,17 +3,24 @@ package dev.magina.gateway.core
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class SafetyGateTest {
     private val args = JSONObject().put("key", "enter")
+    private val imeSessionId = "ime|0123456789abcdef01234567"
+    private val nodeId =
+        "7|com.tencent.mm:id/chat_input|android.widget.EditText|com.tencent.mm|10,20,100,80"
+    private val strict = FocusIdentity(IdentitySource.A11Y, nodeId, imeSessionId)
+    private val degraded = FocusIdentity(IdentitySource.IME_ONLY, null, imeSessionId)
     private val inputEvidence = InputCommitEvidence(
         commitId = 1,
         preview = "P0 安全硬门测试",
         length = "P0 安全硬门测试".length,
         sha256 = InputCommitEvidence.sha256("P0 安全硬门测试"),
-        focusedInputId = "chat-input",
+        identity = strict,
+        readbackVerified = true,
         committedAtMs = 1_000,
         expiresAtMs = 61_000,
     )
@@ -21,9 +28,8 @@ class SafetyGateTest {
         preparedId = 1,
         label = "文件传输助手",
         packageName = "com.tencent.mm",
-        focusedInputId = "chat-input",
+        identity = strict,
         bounds = "[10,20][100,80]",
-        imeSessionId = "ime|0123456789abcdef01234567",
         preparedAtMs = 1_000,
         expiresAtMs = 61_000,
     )
@@ -32,11 +38,20 @@ class SafetyGateTest {
         activityName = ".ui.LauncherUI",
         revision = 7,
         target = SafetyTarget(
-            focusedInputId = "chat-input",
+            focusIdentity = strict,
             focusedInputBounds = "[10,20][100,80]",
-            imeSessionId = "ime|0123456789abcdef01234567",
             inputCommitEvidence = inputEvidence,
             preparedTargetEvidence = preparedTarget,
+        ),
+    )
+
+    /** IME-only 降级链：三处身份一致 + OCR 读回通过 → 才走到确认卡。 */
+    private val degradedContext = initialContext.copy(
+        target = SafetyTarget(
+            focusIdentity = degraded,
+            focusedInputBounds = null,
+            inputCommitEvidence = inputEvidence.copy(identity = degraded),
+            preparedTargetEvidence = preparedTarget.copy(identity = degraded, bounds = null),
         ),
     )
 
@@ -195,14 +210,18 @@ class SafetyGateTest {
 
     @Test
     fun `dynamic target signature change after confirmation rejects as stale`() {
+        val other = FocusIdentity(
+            IdentitySource.A11Y,
+            nodeId.replace("chat_input", "search"),
+            imeSessionId,
+        )
         assertContextChangeIsStale(
             initialContext.copy(
                 target = SafetyTarget(
-                    focusedInputId = "search-input",
+                    focusIdentity = other,
                     focusedInputBounds = "[10,20][100,80]",
-                    imeSessionId = "ime|0123456789abcdef01234567",
-                    inputCommitEvidence = inputEvidence.copy(focusedInputId = "search-input"),
-                    preparedTargetEvidence = preparedTarget.copy(focusedInputId = "search-input"),
+                    inputCommitEvidence = inputEvidence.copy(identity = other),
+                    preparedTargetEvidence = preparedTarget.copy(identity = other),
                 ),
             ),
         )
@@ -216,7 +235,7 @@ class SafetyGateTest {
             policy = SafetyPolicy(),
             confirmer = { confirmerCalls++; true },
             contextProvider = {
-                initialContext.copy(target = SafetyTarget(focusedInputId = "chat-input"))
+                initialContext.copy(target = SafetyTarget(focusIdentity = strict))
             },
             onExecutionFailure = { fail("门前阻断不得记录执行失败") },
         )
@@ -253,7 +272,7 @@ class SafetyGateTest {
         var readableText: String? = "P0 安全硬门测试"
         var now = 1_000L
         val store = InputCommitEvidenceStore(ttlMs = 60_000, clock = { now })
-        store.record(readableText!!, "chat-input")
+        store.record(readableText!!, strict, readbackVerified = true)
         val gate = SafetyGate(
             policy = SafetyPolicy(),
             confirmer = {
@@ -264,10 +283,9 @@ class SafetyGateTest {
                 reads++
                 initialContext.copy(
                     target = SafetyTarget(
-                        focusedInputId = "chat-input",
+                        focusIdentity = strict,
                         focusedInputBounds = "[10,20][100,80]",
-                        imeSessionId = "ime|0123456789abcdef01234567",
-                        inputCommitEvidence = store.current("chat-input", readableText),
+                        inputCommitEvidence = store.current(strict, readableText),
                         preparedTargetEvidence = preparedTarget,
                     ),
                 )
@@ -289,24 +307,108 @@ class SafetyGateTest {
                 preparedTargetEvidence = preparedTarget.copy(preparedId = 2),
             ),
             initialContext.target!!.copy(preparedTargetEvidence = null),
-            initialContext.target!!.copy(
-                focusedInputId = "other-input",
-                inputCommitEvidence = inputEvidence.copy(focusedInputId = "other-input"),
-                preparedTargetEvidence = preparedTarget.copy(focusedInputId = "other-input"),
-            ),
+            FocusIdentity(IdentitySource.A11Y, nodeId.replace("chat_input", "other"), imeSessionId)
+                .let { other ->
+                    initialContext.target!!.copy(
+                        focusIdentity = other,
+                        inputCommitEvidence = inputEvidence.copy(identity = other),
+                        preparedTargetEvidence = preparedTarget.copy(identity = other),
+                    )
+                },
             initialContext.target!!.copy(
                 focusedInputBounds = "[0,0][1,1]",
                 preparedTargetEvidence = preparedTarget.copy(bounds = "[0,0][1,1]"),
             ),
-            initialContext.target!!.copy(
-                imeSessionId = "ime|fedcba9876543210fedcba98",
-                preparedTargetEvidence = preparedTarget.copy(
-                    imeSessionId = "ime|fedcba9876543210fedcba98",
-                ),
-            ),
+            FocusIdentity(IdentitySource.A11Y, nodeId, "ime|fedcba9876543210fedcba98")
+                .let { other ->
+                    initialContext.target!!.copy(
+                        focusIdentity = other,
+                        inputCommitEvidence = inputEvidence.copy(identity = other),
+                        preparedTargetEvidence = preparedTarget.copy(identity = other),
+                    )
+                },
         ).forEach { changed ->
             assertContextChangeIsStale(initialContext.copy(target = changed))
         }
+    }
+
+    /** 降级链成链后仍必须走两段式确认，只是身份来源换成 IME 单命名空间。 */
+    @Test
+    fun `ime only chain still requires confirmation and then executes once`() {
+        var executorCalls = 0
+        var cards = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { decision ->
+                cards++
+                val card = decision.cardText("abcdef123456")
+                assertTrue("确认卡必须显式告知已降级", card.contains("已降级为 IME 单命名空间"))
+                assertTrue("确认卡必须展示 OCR 会话标题", card.contains("文件传输助手"))
+                assertTrue("确认卡必须展示落框读回结论", card.contains("OCR 读回已通过"))
+                assertTrue(card.contains("输入 SHA-256"))
+                true
+            },
+            contextProvider = { degradedContext },
+            onExecutionFailure = { fail("成功执行不得记录失败") },
+        )
+
+        gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+
+        assertEquals(1, cards)
+        assertEquals(1, executorCalls)
+    }
+
+    /** design §3.5：IME-only 下 OCR 读回是仅剩的落框机械证据，未通过必须门前拒。 */
+    @Test
+    fun `ime only chain without ocr readback is blocked before confirmation`() {
+        assertEnterBlocked(
+            degradedContext.copy(
+                target = degradedContext.target!!.copy(
+                    inputCommitEvidence = inputEvidence.copy(
+                        identity = degraded,
+                        readbackVerified = false,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    /** design §3.1：a11y 与几何全空绝不能因为 blank == blank 悄悄通过。 */
+    @Test
+    fun `all blank evidence never passes trivially`() {
+        assertEnterBlocked(
+            initialContext.copy(
+                target = SafetyTarget(
+                    focusIdentity = null,
+                    focusedInputBounds = null,
+                    inputCommitEvidence = null,
+                    preparedTargetEvidence = null,
+                ),
+            ),
+        )
+    }
+
+    /** design §3.3：a11y 字段必须一致地缺失，一边有一边没有属于错配。 */
+    @Test
+    fun `mismatched identity sources across the chain are blocked`() {
+        listOf(
+            // 目标降级，但输入证据还挂在严格链上
+            degradedContext.target!!.copy(inputCommitEvidence = inputEvidence),
+            // 目标降级，但已准备会话还挂在严格链上
+            degradedContext.target!!.copy(preparedTargetEvidence = preparedTarget),
+            // 降级身份却带着 a11y 几何
+            degradedContext.target!!.copy(focusedInputBounds = "[10,20][100,80]"),
+            // 严格身份却丢了几何
+            initialContext.target!!.copy(focusedInputBounds = null),
+        ).forEach { target ->
+            assertEnterBlocked(initialContext.copy(target = target))
+        }
+    }
+
+    /** design §3.2：确认前后身份来源不得漂移。 */
+    @Test
+    fun `identity source drift after confirmation rejects as stale`() {
+        assertContextChangeIsStale(degradedContext)
     }
 
     @Test
@@ -555,6 +657,24 @@ class SafetyGateTest {
         assertEquals(0, confirmerCalls)
         assertEquals(0, executorCalls)
         assertEquals(0, failureRecords)
+    }
+
+    private fun assertEnterBlocked(context: SafetyContext) {
+        var confirmerCalls = 0
+        var executorCalls = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; true },
+            contextProvider = { context },
+            onExecutionFailure = { fail("门前阻断不得记录执行失败") },
+        )
+
+        expectGatewayError(ErrorCode.E_BLOCKED) {
+            gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+        }
+
+        assertEquals(0, confirmerCalls)
+        assertEquals(0, executorCalls)
     }
 
     private fun assertContextChangeIsStale(changedContext: SafetyContext) {

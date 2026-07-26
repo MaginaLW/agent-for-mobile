@@ -1,6 +1,8 @@
 # IME 单命名空间降级门 · 设计说明（2026-07-25）
 
-> 状态：**已获项目所有者policy 批准（"允许 Enter 门"），实现未开始。**
+> 状态：**已获项目所有者policy 批准（"允许 Enter 门"）；离线实现已完成，两套单测全绿，真机未验。**
+> 实现落点：`FocusIdentity`（新，唯一降级决策点）、两个证据 store、`UiTools`、`SafetyGate`/`SafetyPolicy`、
+> `P0WeChatPrepareMacro`、`P0PreparedTargetRecorderValidator`。§6 的 `Start-P0TargetApp` 仍未修。
 > 背景根因见 [knowledge/android/common.md #18](../knowledge/android/common.md)。
 
 ## 1. 为什么要改

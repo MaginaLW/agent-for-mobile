@@ -39,6 +39,14 @@ if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
 }
 
+function Get-P0OptionalProperty {
+    param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 $requested = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($value in $Legs) {
     foreach ($part in ($value -split ',')) {
@@ -863,8 +871,11 @@ try {
             if ($null -ne $state) {
                 if ([string]$state.run_id -cne $runId) { throw "$leg 腿确认状态 run_id 不匹配。" }
                 if ([string]$state.tool -cne 'press_key') { throw "$leg 腿确认状态工具不匹配。" }
-                if ($state.evidence_file -and -not (Test-Path -LiteralPath $screenshotPath)) {
-                    Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$state.evidence_file) -Destination $screenshotPath
+                # evidence_file 只在证据就绪后才出现在状态文件里（app 侧 evidenceFile?.let），
+                # 而 Set-StrictMode 3.0 会把"读不存在的属性"变成硬错误——早期状态必须先探属性。
+                $evidenceFile = Get-P0OptionalProperty -Object $state -Name 'evidence_file'
+                if ($evidenceFile -and -not (Test-Path -LiteralPath $screenshotPath)) {
+                    Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$evidenceFile) -Destination $screenshotPath
                 }
                 if ([string]$state.state -in @('evidence_ready','allowed') -and -not $prompted) {
                     Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow

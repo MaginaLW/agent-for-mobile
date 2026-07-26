@@ -17,11 +17,11 @@ class ImeBridgeSessionCommitTest {
     @Test
     fun `commit is zero when focus switches finishes or fast precondition fails`() {
         val connection = fakeConnection()
-        ImeBridge.startSession("session-a") { connection }
+        ImeBridge.startSession("session-a", "com.tencent.mm") { connection }
         assertFalse(ImeBridge.commitIfCurrentSession("wrong", "fixed") { true })
         assertFalse(ImeBridge.commitIfCurrentSession("session-a", "fixed") { false })
 
-        ImeBridge.startSession("session-b") { connection }
+        ImeBridge.startSession("session-b", "com.tencent.mm") { connection }
         assertFalse(ImeBridge.commitIfCurrentSession("session-a", "fixed") { true })
         ImeBridge.finishSession()
         assertFalse(ImeBridge.commitIfCurrentSession("session-b", "fixed") { true })
@@ -31,7 +31,7 @@ class ImeBridgeSessionCommitTest {
     @Test
     fun `matching current session commits once while lock owns final precondition`() {
         val connection = fakeConnection()
-        ImeBridge.startSession("session-a") { connection }
+        ImeBridge.startSession("session-a", "com.tencent.mm") { connection }
 
         assertTrue(ImeBridge.commitIfCurrentSession("session-a", "fixed") {
             ImeBridge.focusedInputId == "session-a"
@@ -45,7 +45,7 @@ class ImeBridgeSessionCommitTest {
         val connection = fakeConnection()
         var foregroundIsWechat = true
         var searchProofValid = true
-        ImeBridge.startSession("session-a") { connection }
+        ImeBridge.startSession("session-a", "com.tencent.mm") { connection }
 
         foregroundIsWechat = false
         assertFalse(ImeBridge.commitIfCurrentSession("session-a", "fixed") {

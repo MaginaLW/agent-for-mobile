@@ -69,10 +69,67 @@ internal data class P0MacroFocus(
     /** 必须由真实节点显式观测；省略时 fail-closed，不能从 nodePresent 推断。 */
     val editable: Boolean = false,
     val stage: P0ElementStage? = null,
+    /** 当前 IME 输入会话所属包名；零 UI IME 下这是会话归属的唯一可用证据。 */
+    val sessionPackage: String? = null,
+    /** 诊断用的节点摘要（class/package/bounds，不含文本）；只进错误信息，不参与判定。 */
+    val nodeSummary: String? = null,
 ) {
+    /** IME 侧就绪：两种身份模式的共同底线，任何一项缺失都不算就绪。 */
+    val imeReady: Boolean
+        get() = imeActive && inputConnectionAvailable && !fingerprint.isNullOrBlank()
+
+    /**
+     * a11y 侧给出了**可用的输入身份**。判据是 editable：不可编辑的节点既不能打字，
+     * 也不能给输入证据当主键，它不是"更弱的输入节点"，而根本不是输入节点。
+     */
+    val a11yInputNode: Boolean
+        get() = nodePresent && editable
+
+    /** a11y 侧真实输入节点完整可观测。 */
+    val a11yNodeReady: Boolean
+        get() = a11yInputNode && focused && stage != null
+
+    /**
+     * a11y 侧拿不到可用输入身份。两种形态：
+     * ① `findFocus(FOCUS_INPUT)` 返回 null（设计时的假设）；
+     * ② **返回一个既不 focused 也不 editable 的残留节点**——2026-07-25 真机实测形态
+     *    （`nodePresent=true focused=false editable=false stage=SEARCH`，bounds 疑似退化）。
+     *    这种节点不承载任何可用身份，等价于缺失。
+     *
+     * 但 focused 却不 editable 属于**错配**（页面确实把焦点给了某个非输入控件），
+     * 仍然两条链都不给过，不能滑进降级。
+     */
+    val a11yAbsent: Boolean
+        get() = !nodePresent || (!editable && !focused)
+
+    /** 输入会话确实属于目标 App。零 UI IME 下这取代了"键盘可见"这条不可用的代理。 */
+    fun sessionBelongsTo(expectedPackage: String): Boolean =
+        imeReady && sessionPackage == expectedPackage
+
+    /**
+     * 严格链：a11y 节点可见且落在期望区域。能严则严，有节点时只走这条。
+     * 这里不额外要求 IME 会话包名——节点 id 本身已经编码了 package（`FocusedInputIdentity`）。
+     */
+    fun strictReadyAt(expected: P0ElementStage): Boolean =
+        imeReady && a11yNodeReady && stage == expected
+
+    /**
+     * 降级链：没有任何 a11y 节点可用，包名证据只能来自 IME 会话本身。
+     * 新鲜度（聚焦动作前后 session id 必须变化）由 [P0WeChatPrepareMacro.waitForReadyFocus] 强制。
+     */
+    fun degradedReadyAt(expectedPackage: String): Boolean =
+        sessionBelongsTo(expectedPackage) && a11yAbsent
+
+    /** 严格链优先；仅当 a11y 拿不到可用输入身份时才承认 IME 单命名空间降级链。 */
+    fun readyAt(expected: P0ElementStage, expectedPackage: String): Boolean =
+        strictReadyAt(expected) || degradedReadyAt(expectedPackage)
+
+    /** 本次是否走了降级链（供上报与证据标记，不用于放宽任何检查）。 */
+    fun degradedAt(expected: P0ElementStage, expectedPackage: String): Boolean =
+        readyAt(expected, expectedPackage) && !strictReadyAt(expected)
+
     val ready: Boolean
-        get() = nodePresent && focused && editable && imeActive && inputConnectionAvailable &&
-            !fingerprint.isNullOrBlank()
+        get() = imeReady && (a11yNodeReady || a11yAbsent)
 }
 
 /** 只描述已经由状态机验证过的屏幕相对聚焦候选区，不暴露任意坐标动作。 */
@@ -141,6 +198,67 @@ internal object P0FocusProbeValidator {
      * 仍会独立复核 label/包名/bounds，这条证据链本身不会因为这处阈值降低而失去保护。
      */
     private val MIN_OCR_CONFIDENCE = MIN_RECOGNITION_OCR_CONFIDENCE.toDouble()
+
+    /**
+     * 只在 [build] 返回 null 后用于**说明原因**，不参与放行判定（放行仍完全由 [build] 决定）。
+     * 三次真机排查都因为"七八个条件合并成一句话"而额外烧掉一轮派单，这里逐条点名。
+     */
+    fun rejectionReason(snapshot: P0MacroSnapshot, sensitiveSurfaceWords: List<String>): String {
+        val w = snapshot.screenWidth
+        val h = snapshot.screenHeight
+        val aspect = h.toDouble() / w.toDouble().coerceAtLeast(1.0)
+        val problems = buildList {
+            if (w < 480 || h < 800 || h <= w || aspect !in 1.4..2.7) add("屏幕几何异常(${w}x$h)")
+            if (snapshot.blockingOverlay) add("存在遮挡浮层")
+            if (snapshot.imeVisible) add("输入法窗口占屏")
+            if (snapshot.systemBottomInset < 0 || snapshot.systemBottomInset > (h * 0.06).toInt()) {
+                add("系统底部 inset 异常(${snapshot.systemBottomInset})")
+            }
+            if (hasSensitiveOrBlockingSurface(snapshot, sensitiveSurfaceWords)) add("屏上有敏感/弹窗语义")
+            val titleCandidates = snapshot.elements.filter {
+                normalized(it.text).contains(P0_FILE_TRANSFER_ASSISTANT)
+            }
+            if (titleCandidates.isEmpty()) {
+                add("OCR 没识别出「$P0_FILE_TRANSFER_ASSISTANT」标题（识别抖动？）")
+            } else if (
+                titleCandidates.none {
+                    it.source in setOf("ocr", "fused") &&
+                        it.confidence?.let { c -> c.isFinite() && c >= MIN_OCR_CONFIDENCE } == true &&
+                        it.stage == P0ElementStage.TOOLBAR &&
+                        validBounds(it.bounds, w, h) &&
+                        it.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
+                        it.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
+                }
+            ) {
+                add(
+                    "标题命中但不可信：" + titleCandidates.joinToString("，") {
+                        "src=${it.source} conf=${it.confidence} stage=${it.stage} bounds=${it.bounds}"
+                    },
+                )
+            }
+            val box = p0FocusProbeRegion(w, h, snapshot.systemBottomInset)
+            val region = P0MacroRect(box[0], box[1], box[2], box[3])
+            if (!validBounds(region, w, h) || region.width < w * 0.40 || region.height < 40) {
+                add("候选区几何无效($region)")
+            }
+            val texts = snapshot.elements.filter {
+                normalized(it.text + it.description).isNotEmpty() && intersects(it.bounds, region)
+            }
+            if (texts.isNotEmpty()) {
+                add(
+                    "候选区有可见文字（空白输入框才允许盲点）：" +
+                        texts.joinToString("，") { "「${it.text.take(12)}」@${it.bounds}" },
+                )
+            }
+            if (
+                snapshot.elements.any {
+                    it.bounds.centerY >= h * 0.72 &&
+                        normalized(it.text + it.description).contains("发送")
+                }
+            ) add("底部出现可见「发送」控件（输入框可能已有内容）")
+        }
+        return problems.ifEmpty { listOf("未知（各分项均通过，疑为竞态）") }.joinToString("；")
+    }
 
     fun build(snapshot: P0MacroSnapshot, sensitiveSurfaceWords: List<String>): P0FocusProbe? {
         val w = snapshot.screenWidth
@@ -315,8 +433,9 @@ internal object P0FixedQueryValidator {
             snapshot.captureRevision != snapshot.revision || snapshot.foregroundWindowId < 0 ||
             snapshot.visionGeneration <= 0 || snapshot.blockingOverlay ||
             P0FocusProbeValidator.hasSensitiveOrBlockingSurface(snapshot, sensitiveSurfaceWords) ||
-            searchInput == null || targetToolbarPresent || !focus.ready ||
-            focus.stage != P0ElementStage.SEARCH
+            searchInput == null || targetToolbarPresent ||
+            // 搜索页的输入框在 a11y 树里可见（实测），这里不接受降级链。
+            !focus.strictReadyAt(P0ElementStage.SEARCH)
         ) throw GatewayError(
             ErrorCode.E_BLOCKED,
             "固定查询只允许在已验证微信搜索页和真实 editable 搜索焦点中提交",
@@ -429,6 +548,8 @@ internal data class P0WeChatPrepareResult(
     val focusedInputFingerprint: String,
     val stableSamples: Int,
     val usedCoordinateFallback: Boolean,
+    /** 本次就绪走的是 IME 单命名空间降级链（a11y 树被 App 屏蔽）。 */
+    val imeOnlyIdentity: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("name", P0_PREPARE_MACRO_NAME)
@@ -436,13 +557,14 @@ internal data class P0WeChatPrepareResult(
         .put("foreground_known", true)
         .put("package", packageName)
         .put("conversation", conversation)
-        .put("input_focused", true)
-        .put("input_editable", true)
+        .put("input_focused", !imeOnlyIdentity)
+        .put("input_editable", !imeOnlyIdentity)
         .put("ime_active", true)
         .put("input_connection_available", true)
         .put("focused_input_fingerprint", focusedInputFingerprint)
         .put("stable_samples", stableSamples)
         .put("coordinate_fallback_used", usedCoordinateFallback)
+        .put("identity_source", if (imeOnlyIdentity) "ime_only" else "a11y")
 }
 
 /** debug 验收专用的确定性状态机；生产可调用性由 build-type dispatcher 隔离。 */
@@ -496,9 +618,10 @@ internal class P0WeChatPrepareMacro(
             ) { isConversationSurface(it) }
         }
 
-        val alreadyFocused = adapter.focusedInput().takeIf {
-            it.ready && it.stage == P0ElementStage.BOTTOM_INPUT
-        }
+        // 只有严格链允许短路——它有焦点可编辑节点背书；降级链没有，必须亲手点一次，
+        // 不能沿用来路不明的现成会话。
+        val alreadyFocused = adapter.focusedInput()
+            .takeIf { it.strictReadyAt(P0ElementStage.BOTTOM_INPUT) }
         val input = findInput(current)
         var usedCoordinateFallback = false
         if (alreadyFocused != null) {
@@ -508,7 +631,8 @@ internal class P0WeChatPrepareMacro(
         } else {
             val plannedProbe = buildFocusProbeWithRetry(current) ?: throw macroError(
                 ErrorCode.E_BLOCKED,
-                "空白输入框没有 ref，且屏幕/会话标题/输入候选区校验失败",
+                "空白输入框没有 ref，且盲点前置校验失败：" +
+                    (lastFocusProbeRejection ?: "原因不可得"),
                 "focus_probe_validation",
             )
             requireWeChatForeground(initial = false)
@@ -545,7 +669,9 @@ internal class P0WeChatPrepareMacro(
         )
         val finalFocus = adapter.focusedInput()
         if (
-            !finalFocus.ready || finalFocus.stage != P0ElementStage.BOTTOM_INPUT ||
+            !finalFocus.readyAt(P0ElementStage.BOTTOM_INPUT, P0_WECHAT_PACKAGE) ||
+            // 中途从降级链切成严格链（或反过来）同样是身份变化，必须判失败。
+            finalFocus.a11yNodeReady != firstFocus.a11yNodeReady ||
             finalFocus.fingerprint != fingerprint
         ) throw macroError(
             ErrorCode.E_STALE_REF,
@@ -560,22 +686,44 @@ internal class P0WeChatPrepareMacro(
             focusedInputFingerprint = fingerprint,
             stableSamples = config.stableSamples,
             usedCoordinateFallback = usedCoordinateFallback,
+            imeOnlyIdentity = finalFocus.degradedAt(P0ElementStage.BOTTOM_INPUT, P0_WECHAT_PACKAGE),
         )
     }
 
+    /**
+     * 降级链**不要求**会话 id 在聚焦动作后变化：2026-07-25 真机实测，微信输入框在键盘
+     * 收起后仍长期持有焦点与活的 InputConnection，对已聚焦的输入框再点一次不会重新触发
+     * `onStartInput`，会话号自然不变——该判据无法区分"点在了已聚焦的输入框上"（合法）
+     * 与"点空了"（非法），只会把合法情形一起否掉。
+     *
+     * "字确实落进输入框"的证明责任按 design §3.5 归 OCR 读回（读的就是输入栏区域），
+     * 配合盲点前"候选区必须视觉为空"的既有校验；这里只负责拿到一个属于微信的活会话，
+     * 并且**必须是亲手点过之后**（降级链不走 alreadyFocused 短路）。
+     */
     private fun waitForReadyFocus(): P0MacroFocus {
         val started = adapter.monotonicMs()
         var last = adapter.focusedInput()
-        while (!last.ready || last.stage != P0ElementStage.BOTTOM_INPUT) {
+        while (!last.readyAt(P0ElementStage.BOTTOM_INPUT, P0_WECHAT_PACKAGE)) {
             if (adapter.monotonicMs() - started >= config.focusTimeoutMs) {
                 val missing = buildList {
-                    if (!last.nodePresent) add("输入框焦点节点")
-                    if (!last.focused) add("节点未 focused")
-                    if (!last.editable) add("节点非 editable")
-                    if (last.stage != P0ElementStage.BOTTOM_INPUT) add("焦点不是底部聊天输入框")
                     if (!last.imeActive) add("IME 未激活")
                     if (!last.inputConnectionAvailable) add("InputConnection 不可用")
                     if (last.fingerprint.isNullOrBlank()) add("focused fingerprint 为空")
+                    // a11y 侧只有"完整可见"和"一致缺失"两种合法形态；错配单列，
+                    // 便于把"App 屏蔽 a11y 树"和"焦点真的不在输入框"区分开。
+                    if (last.imeReady && last.sessionPackage != P0_WECHAT_PACKAGE) {
+                        add("IME 会话不属于微信（session=${last.sessionPackage ?: "未知"}）")
+                    }
+                    if (!last.a11yNodeReady && !last.a11yAbsent) {
+                        add(
+                            "a11y 焦点证据错配（" +
+                                "nodePresent=${last.nodePresent} focused=${last.focused} " +
+                                "editable=${last.editable} stage=${last.stage} " +
+                                "node=${last.nodeSummary ?: "未知"}）",
+                        )
+                    } else if (last.a11yNodeReady && last.stage != P0ElementStage.BOTTOM_INPUT) {
+                        add("焦点不是底部聊天输入框（stage=${last.stage}）")
+                    }
                 }.joinToString("、")
                 throw macroError(
                     ErrorCode.E_TIMEOUT,
@@ -597,7 +745,8 @@ internal class P0WeChatPrepareMacro(
             adapter.sleep(config.pollIntervalMs)
             val next = adapter.focusedInput()
             if (
-                !next.ready || next.stage != P0ElementStage.BOTTOM_INPUT ||
+                !next.readyAt(P0ElementStage.BOTTOM_INPUT, P0_WECHAT_PACKAGE) ||
+                next.a11yNodeReady != first.a11yNodeReady ||
                 next.fingerprint != expected
             ) throw macroError(
                 ErrorCode.E_STALE_REF,
@@ -824,10 +973,15 @@ internal class P0WeChatPrepareMacro(
      * 翻盘机会。一旦拿到探针进入 [P0FocusProbeValidator.revalidateForAction]/实际
      * `probeFocus` 调用，"故意不重试"继续有效，不受这里影响。
      */
+    /** 最后一次尝试失败的逐项原因，仅用于错误信息。 */
+    private var lastFocusProbeRejection: String? = null
+
     private fun buildFocusProbeWithRetry(initial: P0MacroSnapshot): P0FocusProbe? {
         var snapshot = initial
         repeat(config.perceptionRetryAttempts) { attempt ->
             buildFocusProbe(snapshot)?.let { return it }
+            lastFocusProbeRejection =
+                P0FocusProbeValidator.rejectionReason(snapshot, config.sensitiveSurfaceWords)
             if (attempt < config.perceptionRetryAttempts - 1) {
                 adapter.sleep(config.perceptionRetryDelayMs)
                 snapshot = adapter.forceFreshVision()

@@ -2,6 +2,8 @@ package dev.magina.gateway.a11y
 
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.FocusIdentity
+import dev.magina.gateway.core.IdentitySource
 import dev.magina.gateway.core.PreparedTargetEvidenceStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,9 +22,12 @@ class P0PreparedTargetRecordTransactionTest {
                 store.record(
                     label = P0_FILE_TRANSFER_ASSISTANT,
                     packageName = P0_WECHAT_PACKAGE,
-                    focusedInputId = "7|id/chat_input|android.widget.EditText|com.tencent.mm|100,1600,980,1760",
+                    identity = FocusIdentity(
+                        IdentitySource.A11Y,
+                        "7|id/chat_input|android.widget.EditText|com.tencent.mm|100,1600,980,1760",
+                        "ime|0123456789abcdef01234567",
+                    ),
                     bounds = "[100,1600][980,1760]",
-                    imeSessionId = "ime|0123456789abcdef01234567",
                 )
                 throw GatewayError(ErrorCode.E_STALE_REF, "post guard revision drift")
             }

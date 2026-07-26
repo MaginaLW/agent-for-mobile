@@ -19,6 +19,13 @@ internal const val P0_PROBE_BOTTOM_MARGIN_PX = 10
 internal const val P0_PROBE_HEIGHT_PX = 90
 
 /**
+ * IME-only 降级链读回输入栏时裁剪的带高（自截图底边向上）。
+ * 比盲点带（[P0_PROBE_HEIGHT_PX]）高得多：盲点只需要一个可点的中心，读回必须覆盖整条
+ * 输入栏——2026-07-26 真机实测，文字基线落在系统底部 inset **之下**，按盲点带裁会读回 null。
+ */
+internal const val INPUT_BAR_READBACK_HEIGHT_PX = 260
+
+/**
  * 空白输入框盲点安全区（left, top, right, bottom），纯几何计算、无 Android 依赖，可直接单测。
  *
  * 垂直方向从**系统底部 inset 往上推算**而非按屏幕百分比写死：原实现用 0.84h~0.94h，在

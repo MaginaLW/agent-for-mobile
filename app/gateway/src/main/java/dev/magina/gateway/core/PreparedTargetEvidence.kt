@@ -7,14 +7,14 @@ import java.util.concurrent.atomic.AtomicLong
  * debug 准备宏刚刚验证过的业务目标。
  *
  * 只含非敏感的目标标签和 UI 身份元数据；纯进程内、单条、短时，不持久化。
+ * [identity] 显式记录身份来源；IME-only 降级下 [bounds] 一致地缺失（design §3.1/§3.3）。
  */
 data class PreparedTargetEvidence(
     val preparedId: Long,
     val label: String,
     val packageName: String,
-    val focusedInputId: String,
-    val bounds: String,
-    val imeSessionId: String,
+    val identity: FocusIdentity,
+    val bounds: String?,
     val preparedAtMs: Long,
     val expiresAtMs: Long,
 )
@@ -36,48 +36,43 @@ class PreparedTargetEvidenceStore(
     fun record(
         label: String,
         packageName: String,
-        focusedInputId: String,
-        bounds: String,
-        imeSessionId: String,
+        identity: FocusIdentity,
+        bounds: String?,
     ): PreparedTargetEvidence {
         require(label.isNotBlank()) { "label 不能为空" }
         require(packageName.isNotBlank()) { "packageName 不能为空" }
-        require(focusedInputId.isNotBlank()) { "focusedInputId 不能为空" }
-        require(focusedInputId.count { it == '|' } == 4) { "focusedInputId 必须是节点 producer 格式" }
-        require(bounds.isNotBlank()) { "bounds 不能为空" }
-        require(imeSessionId.matches(Regex("^ime\\|[0-9a-f]{24}$"))) {
-            "imeSessionId 必须是 IME producer 格式"
+        require(FocusIdentity.boundsConsistent(identity.source, bounds)) {
+            "bounds 必须与身份来源一致地存在或缺失"
         }
         val now = clock()
         return PreparedTargetEvidence(
             preparedId = sequence.incrementAndGet(),
             label = label,
             packageName = packageName,
-            focusedInputId = focusedInputId,
+            identity = identity,
             bounds = bounds,
-            imeSessionId = imeSessionId,
             preparedAtMs = now,
             expiresAtMs = now + ttlMs,
         ).also { latest = it }
     }
 
     /**
-     * 读取必须同时证明 package、焦点和几何仍相同；任何不匹配都会销毁旧目标，避免稍后复活。
+     * 读取必须同时证明 package、身份（含来源）与几何仍相同；任何不匹配都会销毁旧目标，
+     * 避免稍后复活。身份来源不同一律视为不匹配——严格链与降级链是两条独立的链。
      */
     @Synchronized
     fun current(
         packageName: String?,
-        focusedInputId: String?,
+        identity: FocusIdentity?,
         bounds: String?,
-        imeSessionId: String?,
     ): PreparedTargetEvidence? {
         val evidence = latest ?: return null
         if (
             clock() >= evidence.expiresAtMs ||
             packageName.isNullOrBlank() || evidence.packageName != packageName ||
-            focusedInputId.isNullOrBlank() || evidence.focusedInputId != focusedInputId ||
-            bounds.isNullOrBlank() || evidence.bounds != bounds ||
-            imeSessionId.isNullOrBlank() || evidence.imeSessionId != imeSessionId
+            identity == null || evidence.identity != identity ||
+            !FocusIdentity.boundsConsistent(identity.source, bounds) ||
+            evidence.bounds != bounds
         ) {
             latest = null
             return null

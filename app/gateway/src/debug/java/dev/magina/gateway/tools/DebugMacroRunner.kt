@@ -68,12 +68,14 @@ internal object MacroRunnerFactory {
                 val fresh = adapter.decodeForRecorder(rawFresh)
                 val foregroundJson = service.ctx(Gateway.caps())
                 val focused = UiTools.focusedInputSnapshot(service)
+                // 无焦点节点时 proof 几何是空 Rect 占位，不是真几何：显式置 null，
+                // 让 a11y 侧证据"一致地缺失"，不给错配留缝。
                 val proofBounds = P0MacroRect(
                     serviceInputProof.left,
                     serviceInputProof.top,
                     serviceInputProof.right,
                     serviceInputProof.bottom,
-                )
+                ).takeIf { serviceInputProof.nodePresent && serviceInputProof.editable }
                 val finalState = P0PreparedTargetFinalState(
                     foreground = P0MacroForeground(
                         foregroundJson.optBoolean("foreground_known", false),
@@ -87,18 +89,22 @@ internal object MacroRunnerFactory {
                         imeActive = ImeBridge.active,
                         inputConnectionAvailable = ImeBridge.hasInputConnection(),
                         fingerprint = ImeBridge.focusedInputId,
-                        stage = if (
-                            serviceInputProof.nodePresent &&
+                        sessionPackage = ImeBridge.sessionPackage,
+                        stage = when {
+                            !(serviceInputProof.nodePresent && serviceInputProof.editable) -> null
                             (serviceInputProof.top + serviceInputProof.bottom) / 2 >=
-                            service.resources.displayMetrics.heightPixels * 0.75
-                        ) P0ElementStage.BOTTOM_INPUT else P0ElementStage.CONTENT,
+                                service.resources.displayMetrics.heightPixels * 0.75 ->
+                                P0ElementStage.BOTTOM_INPUT
+                            else -> P0ElementStage.CONTENT
+                        },
                     ),
                     focusedBounds = proofBounds,
-                    uiFocusedInputId = focused.id,
+                    uiFocusedInputId = focused.a11yId,
                     uiFocusedBounds = focused.bounds?.let {
                         P0MacroRect(it.left, it.top, it.right, it.bottom)
                     },
                     imeFocusedInputId = ImeBridge.focusedInputId,
+                    imeSessionPackage = ImeBridge.sessionPackage,
                     inputProofRevision = serviceInputProof.captureRevision,
                     inputProofWindowId = serviceInputProof.foregroundWindowId,
                     inputProofNodeId = serviceInputProof.nodeId,
@@ -110,28 +116,25 @@ internal object MacroRunnerFactory {
                     finalState,
                     sensitiveSurfaceWords,
                 ) { target ->
-                    val bounds = "[${target.bounds.left},${target.bounds.top}]" +
-                        "[${target.bounds.right},${target.bounds.bottom}]"
+                    val bounds = target.bounds?.let {
+                        "[${it.left},${it.top}][${it.right},${it.bottom}]"
+                    }
                     Gateway.preparedTargetEvidence.record(
                         label = target.label,
                         packageName = target.packageName,
-                        focusedInputId = target.focusedInputId,
+                        identity = target.identity,
                         bounds = bounds,
-                        imeSessionId = target.imeSessionId,
                     )
                 }
                 output
-                    .put("focused_input_id", validated.focusedInputId)
+                    .put("identity_source", validated.identity.source.name.lowercase())
+                    .put("focused_input_id", validated.identity.a11yInputId ?: JSONObject.NULL)
+                    .put("ime_session_id", validated.identity.imeSessionId)
                     .put(
                         "focused_input_bounds",
-                        org.json.JSONArray(
-                            listOf(
-                                validated.bounds.left,
-                                validated.bounds.top,
-                                validated.bounds.right,
-                                validated.bounds.bottom,
-                            ),
-                        ),
+                        validated.bounds?.let {
+                            org.json.JSONArray(listOf(it.left, it.top, it.right, it.bottom))
+                        } ?: JSONObject.NULL,
                     )
             }
         }
@@ -317,6 +320,11 @@ private class AndroidP0WeChatPrepareAdapter(
         val nodePresent = node?.let { it.refresh() } == true
         val metrics = service.resources.displayMetrics
         val bounds = node?.let { Rect().also(it::getBoundsInScreen) }
+        // 只含结构信息，不含节点文本：错配时要能一眼看出返回的到底是谁的节点。
+        val summary = if (nodePresent && node != null) {
+            "cls=${node.className} pkg=${node.packageName} " +
+                "id=${node.viewIdResourceName} bounds=$bounds"
+        } else null
         val focusStage = bounds?.let {
             when {
                 it.centerY() <= metrics.heightPixels * 0.30 -> P0ElementStage.SEARCH
@@ -332,6 +340,8 @@ private class AndroidP0WeChatPrepareAdapter(
             inputConnectionAvailable = ImeBridge.hasInputConnection(),
             fingerprint = ImeBridge.focusedInputId,
             stage = focusStage,
+            sessionPackage = ImeBridge.sessionPackage,
+            nodeSummary = summary,
         )
     }
 

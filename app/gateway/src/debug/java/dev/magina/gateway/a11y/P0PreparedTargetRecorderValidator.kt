@@ -1,29 +1,34 @@
 package dev.magina.gateway.a11y
 
 import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.IdentitySource
 
 internal data class P0PreparedTargetFinalState(
     val foreground: P0MacroForeground,
     val snapshot: P0MacroSnapshot,
     val focused: P0MacroFocus,
-    val focusedBounds: P0MacroRect,
+    /** a11y 焦点几何；IME-only 降级链下必须为 null（与 [uiFocusedBounds] 一致地缺失）。 */
+    val focusedBounds: P0MacroRect?,
     val uiFocusedInputId: String?,
     val uiFocusedBounds: P0MacroRect?,
     val imeFocusedInputId: String?,
+    /** IME 会话所属包名；零 UI IME 下取代"键盘可见"作为会话归属证据。 */
+    val imeSessionPackage: String?,
     val inputProofRevision: Long,
     val inputProofWindowId: Int,
     val inputProofNodeId: String?,
     val inputProofImeSessionId: String?,
-    val inputProofBounds: P0MacroRect,
+    val inputProofBounds: P0MacroRect?,
 )
 
 internal data class P0ValidatedPreparedTarget(
     val label: String,
     val packageName: String,
-    val focusedInputId: String,
-    val imeSessionId: String,
-    val bounds: P0MacroRect,
+    val identity: FocusIdentity,
+    /** 严格链下是焦点几何；IME-only 降级链下一致地缺失。 */
+    val bounds: P0MacroRect?,
 )
 
 /** 宏状态机返回后、写入短时目标前的独立强 fresh 终验。 */
@@ -63,28 +68,43 @@ internal object P0PreparedTargetRecorderValidator {
             snapshot.foregroundWindowId >= 0 &&
             snapshot.foregroundWindowId == state.inputProofWindowId &&
             snapshot.visionGeneration > 0
-        val focusValid = state.focused.ready &&
-            state.focused.focused && state.focused.editable &&
-            state.focused.stage == P0ElementStage.BOTTOM_INPUT &&
-            validBounds(state.focusedBounds, w, h) &&
-            state.focusedBounds.centerY >= h * 0.75 &&
-            state.uiFocusedBounds == state.focusedBounds &&
-            state.focusedBounds == state.inputProofBounds
+        // 身份来源在这里一次定死：a11y 侧给得出节点身份就必须走严格链，不允许降级。
+        val identity = FocusIdentity.of(focusedId, imeSessionId)
+        val imeIdentityValid = identity != null &&
+            imeSessionId == state.inputProofImeSessionId &&
+            imeSessionId == state.focused.fingerprint &&
+            imeSessionId == result.focusedInputFingerprint &&
+            // 会话必须属于微信本身：零 UI IME 下 ime_visible 恒假，不能当活性/归属代理。
+            state.imeSessionPackage == P0_WECHAT_PACKAGE
+        val sourceValid = when (identity?.source) {
+            IdentitySource.A11Y ->
+                // 严格链：a11y 焦点、几何、input proof 三处节点身份必须逐项对齐。
+                focusedId == state.inputProofNodeId &&
+                    state.focused.strictReadyAt(P0ElementStage.BOTTOM_INPUT) &&
+                    state.focusedBounds != null &&
+                    validBounds(state.focusedBounds, w, h) &&
+                    state.focusedBounds.centerY >= h * 0.75 &&
+                    state.uiFocusedBounds == state.focusedBounds &&
+                    state.focusedBounds == state.inputProofBounds &&
+                    !result.imeOnlyIdentity
+            IdentitySource.IME_ONLY ->
+                // 降级链：a11y 侧必须**一致地**缺失，任何残留（节点 id、几何、
+                // nodePresent/focused/editable）都算错配，一律拒绝。
+                state.inputProofNodeId.isNullOrBlank() &&
+                    state.uiFocusedBounds == null &&
+                    state.focusedBounds == null && state.inputProofBounds == null &&
+                    state.focused.degradedReadyAt(P0_WECHAT_PACKAGE) &&
+                    result.imeOnlyIdentity
+            null -> false
+        }
         val identityValid = result.ready &&
             result.packageName == P0_WECHAT_PACKAGE &&
             result.conversation == P0_FILE_TRANSFER_ASSISTANT &&
             state.foreground.known && state.foreground.packageName == P0_WECHAT_PACKAGE &&
-            !focusedId.isNullOrBlank() &&
-            focusedId == state.inputProofNodeId &&
-            focusedId.count { it == '|' } == 4 &&
-            !imeSessionId.isNullOrBlank() &&
-            imeSessionId.matches(Regex("^ime\\|[0-9a-f]{24}$")) &&
-            imeSessionId == state.inputProofImeSessionId &&
-            imeSessionId == state.focused.fingerprint &&
-            imeSessionId == result.focusedInputFingerprint
+            imeIdentityValid && sourceValid
         if (
-            !stableFreshProof || !identityValid || !focusValid || !exactTitle ||
-            snapshot.blockingOverlay || !snapshot.imeVisible ||
+            !stableFreshProof || !identityValid || !exactTitle ||
+            snapshot.blockingOverlay ||
             P0FocusProbeValidator.hasSensitiveOrBlockingSurface(snapshot, sensitiveSurfaceWords)
         ) throw GatewayError(
             ErrorCode.E_STALE_REF,
@@ -95,9 +115,8 @@ internal object P0PreparedTargetRecorderValidator {
         return P0ValidatedPreparedTarget(
             label = P0_FILE_TRANSFER_ASSISTANT,
             packageName = P0_WECHAT_PACKAGE,
-            focusedInputId = focusedId,
-            imeSessionId = imeSessionId,
-            bounds = state.focusedBounds,
+            identity = identity!!,
+            bounds = state.focusedBounds.takeIf { identity.source == IdentitySource.A11Y },
         )
     }
 

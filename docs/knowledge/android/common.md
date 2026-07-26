@@ -15,6 +15,43 @@
 - **防御性乱序场景（已有离线回归覆盖，尚无单独真机时序证据）**：事件若短暂早于 windows 列表更新，仅对尚未出现在列表中的 windowId 暂存候选，等 `TYPE_WINDOWS_CHANGED` 后复核归属再发布，不能把候选先写成前台。
 - 前台身份必须显式区分 `Known` / `Unknown`；root 仅给出 package 的 fallback 不等于已验证窗口身份。`Unknown` 时只读 R 可用于诊断，写入 W 与危险 D 动作必须 fail-closed。
 
+## App 屏蔽无障碍树与 IME 单命名空间降级（微信，2026-07-25）
+
+- **微信 ≥8.0.52 对 a11y 树基本不透明**：会话页 `ui_snapshot` 的 a11y 元素恒为状态栏那 13 项，标题/气泡/输入框 100% 来自 OCR，`findFocus(FOCUS_INPUT)` 取不到焦点节点；同一时刻 IME 侧（激活、InputConnection、`focusedInputId`）三项全部正常。与网络调研"有意混淆 a11y 节点数据对抗自动化"吻合。**因此"a11y 可见的焦点可编辑节点"在此 App 上不可满足，与点击精度、OCR 质量、几何算法都无关**——不要再往这三个方向排查。
+- **对策：显式的 IME 单命名空间降级链**（design：`docs/specs/2026-07-25-IME单命名空间降级门-design.md`）。要点：
+  - 身份来源写进值本身（`FocusIdentity(source = A11Y | IME_ONLY)`），**降级必须显式**。直接删掉 a11y 检查会让 `blank == blank` 恒真，绑定悄悄退化成"无绑定"。
+  - **能严则严**：`FocusIdentity.of()` 是唯一降级决策点，a11y 侧一旦给得出合法节点身份就必须走严格链；a11y 侧有值但格式非法（例如把 IME 会话 id 塞进 a11y 位）一律 fail-closed，既不接受也不降级。
+  - **一致缺失 vs 错配**：只有 `nodePresent/focused/editable/stage`（以及 bounds、input proof nodeId）**全部缺失**才算结构性缺失；一边有一边没有是错配，两条链都不给过。
+  - 两套命名空间**不合并比较**（knowledge #43 的老教训）：IME-only 是另一条独立链，不是"把 IME id 当 a11y id 用"。旧代码里 `focusedInputSnapshot` 在无节点时把 `ImeBridge.focusedInputId` 填进 a11y 的 `id` 槽，正是这种隐式混用——只是被 store 的格式断言意外挡住了，改造时先堵这个口。
+- **降级后的安全强度：确实有让步，不是等价替换。** 保留：IME 会话身份、输入长度/SHA-256/预览、**OCR 读回**、OCR 会话标题、包名、12 位确认编号、真人逐项核对并点击确认（两段式硬门不受影响）。失去：a11y 焦点节点身份与 bounds，**以及由 bounds 推出的"焦点确实是底部聊天输入框"这条几何保证**。IME-only 链下 OCR 读回是仅剩的"内容确实落框"机械证据，故设为硬性条件：读回未通过就不记输入证据，Enter 必被拦。
+- **无节点通道要有读回区域**：全树空时没有任何 bounds 可用，读回区域退到与盲点探针同一几何（`p0FocusProbeRegion`，锚定系统底部 inset）。此前 `typeTextNoNode` 在 `target == null` 时**完全跳过读回**，降级链会因此永远拿不到证据。
+
+## 自有零 UI IME 与 `ime_visible` 判据的冲突（2026-07-25 真机实锤）
+
+- **`GatewayIme.onEvaluateInputViewShown()` 返回 false**（有意设计：注入通道不需要可见键盘，也避免键盘高度扰动布局），因此它**永远不创建 `TYPE_INPUT_METHOD` 窗口**。而 `ime_visible` 的定义就是 `windows.any { type == TYPE_INPUT_METHOD }` → **只要当前输入法是「执行网关」，`ime_visible` 恒为 false**（`keyboard_state.visible` 同源，三次真机诊断全程 false）。
+- 这条恒假判据当时被用在三处当"输入会话是活的"的代理，其中两处是既有代码：`withFreshPreparedTargetGuard` 的 fresh proof、其 `requireCurrent()` 终验、以及 P0 宏的降级就绪判据。后果是**已准备目标在自有 IME 下从来就记录不成功**——这是与"微信屏蔽 a11y 树"**相互独立的第二根因**，两者叠加才是 P0 长期卡死的全貌。
+- **替换判据（已实现）：用 IME 会话身份自证，三条**——①活性：`ImeBridge.session()` 非空且 InputConnection 可用（`onFinishInput` 会清空会话，所以为真即代表真有活会话）；②归属：会话的 `EditorInfo.packageName` 必须等于前台包（该包名原先被哈希进 `focusedInputId` 就取不回来了，需在 `ImeBridge` 单独留存 `sessionPackage`）；③**新鲜度**：聚焦动作前后 session id 必须变化（`onStartInput` 重新触发过）——这直接证明"这一次点击真的落在输入框上"，比"键盘弹起来了"更强，因为键盘可见根本不说明焦点在哪个框。
+- **教训**：给"活性/可见性"选代理指标时，先确认这个指标在**自家组件的架构下**是否可能为真。零 UI 组件天然不满足一切"窗口可见"类判据。
+- **"会话必须换新"也不成立**（同日实测的第二次踩空）：微信输入框在**键盘收起后仍长期持有焦点与活的 InputConnection**，对已聚焦的输入框再点一次不会重新触发 `onStartInput`，session id 自然不变。因此"聚焦动作前后 session id 必须变化"无法区分"点在了已聚焦的输入框上"（合法）与"点空了"（非法），只会把合法情形一起否掉。留下的判据是：会话归属 + **降级链永不走"已聚焦"短路（必须亲手执行那次已校验的盲点）** + 打字后输入栏 OCR 读回。
+- **`keyboard_state.visible` 在自有 IME 下不可用作诊断依据**：它与 `ime_visible` 同源，恒为 false。真机诊断里用它"佐证键盘没弹起"是空推理，别再据此下结论。
+
+## 那个"残留焦点节点"会连累三处，别只堵一处（2026-07-26）
+
+微信会话页 `findFocus(FOCUS_INPUT)` 返回的残留节点（不 focused、不 editable、**bounds 退化**）在一天内连着咬了三处，且每处症状完全不同：
+
+1. **身份**：被当成 a11y 焦点身份 → 证据绑到一个打不进字的节点上（改：`focusedInputSnapshot`/`FreshPreparedInputProof` 只在 `isEditable` 时产出节点 id 与几何）。
+2. **就绪判据**：`nodePresent=true` 让"a11y 一致缺失"不成立 → 降级链永远进不去（改：`a11yAbsent = !nodePresent || (!editable && !focused)`）。
+3. **输入路径**：`type_text` 在无 ref 时直接用 `focusedEditable()`，于是走了普通节点通道而不是无节点通道——SET_TEXT 打不进去，且**读回拿它的退化 bounds 去裁剪，把 ML Kit 喂出 `InputImage width and height should be at least 32!`**（改：同一把尺子 `refresh() && isEditable`，不满足就走无节点通道；读回再加一道 bounds<32 退到输入栏带的兜底）。
+
+**教训**：给"这个节点能不能用"定了新判据后，要把**所有**取用该节点的路径一起改，否则症状会在离判据最远的地方冒出来（这里是 OCR 报错）。
+
+## 输入栏 OCR 读回的两条实测约束（2026-07-26）
+
+- **裁剪几何必须用截图位图自身尺寸，不能用 `displayMetrics`**：裁剪发生在位图坐标系里，两者不保证相等。
+- **读回带要比盲点带高得多**：盲点带（`P0_PROBE_HEIGHT_PX=90`，底边=h−inset−10）只需要一个可点中心；而输入框文字基线实测落在系统 inset **之下**，用盲点带裁会读回 null。现按 `INPUT_BAR_READBACK_HEIGHT_PX=260` 从截图底边向上取。
+- **读回判据是"归一后包含"**，能证明"我们的字落进去了"，**不能证明"框里只有我们的字"**（实测读回 `")PO降级链诊断 ))PO降级链诊断 D"` 仍判通过）。Enter 门另有输入长度/SHA-256 与真人核对屏幕兜底，但这条局限要记住。
+- **读回失败必须区分三态**：抛异常 / 读到几何但无文字 / 读到文字但不匹配。早期 `runCatching{}.getOrNull()` 把异常吞成 null，直接多烧一轮诊断。
+
 ## ML Kit 中文 OCR 实战（M1b 融合层，vivo V2352A/Android16，2026-07-19）
 
 - **深色模式灰底灰字漏识 ~40%**（微信搜索框/留言框占位符实锤；同屏正常对比度文本稳定命中）：临界对比度文本不可依赖单发识别。对策：整屏 OCR 缓存加 **2s TTL 重识**给抖动翻盘机会（revision 缓存对事件静默 app 会把单次漏识钉死）；关键锚点尽量选正常对比度文本。
