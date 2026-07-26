@@ -304,31 +304,37 @@ class SafetyGate(
                 ) stale("确认后 UI 目标证据已变化")
             }
             toolName == "press_key" && args.optString("key").equals("enter", ignoreCase = true) -> {
+                // 逐条点名并给出旧值→新值：把"A 或 B 或 C 变了"合并成一句话，是真机排查里
+                // 最贵的反模式（每撞一次多烧一轮派单，knowledge 已记）。判据本身一字未放宽。
                 val before = initial.target?.focusIdentity
                 val after = current.target?.focusIdentity
+                if (before == null) stale("确认前未解析到焦点输入身份")
+                if (after == null) stale("确认后解析不到焦点输入身份（确认前为 ${before.describe()}）")
                 // 身份来源本身也参与比较：确认前严格链、确认后降级链一律判 stale。
-                if (before == null || after == null || before != after) {
-                    stale("确认后焦点输入身份已变化或无法识别")
+                if (before != after) {
+                    stale("确认后焦点输入身份已变化：${before.describe()} → ${after.describe()}")
                 }
                 val beforeBounds = initial.target.focusedInputBounds
                 val afterBounds = current.target?.focusedInputBounds
-                if (
-                    !FocusIdentity.boundsConsistent(before.source, beforeBounds) ||
-                    !FocusIdentity.boundsConsistent(after.source, afterBounds) ||
-                    beforeBounds != afterBounds
-                ) {
-                    stale("确认后焦点输入框位置已变化或与身份来源不一致")
+                if (!FocusIdentity.boundsConsistent(before.source, beforeBounds)) {
+                    stale("确认前焦点几何与身份来源不一致：${before.describe()} bounds=${beforeBounds ?: "-"}")
+                }
+                if (!FocusIdentity.boundsConsistent(after.source, afterBounds)) {
+                    stale("确认后焦点几何与身份来源不一致：${after.describe()} bounds=${afterBounds ?: "-"}")
+                }
+                if (beforeBounds != afterBounds) {
+                    stale("确认后焦点输入框位置已变化：${beforeBounds ?: "-"} → ${afterBounds ?: "-"}")
                 }
                 val beforeInput = initial.target.inputCommitEvidence
                 val afterInput = current.target?.inputCommitEvidence
-                if (beforeInput == null || afterInput == null || beforeInput != afterInput) {
-                    stale("确认后短时输入提交证据已过期或变化")
-                }
+                if (beforeInput == null) stale("确认前没有短时输入提交证据")
+                if (afterInput == null) stale("确认后短时输入提交证据已过期")
+                if (beforeInput != afterInput) stale("确认后短时输入提交证据已变化")
                 val beforeTarget = initial.target.preparedTargetEvidence
                 val afterTarget = current.target?.preparedTargetEvidence
-                if (beforeTarget == null || afterTarget == null || beforeTarget != afterTarget) {
-                    stale("确认后短时目标会话证据已过期或变化")
-                }
+                if (beforeTarget == null) stale("确认前没有短时目标会话证据")
+                if (afterTarget == null) stale("确认后短时目标会话证据已过期")
+                if (beforeTarget != afterTarget) stale("确认后短时目标会话证据已变化")
             }
         }
     }

@@ -177,7 +177,13 @@ object ConfirmOverlay {
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                    // NOT_FOCUSABLE 是必须的：可获焦的 overlay 会从 App 手里抢走窗口输入焦点，
+                    // 于是 ①App 窗口在卡显示期间既非 active 也非 focused，前台身份被判 unknown；
+                    // ②被操作 App 的 InputConnection 被拆掉重建，IME 会话 id 换新，确认后的
+                    // 焦点身份复核必判 stale——2026-07-26 真机两种症状先后各撞了一次。
+                    // 不可获焦的窗口照样收得到触摸事件，卡上的两个按钮不受影响。
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.TRANSLUCENT,
                 ).apply { gravity = Gravity.TOP }
                 fun completeCommittedFrame() {

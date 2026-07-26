@@ -200,12 +200,12 @@ if "%1"=="exec-out" (
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
   )
-  if "%4"=="wc" (
+  if "%2"=="wc" (
     if not exist "%P0_FAKE_STATE%\audit.jsonl" exit /b 1
     for /f %%C in ('find /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C audit.jsonl
     exit /b 0
   )
-  if "%4"=="tail" (
+  if "%2"=="tail" (
     if not exist "%P0_FAKE_STATE%\audit-increment.jsonl" exit /b 1
     type "%P0_FAKE_STATE%\audit-increment.jsonl"
     exit /b 0

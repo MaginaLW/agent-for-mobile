@@ -31,6 +31,13 @@ data class FocusIdentity(
 
     val degraded: Boolean get() = source == IdentitySource.IME_ONLY
 
+    /**
+     * 供 fail-closed 信息逐条点名用的短描述。两项都已在确认卡与 ctx 里公开展示过，
+     * 不引入新的信息暴露；不带这个，"身份已变化"这句话在真机上要多烧一轮派单才知道差在哪。
+     */
+    fun describe(): String = "source=${source.name.lowercase()}" +
+        ",a11y=${a11yInputId ?: "-"},ime=$imeSessionId"
+
     companion object {
         private val IME_SESSION_PATTERN = Regex("^ime\\|[0-9a-f]{24}$")
 

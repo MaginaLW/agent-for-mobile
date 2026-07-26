@@ -768,8 +768,11 @@ function Get-P0AuditCursor {
     $day = $dayProbe.Stdout.Trim()
     if ($dayProbe.ExitCode -ne 0 -or $day -notmatch '^\d{8}$') { throw '无法建立 gateway 审计游标。' }
     $path = "/sdcard/Android/data/$script:P0PackageName/files/audit/$day.jsonl"
+    # 审计落在 external files dir。Android 11+ 的 `run-as` 跑在 shell 的挂载命名空间里，
+    # 对 /sdcard/Android/data/<pkg> 一律 Permission denied（本机 Android 16 实测）；
+    # 而普通 adb shell 反而读得到。内部 filesDir 的操作仍必须走 run-as，两者不能混用。
     $probe = Invoke-P0DeviceCommand -Session $Session `
-        -Arguments @('exec-out','run-as',$script:P0PackageName,'wc','-l',$path) `
+        -Arguments @('exec-out','wc','-l',$path) `
         -Operation '读取 gateway 审计游标' -AllowFailure
     $lineCount = 0
     if ($probe.ExitCode -eq 0 -and $probe.Stdout -match '^\s*(\d+)') { $lineCount = [int64]$Matches[1] }
@@ -783,9 +786,12 @@ function Save-P0AuditIncrement {
         [Parameter(Mandatory)][string]$Destination
     )
     $firstLine = [int64]$Cursor.LineCount + 1
+    # 不再 -AllowFailure：exec-out 会把设备侧 stderr 一并写进目标文件，静默失败的后果是
+    # 一行 `tail: ... Permission denied` 冒充审计内容，直到下游报"无法解析的 JSON 行"
+    # 才暴露（2026-07-26 实锤，且这个坑一直藏在 ToolSearch 误杀后面没被发现）。
     Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
-        -Arguments @('-s',$Session.Serial,'exec-out','run-as',$script:P0PackageName,'tail','-n',"+$firstLine",[string]$Cursor.Path) `
-        -Destination $Destination -Operation '拉取本腿 gateway 审计增量' -AllowFailure
+        -Arguments @('-s',$Session.Serial,'exec-out','tail','-n',"+$firstLine",[string]$Cursor.Path) `
+        -Destination $Destination -Operation '拉取本腿 gateway 审计增量'
 }
 
 function Clear-P0DebugArtifacts {
