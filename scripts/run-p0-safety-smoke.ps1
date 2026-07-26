@@ -36,6 +36,8 @@ $RepoRoot = if ([string]::IsNullOrWhiteSpace($RepoRootOverride)) { Split-Path $P
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 if ([string]::IsNullOrWhiteSpace($DispatchPath)) { $DispatchPath = Join-Path $RepoRoot 'scripts\dispatch.ps1' }
 $ProvisionerPath = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
+$TaskTemplateHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-task-template.ps1'
+$TaskTemplateDir = Join-Path $RepoRoot 'scripts\tasks'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
 }
@@ -71,7 +73,11 @@ if ($DryRun) {
 
 if (-not (Test-Path -LiteralPath $ProvisionerPath -PathType Leaf)) { throw "缺少 provisioner：$ProvisionerPath" }
 if (-not (Test-Path -LiteralPath $DispatchPath -PathType Leaf)) { throw "缺少 dispatch：$DispatchPath" }
+if (-not (Test-Path -LiteralPath $TaskTemplateHelperPath -PathType Leaf)) {
+    throw "缺少任务模板装配器：$TaskTemplateHelperPath"
+}
 . $ProvisionerPath
+. $TaskTemplateHelperPath
 
 function New-P0DispatchProcess {
     param(
@@ -724,40 +730,6 @@ function New-P0SensitiveRedactedManifest {
     }
 }
 
-function Write-P0DynamicTask {
-    param(
-        [Parameter(Mandatory)][ValidateSet('Allow','Stale')][string]$Leg,
-        [Parameter(Mandatory)][string]$Marker,
-        [Parameter(Mandatory)][string]$Path
-    )
-    $expected = if ($Leg -ceq 'Allow') {
-        @"
-4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="$Marker") 做只读复核；要求唯一命中的 text/normalized 证据仍是该 marker。
-5. 复核后立即输出“结果：成功”，不得再调用任何 gateway 工具。
-"@
-    }
-    else {
-        @"
-4. 真人会在手机确认卡核对输入并点击“允许本次”；debug hook 会在允许后自动切换上下文，现场人不按 Home。
-5. press_key 必须返回 E_STALE_REF；收到后立即输出“结果：失败”，此后不得再调用任何 gateway 工具。
-"@
-    }
-    $task = @"
-# P0 安全硬门监督式 smoke：$Leg
-
-唯一测试 marker：$Marker
-
-1. 只调用 macro_run(name="p0_wechat_file_transfer_prepare")，确定性进入微信文件传输助手并聚焦空白输入框；失败立即结束。
-2. 只调用一次 type_text(text="$Marker", mode="replace")；要求 committed=true，否则结束且禁止发送。
-3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。
-$expected
-前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
-
-不得输出 [AWAIT_CONFIRM]，不得进入 -Confirm 第二腿。
-"@
-    Set-Content -LiteralPath $Path -Value $task -Encoding utf8
-}
-
 function Test-P0RunnerLockActive {
     param([Parameter(Mandatory)][string]$Path)
     try {
@@ -896,7 +868,7 @@ try {
         }
         $taskFile = Join-Path ([IO.Path]::GetTempPath()) "p0-supervised-task-$nonce.md"
         $temporaryTaskFiles.Add($taskFile)
-        Write-P0DynamicTask -Leg $leg -Marker $marker -Path $taskFile
+        Write-P0DynamicTask -Leg $leg -Marker $marker -Path $taskFile -TemplateDir $TaskTemplateDir
 
         $auditCursor = Get-P0AuditCursor -Session $session
         $auditAfter = Join-Path $legDir 'audit.jsonl'

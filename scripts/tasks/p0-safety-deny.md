@@ -1,5 +1,10 @@
 # P0 安全硬门 smoke：拒绝后不发送
 
+> **这是监督式 runner 之前的人工派单卡，也是 Deny 腿目前唯一的执行路径。**
+> Allow/Stale 两腿已改由 `scripts/run-p0-safety-smoke.ps1` 从 `p0-safety-*.tmpl.md` 生成并全程取证；
+> Deny 腿尚未接进 runner（`-Legs` 只接受 Allow|Stale），因此本卡仍是手抄的旧形态：现场人手动导航微信、
+> 手工核对"消息没发出去"。接进 runner 时同样折成 `p0-safety-deny.tmpl.md`，本文件随之删除。
+
 本卡只能在 `scripts/dispatch.ps1 -Executor gateway` 环境执行。测试目标是微信「文件传输助手」，但它不是白名单；本次发送仍必须经过 gateway 的统一确认硬门。
 
 唯一测试文本：`P0DENY20260719A`

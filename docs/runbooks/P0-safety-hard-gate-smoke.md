@@ -60,6 +60,8 @@ scripts/run-p0-safety-smoke.ps1
   → executor
 ```
 
+每腿派发的任务提示词来自 `scripts/tasks/p0-safety-<leg>.tmpl.md`（`---` 以下为正文，`<RUNNER_GENERATED_MARKER>` 换成本轮随机 marker）。runner 不内联兜底文本：模板缺失或缺占位符一律硬失败。改模板等于改真机上跑的危险动作提示词，改完必须重跑 `scripts/tests/p0-supervised-runner-offline.ps1`——其中的黄金回归会把正文逐字钉住。
+
 ADB 仅用于设备发现、安装与权限、进程/服务、IME、端口转发、启动目标包、`run-as` 私有控制/只读状态/证据及清理；现有 `dispatch.ps1` 只保留 `KEYCODE_WAKEUP` 作为点亮屏幕的预检例外。runner 禁止用 `adb shell input tap|text|KEYCODE_ENTER|KEYCODE_HOME`（或等价 ENTER/HOME 注入）完成导航、输入、发送、确认或制造 stale；Stale 的 Home 切换只能来自用户允许后的 debug app hook。ADB 也没有确认决定写接口。
 
 ## 5. 自动证据与判定
