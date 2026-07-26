@@ -29,6 +29,10 @@ function New-P0StartInfo {
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
+    # stdin 重定向后由调用方立刻关掉，让子进程读到 EOF 而不是继承父进程的 stdin。
+    # 本 harness 的常态就是非交互（dispatch 被 agent 拉起、CI、重定向），继承一个永远不给
+    # EOF 的句柄，任何顺手读 stdin 的子进程都会挂到超时。这是防御性的，不针对某个已知故障。
+    $start.RedirectStandardInput = $true
     return $start
 }
 
@@ -49,6 +53,7 @@ function Invoke-P0ExternalText {
     $process.StartInfo = $start
     try {
         if (-not $process.Start()) { throw "$Operation 失败。" }
+        $process.StandardInput.Close()
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSec * 1000)) {
@@ -86,6 +91,7 @@ function Invoke-P0ExternalToFile {
     $process.StartInfo = $start
     try {
         if (-not $process.Start()) { throw "$Operation 失败。" }
+        $process.StandardInput.Close()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $stream = [IO.File]::Open($Destination, 'Create', 'Write', 'None')
         try {

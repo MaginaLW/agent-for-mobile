@@ -95,6 +95,9 @@ function New-P0DispatchProcess {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    # 同 New-P0StartInfo：stdin 重定向后立刻关掉，子进程读到 EOF 而不是挂在继承来的句柄上。
+    # 监督式跑测禁用 -Confirm，dispatch 这条腿本就不该等键盘输入；真等上了也只能是挂死。
+    $start.RedirectStandardInput = $true
     foreach ($arg in @(
         '-NoProfile','-File',$ScriptPath,'-TaskFile',$TaskFile,'-Slug',$Slug,
         '-Executor',$Executor,'-Brain',$Brain,'-TimeoutMin',"$DispatchTimeoutMin"
@@ -104,6 +107,7 @@ function New-P0DispatchProcess {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     if (-not $process.Start()) { throw 'dispatch 子进程启动失败。' }
+    $process.StandardInput.Close()
     $stdoutStream = [IO.File]::Open($StdoutPath, 'Create', 'Write', 'Read')
     $stderrStream = [IO.File]::Open($StderrPath, 'Create', 'Write', 'Read')
     $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)

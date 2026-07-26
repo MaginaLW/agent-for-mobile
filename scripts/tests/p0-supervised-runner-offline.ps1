@@ -1,6 +1,10 @@
 #Requires -Version 7
 [CmdletBinding()]
-param([string]$Filter = '*')
+param(
+    [string]$Filter = '*',
+    # 防挂死的墙钟预算，不是性能断言。见 Invoke-FixtureRunner 处的说明。
+    [ValidateRange(15, 600)][int]$FixtureTimeoutSec = 60
+)
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -13,10 +17,26 @@ $SourceHealthProbe = Join-Path $SourceRepoRoot 'scripts\lib\p0-gateway-health-pr
 $SourceTaskTemplateHelper = Join-Path $SourceRepoRoot 'scripts\lib\p0-task-template.ps1'
 $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
 . $SourceTaskTemplateHelper
+. (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1')
 $PwshPath = (Get-Process -Id $PID).Path
 $script:Passed = 0
 $script:Failed = 0
 $TestRoots = [Collections.Generic.List[string]]::new()
+$script:SlowRuns = [Collections.Generic.List[object]]::new()
+
+# 开跑前自愈：上一轮被 kill 的跑测留下的临时仓库副本不会自己消失，攒到几十个就会把这台机器
+# 压到进程启动都超时（2026-07-26 实测 81 个残留 + 常驻 daemon → 整轮 11/38，全是假超时）。
+$staleSweep = Clear-DevEnvStaleFixture
+if ($staleSweep.Removed -gt 0 -or $staleSweep.Failed.Count -gt 0) {
+    Write-Host ("开跑前清场：删除残留跑测目录 $($staleSweep.Removed) 个" +
+        $(if ($staleSweep.Failed.Count -gt 0) { "，$($staleSweep.Failed.Count) 个删不掉（可能仍被进程占用）" } else { '' })
+    ) -ForegroundColor DarkGray
+}
+$envSnapshot = Get-DevEnvSnapshot
+Write-Host "机器状态：$($envSnapshot.Text)" -ForegroundColor DarkGray
+if (-not $envSnapshot.Healthy) {
+    Write-Host '提示：残留目录偏多或可用内存偏低，建议先跑 scripts/check.ps1 -Clean 清场。' -ForegroundColor Yellow
+}
 
 function Assert-True([bool]$Condition, [string]$Because) {
     if (-not $Condition) { throw $Because }
@@ -209,7 +229,10 @@ if "%1"=="exec-out" (
   )
   if "%2"=="wc" (
     if not exist "%P0_FAKE_STATE%\audit.jsonl" exit /b 1
-    for /f %%C in ('find /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C audit.jsonl
+    rem find 必须走绝对路径：继承到的 PATH 若把 Git Bash 的 Unix find 排在 System32 前面，
+    rem `find /v /c ""` 会被当成"递归搜索 /v 和 /c 两个目录"——/c 在 Git Bash 里就是整个 C 盘，
+    rem 于是这一句一直扫到 30 秒超时被 kill。2026-07-26 靠它误诊了好几轮（先怪机器负载、再怪 stdin）。
+    for /f %%C in ('%SystemRoot%\System32\find.exe /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C audit.jsonl
     exit /b 0
   )
   if "%2"=="tail" (
@@ -585,6 +608,8 @@ function Invoke-FixtureRunner {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.CreateNoWindow = $true
+    # 关掉 stdin，别把本进程的 stdin 传给整条子进程链——见 New-P0StartInfo 处的说明。
+    $start.RedirectStandardInput = $true
     $runnerArgs = [Collections.Generic.List[string]]::new()
     foreach ($arg in @('-NoProfile','-File',$runner,'-Legs',($Legs -join ','),'-Executor','gateway')) {
         [void]$runnerArgs.Add($arg)
@@ -601,12 +626,22 @@ function Invoke-FixtureRunner {
     $process.StartInfo = $start
     try {
         if (-not $process.Start()) { throw '无法启动 runner' }
+        $process.StandardInput.Close()
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        # 这个预算是**防挂死**的墙钟保险，不是性能断言：一次 fixture 跑测实测 8–9 秒
-        # （每腿都要起 pwsh 子进程、造临时仓库、走假 adb/dispatch），15 秒余量太薄，
-        # 机器一有负载波动就成片假超时——2026-07-26 一轮里 39 条挂了 28 条，全是这个。
-        if (-not $process.WaitForExit(60000)) { $process.Kill($true); throw 'runner 离线测试超时' }
+        # 这个预算是**防挂死**的墙钟保险，不是性能断言：一次 fixture 跑测实测 6–9 秒
+        # （每腿都要起 pwsh 子进程、造临时仓库、走假 adb/dispatch），原来的 15 秒余量偏薄。
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        if (-not $process.WaitForExit($FixtureTimeoutSec * 1000)) {
+            $process.Kill($true)
+            # 成片超时先查"子进程卡在哪个固定超时上"，别先怪机器慢：2026-07-26 那轮 28/39
+            # 全挂，真因是假 adb 里的 find 被 Git Bash 的 Unix find 顶替，递归扫 C 盘
+            # （见 docs/knowledge/android/common.md）。耗时方差极小就是挂死的指纹。
+            throw "runner 离线测试超时（预算 ${FixtureTimeoutSec}s；这是防挂死保险，不是性能断言）"
+        }
+        $watch.Stop()
+        # 耗时留痕：慢到逼近预算时要在它变成失败之前就看得见。
+        $script:SlowRuns.Add([pscustomobject]@{ Seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) })
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         [pscustomobject]@{ ExitCode=$process.ExitCode; Text=$stdout+"`n"+$stderr; Stdout=$stdout; Stderr=$stderr }
@@ -1122,7 +1157,12 @@ try {
     }
 
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
-        foreach ($path in @($SourceRunner, $SourceProvisioner, $SourceHealthProbe, $PSCommandPath)) {
+        foreach ($path in @(
+            $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
+            (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
+            $PSCommandPath
+        )) {
             $tokens = $null; $errors = $null
             [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
             Assert-True ($errors.Count -eq 0) "$path 解析失败：$($errors | ForEach-Object Message -join '; ')"
@@ -1130,7 +1170,29 @@ try {
     }
 }
 finally {
-    foreach ($root in $TestRoots) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+    # 收尾清理不再静默吞失败：删不掉通常是被 kill 的子进程还攥着句柄，重试几次；
+    # 仍然删不掉就如实报出来——攒着不说，最后会以"莫名其妙的超时"形式还回来。
+    $leftover = [Collections.Generic.List[string]]::new()
+    foreach ($root in $TestRoots) {
+        $done = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop; $done = $true; break }
+            catch { if ($attempt -lt 3) { Start-Sleep -Milliseconds 400 } }
+        }
+        if (-not $done -and (Test-Path -LiteralPath $root)) { [void]$leftover.Add($root) }
+    }
+    if ($leftover.Count -gt 0) {
+        Write-Host "警告：$($leftover.Count) 个临时跑测目录未能删除，下一轮开跑前会再扫一次。" -ForegroundColor Yellow
+    }
+}
+
+if ($script:SlowRuns.Count -gt 0) {
+    $times = @($script:SlowRuns | ForEach-Object Seconds | Sort-Object -Descending)
+    $budget = $FixtureTimeoutSec
+    Write-Host ("`nfixture 耗时：最慢 $($times[0])s · 中位 $($times[[int]($times.Count / 2)])s · 预算 ${budget}s")
+    if ($times[0] -gt $budget * 0.5) {
+        Write-Host '警告：最慢一次已超过预算的一半，本机负载偏高；再涨就会变成与代码无关的假超时。' -ForegroundColor Yellow
+    }
 }
 
 Write-Host "`n离线监督式 runner：$script:Passed passed, $script:Failed failed"

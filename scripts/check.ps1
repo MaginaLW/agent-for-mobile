@@ -9,12 +9,18 @@ diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚�
 用法：
   scripts/check.ps1              # 全量（含 gradle，首次冷跑几分钟）
   scripts/check.ps1 -SkipGradle  # 只跑脚本与仓库侧（改文档/PowerShell 时够用）
+  scripts/check.ps1 -Clean       # 只清场：停 gradle daemon、删残留跑测目录与旧日志，不跑校验
+
+执行顺序有意为之：先跑秒级的便宜检查（快失败），再 gradle，最慢的监督式 runner 套件放最后，
+并在它开跑前停掉 gradle daemon 释放内存——那套件对进程启动延迟极敏感，daemon 常驻会把它压出
+成片的假超时（2026-07-26 实测，详见 docs/knowledge/android/common.md）。
 
 长输出一律先落盘再尾读（会话纪律 3）：完整日志在 .checks/（已 gitignore），失败时只把关键行打到屏幕。
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipGradle
+    [switch]$SkipGradle,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +31,20 @@ $RepoRoot = Split-Path $PSScriptRoot -Parent
 $LogDir = Join-Path $RepoRoot '.checks'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PwshPath = (Get-Process -Id $PID).Path
+. (Join-Path $PSScriptRoot 'lib\dev-env.ps1')
+
+if ($Clean) {
+    Write-Host '清场：' -ForegroundColor Cyan
+    Write-Host "  gradle daemon → $(Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot)"
+    $sweep = Clear-DevEnvStaleFixture
+    Write-Host "  残留跑测目录 → 删除 $($sweep.Removed) 个" -NoNewline
+    if ($sweep.Failed.Count -gt 0) { Write-Host "，$($sweep.Failed.Count) 个删不掉（仍被占用）" -ForegroundColor Yellow }
+    else { Write-Host '' }
+    Get-ChildItem -LiteralPath $LogDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Write-Host "  .checks/ 日志 → 已清空"
+    Write-Host "`n清场后：$((Get-DevEnvSnapshot).Text)"
+    exit 0
+}
 
 $results = [Collections.Generic.List[object]]::new()
 
@@ -80,7 +100,30 @@ function Get-LastMeaningfulLine {
 }
 
 Write-Host "仓库：$RepoRoot" -ForegroundColor DarkGray
-Write-Host "日志：$LogDir`n" -ForegroundColor DarkGray
+Write-Host "日志：$LogDir" -ForegroundColor DarkGray
+$startSnapshot = Get-DevEnvSnapshot
+Write-Host "机器：$($startSnapshot.Text)`n" -ForegroundColor DarkGray
+if (-not $startSnapshot.Healthy) {
+    Write-Host '提示：本机负载偏高。监督式 runner 套件对进程启动延迟极敏感，可能出现与代码无关的成片超时；' -ForegroundColor Yellow
+    Write-Host '      先跑 scripts/check.ps1 -Clean 清场更稳。' -ForegroundColor Yellow
+    Write-Host ''
+}
+
+# —— 秒级检查放最前：改错了要在等 10 分钟之前就知道 ——
+
+Invoke-Check '空白字符与冲突标记（git diff --check）' {
+    $output = & git -C $RepoRoot diff --check 2>&1
+    # autocrlf 的换行提醒不是错误，只有真正的空白问题才让 git 非零退出。
+    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
+    'clean'
+}
+
+Invoke-Check '派单离线测试' {
+    Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'dispatch-offline.log')
+}
 
 if ($SkipGradle) {
     Write-Host '跳过 gradle（-SkipGradle）：Kotlin 侧未验证。' -ForegroundColor Yellow
@@ -99,25 +142,16 @@ else {
     }
 }
 
-Invoke-Check '派单离线测试' {
-    Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'dispatch-offline.log')
-}
+# —— 最慢的一项放最后，且先把 gradle daemon 占的内存还回来 ——
 
 Invoke-Check '监督式 runner 离线测试' {
+    # daemon 每个占 1GB 上下；这套件 39 条各起一个子进程，内存一紧就成片假超时。
+    # 代价是下一次 gradle 要重新起 daemon（十几秒），换这套件跑得稳，值。
+    if (-not $SkipGradle) { Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot | Out-Null }
     Invoke-Logged -LogName 'runner-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\p0-supervised-runner-offline.ps1')
     ) | Out-Null
     Get-LastMeaningfulLine (Join-Path $LogDir 'runner-offline.log')
-}
-
-Invoke-Check '空白字符与冲突标记（git diff --check）' {
-    $output = & git -C $RepoRoot diff --check 2>&1
-    # autocrlf 的换行提醒不是错误，只有真正的空白问题才让 git 非零退出。
-    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
-    'clean'
 }
 
 Invoke-Check '凭据扫描' {
