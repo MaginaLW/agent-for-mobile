@@ -475,17 +475,134 @@ class ForegroundWindowTrackerTest {
                 known = false,
                 packageName = "com.android.settings",
                 activityName = "",
+                reason = ForegroundUnknownReason.WINDOW_ID_MISMATCH,
             ),
             resolved,
         )
         assertEquals(
-            ResolvedForeground(known = false, packageName = "", activityName = ""),
+            ResolvedForeground(
+                known = false,
+                packageName = "",
+                activityName = "",
+                reason = ForegroundUnknownReason.IDENTITY_UNSET,
+            ),
             resolveForeground(
                 identity = ForegroundIdentity.Unknown,
                 applicationWindowId = 166,
                 applicationWindowPackageName = null,
             ),
         )
+    }
+
+    @Test
+    fun `unknown reason distinguishes missing application window from stale identity`() {
+        assertEquals(
+            ForegroundUnknownReason.NO_APPLICATION_WINDOW,
+            resolveForeground(
+                identity = wechatIdentity,
+                applicationWindowId = null,
+                applicationWindowPackageName = null,
+            ).reason,
+        )
+        assertEquals(
+            ForegroundUnknownReason.NO_APPLICATION_WINDOW,
+            resolveForeground(
+                identity = ForegroundIdentity.Unknown,
+                applicationWindowId = null,
+                applicationWindowPackageName = null,
+            ).reason,
+        )
+        assertEquals(
+            ForegroundUnknownReason.NONE,
+            resolveForeground(
+                identity = wechatIdentity,
+                applicationWindowId = wechat.id,
+                applicationWindowPackageName = null,
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `recent events record every decision with the window list it saw`() {
+        var now = 1_000L
+        val tracker = ForegroundWindowTracker(clock = { now })
+        val overlay = ForegroundWindow(id = 266, type = ForegroundWindowType.OTHER, isFocused = true)
+
+        tracker.onWindowStateChanged(
+            eventWindowId = wechat.id,
+            packageName = "com.tencent.mm",
+            activityName = "com.tencent.mm.ui.LauncherUI",
+            windows = listOf(wechat),
+        )
+        now = 1_200L
+        tracker.onWindowStateChanged(
+            eventWindowId = overlay.id,
+            packageName = "dev.magina.gateway",
+            activityName = "android.widget.FrameLayout",
+            windows = listOf(wechat, overlay),
+        )
+        now = 1_300L
+        tracker.onWindowStateChanged(
+            eventWindowId = 277,
+            packageName = null,
+            activityName = null,
+            windows = listOf(wechat),
+        )
+        now = 1_400L
+        tracker.onWindowsChanged(listOf(wechat))
+
+        val events = tracker.recentEvents()
+        assertEquals(
+            listOf(
+                ForegroundEventDecision.ACCEPTED,
+                ForegroundEventDecision.DROPPED_NOT_SELECTED,
+                ForegroundEventDecision.DROPPED_NO_PACKAGE,
+                ForegroundEventDecision.DROPPED_NO_CANDIDATE,
+            ),
+            events.map { it.decision },
+        )
+        assertEquals(listOf(1L, 2L, 3L, 4L), events.map { it.seq })
+        assertEquals(listOf(1_000L, 1_200L, 1_300L, 1_400L), events.map { it.atMillis })
+        assertEquals("com.tencent.mm", events.first().packageName)
+        assertEquals(listOf(wechat, overlay), events[1].windows)
+        assertEquals(wechat.id, events[1].selectedApplicationWindowId)
+    }
+
+    @Test
+    fun `recent events keep the newest entries within a bounded ring`() {
+        val tracker = ForegroundWindowTracker(clock = { 0L })
+        repeat(40) {
+            tracker.onWindowStateChanged(
+                eventWindowId = wechat.id,
+                packageName = "com.tencent.mm",
+                activityName = "com.tencent.mm.ui.LauncherUI",
+                windows = listOf(wechat),
+            )
+        }
+
+        val events = tracker.recentEvents()
+        assertTrue("ring should stay bounded, was ${events.size}", events.size in 1..24)
+        assertEquals(40L, events.last().seq)
+        assertEquals(40L - events.size + 1, events.first().seq)
+    }
+
+    @Test
+    fun `pending candidate published by windows change is recorded as published`() {
+        val tracker = ForegroundWindowTracker(clock = { 0L })
+
+        tracker.onWindowStateChanged(
+            eventWindowId = wechat.id,
+            packageName = "com.tencent.mm",
+            activityName = "com.tencent.mm.ui.LauncherUI",
+            windows = emptyList(),
+        )
+        tracker.onWindowsChanged(listOf(wechat))
+
+        assertEquals(
+            listOf(ForegroundEventDecision.PENDING, ForegroundEventDecision.PUBLISHED_PENDING),
+            tracker.recentEvents().map { it.decision },
+        )
+        assertEquals("com.tencent.mm", tracker.recentEvents().last().packageName)
     }
 
     @Test

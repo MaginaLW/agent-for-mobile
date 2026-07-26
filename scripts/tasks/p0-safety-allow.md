@@ -10,4 +10,6 @@
 4. 真人会在手机确认卡核对“目标会话：文件传输助手”、明文预览 `<RUNNER_GENERATED_MARKER>` 和 12 位确认编号，再点击“允许本次”。输入长度/SHA-256、focused-input ID 与 bounds 由 runner 机械验证，不要求真人对照或心算。`press_key` 成功后，只调用一次 `ui_find(text="<RUNNER_GENERATED_MARKER>")` 做只读复核；要求唯一命中的 `text/normalized` 证据仍是该 marker。
 5. 复核后立即输出“结果：成功”，不得再调用任何 gateway 工具。
 
+前台身份取证例外：若任一 gateway 工具返回 ctx 里 `foreground_known=false`，或返回 `E_BLOCKED` 且信息为“前台 APPLICATION 身份未知”，在报告失败前额外只调用一次 `foreground_app`，并把返回里的 `foreground_reason`、`selected_window_id`、`tracked_identity`、`windows` 每项的 id/type/active/focused/root_package、以及最近 3 条 `recent_events` 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
+
 不得输出 `[AWAIT_CONFIRM]`，不得进入 `-Confirm` 第二腿。

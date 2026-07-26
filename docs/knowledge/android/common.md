@@ -14,6 +14,7 @@
 - `TYPE_APPLICATION_OVERLAY` 也会产生 `TYPE_WINDOW_STATE_CHANGED`；事件携带的 package/class（实测 class 为 `FrameLayout`）只描述事件窗口，不能直接当作当前前台身份。必须用 `event.windowId` 归属到 windows 列表中的 active `TYPE_APPLICATION`，没有 active 时才保守后备到 focused `TYPE_APPLICATION`；已知 overlay、IME 或 inactive 窗口事件直接忽略。
 - **防御性乱序场景（已有离线回归覆盖，尚无单独真机时序证据）**：事件若短暂早于 windows 列表更新，仅对尚未出现在列表中的 windowId 暂存候选，等 `TYPE_WINDOWS_CHANGED` 后复核归属再发布，不能把候选先写成前台。
 - 前台身份必须显式区分 `Known` / `Unknown`；root 仅给出 package 的 fallback 不等于已验证窗口身份。`Unknown` 时只读 R 可用于诊断，写入 W 与危险 D 动作必须 fail-closed。
+- **`Unknown` 必须自带原因，否则无法排查（2026-07-26）**：`foreground_known=false` 有三种完全不同的成因——从未接受过窗口状态事件（服务冷启动/重启）、当前列表里没有 active/focused 的 `TYPE_APPLICATION` 窗口、已接受身份的 windowId 与当前活动应用窗口不一致。三者在返回体里长得一模一样（微信这类 `root=null` 的应用窗口连 package-only 后备都是空串），只看 `app:""` 分不出来。现已在 `ctx` 加 `foreground_reason`，并把 `foreground_app` 扩成只读诊断（`selected_window_id`、`tracked_identity`、`windows[].root_package`、最近 24 条窗口事件处置记录 `recent_events`）。**排查前台身份问题从读这两处开始，不要从点击/几何/OCR 方向猜。**
 
 ## App 屏蔽无障碍树与 IME 单命名空间降级（微信，2026-07-25）
 
@@ -109,6 +110,11 @@
       - **因此宏要求的"a11y 可见的焦点可编辑节点"在此微信版本上不可满足**，与点击精度、OCR 置信度、区域几何统统无关；继续调这些参数不会有进展。而 [SafetyGate.kt:76](../../../app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt:76) 按设计硬性要求 Enter 前同时具备 a11y 侧 `focusedInputId`+`bounds` 与 IME 侧 `imeSessionId`（knowledge #43 的双命名空间），a11y 侧结构性缺失 → `PreparedTargetEvidence` 无法形成 → 链路必断。**2026-07-22 那条"人工预聚焦 + 无 ref `type_text`"的老路也已被这道门有意堵死，属加固不是回退选项，不要试图绕。**
       - **社区流传的绕过手法不可采用**：把自家无障碍服务注册成系统白名单服务名（如 `com.google.android.marvin.talkback.TalkBackService`）来躲混淆检查——这是冒充系统服务，有 ToS/封号风险，且白名单随时可变，与本项目"永不逆向、只走官方通道"的铁律相悖。
       - **下一步是决策而非编码**：要么查明并合法解决 a11y 全盲，要么由项目所有者决定是否允许 Enter 门以"IME 侧身份 + 输入证据哈希 + OCR 侧会话标题"成链（这会削弱刻意设计的双命名空间复核，属真安全取舍，**不得顺手放宽**）。
+  19. **`foreground_known` 会在两次工具调用之间从 true 翻成 false，而当时的返回体不足以判因**（2026-07-26 Allow 腿真机实锤：`macro_run` ✅ → `type_text`（`committed+verified`）✅ → `press_key(enter)` ⛔ `E_BLOCKED「前台 APPLICATION 身份未知」`，中间只隔 5 次 revision 递增，未发送任何内容，确认卡从未弹出）。
+      - **为什么当时查不下去**：`resolveForeground` 判 Unknown 有三条互斥路径（从未接受过窗口状态事件 / 当前无 active·focused 的 `TYPE_APPLICATION` 窗口 / 已接受身份的 windowId 与当前活动应用窗口不一致），而三者在返回体里长得完全一样——微信的应用窗口 `root=null`，连 package-only 后备也是空串，失败那次只看得到 `app:"" / foreground_known:false`。这类"多因同象"的判据，**原因字段必须和结论同时产出**，否则每次复现都要再烧一次派单。
+      - 已补：`ctx` 增加 `foreground_reason`（失败的那次调用自带原因）；`foreground_app` 从两字段扩成只读诊断——`selected_window_id`、`tracked_identity`、`windows[]`（id/type/active/focused/**root_package**/bounds/title）、以及 tracker 侧最近 24 条窗口事件处置记录 `recent_events`（seq/时间/kind/decision/当时的窗口列表）。`windows[].root_package` 同时回答"服务冷启动能否直接从窗口自举身份"这个 13 号遗留问题——微信若真是 `root=null`，自举就拿不到包名，得另找真值源，不能靠猜。
+      - **没有证据前不要动 tracker 语义**：这次刻意只加诊断不改判据。翻车的两种可能（窗口列表瞬时取空 vs 应用窗口 id 真的换了却没等到可接受的事件）修法完全不同，前者该做有界重读，后者要动候选发布规则，而后者正是 D1 那道"overlay 事件不得污染前台身份"的防线所在，改错就是把安全门拆了。
+      - 取证方式：Allow/Stale 任务卡已加"前台身份取证例外"——任一工具返回 `foreground_known=false` 或该 `E_BLOCKED` 时，允许**额外只调一次** `foreground_app` 并把结果抄进「关键观察」，然后立即报失败，不得据此重试。
       - 附带待修：`Start-P0TargetApp` 改成"已在前台就跳过 `am start`"后有副作用——网关服务重启后再没有窗口状态事件触发，`ForegroundWindowTracker` 拿不到 activity 名，`foreground_known=false` 导致 W 级工具被拒；当前靠"人工回桌面、让脚本自己拉起微信"绕过，正式修法是让 tracker 能在服务连接时自举当前前台身份。
   17. 16 号之后同一天（2026-07-24）又追了一整天，最终发现真正卡点不是置信度，是**字符串精确匹配**：
       - **对比度增强真机证实有效**：[`OcrEngine.recognize()`](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt) 改成原图+灰度对比度拉伸图各识别一遍、按区域取更高置信度合并后，真机独立诊断证实「文件传输助手」标题从两次连续拿到"零候选"（完全不存在，不是低置信度）提升到能识别（0.55~0.59）——16 号定位的"跌破 0.5 地板"这个假说被这次真机结果正面验证。同时给宏顶层加了纯感知阶段（`unrecognized_entry`/`focus_probe_validation`，还没做任何点击/盲点之前）的有限次重试（`perceptionRetryAttempts`/`perceptionRetryDelayMs`），给 OCR 抖动翻盘机会；"故意不重试"只管点击/盲点之后，这两处新重试不受影响。

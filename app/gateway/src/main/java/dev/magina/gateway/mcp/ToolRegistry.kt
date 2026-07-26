@@ -95,7 +95,12 @@ object ToolRegistry {
                 "expected" to prop("string", "期望值"),
             ),
         ) { SystemTools.verifyState(it.getString("key"), it.getString("expected")) },
-        ToolSpec("foreground_app", "当前前台 app 与 Activity。", Level.R, schema(emptyList())) {
+        ToolSpec(
+            "foreground_app",
+            "当前前台 app 与 Activity，并附前台身份诊断：foreground_reason、窗口列表（含 root_package）、最近窗口事件处置。" +
+                "任何工具返回 foreground_known=false 时先调它取证。",
+            Level.R, schema(emptyList()),
+        ) {
             SystemTools.foregroundApp()
         },
         ToolSpec("keyboard_state", "软键盘可见性与高度（坐标错位主因的感知面）。", Level.R, schema(emptyList())) {

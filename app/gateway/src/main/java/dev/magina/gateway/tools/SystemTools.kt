@@ -137,12 +137,8 @@ object SystemTools {
             .put("source", cur.optString("source"))
     }
 
-    fun foregroundApp(): JSONObject {
-        val a11y = GatewayA11yService.require()
-        return JSONObject()
-            .put("package", a11y.foregroundPackage())
-            .put("activity", a11y.ctx(Gateway.caps()).optString("activity"))
-    }
+    /** package/activity 之外附带前台身份诊断（unknown 原因、窗口列表、最近窗口事件处置）。 */
+    fun foregroundApp(): JSONObject = GatewayA11yService.require().foregroundDiagnostics()
 
     fun keyboardState(): JSONObject = GatewayA11yService.require().keyboardState()
 

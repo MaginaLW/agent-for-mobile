@@ -164,6 +164,8 @@ class GatewayA11yService : AccessibilityService() {
             .put("app", foreground.packageName)
             .put("activity", foreground.activityName)
             .put("foreground_known", foreground.known)
+            // 前台身份判不出来时，让失败的那次调用自己带上原因，不必事后另起一次诊断。
+            .put("foreground_reason", foreground.reason.name.lowercase())
             .put("revision", revision)
             .put("keyboard", keyboardState())
             .put("screen", "on") // 服务在收事件即亮屏；灭屏感知 M1b 接 PowerManager
@@ -180,6 +182,81 @@ class GatewayA11yService : AccessibilityService() {
             applicationWindowId = currentWindow?.id,
             applicationWindowPackageName = currentWindow?.root?.packageName?.toString(),
         )
+    }
+
+    /**
+     * 只读前台身份诊断：解析结论 + 已接受身份 + 实时窗口列表 + 最近事件处置记录。
+     * R 级，`foreground_known=false` 时也可调用——正是为了查清"为什么 unknown"而存在。
+     * `windows[].root_package` 同时回答"服务冷启动能否直接从窗口自举身份"。
+     */
+    fun foregroundDiagnostics(): JSONObject {
+        val currentWindows = windows
+        val selected = applicationWindow(currentWindows)
+        val identity = foregroundWindowTracker.current()
+        val resolved = resolveForeground(
+            identity = identity,
+            applicationWindowId = selected?.id,
+            applicationWindowPackageName = runCatching { selected?.root?.packageName?.toString() }.getOrNull(),
+        )
+        val windowsJson = JSONArray()
+        for (window in currentWindows) {
+            val b = Rect().also(window::getBoundsInScreen)
+            windowsJson.put(
+                JSONObject()
+                    .put("id", window.id)
+                    .put("type", windowTypeName(window.type))
+                    .put("active", window.isActive)
+                    .put("focused", window.isFocused)
+                    .put("root_package", runCatching { window.root?.packageName?.toString() }.getOrNull() ?: JSONObject.NULL)
+                    .put("title", window.title?.toString().orEmpty())
+                    .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
+            )
+        }
+        val eventsJson = JSONArray()
+        for (record in foregroundWindowTracker.recentEvents()) {
+            eventsJson.put(
+                JSONObject()
+                    .put("seq", record.seq)
+                    .put("at_ms", record.atMillis)
+                    .put("kind", record.kind)
+                    .put("window_id", record.eventWindowId)
+                    .put("package", record.packageName)
+                    .put("activity", record.activityName)
+                    .put("decision", record.decision.name.lowercase())
+                    .put("selected_window_id", record.selectedApplicationWindowId ?: JSONObject.NULL)
+                    .put("windows", record.windows.joinToString(",") {
+                        "${it.id}:${it.type.name}:${if (it.isActive) "a" else "-"}${if (it.isFocused) "f" else "-"}"
+                    })
+            )
+        }
+        return JSONObject()
+            .put("package", resolved.packageName)
+            .put("activity", resolved.activityName)
+            .put("foreground_known", resolved.known)
+            .put("foreground_reason", resolved.reason.name.lowercase())
+            .put("selected_window_id", selected?.id ?: JSONObject.NULL)
+            .put(
+                "tracked_identity",
+                (identity as? ForegroundIdentity.Known)?.let {
+                    JSONObject()
+                        .put("window_id", it.windowId)
+                        .put("package", it.packageName)
+                        .put("activity", it.activityName)
+                } ?: JSONObject.NULL,
+            )
+            .put("now_ms", System.currentTimeMillis())
+            .put("revision", revision)
+            .put("windows", windowsJson)
+            .put("recent_events", eventsJson)
+    }
+
+    private fun windowTypeName(type: Int): String = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "application"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "input_method"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "system"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "a11y_overlay"
+        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "split_divider"
+        else -> "other_$type"
     }
 
     private fun foregroundWindows(): List<ForegroundWindow> = windows.map { window ->

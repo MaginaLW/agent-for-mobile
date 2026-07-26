@@ -711,6 +711,8 @@ function Write-P0DynamicTask {
 2. 只调用一次 type_text(text="$Marker", mode="replace")；要求 committed=true，否则结束且禁止发送。
 3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。
 $expected
+前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
+
 不得输出 [AWAIT_CONFIRM]，不得进入 -Confirm 第二腿。
 "@
     Set-Content -LiteralPath $Path -Value $task -Encoding utf8

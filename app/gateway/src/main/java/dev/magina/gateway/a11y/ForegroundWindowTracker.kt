@@ -23,10 +23,26 @@ internal sealed interface ForegroundIdentity {
     ) : ForegroundIdentity
 }
 
+/** 前台身份判不出来时的具体原因；只用于诊断与日志，不参与任何放行判断。 */
+internal enum class ForegroundUnknownReason {
+    /** 身份成立。 */
+    NONE,
+
+    /** 从未接受过任何窗口状态事件（服务冷启动/重启后无人切窗口）。 */
+    IDENTITY_UNSET,
+
+    /** 当前窗口列表里没有 active/focused 的 APPLICATION 窗口。 */
+    NO_APPLICATION_WINDOW,
+
+    /** 已接受身份的 windowId 与当前活动应用窗口不一致（窗口换了但没等到可接受的事件）。 */
+    WINDOW_ID_MISMATCH,
+}
+
 internal data class ResolvedForeground(
     val known: Boolean,
     val packageName: String,
     val activityName: String,
+    val reason: ForegroundUnknownReason = ForegroundUnknownReason.NONE,
 )
 
 /** 将事件身份与当前应用窗口绑定；窗口不一致时只暴露 package-only 尽力后备。 */
@@ -46,26 +62,86 @@ internal fun resolveForeground(
         known = false,
         packageName = if (applicationWindowId != null) applicationWindowPackageName.orEmpty() else "",
         activityName = "",
+        reason = when {
+            applicationWindowId == null -> ForegroundUnknownReason.NO_APPLICATION_WINDOW
+            identity is ForegroundIdentity.Known -> ForegroundUnknownReason.WINDOW_ID_MISMATCH
+            else -> ForegroundUnknownReason.IDENTITY_UNSET
+        },
     )
 }
 
+/** 单条前台事件的处置结果；进环形缓冲供 `foreground_app` 只读取证。 */
+internal enum class ForegroundEventDecision {
+    /** 事件窗口就是当前活动应用窗口，身份直接发布。 */
+    ACCEPTED,
+
+    /** 事件窗口尚未出现在列表里，暂存为候选等下一次列表复核。 */
+    PENDING,
+
+    /** 列表刷新确认了候选，身份发布。 */
+    PUBLISHED_PENDING,
+
+    /** 事件没带包名，无法构成身份。 */
+    DROPPED_NO_PACKAGE,
+
+    /** 事件窗口已在列表里但不是活动应用窗口（overlay/IME/非活动应用）。 */
+    DROPPED_NOT_SELECTED,
+
+    /** 列表刷新时没有与活动应用窗口对应的候选。 */
+    DROPPED_NO_CANDIDATE,
+}
+
+/** 一条前台事件的处置记录。时间与序号让"两次工具调用之间发生了什么"可事后复盘。 */
+internal data class ForegroundEventRecord(
+    val seq: Long,
+    val atMillis: Long,
+    val kind: String,
+    val eventWindowId: Int,
+    val packageName: String,
+    val activityName: String,
+    val decision: ForegroundEventDecision,
+    val selectedApplicationWindowId: Int?,
+    val windows: List<ForegroundWindow>,
+)
+
 /** 保存通过窗口归属校验的 package/activity 原子身份。 */
-internal class ForegroundWindowTracker {
+internal class ForegroundWindowTracker(
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     @Volatile
     private var identity: ForegroundIdentity = ForegroundIdentity.Unknown
     private val pendingCandidates = LinkedHashMap<Int, ForegroundIdentity.Known>()
+    private val recent = ArrayDeque<ForegroundEventRecord>()
+    private var seq = 0L
 
     fun current(): ForegroundIdentity = identity
 
+    /** 最近若干条前台事件处置记录，旧在前。 */
+    @Synchronized
+    fun recentEvents(): List<ForegroundEventRecord> = recent.toList()
+
+    @Synchronized
     fun onWindowStateChanged(
         eventWindowId: Int,
         packageName: String?,
         activityName: String?,
         windows: List<ForegroundWindow>,
     ): Boolean {
+        val selectedId = applicationWindow(windows)?.id
+        fun note(decision: ForegroundEventDecision) = record(
+            kind = "window_state",
+            eventWindowId = eventWindowId,
+            packageName = packageName.orEmpty(),
+            activityName = activityName.orEmpty(),
+            decision = decision,
+            selectedApplicationWindowId = selectedId,
+            windows = windows,
+        )
+
         val pkg = packageName?.takeIf { it.isNotEmpty() }
         if (pkg == null) {
             pendingCandidates.remove(eventWindowId)
+            note(ForegroundEventDecision.DROPPED_NO_PACKAGE)
             return false
         }
 
@@ -74,19 +150,22 @@ internal class ForegroundWindowTracker {
             packageName = pkg,
             activityName = activityName.orEmpty(),
         )
-        if (applicationWindow(windows)?.id == eventWindowId) {
+        if (selectedId == eventWindowId) {
             pendingCandidates.clear()
             identity = candidate
+            note(ForegroundEventDecision.ACCEPTED)
             return true
         }
 
         // 只有列表尚未出现该 windowId 才可能是事件先于 windows 更新；已知非活动/非应用窗口绝不暂存。
         if (windows.none { it.id == eventWindowId }) {
             pendingCandidates[eventWindowId] = candidate
+            note(ForegroundEventDecision.PENDING)
             return false
         }
 
         pendingCandidates.remove(eventWindowId)
+        note(ForegroundEventDecision.DROPPED_NOT_SELECTED)
         return false
     }
 
@@ -94,14 +173,54 @@ internal class ForegroundWindowTracker {
      * 窗口状态事件可能早于 windows 列表刷新；候选只允许由紧随其后的列表变化确认一次。
      * 未成为活动应用窗口便立即消费，防止 windowId 后续复用时发布过期身份。
      */
+    @Synchronized
     fun onWindowsChanged(windows: List<ForegroundWindow>): Boolean {
         val applicationWindowId = applicationWindow(windows)?.id
         val candidate = applicationWindowId?.let { pendingCandidates[it] }
         pendingCandidates.clear()
-        if (candidate == null) return false
+        fun note(decision: ForegroundEventDecision) = record(
+            kind = "windows_changed",
+            eventWindowId = applicationWindowId ?: -1,
+            packageName = candidate?.packageName.orEmpty(),
+            activityName = candidate?.activityName.orEmpty(),
+            decision = decision,
+            selectedApplicationWindowId = applicationWindowId,
+            windows = windows,
+        )
+        if (candidate == null) {
+            note(ForegroundEventDecision.DROPPED_NO_CANDIDATE)
+            return false
+        }
 
         identity = candidate
+        note(ForegroundEventDecision.PUBLISHED_PENDING)
         return true
+    }
+
+    private fun record(
+        kind: String,
+        eventWindowId: Int,
+        packageName: String,
+        activityName: String,
+        decision: ForegroundEventDecision,
+        selectedApplicationWindowId: Int?,
+        windows: List<ForegroundWindow>,
+    ) {
+        seq += 1
+        recent.addLast(
+            ForegroundEventRecord(
+                seq = seq,
+                atMillis = clock(),
+                kind = kind,
+                eventWindowId = eventWindowId,
+                packageName = packageName,
+                activityName = activityName,
+                decision = decision,
+                selectedApplicationWindowId = selectedApplicationWindowId,
+                windows = windows,
+            )
+        )
+        while (recent.size > RECENT_CAPACITY) recent.removeFirst()
     }
 
     private fun applicationWindow(windows: List<ForegroundWindow>): ForegroundWindow? =
@@ -109,4 +228,9 @@ internal class ForegroundWindowTracker {
             ?: windows.firstOrNull {
                 it.type == ForegroundWindowType.APPLICATION && it.isFocused
             }
+
+    private companion object {
+        /** 够覆盖一次工具调用间隔内的窗口抖动，又不至于让诊断输出撑爆返回体。 */
+        const val RECENT_CAPACITY = 24
+    }
 }
