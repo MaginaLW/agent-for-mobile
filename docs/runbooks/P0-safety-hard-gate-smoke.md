@@ -30,7 +30,7 @@ pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale -Executo
 
 `p0_wechat_file_transfer_prepare` 宏的自动导航（从聊天列表点搜索图标→搜索→点目标）依赖 OCR 识别聊天列表里的目标文字；真机实测该场景下相关文字置信度不够，宏会在 `search_entry` 阶段 fail-closed 拒绝导航（2026-07-23 实锤，不是弹窗/敏感语义误判）。宏本身认识「已经在文件传输助手会话里」这个状态（`isConversationSurface`，靠会话顶部标题识别，OCR 置信度足够），所以在每次 `-Provision` 跑测前，用户手动打开微信、进入「文件传输助手」会话（不发送任何内容，只是让它成为当前会话页）即可让宏走最短路径识别成功。这是本节唯一要求用户做的导航动作，其余步骤仍遵守“不导航微信”的原则——跑测过程中不再需要用户操作微信。
 
-**输入框必须是空的**：盲点探针按设计要求候选区（底部输入栏带）视觉为空，上一轮失败的 `type_text` 会把 marker 留在框里，不清就必然在 `focus_probe_validation` 白烧一轮。2026-07-26 起 runner 在每腿开跑前会零 token 只读预检（`scripts/lib/p0-probe-region-precheck.ps1` → 网关 R 级工具 `p0_probe_region_state`），非空就在派单之前直接失败并回显残留文字，按提示在手机上清空输入框再重跑即可。预检本身不可用（例如装的是不含该工具的旧 APK）只警告不阻断。
+**输入框必须是空的，且必须真的停在会话页**：盲点探针按设计要求候选区（底部输入栏带）视觉为空，上一轮失败的 `type_text` 会把 marker 留在框里；停在聊天列表则会在 `search_entry` 直接失败（2026-07-26 实测各烧掉一轮）。2026-07-26 起 runner 在每腿开跑前做零 token 只读预检（`scripts/lib/p0-probe-region-precheck.ps1` → 网关 R 级工具 `p0_probe_region_state`，判据与宏的 `P0FocusProbeValidator.build` 共用同一实现，并同样带 OCR 抖动重试），不满足就**在派单之前**失败：残留文字会回显具体文字并提示清空输入框，其他情况回显宏自己的逐条原因并提示把微信停回「文件传输助手」会话页。预检本身不可用（例如装的是不含该工具的旧 APK）只警告不阻断。
 
 ### 3.1 确认卡核对
 

@@ -19,6 +19,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
+
+# 旧 APK 不报新字段；Set-StrictMode 下读不存在的属性是硬错误，必须先探再读。
+function Get-P0ProbeProperty {
+    param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
 $token = $null
 $authorization = $null
 $config = $null
@@ -66,17 +75,32 @@ finally {
     if ($null -ne $client) { $client.Dispose() }
 }
 
-if ($data.empty -eq $true) {
+$probeReady = Get-P0ProbeProperty -Object $data -Name 'probe_ready'
+if ($data.empty -eq $true -and $probeReady -ne $false) {
     [pscustomobject]@{ ok = $true; empty = $true } | ConvertTo-Json -Compress
     exit 0
 }
 
-# 残留文字原样回显给现场人——他要照着这个去手机上清框，不能只说"非空"。
-$leftovers = @($data.texts | ForEach-Object { "「$($_.text)」@$([string]::Join(',', $_.bounds))" })
-if ($data.visible_send_control -eq $true) { $leftovers += '底部出现可见「发送」控件' }
+if ($data.empty -ne $true) {
+    # 残留文字原样回显给现场人——他要照着这个去手机上清框，不能只说"非空"。
+    $leftovers = @($data.texts | ForEach-Object { "「$($_.text)」@$([string]::Join(',', $_.bounds))" })
+    if ($data.visible_send_control -eq $true) { $leftovers += '底部出现可见「发送」控件' }
+    [pscustomobject]@{
+        ok = $false
+        empty = $false
+        remedy = '请在手机上清空微信输入框后重跑'
+        leftovers = $leftovers
+    } | ConvertTo-Json -Compress -Depth 4
+    exit 2
+}
+
+# 输入框是空的但盲点探针仍不会放行：多半是微信没停在「文件传输助手」会话页
+# （2026-07-26 实测烧掉一轮 $0.32 就是这个）。原因用宏自己的逐条说明，不另写一份。
 [pscustomobject]@{
     ok = $false
-    empty = $false
-    leftovers = $leftovers
+    empty = $true
+    probe_ready = $false
+    remedy = '请把微信停在「文件传输助手」会话页后重跑'
+    reason = [string]$data.reason
 } | ConvertTo-Json -Compress -Depth 4
 exit 2

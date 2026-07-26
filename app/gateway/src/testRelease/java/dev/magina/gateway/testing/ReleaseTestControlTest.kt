@@ -21,7 +21,7 @@ class ReleaseTestControlTest {
 
         val session = control.onConfirmationShown(attempt) {
             captured = true
-            byteArrayOf(1)
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
         }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         control.afterAllowed(session, attempt, { home = true; true }) {

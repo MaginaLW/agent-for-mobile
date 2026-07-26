@@ -18,13 +18,16 @@ import dev.magina.gateway.core.invalidatePreparedTargetForMutation
 import dev.magina.gateway.core.shouldSerializeUiCall
 import dev.magina.gateway.core.preparedTargetSurvivesTypeText
 import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
+import dev.magina.gateway.overlay.ConfirmCardTarget
 import dev.magina.gateway.overlay.ConfirmOverlay
+import dev.magina.gateway.overlay.confirmCardVisibleInCapture
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
 import dev.magina.gateway.testing.InactiveTestControlSession
 import dev.magina.gateway.testing.ConfirmationIdGenerator
 import dev.magina.gateway.testing.TestConfirmationAttempt
+import dev.magina.gateway.testing.TestConfirmationCapture
 import dev.magina.gateway.testing.TestControlSession
 import dev.magina.gateway.testing.TestForeground
 import org.json.JSONArray
@@ -403,19 +406,9 @@ object ToolRegistry {
                         ConfirmOverlay.ask(
                             context = Gateway.appContext,
                             actionDesc = decision.cardText(attempt.confirmationId),
-                            onShownBeforeButtonsEnabled = {
+                            onShownBeforeButtonsEnabled = { cardTarget ->
                                 testSession = Gateway.testControl.onConfirmationShown(attempt) {
-                                    val bitmap = GatewayA11yService.require().captureBitmap()
-                                    ByteArrayOutputStream().use { output ->
-                                        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
-                                            throw GatewayError(
-                                                ErrorCode.E_CHANNEL_DOWN,
-                                                "确认卡 PNG 编码失败",
-                                                channel = "overlay",
-                                            )
-                                        }
-                                        output.toByteArray()
-                                    }
+                                    captureConfirmCardEvidence(cardTarget)
                                 }
                             },
                             onDecisionObserved = { observed ->
@@ -511,6 +504,57 @@ object ToolRegistry {
     }
 
     /** 每次调用都重新读取；确认前后分别解析 ref/焦点，不依赖 revision 硬相等。 */
+    /**
+     * 确认卡取证截图。frame commit 只保证本进程这一帧提交进渲染管线，SurfaceFlinger
+     * 合成/latch 还可能差一两个 vsync——2026-07-26 Allow 腿实锤拍出来的是纯微信会话页，
+     * 卡完全不在图里，而这张 PNG 是监督式跑测唯一的现场证据。所以拍完先按卡的真实
+     * 位置与底色核一遍，没拍到就短暂等一下重拍；重拍间隔要躲开 a11y 截图节流
+     * （knowledge：<300ms 连发会硬报 INTERVAL_TIME_SHORT）。
+     *
+     * 仍然拍不到时**照样返回 PNG，但如实标 cardVisible=false**：这条路径是取证，
+     * 静默交出一张证明不了任何事的图，比明说"没拍到"危险得多。
+     */
+    private fun captureConfirmCardEvidence(target: ConfirmCardTarget?): TestConfirmationCapture {
+        val service = GatewayA11yService.require()
+        var attempts = 0
+        var latest: Bitmap? = null
+        var visible = false
+        while (attempts < CONFIRM_CARD_CAPTURE_ATTEMPTS) {
+            attempts += 1
+            if (attempts > 1) SystemClock.sleep(CONFIRM_CARD_RECAPTURE_DELAY_MS)
+            val bitmap = try {
+                service.captureBitmap()
+            } catch (error: GatewayError) {
+                if (error.code == ErrorCode.E_RATE_LIMITED && attempts < CONFIRM_CARD_CAPTURE_ATTEMPTS) {
+                    SystemClock.sleep(CONFIRM_CARD_THROTTLE_BACKOFF_MS)
+                    continue
+                }
+                if (latest == null) throw error
+                break
+            }
+            latest?.recycle()
+            latest = bitmap
+            visible = target != null && confirmCardVisibleInCapture(
+                target = target,
+                width = bitmap.width,
+                height = bitmap.height,
+                pixelAt = bitmap::getPixel,
+            )
+            // 几何未知时无从核对，拍一张就走，由 cardVisible=false 如实反映。
+            if (visible || target == null) break
+        }
+        val bitmap = latest ?: throw GatewayError(
+            ErrorCode.E_CHANNEL_DOWN, "确认卡取证未取得任何截图", channel = "overlay",
+        )
+        val png = ByteArrayOutputStream().use { output ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                throw GatewayError(ErrorCode.E_CHANNEL_DOWN, "确认卡 PNG 编码失败", channel = "overlay")
+            }
+            output.toByteArray()
+        }
+        return TestConfirmationCapture(png = png, cardVisible = visible, attempts = attempts)
+    }
+
     private fun safetyContext(name: String, args: JSONObject): SafetyContext {
         val a11y = GatewayA11yService.instance
             ?: return SafetyContext("", "", -1, foregroundKnown = false)
@@ -696,4 +740,9 @@ object ToolRegistry {
 
     private fun boundsString(bounds: android.graphics.Rect): String =
         "[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]"
+
+    /** 合成落后一两个 vsync 是常态，多给几次机会；总延迟仍远小于人抬手看卡的时间。 */
+    private const val CONFIRM_CARD_CAPTURE_ATTEMPTS = 4
+    private const val CONFIRM_CARD_RECAPTURE_DELAY_MS = 400L
+    private const val CONFIRM_CARD_THROTTLE_BACKOFF_MS = 900L
 }

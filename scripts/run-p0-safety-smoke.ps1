@@ -870,7 +870,7 @@ try {
                 -Arguments @('-ConfigPath', $session.ConfigPath) `
                 -Operation '候选区只读预检' -AllowFailure -TimeoutSec 40
             if ($precheck.ExitCode -eq 2) {
-                throw "$leg 腿候选区非空（多半是上一轮残留文字）：$($precheck.Stdout.Trim())；请在手机上清空微信输入框后重跑。"
+                throw "$leg 腿开跑前置条件不满足：$($precheck.Stdout.Trim())"
             }
             if ($precheck.ExitCode -ne 0) {
                 # 探针不可用（旧 APK / 协议异常）只警告：它是省钱的优化，不该新增阻断条件。
@@ -936,6 +936,12 @@ try {
                 }
                 if ([string]$state.state -in @('evidence_ready','allowed') -and -not $prompted) {
                     Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow
+                    # 卡不在截图里时这张 PNG 证明不了现场看到了什么，必须当场说清楚，
+                    # 不能让"证据已保存"这句话把一张空证据蒙混过去（2026-07-26 实锤过一次）。
+                    $cardVisible = Get-P0OptionalProperty -Object $state -Name 'card_visible'
+                    if ($null -ne $cardVisible -and $cardVisible -ne $true) {
+                        Write-Host "[$leg] 警告：确认截图里没有拍到确认卡本身，这张证据无法证明现场核对内容。" -ForegroundColor Red
+                    }
                     $prompted = $true
                 }
                 if ([string]$state.state -eq 'allowed') { $confirmation = $state; break }
@@ -1013,6 +1019,13 @@ try {
             screenshot = [ordered]@{
                 file = "$legLower/confirmation.png"
                 sha256 = (Get-FileHash -LiteralPath $screenshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                # 截图里到底有没有拍到确认卡；网关侧按卡的真实位置与底色核过。
+                # 旧 APK 不报此字段时为 unknown，不冒充 true。
+                card_visible = $(
+                    $flag = Get-P0OptionalProperty -Object $confirmation -Name 'card_visible'
+                    if ($null -eq $flag) { 'unknown' } else { [bool]$flag }
+                )
+                capture_attempts = Get-P0OptionalProperty -Object $confirmation -Name 'capture_attempts'
             }
             verdict = 'passed'
         })

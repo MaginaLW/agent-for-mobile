@@ -52,6 +52,10 @@ class GatewayA11yService : AccessibilityService() {
         /** 前台 app 贡献可读元素低于此数 → 视为树空/稀疏，snapshot 自动融合 OCR（spec §5.4，S1 微信实锤）。 */
         private const val FUSE_FG_THRESHOLD = 5
 
+        /** 覆盖自家确认卡收起后系统重新激活 App 窗口的那几帧；总上限 ~320ms，只在没有活动应用窗口时才付。 */
+        private const val FOREGROUND_SETTLE_ATTEMPTS = 5
+        private const val FOREGROUND_SETTLE_INTERVAL_MS = 80L
+
         @Volatile var instance: GatewayA11yService? = null
 
         fun require(): GatewayA11yService = instance ?: throw GatewayError(
@@ -176,7 +180,7 @@ class GatewayA11yService : AccessibilityService() {
      * 冷启动仅从活动应用窗口取 package-only 后备；overlay/IME root 不参与，root 为空则保持未知。
      */
     private fun currentForeground(): ResolvedForeground {
-        val currentWindow = applicationWindow()
+        val currentWindow = applicationWindow(settledWindows())
         return resolveForeground(
             identity = foregroundWindowTracker.current(),
             applicationWindowId = currentWindow?.id,
@@ -270,6 +274,29 @@ class GatewayA11yService : AccessibilityService() {
             isActive = window.isActive,
             isFocused = window.isFocused,
         )
+    }
+
+    /**
+     * 取窗口列表；只在"当前一个活动应用窗口都没有"这种**瞬时**形态下有限重读。
+     *
+     * 自家确认卡是可获焦的 `TYPE_APPLICATION_OVERLAY`：它在时 App 窗口既非 active 也非
+     * focused，收起后系统重新激活 App 窗口还要几帧。单次采样正好撞上这几帧，前台身份就
+     * 会被判成 unknown——2026-07-26 Allow 腿实锤：人点完「允许本次」，紧接着的确认后复核
+     * （[SafetyGate] 的第二次 requireKnownForeground）直接 E_BLOCKED，而此前同为 W 级的
+     * `type_text` 一路正常。
+     *
+     * 只重读、不放宽判据：窗口真的没了（切走、灭屏）就照旧解析为 unknown，D1 的
+     * "身份必须归属到活动 APPLICATION 窗口"一字未动。
+     */
+    private fun settledWindows(): List<AccessibilityWindowInfo> {
+        var current = windows
+        var attempts = 1
+        while (applicationWindow(current) == null && attempts < FOREGROUND_SETTLE_ATTEMPTS) {
+            SystemClock.sleep(FOREGROUND_SETTLE_INTERVAL_MS)
+            attempts += 1
+            current = windows
+        }
+        return current
     }
 
     private fun applicationWindow(currentWindows: List<AccessibilityWindowInfo> = windows): AccessibilityWindowInfo? {
@@ -639,6 +666,9 @@ class GatewayA11yService : AccessibilityService() {
     }
 
     private fun readFreshActionState(): FreshClickCurrent {
+        // 先让窗口稳定（见 settledWindows），再开始这段"期间不得有事件"的原子读取——
+        // 否则重读期间的自然事件会把新鲜度校验直接顶成 fail-closed。
+        settledWindows()
         val revisionBefore = rev.get()
         val currentWindows = windows
         val applicationWindow = applicationWindow(currentWindows)

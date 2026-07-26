@@ -30,13 +30,16 @@ object ConfirmOverlay {
     var isAwaitingDecision: Boolean = false
         private set
 
+    /** 卡片底色；取证判据按它比对，改颜色必须两处一起改，故只留这一处定义。 */
+    val CARD_BACKGROUND_COLOR: Int = Color.parseColor("#F2222222")
+
     /** 阻塞调用方线程（工具线程，非主线程）直到 允许/拒绝/超时。 */
     @Synchronized
     fun ask(
         context: Context,
         actionDesc: String,
         timeoutMs: Long = 60_000,
-        onShownBeforeButtonsEnabled: () -> Unit = {},
+        onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
         onDecisionObserved: (TestConfirmationDecision) -> Unit = {},
     ): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) throw GatewayError(
@@ -52,6 +55,9 @@ object ConfirmOverlay {
 
         val future = CompletableFuture<Boolean>()
         val cardShown = CompletableFuture<Unit>()
+        // 卡片在屏幕上的真实位置与底色，取证时用来判断截图里到底有没有拍到卡本身。
+        // 写在 cardShown.complete 之前、读在 cardShown.get 之后，两侧由 future 建立 happens-before。
+        var cardTarget: ConfirmCardTarget? = null
         val buttonsEnabled = CompletableFuture<Unit>()
         val readiness = ConfirmationReadinessGate()
         val main = Handler(Looper.getMainLooper())
@@ -138,7 +144,7 @@ object ConfirmOverlay {
             try {
                 val card = LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
-                    setBackgroundColor(Color.parseColor("#F2222222"))
+                    setBackgroundColor(CARD_BACKGROUND_COLOR)
                     setPadding(48, 40, 48, 40)
 
                     addView(TextView(context).apply {
@@ -176,6 +182,14 @@ object ConfirmOverlay {
                 ).apply { gravity = Gravity.TOP }
                 fun completeCommittedFrame() {
                     if (readiness.state() != ConfirmationReadinessGate.State.FRAME_COMMITTED) return
+                    val origin = IntArray(2).also(card::getLocationOnScreen)
+                    cardTarget = ConfirmCardTarget(
+                        left = origin[0],
+                        top = origin[1],
+                        right = origin[0] + card.width,
+                        bottom = origin[1] + card.height,
+                        backgroundColor = CARD_BACKGROUND_COLOR,
+                    )
                     if (cardShown.complete(Unit)) {
                         card.post { removeFrameFence(card) }
                     }
@@ -253,7 +267,7 @@ object ConfirmOverlay {
             cardShown.get(2, TimeUnit.SECONDS)
             readiness.beginEvidence()
             // 可选的附加证据在首帧 draw fence 后同步准备；失败时按钮从未启用。
-            onShownBeforeButtonsEnabled()
+            onShownBeforeButtonsEnabled(cardTarget)
             readiness.evidenceReady()
             val enablePosted = main.post {
                 val card = view

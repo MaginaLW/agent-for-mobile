@@ -59,6 +59,8 @@ class DebugTestControl(
         val attempt: TestConfirmationAttempt,
         override val confirmId: String,
         var decisionState: DecisionState = DecisionState.AWAITING,
+        var cardVisible: Boolean? = null,
+        var captureAttempts: Int? = null,
     ) : TestControlSession {
         override val armed: Boolean = true
     }
@@ -66,7 +68,7 @@ class DebugTestControl(
     @Synchronized
     override fun onConfirmationShown(
         attempt: TestConfirmationAttempt,
-        capturePng: () -> ByteArray,
+        capture: () -> TestConfirmationCapture,
     ): TestControlSession {
         val controlFile = File(filesDir, CONTROL_FILE_NAME)
         if (!controlFile.isFile) return InactiveTestControlSession
@@ -105,9 +107,13 @@ class DebugTestControl(
         writeState(session, "awaiting")
         val evidenceFile = "confirmation-${session.confirmId}.png"
         try {
-            val bytes = capturePng()
-            if (bytes.isEmpty()) throw IllegalStateException("empty png")
-            atomicWriter.writeBytes(File(cacheDir, evidenceFile), bytes)
+            val shot = capture()
+            if (shot.png.isEmpty()) throw IllegalStateException("empty png")
+            atomicWriter.writeBytes(File(cacheDir, evidenceFile), shot.png)
+            // 卡不在图里也照样落盘并进入 awaiting——但状态文件必须如实写明，
+            // 让 PC 侧看得见"这张证据其实没拍到卡"，而不是默默当成有效证据。
+            session.cardVisible = shot.cardVisible
+            session.captureAttempts = shot.attempts
             writeState(session, "evidence_ready", evidenceFile)
         } catch (error: Throwable) {
             writeState(session, "error", errorCode = error.javaClass.simpleName)
@@ -295,6 +301,8 @@ class DebugTestControl(
             .put("input_length", session.attempt.inputLength)
             .put("input_sha256", session.attempt.inputSha256)
         evidenceFile?.let { json.put("evidence_file", it) }
+        session.cardVisible?.let { json.put("card_visible", it) }
+        session.captureAttempts?.let { json.put("capture_attempts", it) }
         errorCode?.let { json.put("error_code", it) }
         atomicWriter.writeText(File(filesDir, STATE_FILE_NAME), json.toString())
     }

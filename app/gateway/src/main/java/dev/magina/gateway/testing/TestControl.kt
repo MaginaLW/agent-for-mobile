@@ -29,6 +29,20 @@ data class TestForeground(
     val packageName: String,
 )
 
+/**
+ * 确认卡取证结果。[cardVisible] 为 false 表示这张 PNG 里**没有**卡本身
+ * （2026-07-26 Allow 腿实锤过一次），它就证明不了"人当时看到了什么"，
+ * 必须如实标记进状态文件，不能让它冒充有效证据。
+ */
+data class TestConfirmationCapture(
+    val png: ByteArray,
+    val cardVisible: Boolean,
+    val attempts: Int,
+) {
+    override fun equals(other: Any?): Boolean = this === other
+    override fun hashCode(): Int = System.identityHashCode(this)
+}
+
 /** source set 实现持有的不透明会话；生产 no-op 会话永远不武装。 */
 interface TestControlSession {
     val armed: Boolean
@@ -47,7 +61,7 @@ data object InactiveTestControlSession : TestControlSession {
 interface TestControl {
     fun onConfirmationShown(
         attempt: TestConfirmationAttempt,
-        capturePng: () -> ByteArray,
+        capture: () -> TestConfirmationCapture,
     ): TestControlSession
 
     fun onConfirmationDecision(
@@ -67,7 +81,7 @@ interface TestControl {
 open class NoopTestControl : TestControl {
     override fun onConfirmationShown(
         attempt: TestConfirmationAttempt,
-        capturePng: () -> ByteArray,
+        capture: () -> TestConfirmationCapture,
     ): TestControlSession = InactiveTestControlSession
 
     override fun onConfirmationDecision(

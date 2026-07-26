@@ -36,7 +36,7 @@ class TestControlTest {
 
         val session = control.onConfirmationShown(attempt) {
             captures++
-            byteArrayOf(1)
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
         }
 
         assertFalse(session.armed)
@@ -49,7 +49,7 @@ class TestControlTest {
         val control = debugControl()
         var homeCalls = 0
 
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(1, 2, 3) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1, 2, 3), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         control.afterAllowed(session, attempt, performHome = { homeCalls++; true }) {
             TestForeground(known = true, packageName = "launcher")
@@ -70,7 +70,7 @@ class TestControlTest {
     @Test
     fun `state and evidence use the exact confirmation id already shown on card`() {
         writeControl(leg = "allow", nonce = "nonce-card-id-0001")
-        val session = debugControl().onConfirmationShown(attempt) { byteArrayOf(1) }
+        val session = debugControl().onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
 
         assertEquals(attempt.confirmationId, session.confirmId)
         val state = File(temp.root, DebugTestControl.STATE_FILE_NAME).readText()
@@ -82,7 +82,7 @@ class TestControlTest {
     fun `after allowed rejects a different confirmation id`() {
         writeControl(leg = "allow", nonce = "nonce-id-swap-0001")
         val control = debugControl()
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         val swapped = attempt.copy(confirmationId = "000000000000")
 
@@ -99,7 +99,7 @@ class TestControlTest {
         var foregroundReads = 0
         var homeCalls = 0
         val control = debugControl(sleep = {})
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(7) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(7), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
 
         control.afterAllowed(session, attempt, performHome = { homeCalls++; true }) {
@@ -130,7 +130,7 @@ class TestControlTest {
         decisions.forEachIndexed { index, decision ->
             writeControl(leg = "stale", nonce = "nonce-decision-000$index")
             val control = debugControl()
-            val session = control.onConfirmationShown(attempt) { byteArrayOf(1) }
+            val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
             decision?.let { control.onConfirmationDecision(session, it) }
             var homeCalls = 0
 
@@ -147,7 +147,7 @@ class TestControlTest {
     fun `repeated or conflicting decision invalidates session before home`() {
         writeControl(leg = "stale", nonce = "nonce-repeat-0001")
         val control = debugControl()
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         expectError(ErrorCode.E_BLOCKED) {
             control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
@@ -176,7 +176,7 @@ class TestControlTest {
             File(temp.root, DebugTestControl.CONTROL_FILE_NAME).writeText(json)
             var captures = 0
             expectError(ErrorCode.E_BLOCKED) {
-                debugControl().onConfirmationShown(attempt) { captures++; byteArrayOf(1) }
+                debugControl().onConfirmationShown(attempt) { captures++; TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
             }
             assertEquals("case $index", 0, captures)
         }
@@ -201,7 +201,7 @@ class TestControlTest {
         cases.forEachIndexed { index, json ->
             File(temp.root, DebugTestControl.CONTROL_FILE_NAME).writeText(json)
             expectError(ErrorCode.E_BLOCKED) {
-                debugControl().onConfirmationShown(attempt) { byteArrayOf(1) }
+                debugControl().onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
             }
             assertFalse("case $index must consume invalid file", File(temp.root, DebugTestControl.CONTROL_FILE_NAME).exists())
         }
@@ -211,11 +211,11 @@ class TestControlTest {
     fun `nonce is single use even if command file is recreated`() {
         writeControl(leg = "stale", nonce = "nonce-replay-0001")
         val control = debugControl()
-        control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         writeControl(leg = "stale", nonce = "nonce-replay-0001")
 
         expectError(ErrorCode.E_BLOCKED) {
-            control.onConfirmationShown(attempt) { byteArrayOf(2) }
+            control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(2), cardVisible = true, attempts = 1) }
         }
     }
 
@@ -225,12 +225,12 @@ class TestControlTest {
         repeat(65) { index ->
             val nonce = "nonce-ledger-${index.toString().padStart(4, '0')}"
             writeControl(leg = "allow", nonce = nonce)
-            control.onConfirmationShown(attempt) { byteArrayOf(1) }
+            control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         }
         writeControl(leg = "allow", nonce = "nonce-ledger-0000")
 
         expectError(ErrorCode.E_BLOCKED) {
-            control.onConfirmationShown(attempt) { byteArrayOf(2) }
+            control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(2), cardVisible = true, attempts = 1) }
         }
     }
 
@@ -249,9 +249,9 @@ class TestControlTest {
         )
         writeControl(leg = "allow", nonce = "nonce-claim-old-01")
 
-        control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         assertTrue(File(temp.root, DebugTestControl.CONTROL_FILE_NAME).isFile)
-        control.onConfirmationShown(attempt) { byteArrayOf(2) }
+        control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(2), cardVisible = true, attempts = 1) }
 
         assertFalse(File(temp.root, DebugTestControl.CONTROL_FILE_NAME).exists())
     }
@@ -279,7 +279,7 @@ class TestControlTest {
             },
         )
 
-        control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
 
         assertTrue(events.indexOf("nonce-persisted") < events.indexOf("claimed-deleted"))
     }
@@ -291,7 +291,7 @@ class TestControlTest {
         val control = debugControl(claimedDeleter = { false })
 
         expectError(ErrorCode.E_BLOCKED) {
-            control.onConfirmationShown(attempt) { captures++; byteArrayOf(1) }
+            control.onConfirmationShown(attempt) { captures++; TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         }
 
         assertEquals(0, captures)
@@ -300,7 +300,7 @@ class TestControlTest {
 
         writeControl(leg = "allow", nonce = "nonce-delete-fail-01")
         expectError(ErrorCode.E_BLOCKED) {
-            debugControl().onConfirmationShown(attempt) { captures++; byteArrayOf(2) }
+            debugControl().onConfirmationShown(attempt) { captures++; TestConfirmationCapture(byteArrayOf(2), cardVisible = true, attempts = 1) }
         }
         assertEquals(0, captures)
     }
@@ -320,7 +320,7 @@ class TestControlTest {
         expectError(ErrorCode.E_BLOCKED) {
             debugControl(atomicWriter = writer).onConfirmationShown(attempt) {
                 captures++
-                byteArrayOf(1)
+                TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
             }
         }
 
@@ -336,7 +336,7 @@ class TestControlTest {
             commandJson(nonce = "nonce-expire-0001", expiresAtMs = now + 10),
         )
         val control = debugControl(clock = { currentTime })
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         currentTime = now + 11
         var homeCalls = 0
@@ -359,7 +359,7 @@ class TestControlTest {
             monotonicClock = { monotonic },
             sleep = { monotonic += it },
         )
-        val session = control.onConfirmationShown(attempt) { byteArrayOf(1) }
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
 
         expectError(ErrorCode.E_CHANNEL_DOWN) {
@@ -392,7 +392,7 @@ class TestControlTest {
         var captured = false
         var home = false
         val release = NoopTestControl()
-        val session = release.onConfirmationShown(attempt) { captured = true; byteArrayOf(1) }
+        val session = release.onConfirmationShown(attempt) { captured = true; TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
         release.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
         release.afterAllowed(session, attempt, { home = true; true }) {
             TestForeground(true, "launcher")

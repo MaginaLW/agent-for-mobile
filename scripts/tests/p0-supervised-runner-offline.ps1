@@ -64,7 +64,8 @@ function New-Fixture {
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
-        'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable'
+        'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
+        'card_not_captured'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -284,7 +285,7 @@ exit /b 0
 @echo off
 echo precheck>>"%P0_FAKE_STATE%\precheck.log"
 findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
-  echo {"ok":false,"empty":false,"leftovers":["fake-leftover@100,2600,900,2700"]}
+  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["fake-leftover@100,2600,900,2700"]}
   exit /b 2
 )
 findstr /x /c:"probe_region_unavailable" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 1
@@ -347,6 +348,7 @@ $confirm = [ordered]@{
     run_id=$control.run_id; confirm_id=$control.nonce; state='allowed'; tool='press_key';
     time='2026-07-23T00:00:00Z'; evidence_file=$evidenceName;
     input_length=$marker.Length; input_sha256=$confirmHash
+    card_visible=($scenario -ne 'card_not_captured'); capture_attempts=1
 }
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
@@ -828,11 +830,24 @@ try {
         }
     }
 
+    Test-Case '确认截图没拍到卡时当场警告并如实写进 manifest' {
+        $fixture = New-Fixture card_not_captured
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-Contains $result.Text '没有拍到确认卡本身'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].screenshot.card_visible -eq $false) `
+            'manifest 未如实记录截图没拍到确认卡。'
+    }
+
     Test-Case '候选区残留文字在开跑前零付费拦下' {
         $fixture = New-Fixture probe_region_dirty
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) '候选区非空必须失败。'
-        Assert-Contains $result.Text '清空微信输入框'
+        Assert-Contains $result.Text '前置条件不满足'
+        Assert-Contains $result.Text 'fake-leftover'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) `
             '候选区非空仍启动了付费派单。'
     }

@@ -32,6 +32,9 @@ import dev.magina.gateway.ime.ImeBridge
 import org.json.JSONObject
 
 internal object MacroRunnerFactory {
+    /** 只读预检的感知重试次数；与宏纯感知阶段同理，给 OCR 抖动翻盘机会。 */
+    private const val PROBE_STATE_ATTEMPTS = 3
+
     /**
      * 只读预检：盲点候选区（输入栏带）当前是否视觉为空。
      *
@@ -48,11 +51,20 @@ internal object MacroRunnerFactory {
             retryable = false,
         )
         val service = GatewayA11yService.require()
+        val sensitiveSurfaceWords = Gateway.skills.dangerWords + Gateway.skills.sensitiveTargets
         val adapter = AndroidP0WeChatPrepareAdapter(
             service = service,
-            sensitiveSurfaceWords = Gateway.skills.dangerWords + Gateway.skills.sensitiveTargets,
+            sensitiveSurfaceWords = sensitiveSurfaceWords,
         )
-        val snapshot = adapter.forceFreshVision()
+        // OCR 会抖：宏自己在纯感知阶段也有重试，预检若只看一帧就会比宏更严，
+        // 把本可通过的跑测挡在门外。任一帧判 ready 即放行。
+        var attempt = 0
+        var snapshot = adapter.forceFreshVision()
+        var ready = P0FocusProbeValidator.build(snapshot, sensitiveSurfaceWords) != null
+        while (!ready && ++attempt < PROBE_STATE_ATTEMPTS) {
+            snapshot = adapter.forceFreshVision()
+            ready = P0FocusProbeValidator.build(snapshot, sensitiveSurfaceWords) != null
+        }
         val texts = P0FocusProbeValidator.probeRegionTexts(snapshot)
         val sendControl = P0FocusProbeValidator.visibleSendControl(snapshot)
         val box = dev.magina.gateway.a11y.p0FocusProbeRegion(
@@ -62,6 +74,12 @@ internal object MacroRunnerFactory {
         )
         return JSONObject()
             .put("empty", texts.isEmpty() && !sendControl)
+            .put("probe_ready", ready)
+            // 不 ready 时给出宏自己的逐条原因（同一实现），省得跑一轮才知道差在哪。
+            .put(
+                "reason",
+                if (ready) "" else P0FocusProbeValidator.rejectionReason(snapshot, sensitiveSurfaceWords),
+            )
             .put("visible_send_control", sendControl)
             .put("region", org.json.JSONArray(box.toList()))
             .put("system_bottom_inset", snapshot.systemBottomInset)
