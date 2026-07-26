@@ -116,10 +116,23 @@ scripts/
 
 ```
 time, slug, leg, brain, model, turns, in_tok, out_tok, cache_read, cache_write,
-cost_usd, dur_s, result, session_id, trace_file, note
+cost_usd, dur_s, result, session_id, trace_file, note, fail_reason
 ```
 
 `result ∈ success | fail | paused | step-cap | timeout | preflight-fail`。
+
+**`fail_reason`（2026-07-27 追加）**：`result` 只说成没成，说不出为什么。台账攒到 43 fail / 24 success
+时 `note` 列基本只有 `executor=gateway`，回头归因只能一条条翻 trace——而"安全门按预期拦下"与
+"通道挂了"是完全不同的两件事，却都记成 fail。判据优先取 trace 里**最后一个** gateway 错误码
+（比模型自述准确），取不到才退回派单层信号。成功与暂停留空。
+
+`fail_reason ∈ preflight | dispatch-timeout | step-cap | safety-denied | stale-context |
+verify-fail | confirm-timeout | confirm-required | channel-down | perm-missing | not-found |
+tool-timeout | e-*（未映射错误码） | executor-<subtype> | reported-fail`
+
+其中 **`safety-denied` 在 Deny 腿是期望结果**，表示安全门尽到了职责，不是故障。
+
+该列**追加在末尾**：既有 60+ 行历史记录少一列，`Import-Csv` 会把缺的尾列读成空；插在中间会整体错位。
 
 - **原始 trace 不进 git**【决策点 1】：stream-json 含 base64 截图，单任务几十 MB 量级，进 git 会撑爆仓库。这是对「全量 trace 落盘 docs/runs/」原则的一处细化：落盘 = 本地磁盘归档；git 只收台账与人写的跑测记录。
 - codex 腿 cost_usd 留空（订阅无单价），tokens/轮次照记。

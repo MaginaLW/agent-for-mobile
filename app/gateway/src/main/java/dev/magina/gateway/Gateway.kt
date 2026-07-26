@@ -45,7 +45,8 @@ object Gateway {
         val prefs = appContext.getSharedPreferences("gateway", Context.MODE_PRIVATE)
         TokenStore(
             read = { prefs.getString("token", null) },
-            // commit() 而不是 apply()：token 必须落盘之后才能交出去（见 TokenStore 说明）。
+            // commit() 而不是 apply()：token 必须落盘之后才能交出去，且要把它的
+            // Boolean 返回值真的交给 TokenStore 判断（见 TokenStore 说明）。
             write = { prefs.edit().putString("token", it).commit() },
         )
     }

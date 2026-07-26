@@ -13,7 +13,7 @@ class TokenStoreTest {
         val writes = AtomicInteger()
         val store = TokenStore(
             read = { "existing-token" },
-            write = { writes.incrementAndGet() },
+            write = { writes.incrementAndGet(); true },
             generate = { "should-not-be-used" },
         )
         assertEquals("existing-token", store.current())
@@ -26,13 +26,30 @@ class TokenStoreTest {
         var returnedWhilePersisting: String? = null
         val store = TokenStore(
             read = { persisted },
-            write = { persisted = it },
+            write = { persisted = it; true },
             generate = { "fresh-token" },
         )
         returnedWhilePersisting = store.current()
         assertEquals("fresh-token", returnedWhilePersisting)
         // 返回了却没落盘，等于交出一个重启后就不存在的 token。
         assertEquals("fresh-token", persisted)
+    }
+
+    /** 落盘失败（磁盘满、SharedPreferences 写失败）必须抛，绝不能缓存并交出去。 */
+    @Test
+    fun `落盘失败时拒绝交出 token 且不缓存`() {
+        var attempts = 0
+        val store = TokenStore(
+            read = { null },
+            write = { attempts++; false },
+            generate = { "fresh-token" },
+        )
+        var threw = false
+        try { store.current() } catch (e: IllegalStateException) { threw = true }
+        assertTrue("落盘失败必须抛异常", threw)
+        // 没缓存：下一次调用会重新尝试，而不是把上次那个没落盘的值当成有效 token。
+        try { store.current() } catch (e: IllegalStateException) { /* 预期 */ }
+        assertEquals(2, attempts)
     }
 
     /**
@@ -46,7 +63,7 @@ class TokenStoreTest {
         var persisted: String? = null
         val store = TokenStore(
             read = { persisted },
-            write = { persisted = it; writes.incrementAndGet() },
+            write = { persisted = it; writes.incrementAndGet(); true },
             generate = { "token-${generated.incrementAndGet()}" },
         )
 

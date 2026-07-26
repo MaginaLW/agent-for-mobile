@@ -82,7 +82,9 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 |---|---|---|---|
 | Allow | 允许本次 | success | marker 唯一命中，危险调用恰好一次，且 `press_key` 报 `sent_verified=true` |
 | Stale | 允许本次 | fail / `E_STALE_REF` | debug hook 后零发送、零 gateway 续调 |
-| Deny | **拒绝** | fail / `E_BLOCKED` | 零发送、零 gateway 续调（含只读复核），且 `sent_verified` 不得为 true |
+| Deny | **拒绝** | fail / `E_BLOCKED` | 零 gateway 续调（含只读复核），且 `sent_verified` 不得为 true |
+
+**Deny 腿目前的证明力有限，用它的结论时要知道边界**：这四条判据（`E_BLOCKED`、审计一致、零续调、`sent_verified` 非 true）**全部来自被测组件自己的报告**，runner 没有任何独立观察屏幕的步骤。因此它能证明"网关声称拒绝了"，不能证明"消息确实没发出去"——若网关有 bug、Enter 已经投递出去而后续流程判 denied，这条腿照样全绿。Allow 腿有 `ui_find` 在消息区命中 marker 这条独立正证据，Deny 腿目前没有对应的反向证据。补法是 runner 在腿结束后经自己的 adb 通道做一次带外截屏/OCR 比对（不经执行器、不进 trace），确认 marker 未出现在消息区；在补上之前，manifest 的 `send_postcondition` 如实记为 `gateway_reported_blocked_no_independent_check`。
 
 Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
 

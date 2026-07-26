@@ -26,7 +26,8 @@ $script:SlowRuns = [Collections.Generic.List[object]]::new()
 
 # 开跑前自愈：上一轮被 kill 的跑测留下的临时仓库副本不会自己消失，攒到几十个就会把这台机器
 # 压到进程启动都超时（2026-07-26 实测 81 个残留 + 常驻 daemon → 整轮 11/38，全是假超时）。
-$staleSweep = Clear-DevEnvStaleFixture
+# 只扫 30 分钟前的：0 会把并行跑的另一个套件正在用的目录也当成残留删掉。
+$staleSweep = Clear-DevEnvStaleFixture -OlderThanMinutes $DevEnvDefaultStaleMinutes
 if ($staleSweep.Removed -gt 0 -or $staleSweep.Failed.Count -gt 0) {
     Write-Host ("开跑前清场：删除残留跑测目录 $($staleSweep.Removed) 个" +
         $(if ($staleSweep.Failed.Count -gt 0) { "，$($staleSweep.Failed.Count) 个删不掉（可能仍被进程占用）" } else { '' })
@@ -89,7 +90,7 @@ function New-Fixture {
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
-        'deny_read_after', 'deny_rechecked', 'deny_but_allowed'
+        'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -508,7 +509,13 @@ if ($code -eq 'OK') {
         }
     }
 } else {
-    ToolResult 'p1' @{ok=$false;error=@{code=$code;channel='safety';retryable=$false}}
+    $pressErrorEnvelope = @{ok=$false;error=@{code=$code;channel='safety';retryable=$false}}
+    if ($scenario -eq 'deny_but_sent') {
+        # 有 bug 的网关：一边报 E_BLOCKED，一边带出"发送已验证"。信封形态是畸形的，
+        # 但被测组件本来就是我们不敢假设其正确的那个——这条断言就是为这种情况准备的。
+        $pressErrorEnvelope['data'] = @{sent_verified=$true;verification_state='sent'}
+    }
+    ToolResult 'p1' $pressErrorEnvelope
     if ($scenario -in @('stale_read_after','deny_read_after')) {
         ToolUse 'r1' 'foreground_app' @{}
         ToolResult 'r1' @{ok=$true;data=@{package='launcher'}}
@@ -709,6 +716,13 @@ try {
         Assert-Contains $denyBody 'E_BLOCKED'
         Assert-Contains $denyBody '拒绝'
         Assert-NotMatches $denyBody '允许本次'
+        # 正文里绝不能出现"前台身份取证例外"：那段允许在 E_BLOCKED 时多调一次 foreground_app，
+        # 而 E_BLOCKED 在本腿是预期结果，多出的第 4 个调用会被严格签名当场判失败。
+        Assert-NotMatches $denyBody '前台身份取证例外'
+        # 分隔线只取第一个：人读段落里若再出现一条 `---`，其后的说明文字会静默混进真机提示词。
+        # Allow/Stale 有逐字黄金回归钉住，Deny 只能靠这条。
+        Assert-True (($denyBody -split "`r?`n" | Where-Object { $_.Trim() -eq '---' }).Count -eq 0) `
+            'Deny 派发正文里出现了 --- 分隔线，说明模板的人读段落被切进了提示词。'
 
         foreach ($leg in @('Allow','Stale')) {
             $actual = Get-P0DynamicTaskText -Leg $leg -Marker $marker -TemplateDir $SourceTaskTemplateDir
@@ -824,8 +838,10 @@ try {
         $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         Assert-True ($manifestJson.legs[0].confirmation -ceq 'denied') 'manifest 未如实记录真人拒绝。'
         Assert-True ($manifestJson.legs[0].safety_code -ceq 'E_BLOCKED') 'manifest 未记录 E_BLOCKED。'
-        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'not_executed_denied') `
-            'manifest 未记录"因拒绝而未执行"。'
+        # manifest 只该写"验过什么"，不写"结论是什么"：这条腿没有任何独立观察屏幕的步骤，
+        # 判据全部来自被测组件自己的报告，所以不能记成"已验证未发送"。
+        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'gateway_reported_blocked_no_independent_check') `
+            'manifest 的发送后置条件措辞夸大了实际验证强度。'
     }
 
     Test-Case 'Deny 腿：拒绝后任何 gateway 续调都失败' {
@@ -843,6 +859,15 @@ try {
         Assert-Contains $result.Text '确认后上下文复检'
     }
 
+    Test-Case 'Deny 腿：报告发送已验证即判失败' {
+        # 拒绝了却报告 sent_verified=true，等于动作实际执行了——P0 能出现的最严重失败。
+        # 此前这条断言没有任何用例覆盖（复查发现）。
+        $fixture = New-Fixture deny_but_sent
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) '拒绝后报告已发送必须判失败。'
+        Assert-Contains $result.Text '拒绝之后动作仍被执行'
+    }
+
     Test-Case 'Deny 腿：确认状态是 allowed 时当场停止' {
         # 这条腿期望的真人决定是拒绝；拿到 allowed 说明现场点错了按钮或状态被篡改，
         # 无论后续如何都不能按"通过"处理。
@@ -852,16 +877,24 @@ try {
         Assert-Contains $result.Text '期望 denied'
     }
 
-    Test-Case 'Allow 腿要求网关侧发送后验为已验证' {
-        # 「判不了」在网关侧按 ok 返回（判不了 ≠ 没发出去，报失败会诱导重试→重复发送），
-        # 但监督式跑测的判定标准更严：拿不到发送证据就不算 P0 通过。
-        # 旧 APK 不带该字段时同样不放行，不冒充通过。
-        foreach ($scenario in @('send_unverified','legacy_no_send_field')) {
-            $fixture = New-Fixture $scenario
-            $result = Invoke-FixtureRunner $fixture @('Allow')
-            Assert-True ($result.ExitCode -ne 0) "$scenario 必须判失败。"
-            Assert-Contains $result.Text '未报告发送已验证'
-        }
+    Test-Case 'Allow 腿：网关侧后验判不了仍可通过，但必须显式说明依据' {
+        # 真正的正证据是 runner 侧 ui_find 在消息区命中 marker；网关侧后验只是负证据
+        # （"不在输入框里了"）。微信屏蔽 a11y 树，后验只剩 OCR 腿，而发送成功后输入栏本来
+        # 就是空的、常常一个字都读不到——那种情况下 unverified 是物理上正确的结论。
+        # 要求它必须 sent 会让 P0 因为"拿不到证据"而永远过不了（2026-07-27 复查纠正）。
+        $fixture = New-Fixture send_unverified
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "网关侧判不了不应否决本腿：`n$($result.Text)"
+        Assert-Contains $result.Text '未能自证发送'
+        Assert-Contains $result.Text 'ui_find'
+    }
+
+    Test-Case 'Allow 腿：旧 APK 不报 verification_state 时不冒充通过' {
+        # 与"判不了"不同：字段整个缺失说明装的是不含发送后验的旧包，此时连负证据都没有。
+        $fixture = New-Fixture legacy_no_send_field
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '旧 APK 缺字段必须判失败。'
+        Assert-Contains $result.Text '未报告 verification_state'
     }
 
     Test-Case '首腿失败立即停止且不重试' {

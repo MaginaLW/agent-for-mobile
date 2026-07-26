@@ -15,7 +15,8 @@ import java.security.SecureRandom
  */
 class TokenStore(
     private val read: () -> String?,
-    private val write: (String) -> Unit,
+    /** 返回是否**确实落盘**。返回 false 一律当失败处理，绝不缓存也绝不交出去。 */
+    private val write: (String) -> Boolean,
     private val generate: () -> String = { newToken() },
 ) {
     private var cached: String? = null
@@ -29,7 +30,10 @@ class TokenStore(
             return stored
         }
         val fresh = generate()
-        write(fresh)
+        // write 必须能报告失败，否则"先落盘再返回"只是句口号：`commit()` 在磁盘满或
+        // SharedPreferences 写失败时返回 false，把它的返回值丢掉就等于又回到了
+        // "交出一个重启后不存在的 token"——正是这个类要排除的失败模式。
+        if (!write(fresh)) throw IllegalStateException("网关 token 落盘失败，拒绝交出未持久化的 token")
         cached = fresh
         return fresh
     }

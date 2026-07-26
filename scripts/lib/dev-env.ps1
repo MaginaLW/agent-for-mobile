@@ -13,8 +13,18 @@
 $DevEnvFixturePatterns = @(
     'agent-mobile-p0-runner-*',
     'agent-mobile-p0-tmpl-*',
-    'agent-mobile-dispatch-offline-*'
+    'agent-mobile-dispatch-offline-*',
+    'agent-mobile-failreason-*'
 )
+
+<#
+自动清扫的默认年龄下限。
+
+不能是 0：那样"1 毫秒前刚建好的目录"也算残留，两个套件并行跑（或人手跑一个、check.ps1 跑
+另一个）会互删对方正在用的工作目录。真机 runner 用的是别的前缀，不受影响，但没必要留这个坑。
+人显式 -Clean 时才用 0——那是他自己要求的全清。
+#>
+$DevEnvDefaultStaleMinutes = 30
 
 <# 被 kill 的跑测不会执行 finally，残留目录只能靠外部扫。 #>
 function Get-DevEnvStaleFixture {
@@ -68,20 +78,37 @@ function Get-DevEnvBuildDaemon {
         Where-Object { $_.CommandLine -match 'GradleDaemon|KotlinCompileDaemon|kotlin-daemon-embeddable' }
 }
 
-<# 停掉常驻构建 daemon：每个占 1GB 上下，正是把这台机器压过阈值的那部分。 #>
+<#
+停掉常驻构建 daemon：每个占 1GB 上下，正是把这台机器压过阈值的那部分。
+
+**默认只动本仓库的 daemon**。`gradlew --stop` 本身就是按 gradle 用户目录/项目定向的；
+而按命令行匹配去 `Stop-Process -Force` 是全机行为——`GradleDaemon` 出现在这台机器上
+**每一个** Gradle daemon 的命令行里，`kotlin-daemon-embeddable` 更宽（任何 Kotlin 构建的
+classpath 上都有）。若此时 Android Studio 正在给别的项目跑构建，就会被连坐杀掉。
+
+所以强杀改为显式 opt-in（`-Aggressive`），且只有 check.ps1 的 -Clean 会用。
+#>
 function Stop-DevEnvGradleDaemon {
-    param([Parameter(Mandatory)][string]$RepoRoot)
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [switch]$Aggressive
+    )
     $before = @(Get-DevEnvBuildDaemon).Count
     $gradlew = Join-Path $RepoRoot 'app\gradlew.bat'
     if (Test-Path -LiteralPath $gradlew -PathType Leaf) { & $gradlew --stop *>&1 | Out-Null }
-    # --stop 是异步请求，daemon 要一会儿才真退；Kotlin daemon 它压根不管，直接点名。
+    # --stop 是异步请求，daemon 要一会儿才真退。
     Start-Sleep -Seconds 2
-    foreach ($proc in @(Get-DevEnvBuildDaemon)) {
-        try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop } catch {}
+    if ($Aggressive) {
+        # Kotlin 编译 daemon 不归 gradlew --stop 管，只能点名——但这一步是全机的，
+        # 会波及本机其它项目的构建，所以必须由调用方显式要求。
+        foreach ($proc in @(Get-DevEnvBuildDaemon)) {
+            try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop } catch {}
+        }
+        Start-Sleep -Milliseconds 500
     }
-    Start-Sleep -Milliseconds 500
     $after = @(Get-DevEnvBuildDaemon).Count
-    return "构建 daemon $before → $after"
+    $scope = if ($Aggressive) { '本机全部构建 daemon' } else { '本仓库 gradle daemon' }
+    return "$scope $before → $after"
 }
 
 <# 一行机器快照，跑长套件前打一眼；数字异常时人能立刻知道该先清场。 #>

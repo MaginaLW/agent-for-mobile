@@ -35,7 +35,9 @@ $PwshPath = (Get-Process -Id $PID).Path
 
 if ($Clean) {
     Write-Host '清场：' -ForegroundColor Cyan
-    Write-Host "  gradle daemon → $(Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot)"
+    # -Clean 是人显式要求的清场，可以动全机构建 daemon；但要说清楚它的波及范围。
+    Write-Host '  注意：这一步会停掉本机**所有** Gradle/Kotlin 构建 daemon，其它项目正在跑的构建会被中断。' -ForegroundColor Yellow
+    Write-Host "  构建 daemon → $(Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot -Aggressive)"
     $sweep = Clear-DevEnvStaleFixture
     Write-Host "  残留跑测目录 → 删除 $($sweep.Removed) 个" -NoNewline
     if ($sweep.Failed.Count -gt 0) { Write-Host "，$($sweep.Failed.Count) 个删不掉（仍被占用）" -ForegroundColor Yellow }
@@ -145,8 +147,8 @@ else {
 # —— 最慢的一项放最后，且先把 gradle daemon 占的内存还回来 ——
 
 Invoke-Check '监督式 runner 离线测试' {
-    # daemon 每个占 1GB 上下；这套件 39 条各起一个子进程，内存一紧就成片假超时。
-    # 代价是下一次 gradle 要重新起 daemon（十几秒），换这套件跑得稳，值。
+    # daemon 每个占 1GB 上下；这套件几十条各起一个子进程，内存紧张时会更容易出问题。
+    # 这里**不加 -Aggressive**：常规校验不该去动其它项目的构建 daemon。
     if (-not $SkipGradle) { Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot | Out-Null }
     Invoke-Logged -LogName 'runner-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\p0-supervised-runner-offline.ps1')
@@ -165,9 +167,12 @@ Invoke-Check '凭据扫描' {
 
     # 网关 token 是 32 位裸 hex。当前仓库零命中，任何新命中都要人看一眼。
     #
-    # --untracked 不能省：git grep 默认只搜已跟踪文件，于是新写的文件要等**提交之后**才被扫到——
-    # 这个扫描就只能事后报警、拦不住提交。2026-07-27 实锤：BearerAuthGuardTest 里的假 token
-    # 恰好是 32 位十六进制，批次 D 跑 check 时它还没入库、报了全绿，提交完才被抓出来。
+    # --untracked 不能省：git grep 默认只搜已跟踪文件，于是新写的文件要等**提交之后**才被扫到。
+    # 2026-07-27 实锤：BearerAuthGuardTest 里的假 token 恰好是 32 位十六进制，批次 D 跑 check
+    # 时它还没入库、报了全绿，提交完才被抓出来。
+    #
+    # 注意这仍然只是**提交前跑一下**的人工闸门，不是强制拦截——仓库没有装 git hook，
+    # 谁不跑 check.ps1 就绕过了。真要拦住提交得配 pre-commit hook（未做）。
     $hits = @(& git -C $RepoRoot grep -nIE --untracked '\b[0-9a-f]{32}\b' -- . 2>$null)
     if ($LASTEXITCODE -notin @(0, 1)) { throw 'git grep 执行失败。' }
     if ($hits.Count -gt 0) {

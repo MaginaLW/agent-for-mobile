@@ -459,8 +459,14 @@ object UiTools {
         // a11y 腿更可靠：读的是输入框文本本身，没有长度上限、不吃屏幕几何假设。
         // 但 readableText 为 null 表示"这个节点没有 text 可读"而不是"框里是空的"
         // （微信屏蔽 a11y 树时正是如此），必须降级而不是当成已清空。
-        val readable = focusedInputSnapshot(a11y).readableText
-        if (readable != null) return SendVerdictPolicy.fromAccessibilityText(committed, readable)
+        val snapshot = focusedInputSnapshot(a11y)
+        val readable = snapshot.readableText
+        // 还必须确认读的是**同一个输入框**。Enter 之前有三重身份复核，之后一次都没有；
+        // 焦点若跳到别的可编辑节点（搜索框/评论框，或 App 自己挪走焦点），那个节点是空的，
+        // 就会读出"已清空"——而原框里的内容可能还在。身份对不上一律降级到 OCR 腿。
+        if (readable != null && committed != null && snapshot.identity == committed.identity) {
+            return SendVerdictPolicy.fromAccessibilityText(committed, readable)
+        }
         val after = try {
             a11y.ocrReadInputBarRegion(preferredRegion).text
         } catch (e: Throwable) {
@@ -587,8 +593,14 @@ object UiTools {
 
     fun macroRun(args: JSONObject): JSONObject = MacroRunner.run(args)
 
-    /** 发送后验的轮询上限与间隔：UI 清空的时机随消息大小与网络抖动，固定睡一觉会读出假阴性。 */
-    private const val ENTER_VERIFY_TIMEOUT_MS = 2_000L
+    /**
+     * 发送后验的轮询上限与间隔：UI 清空的时机随消息大小与网络抖动，固定睡一觉会读出假阴性。
+     *
+     * 6s 不是拍脑袋：OCR 腿一轮 = 截图（撞系统节流时 `captureBitmapRetry` 内部还要 sleep ~900ms
+     * 再截一次）+ 裁剪 + ML Kit 识别，乐观也要 0.5–2s。原来给 2s，微信这条 OCR-only 链上很可能
+     * **一轮都跑不满**就到期，于是消息明明发出去了也只能报 unverified。
+     */
+    private const val ENTER_VERIFY_TIMEOUT_MS = 6_000L
     private const val ENTER_VERIFY_POLL_MS = 250L
     /** OCR 腿每轮要截屏，系统对 a11y 截图有节流，间隔放宽。 */
     private const val ENTER_VERIFY_OCR_POLL_MS = 600L

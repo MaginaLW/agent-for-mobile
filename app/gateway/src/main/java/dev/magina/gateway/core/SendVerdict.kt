@@ -90,11 +90,22 @@ object SendVerdictPolicy {
                 "归一后的基线只有 ${wanted.length} 字，不足 $MIN_PROBE_CHARS 字",
             )
         }
+        // **读回为空绝不能判成已发送。**
+        // 这条腿上 null / 空串的意思是"这一轮什么都没读到"，而不是"输入栏空了"：
+        // `ocrReadRegionOf` 在 OCR 零行、ML Kit 抛错（含 "width and height should be at least 32"）、
+        // 截图撞上过渡帧或系统节流后的空白帧时，一律返回 null。把它当成"内容消失了"，
+        // 就是换了个触发条件的谎报发送成功——正是这套三态要防的那件事本身。
+        //
+        // 能判 SENT 的只有一种情形：**读到了非空文本，且其中不含基线**——那说明这一轮 OCR
+        // 是有效的（识别出了输入栏周边的文字），只是我们提交的那串已经不在了。
         val actual = normalize(readback.orEmpty())
-        return if (actual.contains(wanted)) {
-            SendVerdict(SendVerification.NOT_SENT, "ocr", "输入栏仍显示已提交内容")
-        } else {
-            SendVerdict(SendVerification.SENT, "ocr", "输入栏已不再显示已提交内容")
+        return when {
+            actual.isBlank() -> SendVerdict(
+                SendVerification.UNVERIFIED, "ocr",
+                "输入栏区域一个字都没读到：分不清是内容已消失还是这一轮读回失败",
+            )
+            actual.contains(wanted) -> SendVerdict(SendVerification.NOT_SENT, "ocr", "输入栏仍显示已提交内容")
+            else -> SendVerdict(SendVerification.SENT, "ocr", "输入栏读到了其它文字但已不含已提交内容")
         }
     }
 }

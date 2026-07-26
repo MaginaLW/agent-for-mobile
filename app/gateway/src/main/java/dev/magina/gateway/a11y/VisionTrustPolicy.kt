@@ -26,6 +26,13 @@ internal const val P0_PROBE_HEIGHT_PX = 90
 internal const val INPUT_BAR_READBACK_HEIGHT_PX = 260
 
 /**
+ * 送进 ML Kit 的裁剪区最小边长。低于它直接抛 `InputImage width and height should be at least 32!`，
+ * 而那个异常在读回路径上会被 `runCatching` 吞成 null——下游就分不清"没读到"和"读到了空"。
+ * 凡是用外部几何去裁位图的地方都要过这把尺子（2026-07-26 被退化 bounds 咬过一次）。
+ */
+internal const val MIN_OCR_EDGE_PX = 32
+
+/**
  * 空白输入框盲点安全区（left, top, right, bottom），纯几何计算、无 Android 依赖，可直接单测。
  *
  * 垂直方向从**系统底部 inset 往上推算**而非按屏幕百分比写死：原实现用 0.84h~0.94h，在

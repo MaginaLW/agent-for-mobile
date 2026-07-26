@@ -51,6 +51,25 @@ class AuditWriteFailureTest {
         assertTrue(audit.writeFailures > 0)
     }
 
+    /** 清理出问题不该污染"写盘失败"这个信号：行已经落下去了，报警就是假阳性。 */
+    @Test
+    fun `清理失败不计入写盘失败`() {
+        val dir = File(System.getProperty("java.io.tmpdir"), "audit-prune-fail-${System.nanoTime()}")
+        try {
+            val audit = Audit({ dir })
+            audit.writeOnce()
+            assertEquals(0L, audit.writeFailures)
+            // 写盘成功后把目录换成文件，使后续清理必然出错；计数仍应为 0。
+            dir.deleteRecursively()
+            dir.writeText("not a directory")
+            val audit2 = Audit({ dir })
+            audit2.writeOnce()
+            assertTrue("目录不可用时写盘本身失败，应计数", audit2.writeFailures > 0)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test
     fun `超过保留期的旧审计文件会被清掉，当天的保留`() {
         val dir = File(System.getProperty("java.io.tmpdir"), "audit-prune-${System.nanoTime()}")

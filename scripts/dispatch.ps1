@@ -36,21 +36,27 @@ $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
 $LedgerPath   = Join-Path $RepoRoot 'docs\runs\ledger.csv'
 $LockFile     = Join-Path $PSScriptRoot '.dispatch.lock'
-$LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note'
+# fail_reason 追加在末尾而不是插在 result 后面：既有 60+ 行历史记录列数少一列，
+# Import-Csv 会把缺的尾列读成空，插在中间则会整体错位。
+$LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason'
 $ProfileHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-profile.ps1'
 . $ProfileHelperPath
 $LockHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
 . $LockHelperPath
+$LedgerHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-ledger.ps1'
+. $LedgerHelperPath
 
 function CsvQuote([string]$s) { '"' + ("$s" -replace '"', '""') + '"' }
 
 function Add-LedgerRow([int]$Turns, [long]$InTok, [long]$OutTok, [long]$CacheRead, [long]$CacheWrite,
-                       [double]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace, [string]$Note) {
+                       [double]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
+                       [string]$Note, [string]$FailReason = '') {
     if (-not (Test-Path $LedgerPath)) { Set-Content -Path $LedgerPath -Value $LedgerHeader -Encoding utf8 }
     $noteWithExecutor = if ([string]::IsNullOrWhiteSpace($Note)) { "executor=$Executor" } else { "executor=$Executor | $Note" }
     $row = @((Get-Date -Format 's'), (CsvQuote $Slug), $Leg, $Brain, $Model,
              $Turns, $InTok, $OutTok, $CacheRead, $CacheWrite,
-             [math]::Round($CostUsd, 4), $DurS, $Result, $SessionId, (CsvQuote $Trace), (CsvQuote $noteWithExecutor)) -join ','
+             [math]::Round($CostUsd, 4), $DurS, $Result, $SessionId, (CsvQuote $Trace),
+             (CsvQuote $noteWithExecutor), $FailReason) -join ','
     Add-Content -Path $LedgerPath -Value $row -Encoding utf8
 }
 
@@ -199,7 +205,7 @@ function Test-Preflight {
 $pf = Test-Preflight
 if ($pf) {
     Write-Host "预检失败：$pf" -ForegroundColor Red
-    Add-LedgerRow 0 0 0 0 0 0 0 'preflight-fail' '' '' $pf
+    Add-LedgerRow 0 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
     exit 4
 }
 
@@ -303,12 +309,14 @@ try {
     }
 
     # ── 台账 + 摘要 ───────────────────────────────────────────────────────
-    Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $cost $durS $verdict $sid "$base.jsonl" $note
+    $failReason = Get-FailReason -Verdict $verdict -Subtype "$($resultEvent.subtype)" -TraceFile $TraceFile
+    Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $cost $durS $verdict $sid "$base.jsonl" $note $failReason
     Write-Host ''
     Write-Host "───── 派单结果：$verdict（$Executor · $turns 轮 · `$$([math]::Round($cost, 4)) · ${durS}s）─────"
     if ($final) { Write-Host $final }
     elseif ($lastSay) { Write-Host "（会话被上限截断，以下为末条 assistant 报告）`n$lastSay" }
     if ($note) { Write-Host "note: $note" }
+    if ($failReason) { Write-Host "fail_reason: $failReason" }
     if ($verdict -eq 'paused') {
         Write-Host ''
         Write-Host '>>> 危险动作已暂停，手机屏幕停在原地。人工核对后运行：' -ForegroundColor Yellow

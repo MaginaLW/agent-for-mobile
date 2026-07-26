@@ -1315,7 +1315,11 @@ class GatewayA11yService : AccessibilityService() {
                 wanted.top.coerceIn(0, full.height - 1),
                 wanted.right.coerceIn(1, full.width),
                 wanted.bottom.coerceIn(1, full.height),
-            ).takeIf { it.width() > 0 && it.height() > 0 }
+            )
+                // 必须 ≥32：小于这个尺寸 ML Kit 直接抛 "width and height should be at least 32"，
+                // 而这里的异常会被 runCatching 吞成 null，下游就分不清"没读到"和"读到了空"。
+                // 与 ocrReadbackResult 的 usableBounds 同一把尺子（2026-07-26 已被退化 bounds 咬过一次）。
+                .takeIf { it.width() >= MIN_OCR_EDGE_PX && it.height() >= MIN_OCR_EDGE_PX }
         }
         val bottom = full.height
         val top = (bottom - INPUT_BAR_READBACK_HEIGHT_PX).coerceAtLeast(0)

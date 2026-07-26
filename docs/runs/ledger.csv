@@ -1,4 +1,4 @@
-time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note
+time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason
 2026-07-17T05:47:04,"check-bluetooth",1,claude,sonnet,0,0,0,0,0,0,0,preflight-fail,,"","无已授权设备（adb get-state → error: no devices/emulators found）"
 2026-07-17T06:01:49,"check-bluetooth",1,claude,sonnet,5,4922,481,167121,60887,0.4374,22,success,447e6f9a-c50d-4afd-9792-e16e85a59428,"20260717-060127-check-bluetooth-claude-leg1.jsonl","报告未循例"
 2026-07-17T06:02:44,"check-bluetooth",1,claude,sonnet,2,0,0,0,0,0.0766,6,step-cap,fffc4ffd-2206-4304-ac87-41b4bb2f7ef9,"20260717-060237-check-bluetooth-claude-leg1.jsonl","error_max_budget_usd"

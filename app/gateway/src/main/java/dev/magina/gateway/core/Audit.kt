@@ -54,6 +54,7 @@ class Audit(
     private val day = SimpleDateFormat("yyyyMMdd", Locale.US)
     private val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
     private val failures = AtomicLong(0)
+    private var prunedDay: String? = null
 
     /**
      * 写盘失败次数。
@@ -77,6 +78,7 @@ class Audit(
         elapsedMs: Long,
         note: String = "",
     ) {
+        val today = day.format(Date())
         val outcome = runCatching {
             val dir = dirProvider().apply { mkdirs() }
             val line = buildAuditLine(
@@ -89,14 +91,27 @@ class Audit(
                 elapsedMs = elapsedMs,
                 note = note,
             )
-            File(dir, "${day.format(Date())}.jsonl").appendText(line.toString() + "\n")
-            pruneExpired(dir)
+            File(dir, "$today.jsonl").appendText(line.toString() + "\n")
+            dir
         }
         // 仍然不让审计失败把工具调用带崩（证据缺失比动作失败轻），但必须留下痕迹。
-        if (outcome.isFailure) failures.incrementAndGet()
+        if (outcome.isFailure) {
+            failures.incrementAndGet()
+            return
+        }
+        // 清理**独立于写盘成败计数**：行已经落下去了，清理再出问题也不该让
+        // ctx.audit_write_failures 报警——那个信号一旦有假阳性就没人信了。
+        prunedDay?.let { if (it == today) return }
+        prunedDay = today
+        runCatching { pruneExpired(outcome.getOrThrow()) }
     }
 
-    /** 一天一个文件、永不清理会无限长下去。只保留最近 [RETENTION_DAYS] 天。 */
+    /**
+     * 一天一个文件、永不清理会无限长下去。只保留最近 [RETENTION_DAYS] 天。
+     *
+     * 每天只跑一次：原来每写一行都 `listFiles` + 每文件一次 `lastModified()`，稳态下
+     * 每次工具调用要在 external files（FUSE）上做 30 次 stat，纯属白烧。
+     */
     private fun pruneExpired(dir: File) {
         val cutoff = System.currentTimeMillis() - RETENTION_DAYS * DAY_MS
         dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }

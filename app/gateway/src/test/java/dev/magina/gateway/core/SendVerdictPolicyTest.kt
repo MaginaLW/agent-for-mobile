@@ -66,15 +66,36 @@ class SendVerdictPolicyTest {
         assertEquals("ocr", verdict.channel)
     }
 
+    /**
+     * 关键区分：读到了**非空**文本、其中不含基线，才说明这一轮 OCR 是有效的、而我们的字不在了。
+     */
     @Test
-    fun `OCR 腿输入栏读不到基线判定已发送`() {
+    fun `OCR 腿读到其它文字且不含基线才判已发送`() {
         assertEquals(
             SendVerification.SENT,
+            SendVerdictPolicy.fromOcrReadback(evidence("P0ALLOW-ABCDEF"), "说点什么...") { it }.state,
+        )
+    }
+
+    /**
+     * 这条曾经写反过：旧实现把 null/空串判成 SENT，理由是"基线不在读回里"。
+     * 但这条腿上 null 表示**这一轮什么都没读到**——OCR 零行、ML Kit 抛错被吞、截图撞上过渡帧
+     * 或系统节流后的空白帧，全都是 null。把它当成"内容消失了"，就是换了个触发条件的
+     * 谎报发送成功，正是这套三态要防的那件事本身。
+     */
+    @Test
+    fun `OCR 腿一个字都没读到必须判不了而不是已发送`() {
+        assertEquals(
+            SendVerification.UNVERIFIED,
+            SendVerdictPolicy.fromOcrReadback(evidence("P0ALLOW-ABCDEF"), null) { it }.state,
+        )
+        assertEquals(
+            SendVerification.UNVERIFIED,
             SendVerdictPolicy.fromOcrReadback(evidence("P0ALLOW-ABCDEF"), "") { it }.state,
         )
         assertEquals(
-            SendVerification.SENT,
-            SendVerdictPolicy.fromOcrReadback(evidence("P0ALLOW-ABCDEF"), null) { it }.state,
+            SendVerification.UNVERIFIED,
+            SendVerdictPolicy.fromOcrReadback(evidence("P0ALLOW-ABCDEF"), "   ") { it }.state,
         )
     }
 
@@ -94,7 +115,7 @@ class SendVerdictPolicyTest {
         val exact = "长".repeat(InputCommitEvidence.PREVIEW_LIMIT)
         assertEquals(
             SendVerification.SENT,
-            SendVerdictPolicy.fromOcrReadback(evidence(exact), "") { it }.state,
+            SendVerdictPolicy.fromOcrReadback(evidence(exact), "说点什么...") { it }.state,
         )
     }
 

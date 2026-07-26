@@ -291,6 +291,66 @@ exit /b 97
     $before = Get-RepoEffectState
     $taskArgs = @('-Task', 'offline profile contract', '-Slug', 'offline-profile', '-DryRun')
 
+    $fixtureLedgerHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-ledger.ps1'
+    Assert-True (Test-Path -LiteralPath $fixtureLedgerHelper -PathType Leaf) `
+        '测试设施错误：fixture 缺少 dispatch ledger helper。'
+    . $fixtureLedgerHelper
+
+    Test-Case '台账归因：成功与暂停不产生 fail_reason' {
+        Assert-True ((Get-FailReason -Verdict 'success') -ceq '') 'success 不该有归因。'
+        Assert-True ((Get-FailReason -Verdict 'paused') -ceq '') 'paused 不是失败。'
+    }
+
+    Test-Case '台账归因：派单层信号直接成枚举' {
+        Assert-True ((Get-FailReason -Verdict 'preflight-fail') -ceq 'preflight') 'preflight 归因不符。'
+        Assert-True ((Get-FailReason -Verdict 'timeout') -ceq 'dispatch-timeout') 'timeout 归因不符。'
+        Assert-True ((Get-FailReason -Verdict 'step-cap') -ceq 'step-cap') 'step-cap 归因不符。'
+    }
+
+    Test-Case '台账归因：优先取 trace 里最后一个 gateway 错误码' {
+        # 放仓库外：这套件有"DryRun 不得有仓库副作用"的不变量，往 docs/runs/traces 里写会撞上它。
+        # 前缀已纳入 dev-env.ps1 的清扫模式；用 try/finally 保证中途抛错也不泄漏。
+        $traceDir = Join-Path ([IO.Path]::GetTempPath()) "agent-mobile-failreason-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $traceDir -Force | Out-Null
+        $trace = Join-Path $traceDir 'fail-reason-fixture.jsonl'
+        try {
+        # 先出现 E_NOT_FOUND、最后是 E_BLOCKED：必须取最后一个，中间的失败往往已被重试绕过。
+        @(
+            '{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_NOT_FOUND\"}}"}]}]}}',
+            '{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_BLOCKED\"}}"}]}]}}'
+        ) | Set-Content -LiteralPath $trace -Encoding utf8
+        # E_BLOCKED 在 Deny 腿是期望结果：safety-denied 表示安全门尽到职责，不是故障。
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'safety-denied') `
+            '未取到 trace 里最后一个错误码。'
+
+        @('{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_STALE_REF\"}}"}]}]}}') |
+            Set-Content -LiteralPath $trace -Encoding utf8
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'stale-context') `
+            'E_STALE_REF 归因不符。'
+
+        # 未转义形态（信封若直接落成 JSON 而非字符串）也要认。
+        @('{"error":{"code":"E_CHANNEL_DOWN"}}') | Set-Content -LiteralPath $trace -Encoding utf8
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'channel-down') `
+            '未转义形态的错误码也必须能匹配。'
+
+        # 未列入映射表的错误码也要给出可读枚举，不能落到兜底把信息丢掉。
+        @('{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_RATE_LIMITED\"}}"}]}]}}') |
+            Set-Content -LiteralPath $trace -Encoding utf8
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'e-rate-limited') `
+            '未映射错误码应转成可读枚举。'
+        }
+        finally { Remove-Item -LiteralPath $traceDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case '台账归因：trace 无错误码时退回派单层信号' {
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'error_during_execution') -ceq 'executor-error_during_execution') `
+            '应退回 subtype。'
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success') -ceq 'reported-fail') `
+            '模型自报失败应落 reported-fail。'
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile 'Z:\不存在的 trace.jsonl') -ceq 'reported-fail') `
+            'trace 不存在不该抛错。'
+    }
+
     Test-Case 'gateway 有效私密配置通过纯校验' {
         $problem = Get-GatewayConfigProblem -ConfigPath $validGatewayConfig
         Assert-True ($null -eq $problem) "有效配置不应返回问题：$problem"

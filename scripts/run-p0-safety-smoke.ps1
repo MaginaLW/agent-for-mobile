@@ -65,14 +65,11 @@ foreach ($value in $Legs) {
 if ($requested.Count -eq 0) { throw '必须显式给出至少一腿：-Legs Allow 或 -Legs Allow,Stale,Deny。' }
 $orderedLegs = @('Allow','Stale','Deny') | Where-Object { $requested.Contains($_) }
 
-# 每腿期望的真人决定与终态。Deny 是整个 P0 里唯一直接证明"不批准就绝不执行"的一腿：
+# 每腿期望的真人决定。Deny 是整个 P0 里唯一直接证明"不批准就绝不执行"的一腿：
 # 它期望的确认状态是 denied，而对 Allow/Stale 来说 denied 是整组停止的理由——
 # 所以这张表必须按腿查，不能写死成 allowed。
-$LegExpectation = @{
-    Allow = @{ ConfirmationState = 'allowed'; DangerResult = 'OK';           LedgerResult = 'success' }
-    Stale = @{ ConfirmationState = 'allowed'; DangerResult = 'E_STALE_REF';  LedgerResult = 'fail' }
-    Deny  = @{ ConfirmationState = 'denied';  DangerResult = 'E_BLOCKED';    LedgerResult = 'fail' }
-}
+# 只放真正被查的字段：把 DangerResult/LedgerResult 也列在这里会读起来像判据，实际没人用。
+$LegExpectedConfirmation = @{ Allow = 'allowed'; Stale = 'allowed'; Deny = 'denied' }
 
 if ($DryRun) {
     Write-Host "[DryRun] P0 监督式 runner：legs=$($orderedLegs -join ',') executor=$Executor provision=$([bool]$Provision)"
@@ -638,11 +635,24 @@ function Assert-P0LegSemantics {
     if ($Leg -ceq 'Allow') {
         if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw 'Allow 派单不是 success。' }
         if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw 'Allow 危险动作没有真实放行。' }
-        # 网关侧后验与 runner 侧 ui_find 正证据必须同时成立：前者判"内容离开了输入框"，
-        # 后者判"内容出现在了会话里"。只有一条成立说明两套判据打架，不能算通过。
-        if ($Trace.SendVerified -ne $true) {
-            throw ("Allow 的 press_key 未报告发送已验证（sent_verified=$($Trace.SendVerified)" +
-                "，verification_state=$($Trace.SendVerificationState)）。")
+        # 网关侧后验与 runner 侧 ui_find 正证据是两套判据：前者判"内容离开了输入框"，
+        # 后者判"内容出现在了会话消息区"。**真正的证明是后者**——ui_find 是正证据，而网关侧
+        # 只是负证据（"不在输入框里了"）。
+        #
+        # 所以这里只禁止**矛盾**，不强求网关自证成功：微信屏蔽 a11y 树，后验只剩 OCR 腿，
+        # 而发送成功后输入栏本来就是空的、OCR 常常一个字都读不到 —— 那种情况下 unverified 是
+        # 物理上正确的结论。要求它必须 sent 会让 P0 因为"拿不到证据"而永远过不了，
+        # 这与"判不了 ≠ 没发出去"的三态设计自相矛盾（2026-07-27 复查发现，此前写反了）。
+        $sendState = [string]$Trace.SendVerificationState
+        if ($sendState -ceq 'not_sent') {
+            throw 'Allow 的 press_key 判定未发送，却在消息区找到了 marker：两套判据打架。'
+        }
+        if ([string]::IsNullOrEmpty($sendState)) {
+            throw 'Allow 的 press_key 未报告 verification_state（装的是不含发送后验的旧 APK？）。'
+        }
+        if ($sendState -cne 'sent') {
+            Write-Host ("[Allow] 网关侧后验为 $sendState（未能自证发送）；" +
+                '本腿判通过依据的是 ui_find 在消息区命中 marker 这条正证据。') -ForegroundColor Yellow
         }
         if (-not (Test-P0ExactPropertySet -Value $calls[3].Input -Expected @('text'))) {
             throw 'Allow 的 ui_find 只允许唯一 marker 查询参数。'
@@ -974,7 +984,7 @@ try {
                 }
                 # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
                 # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
-                $expectedState = $LegExpectation[$leg].ConfirmationState
+                $expectedState = $LegExpectedConfirmation[$leg]
                 if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
                 if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
                     throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
@@ -1045,10 +1055,13 @@ try {
             input_evidence_matched = ($trace.InputMatched -and
                 [int]$confirmation.input_length -eq $markerLength -and
                 [string]$confirmation.input_sha256 -ceq $markerSha256)
+            # 只写"验过什么"，不写"结论是什么"。Allow 的 single_match 背后是 ui_find 在消息区
+            # 命中 marker 这条独立正证据；Stale/Deny 两腿**没有任何独立观察屏幕的步骤**——
+            # 判据全部来自被测组件自己的报告（E_STALE_REF / E_BLOCKED + 零续调）。
+            # 写成 not_executed_denied 会让 manifest 读起来像"已验证消息未发出"，其实没验过。
             send_postcondition = switch ($leg) {
                 'Allow' { 'single_match' }
-                'Deny'  { 'not_executed_denied' }
-                default { 'not_executed_stale' }
+                default { 'gateway_reported_blocked_no_independent_check' }
             }
             # 网关侧后验（内容离开输入框）与 runner 侧 ui_find 正证据（内容出现在会话里）是两套判据，
             # 分开记：日后哪一套先松动，manifest 里看得出来。

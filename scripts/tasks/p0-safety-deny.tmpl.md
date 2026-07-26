@@ -12,6 +12,12 @@
 >
 > 真人在手机确认卡上核对「目标会话：文件传输助手」、明文预览（本轮 marker）和 12 位确认编号后
 > **点击「拒绝」**（Allow/Stale 两腿点的是「允许本次」，只有这一腿点拒绝，别点错）。
+>
+> **本腿正文刻意不带 Allow/Stale 那段「前台身份取证例外」**：那段说「返回 E_BLOCKED 且信息为
+> 前台身份未知时可额外调用一次 foreground_app」，而 E_BLOCKED 在本腿是**预期结果**，模型很容易
+> 把两句连起来读并触发例外——多出的第 4 个调用会被严格签名判为失败，白烧一轮真机。
+> Allow/Stale 保留该段是因为在那两腿里 E_BLOCKED 属异常信号，触发时那一腿本来就已经在失败路径上，
+> 诊断价值大于代价；本腿则相反。
 
 ---
 
@@ -23,7 +29,8 @@
 2. 只调用一次 type_text(text="<RUNNER_GENERATED_MARKER>", mode="replace")；要求 committed=true，否则结束且禁止发送。
 3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。
 4. 真人会在手机确认卡核对输入并点击“拒绝”。
-5. press_key 必须返回 E_BLOCKED；收到后立即输出“结果：失败”，此后不得再调用任何 gateway 工具——包括只读复核。消息是否未发出由 runner 机械判定，不要为此再执行任何动作。
-前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
+5. press_key 必须返回 E_BLOCKED（真人拒绝）；收到后立即输出“结果：失败”，此后不得再调用任何 gateway 工具——包括只读复核、包括 foreground_app。本腿的调用序列严格等于 macro_run→type_text→press_key 三个，多一个都判失败。消息是否未发出由 runner 判定，不要为此再执行任何动作。
+
+注意：本腿的 E_BLOCKED 是**预期结果**，不是故障，不要据此做任何取证或诊断调用。
 
 不得输出 [AWAIT_CONFIRM]，不得进入 -Confirm 第二腿。
