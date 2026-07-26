@@ -351,10 +351,6 @@ object UiTools {
     ): JSONObject {
         if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
-        // 发送后验的基线：Enter 之前输入栏上到底显示着什么。读不到就如实反映为无法后验。
-        val inputBarBefore = if (key == "enter") {
-            runCatching { a11y.ocrReadInputBarRegion().text }.getOrNull()
-        } else null
         val ok = when (key) {
             "enter" -> {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
@@ -393,12 +389,13 @@ object UiTools {
             fallback = if (key == "enter" || key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
         )
         if (key != "enter") return JSONObject().put("done", true)
+        // 后验要在清证据之前取基线：它是"应当消失的那串字"的唯一可靠来源。
+        val verdict = verifyEnterSent(a11y, expectedInputCommitEvidence)
         Gateway.inputCommitEvidence.clear()
         // Enter 是"发送"，返回值不能只看通道调用是否被受理：`performEditorAction` 只要
         // InputConnection 还活着就返回 true，微信不理会 IME_ACTION_SEND 时照样返回 true。
         // 2026-07-26 真机实锤：press_key 返回 done:true、确认卡也走完了，而 marker 原封不动
         // 躺在输入框里，消息根本没发出去——危险动作谎报成功比失败更糟。
-        val verdict = verifyEnterSent(a11y, inputBarBefore)
         if (!verdict.sent) throw GatewayError(
             ErrorCode.E_VERIFY_FAIL,
             "Enter 已投递但输入框内容未消失，无法证明已发送（后验读回：${verdict.detail}）",
@@ -412,13 +409,20 @@ object UiTools {
     private data class EnterVerdict(val sent: Boolean, val detail: String)
 
     /**
-     * 发送后验：输入栏里原先那串文字应当已经消失。**只判定、绝不重试发送**——
+     * 发送后验：刚提交的那串内容应当已经从输入栏消失。**只判定、绝不重试发送**——
      * 后验失败时可能已经发出去了，换通道再来一次的风险是重复发送。
+     *
+     * 基线必须是**已提交的确切文本**（取自输入证据，长度未超 `PREVIEW_LIMIT` 时 preview
+     * 就是原文），不能拿"Enter 之前那次 OCR 读回的字符串"当基线——OCR 每次的噪声都不同
+     * （实测同一屏读出 `") POALLOW-…F20 ) POALLOW-…F2C"` 与 `"POALLOW-…F2C"`），
+     * 拿噪声串做 contains 比较，任何一次抖动都会被判成"内容已消失"，也就是**谎报发送成功**
+     * （2026-07-26 真机实锤：`sent_verified:true`，而 marker 还好端端在框里）。
      */
-    private fun verifyEnterSent(a11y: GatewayA11yService, before: String?): EnterVerdict {
-        val wanted = OcrEngine.norm(before.orEmpty())
+    private fun verifyEnterSent(a11y: GatewayA11yService, committed: InputCommitEvidence?): EnterVerdict {
+        val expected = committed?.takeIf { it.length <= InputCommitEvidence.PREVIEW_LIMIT }?.preview
+        val wanted = OcrEngine.norm(expected.orEmpty())
         if (wanted.length < MIN_ENTER_VERIFY_CHARS) {
-            return EnterVerdict(false, "发送前未读到足够的输入栏文字（无法建立后验基线）")
+            return EnterVerdict(false, "没有可用于后验的已提交文本基线")
         }
         Thread.sleep(600)
         val after = try {
@@ -427,7 +431,7 @@ object UiTools {
             return EnterVerdict(false, "读回异常=${e.javaClass.simpleName}")
         }
         val stillThere = OcrEngine.norm(after.orEmpty()).contains(wanted)
-        return EnterVerdict(!stillThere, if (stillThere) "输入栏仍是原内容" else "输入栏已清空")
+        return EnterVerdict(!stillThere, if (stillThere) "输入栏仍显示已提交内容" else "输入栏已不再显示已提交内容")
     }
 
     private fun requireInputEvidence(expected: InputCommitEvidence?, focused: FocusedInputSnapshot) {

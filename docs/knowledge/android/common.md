@@ -120,6 +120,8 @@
       - **后验失败时绝不换通道重试**：那时有可能其实已经发出去了，"再试一条通道"的代价是重复发送。这与站规"不得重试同一危险动作"是同一条原则在网关侧的落实。
       - 顺带：零 UI IME 下微信输入栏右侧**不会出现 发送 按钮**（它只在键盘弹起时替换 ⊕），所以也不能指望"点发送按钮"这条现成路径凭空存在。
       - **诊断办法：问我们自己的 IME，别猜。** `onStartInput` 收到的 `EditorInfo` 就是权威答案，已做成 R 级只读工具 `ime_editor_info`（只输出 imeOptions/inputType/action，不含 hintText/initialText 这类可能带内容的字段），零 token 直接问。本机实测微信聊天输入框：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行 TEXT|CAP_SENTENCES）、`no_enter_action=false`——**契约上两条路都该通**，所以失败原因不在契约。
+      - **两条 IME 路都验完了，微信都不发**（2026-07-26 21:41 真机）：`performEditorAction(IME_ACTION_SEND)` 与单行框上的 `KEYCODE_ENTER` 均无反应，尽管契约声明了 send、单行、未禁回车动作。合理推测是微信的发送处理绑在它自己的"键盘已弹起/文字模式"UI 状态机上（零 UI IME 下它连 发送 按钮都不渲染）。**结论：这台设备上，靠 IME 送回车发不出微信消息。**
+      - **后验基线必须是"已提交的确切文本"，不能是"动作前那次 OCR 读回"**：OCR 每次噪声不同（同一屏读出 `") POALLOW-…F20 ) POALLOW-…F2C"` 与 `"POALLOW-…F2C"`），拿噪声串做 contains，任何抖动都会被判成"内容已消失"，也就是**谎报发送成功**（自己踩过一次）。用输入证据里的 preview（长度未超 `PREVIEW_LIMIT` 时就是原文）当基线。
       - **改法：按契约选通道，且只送一次。** 单行框直接送物理回车键事件（单行 `TextView` 会自己把回车转成它声明的 editor action，与真实键盘按 Enter 完全同一条路径，比我们代劳 `performEditorAction` 更可靠）；多行框回车是换行，才显式调 editor action。`KeyEvent` 要用带 downTime/eventTime 的完整构造函数，别用只有 action+code 的那个。
   21. **自家确认卡是「可获焦 overlay」，它抢走窗口输入焦点会连累两处安全判据**（2026-07-26 真机先后各撞一次，同一病根）。`ConfirmOverlay` 原先只设了 `FLAG_NOT_TOUCH_MODAL`，窗口是可获焦的：
       - 症状一：卡显示期间 App 窗口既非 `isActive` 也非 `isFocused`，`applicationWindow()` 取不到活动应用窗口 → 前台身份判 unknown → **确认后的第二次 `requireKnownForeground` 直接 `E_BLOCKED`**（人已经点了「允许本次」才翻车）。

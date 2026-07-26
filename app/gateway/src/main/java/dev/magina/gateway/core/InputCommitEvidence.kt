@@ -26,7 +26,7 @@ data class InputCommitEvidence(
             preview == InputCommitEvidence.preview(text)
 
     companion object {
-        internal const val PREVIEW_LIMIT = 64
+        const val PREVIEW_LIMIT = 64
 
         fun sha256(text: String): String = MessageDigest.getInstance("SHA-256")
             .digest(text.toByteArray(Charsets.UTF_8))
