@@ -44,11 +44,26 @@ internal fun buildAuditLine(
  * screen_capture 的 reason 也在参数里，事后可查每张原图为什么进了模型。
  * 落盘 getExternalFilesDir/audit/YYYYMMDD.jsonl，adb pull 可取，M3 任务面板回放用同一数据。
  */
-class Audit(private val appContext: Context) {
+class Audit(
+    /** 审计目录来源。抽成 lambda 是为了能在纯 JVM 单测里注入临时目录与故意失败的实现。 */
+    private val dirProvider: () -> File,
+) {
+    constructor(appContext: Context) : this({ File(appContext.getExternalFilesDir(null), "audit") })
 
     private val seq = AtomicLong(0)
     private val day = SimpleDateFormat("yyyyMMdd", Locale.US)
     private val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+    private val failures = AtomicLong(0)
+
+    /**
+     * 写盘失败次数。
+     *
+     * 原实现整个裹在 `runCatching {}` 里，失败连个痕迹都不留——而审计是安全硬门的证据链，
+     * **"一切正常，只是没有证据"是最坏的失败模式**：事后回看以为动作没发生过。
+     * 这个计数会进 ctx，让大脑当场看见证据链断了（`run-as` 读不到 external files 那次，
+     * 采集坏了好几天没人知道，就是同一类问题的另一面）。
+     */
+    val writeFailures: Long get() = failures.get()
 
     fun nextId(): String = "a-%06d".format(seq.incrementAndGet())
 
@@ -62,8 +77,8 @@ class Audit(private val appContext: Context) {
         elapsedMs: Long,
         note: String = "",
     ) {
-        runCatching {
-            val dir = File(appContext.getExternalFilesDir(null), "audit").apply { mkdirs() }
+        val outcome = runCatching {
+            val dir = dirProvider().apply { mkdirs() }
             val line = buildAuditLine(
                 timestamp = iso.format(Date()),
                 auditId = auditId,
@@ -75,6 +90,22 @@ class Audit(private val appContext: Context) {
                 note = note,
             )
             File(dir, "${day.format(Date())}.jsonl").appendText(line.toString() + "\n")
+            pruneExpired(dir)
         }
+        // 仍然不让审计失败把工具调用带崩（证据缺失比动作失败轻），但必须留下痕迹。
+        if (outcome.isFailure) failures.incrementAndGet()
+    }
+
+    /** 一天一个文件、永不清理会无限长下去。只保留最近 [RETENTION_DAYS] 天。 */
+    private fun pruneExpired(dir: File) {
+        val cutoff = System.currentTimeMillis() - RETENTION_DAYS * DAY_MS
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
+            ?.filter { it.lastModified() < cutoff }
+            ?.forEach { it.delete() }
+    }
+
+    companion object {
+        const val RETENTION_DAYS = 30L
+        private const val DAY_MS = 24L * 60 * 60 * 1000
     }
 }

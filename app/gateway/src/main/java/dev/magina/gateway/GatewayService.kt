@@ -42,7 +42,7 @@ class GatewayService : Service() {
             .setOngoing(true)
             .build()
         startForeground(NOTIF_ID, notif)
-        McpServer.start(Gateway.DEFAULT_PORT, Gateway.token)
+        McpServer.start(Gateway.DEFAULT_PORT, Gateway.token())
         return START_STICKY
     }
 

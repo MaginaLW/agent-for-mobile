@@ -12,7 +12,9 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import dev.magina.gateway.core.BearerAuthGuard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,11 +33,12 @@ object McpServer {
 
     fun start(port: Int, token: String) {
         if (engine != null) return
+        val guard = BearerAuthGuard(token)
         engine = embeddedServer(CIO, port = port, host = "127.0.0.1") {
             routing {
                 get("/health") { call.respondText("ok") }
                 get("/mcp") { call.respondText("", status = HttpStatusCode.MethodNotAllowed) }
-                post("/mcp") { handle(call, token) }
+                post("/mcp") { handle(call, guard) }
             }
         }.start(wait = false)
     }
@@ -45,9 +48,11 @@ object McpServer {
         engine = null
     }
 
-    private suspend fun handle(call: ApplicationCall, token: String) {
-        val auth = call.request.header("Authorization") ?: ""
-        if (auth != "Bearer $token") {
+    private suspend fun handle(call: ApplicationCall, guard: BearerAuthGuard) {
+        val verdict = guard.check(call.request.header("Authorization"))
+        if (!verdict.allowed) {
+            // 失败退避：拖慢猜测，不锁死端口（锁死会让同机乱打的进程把我们自己也挡在外面）。
+            if (verdict.delayMs > 0) delay(verdict.delayMs)
             call.respondText("""{"error":"unauthorized"}""", status = HttpStatusCode.Unauthorized)
             return
         }

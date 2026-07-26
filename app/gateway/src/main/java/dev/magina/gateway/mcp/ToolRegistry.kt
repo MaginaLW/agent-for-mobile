@@ -343,13 +343,19 @@ object ToolRegistry {
         val fingerprint = SafetyPolicy.fingerprint(args)
         val auditArgs = sanitizeAuditArgs(name, args)
 
-        fun ctxNow(): JSONObject =
-            GatewayA11yService.instance?.ctx(Gateway.caps())
+        fun ctxNow(): JSONObject {
+            val ctx = GatewayA11yService.instance?.ctx(Gateway.caps())
                 ?: JSONObject().put("app", "").put("activity", "")
                     .put("foreground_known", false).put("revision", -1)
                     .put("keyboard", JSONObject().put("visible", false).put("height", 0))
                     .put("caps", JSONArray(Gateway.caps()))
                     .put("note", "a11y 未开启，ctx 降级")
+            // 审计写不进去时必须让大脑当场看见：证据链断了而动作照常执行，
+            // 是比动作失败更坏的状态（事后回看会以为这些动作从没发生过）。
+            val auditFailures = Gateway.audit.writeFailures
+            if (auditFailures > 0) ctx.put("audit_write_failures", auditFailures)
+            return ctx
+        }
 
         var safetyNote = ""
 

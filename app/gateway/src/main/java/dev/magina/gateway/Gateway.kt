@@ -9,11 +9,11 @@ import dev.magina.gateway.core.InputCommitEvidenceStore
 import dev.magina.gateway.core.PreparedTargetEvidenceStore
 import dev.magina.gateway.core.RetryGuard
 import dev.magina.gateway.core.SkillPack
+import dev.magina.gateway.core.TokenStore
 import dev.magina.gateway.core.UiMutationCoordinator
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.testing.TestControl
 import dev.magina.gateway.testing.TestControlProvider
-import java.util.UUID
 
 /** L0 全局装配：技能包、审计、重试守卫、能力位、token/端口。 */
 object Gateway {
@@ -41,14 +41,17 @@ object Gateway {
         testControl = TestControlProvider.create(appContext)
     }
 
-    val token: String
-        get() {
-            val prefs = appContext.getSharedPreferences("gateway", Context.MODE_PRIVATE)
-            prefs.getString("token", null)?.let { return it }
-            val t = UUID.randomUUID().toString().replace("-", "")
-            prefs.edit().putString("token", t).apply()
-            return t
-        }
+    private val tokenStore: TokenStore by lazy {
+        val prefs = appContext.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+        TokenStore(
+            read = { prefs.getString("token", null) },
+            // commit() 而不是 apply()：token 必须落盘之后才能交出去（见 TokenStore 说明）。
+            write = { prefs.edit().putString("token", it).commit() },
+        )
+    }
+
+    /** 取网关 token；首次调用生成并同步落盘，并发安全。 */
+    fun token(): String = tokenStore.current()
 
     /** 能力位：进 ctx.caps，大脑与工具降级逻辑都看它。 */
     fun caps(): List<String> {

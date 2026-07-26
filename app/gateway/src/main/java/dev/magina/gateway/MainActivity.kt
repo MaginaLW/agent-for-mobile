@@ -61,7 +61,7 @@ class MainActivity : Activity() {
         button("停止网关服务") { GatewayService.stop(this); status.postDelayed({ refresh() }, 500) }
         button("复制 token") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("gateway-token", Gateway.token))
+            cm.setPrimaryClip(ClipData.newPlainText("gateway-token", Gateway.token()))
             Toast.makeText(this, "token 已复制", Toast.LENGTH_SHORT).show()
         }
 
@@ -82,7 +82,7 @@ class MainActivity : Activity() {
             appendLine("输入法: ${if (Gateway.imeEnabled()) "已启用 ✅" else "未启用"}")
             appendLine("悬浮窗: ${if (Settings.canDrawOverlays(this@MainActivity)) "✅" else "未授权"}")
             appendLine("能力位: ${Gateway.caps()}")
-            appendLine("\ntoken: ${Gateway.token}")
+            appendLine("\ntoken: ${Gateway.token()}")
             appendLine("\nPC 侧接入：")
             appendLine("adb forward tcp:${Gateway.DEFAULT_PORT} tcp:${Gateway.DEFAULT_PORT}")
             appendLine("然后 claude --mcp-config configs/gateway-mcp.json")
