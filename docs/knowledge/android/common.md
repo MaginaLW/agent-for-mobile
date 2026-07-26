@@ -115,6 +115,10 @@
       - 已补：`ctx` 增加 `foreground_reason`（失败的那次调用自带原因）；`foreground_app` 从两字段扩成只读诊断——`selected_window_id`、`tracked_identity`、`windows[]`（id/type/active/focused/**root_package**/bounds/title）、以及 tracker 侧最近 24 条窗口事件处置记录 `recent_events`（seq/时间/kind/decision/当时的窗口列表）。`windows[].root_package` 同时回答"服务冷启动能否直接从窗口自举身份"这个 13 号遗留问题——微信若真是 `root=null`，自举就拿不到包名，得另找真值源，不能靠猜。
       - **没有证据前不要动 tracker 语义**：这次刻意只加诊断不改判据。翻车的两种可能（窗口列表瞬时取空 vs 应用窗口 id 真的换了却没等到可接受的事件）修法完全不同，前者该做有界重读，后者要动候选发布规则，而后者正是 D1 那道"overlay 事件不得污染前台身份"的防线所在，改错就是把安全门拆了。
       - 取证方式：Allow/Stale 任务卡已加"前台身份取证例外"——任一工具返回 `foreground_known=false` 或该 `E_BLOCKED` 时，允许**额外只调一次** `foreground_app` 并把结果抄进「关键观察」，然后立即报失败，不得据此重试。
+  23. **`InputConnection.performEditorAction()` 返回 true 不代表 App 做了任何事**（2026-07-26 真机实锤）：它只表示这次调用被投递到了还活着的输入连接。微信不理会 `IME_ACTION_SEND` 时照样返回 true，于是 `ImeBridge.enter()` 里排在它后面的 `KEYCODE_ENTER` 兜底成了**永远走不到的死代码**，而 `press_key` 一路返回 `done:true`——确认卡也走完了，marker 却原封不动躺在输入框里，消息根本没发出去。
+      - **危险动作谎报成功比失败更糟**：发送/支付/删除这类动作的返回值必须由**后验**决定，不能由"通道调用被受理"决定。现在 Enter 前后各读一次输入栏 OCR，内容没消失就 `E_VERIFY_FAIL`。
+      - **后验失败时绝不换通道重试**：那时有可能其实已经发出去了，"再试一条通道"的代价是重复发送。这与站规"不得重试同一危险动作"是同一条原则在网关侧的落实。
+      - 顺带：零 UI IME 下微信输入栏右侧**不会出现 发送 按钮**（它只在键盘弹起时替换 ⊕），所以也不能指望"点发送按钮"这条现成路径凭空存在。
   21. **自家确认卡是「可获焦 overlay」，它抢走窗口输入焦点会连累两处安全判据**（2026-07-26 真机先后各撞一次，同一病根）。`ConfirmOverlay` 原先只设了 `FLAG_NOT_TOUCH_MODAL`，窗口是可获焦的：
       - 症状一：卡显示期间 App 窗口既非 `isActive` 也非 `isFocused`，`applicationWindow()` 取不到活动应用窗口 → 前台身份判 unknown → **确认后的第二次 `requireKnownForeground` 直接 `E_BLOCKED`**（人已经点了「允许本次」才翻车）。
       - 症状二：被操作 App 的 InputConnection 被拆掉重建，**IME 会话 id 换新** → 确认后焦点身份复核 `E_STALE_REF`。降级链是 IME 单命名空间，身份就是这个 session id，等于整条链被自家的卡打断。

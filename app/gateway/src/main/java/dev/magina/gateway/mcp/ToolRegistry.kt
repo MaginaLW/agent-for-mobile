@@ -494,7 +494,10 @@ object ToolRegistry {
         name.startsWith("system_") || name in setOf("device_info", "clipboard", "media_query", "foreground_app", "keyboard_state") -> "api"
         name in setOf("open_uri", "intent_send", "share_text", "share_file", "app_launch") -> "intent"
         name == "screen_capture" -> "vision"
-        else -> ""
+        // 受控宏走 a11y + IME 复合通道；此前落到空串，写出的审计行 channel 为空，
+        // 而审计契约要求每行都有非空通道（2026-07-26：审计一能读到就立刻被这条卡住）。
+        name == "macro_run" -> "a11y"
+        else -> "tool"
     }
 
     private fun blockedAppAllows(name: String, args: JSONObject): Boolean = when {

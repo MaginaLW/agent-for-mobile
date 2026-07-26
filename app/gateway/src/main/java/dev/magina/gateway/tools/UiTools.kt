@@ -351,6 +351,10 @@ object UiTools {
     ): JSONObject {
         if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
+        // 发送后验的基线：Enter 之前输入栏上到底显示着什么。读不到就如实反映为无法后验。
+        val inputBarBefore = if (key == "enter") {
+            runCatching { a11y.ocrReadInputBarRegion().text }.getOrNull()
+        } else null
         val ok = when (key) {
             "enter" -> {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
@@ -388,8 +392,42 @@ object UiTools {
             channel = "a11y", retryable = true,
             fallback = if (key == "enter" || key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
         )
-        if (key == "enter") Gateway.inputCommitEvidence.clear()
-        return JSONObject().put("done", true)
+        if (key != "enter") return JSONObject().put("done", true)
+        Gateway.inputCommitEvidence.clear()
+        // Enter 是"发送"，返回值不能只看通道调用是否被受理：`performEditorAction` 只要
+        // InputConnection 还活着就返回 true，微信不理会 IME_ACTION_SEND 时照样返回 true。
+        // 2026-07-26 真机实锤：press_key 返回 done:true、确认卡也走完了，而 marker 原封不动
+        // 躺在输入框里，消息根本没发出去——危险动作谎报成功比失败更糟。
+        val verdict = verifyEnterSent(a11y, inputBarBefore)
+        if (!verdict.sent) throw GatewayError(
+            ErrorCode.E_VERIFY_FAIL,
+            "Enter 已投递但输入框内容未消失，无法证明已发送（后验读回：${verdict.detail}）",
+            channel = "a11y",
+            retryable = false,
+            fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
+        )
+        return JSONObject().put("done", true).put("sent_verified", true)
+    }
+
+    private data class EnterVerdict(val sent: Boolean, val detail: String)
+
+    /**
+     * 发送后验：输入栏里原先那串文字应当已经消失。**只判定、绝不重试发送**——
+     * 后验失败时可能已经发出去了，换通道再来一次的风险是重复发送。
+     */
+    private fun verifyEnterSent(a11y: GatewayA11yService, before: String?): EnterVerdict {
+        val wanted = OcrEngine.norm(before.orEmpty())
+        if (wanted.length < MIN_ENTER_VERIFY_CHARS) {
+            return EnterVerdict(false, "发送前未读到足够的输入栏文字（无法建立后验基线）")
+        }
+        Thread.sleep(600)
+        val after = try {
+            a11y.ocrReadInputBarRegion().text
+        } catch (e: Throwable) {
+            return EnterVerdict(false, "读回异常=${e.javaClass.simpleName}")
+        }
+        val stillThere = OcrEngine.norm(after.orEmpty()).contains(wanted)
+        return EnterVerdict(!stillThere, if (stillThere) "输入栏仍是原内容" else "输入栏已清空")
     }
 
     private fun requireInputEvidence(expected: InputCommitEvidence?, focused: FocusedInputSnapshot) {
@@ -501,4 +539,7 @@ object UiTools {
     }
 
     fun macroRun(args: JSONObject): JSONObject = MacroRunner.run(args)
+
+    /** 少于这么多字符的基线不足以判断"内容是否消失"（OCR 在空输入栏上也会捡到一两个符号）。 */
+    private const val MIN_ENTER_VERIFY_CHARS = 4
 }
