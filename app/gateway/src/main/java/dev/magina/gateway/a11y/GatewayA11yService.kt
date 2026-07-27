@@ -742,6 +742,13 @@ class GatewayA11yService : AccessibilityService() {
         return out
     }
 
+    /**
+     * 本次感知里视觉通道的失败原因；null 表示上一次并入 OCR 时是正常的。
+     * 由调用方在自己的判定开始前清空，以免把陈旧的失败算到这一次头上。
+     */
+    @Volatile
+    private var lastVisionSenseError: String? = null
+
     /** 供安全层做白名单上下文判断。 */
     fun visibleTexts(withOcr: Boolean = false): List<String> {
         val out = ArrayList<String>()
@@ -754,7 +761,16 @@ class GatewayA11yService : AccessibilityService() {
         exposedWindows()
             .forEach { w -> w.root?.let { visit(it, 0) } }
         if (withOcr && !ConfirmOverlay.isAwaitingDecision) {
-            runCatching { ocrScreen() }.getOrNull()?.lines?.forEach { out.add(it.text) }
+            // 失败必须留痕。微信屏蔽 a11y 树时 OCR 是屏上文字的**唯一**来源，静默吞掉它会让
+            // wait_for 只报"超时"，把排查引向"文字没出现"，而真相是"我们根本看不见"。
+            runCatching { ocrScreen() }
+                .onSuccess { shot ->
+                    lastVisionSenseError = null
+                    shot.lines.forEach { out.add(it.text) }
+                }
+                .onFailure {
+                    lastVisionSenseError = "${it.javaClass.simpleName}: ${it.message.orEmpty().take(80)}"
+                }
         }
         return out
     }
@@ -1106,6 +1122,8 @@ class GatewayA11yService : AccessibilityService() {
         val start = SystemClock.elapsedRealtime()
         var lastRev = revision
         var quietSince = start
+        // 清空后再等：超时时报出来的视觉失败必须是**这一次**发生的，不能把上一次的旧账算进来。
+        lastVisionSenseError = null
         while (SystemClock.elapsedRealtime() - start < timeoutMs) {
             val met = when (condition) {
                 "text_appears" -> textOnScreen(args.optString("text"))
@@ -1126,10 +1144,19 @@ class GatewayA11yService : AccessibilityService() {
                 .put("revision", revision)
             SystemClock.sleep(250)
         }
+        // 视觉通道在等待期间失败过，就必须说出来：否则"超时"会把排查引向"目标文字没出现"，
+        // 而真相是这段时间里我们根本看不见屏幕（微信这类屏蔽 a11y 树的 App 上尤其致命）。
+        val visionError = lastVisionSenseError
         throw GatewayError(
-            ErrorCode.E_TIMEOUT, "wait_for($condition) 超时 ${timeoutMs}ms",
+            ErrorCode.E_TIMEOUT,
+            "wait_for($condition) 超时 ${timeoutMs}ms" +
+                (visionError?.let { "；期间视觉通道失败（$it），本次很可能不是'没出现'而是'看不见'" } ?: ""),
             channel = "a11y", retryable = false,
-            fallback = "ui_snapshot 看当前实况再决策",
+            fallback = if (visionError != null) {
+                "先 screen_capture(reason=low_confidence) 确认视觉通道，再决定是否重等"
+            } else {
+                "ui_snapshot 看当前实况再决策"
+            },
         )
     }
 

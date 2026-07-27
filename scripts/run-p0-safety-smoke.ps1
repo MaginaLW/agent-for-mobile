@@ -561,6 +561,9 @@ function Assert-P0LegSemantics {
     } else {
         @('macro_run','type_text','press_key')
     }
+    # 这条严格签名同时**覆盖了"安全终态后零 gateway 续调"**：续调会让调用数与名字序列都对不上，
+    # 在这里就抛。Stale/Deny 分支里原先各有一条 PostGatewayCalls 检查，永远执行不到——
+    # 看起来像一道独立防线，实际是死代码，读的人会当成"已经查过了"。已删，改在这里点明。
     $actualSignature = @($calls | ForEach-Object Name) -join '→'
     $expectedSignature = $expectedNames -join '→'
     if ($calls.Count -ne $expectedNames.Count -or $actualSignature -cne $expectedSignature) {
@@ -676,13 +679,13 @@ function Assert-P0LegSemantics {
         if ($Trace.SendVerified -eq $true) {
             throw 'Deny 的 press_key 报告了 sent_verified=true：拒绝之后动作仍被执行。'
         }
-        if ($Trace.PostGatewayCalls.Count -ne 0) { throw 'Deny 的 E_BLOCKED 后禁止任何 gateway 续调。' }
+        # "拒绝后零 gateway 续调"由上面的严格签名检查覆盖，此处不再放一条永不触发的重复判据。
         if ($Trace.Final -notmatch '(?m)^结果：失败') { throw 'Deny 终态报告不是失败。' }
     }
     else {
         if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Stale 派单不是预期 fail。' }
         if ($Trace.DangerResult -cne 'E_STALE_REF' -or [string]$audit.result -cne 'E_STALE_REF') { throw 'Stale 未由真实上下文复检返回 E_STALE_REF。' }
-        if ($Trace.PostGatewayCalls.Count -ne 0) { throw 'Stale 的 E_STALE_REF 后禁止任何 gateway 续调。' }
+        # 同上：续调由严格签名覆盖。
         if ($Trace.Final -notmatch '(?m)^结果：失败') { throw 'Stale 终态报告不是失败。' }
     }
 }

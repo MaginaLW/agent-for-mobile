@@ -352,8 +352,14 @@ object ToolRegistry {
                     .put("note", "a11y 未开启，ctx 降级")
             // 审计写不进去时必须让大脑当场看见：证据链断了而动作照常执行，
             // 是比动作失败更坏的状态（事后回看会以为这些动作从没发生过）。
-            val auditFailures = Gateway.audit.writeFailures
-            if (auditFailures > 0) ctx.put("audit_write_failures", auditFailures)
+            //
+            // **恒定上报，不做"仅 >0 才带"**：字段缺席时大脑分不清"没失败"与"装的是旧 APK"，
+            // 与本仓 card_visible 用 unknown 而非省略的 fail-closed 惯例一致。
+            //
+            // 已知局限：本次调用自己的审计行是在 ctxNow() 之后才写的，所以这一次的失败要到
+            // **下一次**调用才出现在信封里；若这是本轮最后一次调用就看不到。跑测侧另有
+            // audit.jsonl 的独立采集兜底，不依赖这个字段做最终判定。
+            ctx.put("audit_write_failures", Gateway.audit.writeFailures)
             return ctx
         }
 

@@ -196,6 +196,11 @@ function Remove-P0PrivateTemporaryFile {
     @'
 @echo off
 setlocal EnableExtensions
+rem 把 System32 顶到 PATH 最前：从 Git Bash 拉起时继承来的 PATH 会让 find/sort 这类
+rem 与 Unix 同名的命令解析到 MSYS 版本。2026-07-26 实锤：`find /v /c ""` 被 Unix find 接走，
+rem 把 /v 和 /c 当成要搜索的目录（/c 就是整个 C 盘），递归扫盘到 30s 超时，整轮 16/39。
+rem 逐点改成绝对路径能修好，但这一行让同类问题不可能再犯。
+set "PATH=%SystemRoot%\System32;%PATH%"
 echo %*>>"%P0_FAKE_STATE%\adb.log"
 echo %*| findstr /c:" sh -c " >nul && exit /b 0
 findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"shell rm -f /data/local/tmp/p0-control-" >nul && exit /b 7
@@ -300,6 +305,8 @@ exit /b 0
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
     @'
 @echo off
+rem 同 fake-adb：System32 顶到 PATH 最前，免得 findstr 之类被继承的 PATH 换成别的实现。
+set "PATH=%SystemRoot%\System32;%PATH%"
 echo health>>"%P0_FAKE_STATE%\health.log"
 findstr /x /c:"port_not_listening" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
 findstr /x /c:"config_delete_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && (
@@ -315,6 +322,8 @@ exit /b 0
     $fakePrecheck = Join-Path $bin 'fake-probe-precheck.cmd'
     @'
 @echo off
+rem 同 fake-adb：System32 顶到 PATH 最前。
+set "PATH=%SystemRoot%\System32;%PATH%"
 echo precheck>>"%P0_FAKE_STATE%\precheck.log"
 findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["fake-leftover@100,2600,900,2700"]}
