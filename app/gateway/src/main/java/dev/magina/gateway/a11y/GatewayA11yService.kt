@@ -402,35 +402,27 @@ class GatewayA11yService : AccessibilityService() {
                 var ocrIdx = 0
                 for (line in shot.lines) {
                     if (truncated) break
-                    val lineArea = line.bounds.width().toLong() * line.bounds.height()
-                    val host = refs.entries
-                        .filter {
-                            it.value.node != null &&
-                                it.value.bounds.contains(line.bounds.centerX(), line.bounds.centerY())
-                        }
-                        .minByOrNull { it.value.bounds.width().toLong() * it.value.bounds.height() }
-                        ?.takeIf {
-                            it.value.bounds.width().toLong() * it.value.bounds.height() <= 12 * lineArea
-                        }
-                    if (host != null) {
-                        val he = host.value
-                        val hostHasText = he.label.isNotEmpty() || he.desc.isNotEmpty()
-                        if (he.source == "a11y" && !hostHasText) {
-                            refs[host.key] = he.copy(label = line.text, source = "fused")
-                            jsonByRef[host.key]
+                    // 每行都重新取候选：上一行可能刚把某个宿主变成 fused，它就不该再参与了。
+                    val hosts = refs.entries
+                        .filter { it.value.node != null }
+                        .map { FusionHost(it.key, it.value.bounds.toOcrBox(), it.value.label, it.value.desc, it.value.source) }
+                    when (val decision = OcrFusionPolicy.decide(
+                        lineBox = line.bounds.toOcrBox(),
+                        lineText = line.text,
+                        hosts = hosts,
+                        normalize = OcrEngine::norm,
+                    )) {
+                        is FusionDecision.Fuse -> {
+                            val he = refs.getValue(decision.hostRef)
+                            refs[decision.hostRef] = he.copy(label = line.text, source = "fused")
+                            jsonByRef[decision.hostRef]
                                 ?.put("text", line.text.take(cap))
                                 ?.put("source", "fused")
                                 ?.put("confidence", conf2(line.conf))
                             continue
                         }
-                        if (he.source == "a11y" && hostHasText) {
-                            // 仅当内容确实相同才算重复丢弃——vivo 充电胶囊等带文本大悬浮节点
-                            // 罩住页面文字时（实锤：选择聊天/搜索被误吞），必须落为独立 OCR 元素
-                            val hn = OcrEngine.norm(he.label + he.desc)
-                            val ln = OcrEngine.norm(line.text)
-                            if (hn.contains(ln) || (ln.contains(hn) && hn.length >= 2)) continue
-                        }
-                        // host 已被先前的行挂载（fused）/ 内容不同 → 本行落为独立 OCR 元素
+                        FusionDecision.DropDuplicate -> continue
+                        FusionDecision.Standalone -> Unit
                     }
                     if (count >= maxElements) { truncated = true; break }
                     count += 1
