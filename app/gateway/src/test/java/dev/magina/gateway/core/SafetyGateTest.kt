@@ -78,6 +78,47 @@ class SafetyGateTest {
         assertEquals(0, failureRecords)
     }
 
+    /**
+     * **风险分级不产出任何免确认路径**（spec `2026-08-01-危险动作风险分级` §6.4 的回归断言）。
+     *
+     * 这条是整篇分级里唯一承重的断言。分级的原始诉求是「任务级额度」——批准一次、同类动作
+     * 免确认；B 道否掉了它，硬门不变量 4（一次确认只授权当前这一次调用，不生成可重放令牌）
+     * 原样保留。**两档必须行为完全一样**：都要确认，未确认时 handler 一次都不许被调到。
+     * 日后谁把档位接成免确认资格的键，这条就会红。
+     */
+    @Test
+    fun `neither risk tier ever yields a confirmation free path`() {
+        val cases = mapOf(
+            // II 级·有撤回窗口——最容易被当成"可以放宽"的那一档。
+            RiskTier.RETRACTABLE to SafetyTarget(ref = "r1", text = "发送", bounds = "[0,0][1,1]"),
+            RiskTier.IRREVERSIBLE to SafetyTarget(ref = "r1", text = "删除", bounds = "[0,0][1,1]"),
+        )
+
+        cases.forEach { (tier, target) ->
+            val clickArgs = JSONObject().put("ref", "r1").put("action", "click")
+            val context = initialContext.copy(target = target)
+            val assessed = SafetyPolicy().assess("ui_action", Level.W, clickArgs, context)
+            assertTrue("$tier 必须仍然要求确认", assessed is SafetyDecision.ConfirmationRequired)
+            assertEquals(tier, (assessed as SafetyDecision.ConfirmationRequired).riskTier)
+
+            var confirmerCalls = 0
+            var executorCalls = 0
+            val gate = SafetyGate(
+                policy = SafetyPolicy(),
+                confirmer = { confirmerCalls++; false },
+                contextProvider = { context },
+                onExecutionFailure = { fail("$tier 门前拒绝不得记录执行失败") },
+            )
+
+            expectGatewayError(ErrorCode.E_BLOCKED) {
+                gate.execute("ui_action", Level.W, clickArgs) { _, _ -> executorCalls++ }
+            }
+
+            assertEquals("$tier 必须弹一次确认", 1, confirmerCalls)
+            assertEquals("$tier 未确认时 handler 调用次数必须为 0", 0, executorCalls)
+        }
+    }
+
     @Test
     fun `confirmation timeout never calls executor or failure recorder`() {
         var executorCalls = 0

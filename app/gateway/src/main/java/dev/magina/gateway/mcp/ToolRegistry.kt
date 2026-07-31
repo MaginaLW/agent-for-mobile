@@ -399,8 +399,9 @@ object ToolRegistry {
             var testAttempt: TestConfirmationAttempt? = null
             val gate = SafetyGate(
                 policy = SafetyPolicy(
-                    dangerWords = Gateway.skills.dangerWords,
-                    sendWords = Gateway.skills.sendWords,
+                    // 技能包资产的 danger_words 即 I 级、send_words 即 II 级（见 SafetyPolicy 类注释）。
+                    irreversibleWords = Gateway.skills.dangerWords,
+                    retractableWords = Gateway.skills.sendWords,
                     sensitiveTargets = Gateway.skills.sensitiveTargets,
                 ),
                 confirmer = { decision ->

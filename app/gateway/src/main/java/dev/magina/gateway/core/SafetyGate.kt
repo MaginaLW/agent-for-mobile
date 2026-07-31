@@ -32,6 +32,24 @@ data class SafetyTarget(
     val preparedTargetEvidence: PreparedTargetEvidence? = null,
 )
 
+/**
+ * 危险动作风险档位（spec `2026-08-01-危险动作风险分级`）。
+ *
+ * 判据是**用户在动作完成后，能否用自己手上的手段把它撤销**——不看金额、不看动作名。
+ *
+ * **两档的行为完全一样**：都走完整确认链、都逐次确认。档位只是给下游（批次 2 通知栏审批的
+ * 折叠态那一行）的措辞输入，**不产出任何免确认路径**——硬门不变量 4「一次确认只授权当前这一次
+ * 调用，不生成可重放的通用令牌」一字未动。`SafetyGateTest` 里有一条回归断言钉住这件事：
+ * 任一档位下，未确认时 handler 调用次数仍为 0。
+ */
+enum class RiskTier {
+    /** I 级·不可逆：做完之后用户无自救手段，或撤销成本远高于执行成本。 */
+    IRREVERSIBLE,
+
+    /** II 级·有撤回窗口：目标 App 提供明确的撤回入口，且窗口未过期。 */
+    RETRACTABLE,
+}
+
 sealed interface SafetyDecision {
     data object Allowed : SafetyDecision
 
@@ -42,6 +60,12 @@ sealed interface SafetyDecision {
         val actionSummary: String,
         val evidence: List<String>,
         val argsFingerprint: String,
+        /**
+         * 本次动作的风险档位。**本轮只产出、不消费**：`cardText` 一个字都没改（spec §7
+         * 明确不动确认卡现有 8 项证据的内容与顺序），消费者是批次 2 的通知栏审批。
+         * 不给默认值——档位判错比编译不过贵得多，新增构造点必须显式想一遍。
+         */
+        val riskTier: RiskTier,
         val inputLength: Int? = null,
         val inputSha256: String? = null,
     ) : SafetyDecision {
@@ -61,10 +85,17 @@ sealed interface SafetyDecision {
     ) : SafetyDecision
 }
 
-/** 纯 Kotlin 风险判定；不持有 Android UI 或执行器对象。 */
+/**
+ * 纯 Kotlin 风险判定；不持有 Android UI 或执行器对象。
+ *
+ * 词表按 [RiskTier] 分两档。技能包资产（`assets/skillpack/safety.json`）的键名保持
+ * `danger_words` / `send_words` 不变——它们的内容与本篇两档逐字相同（17 + 5 词），
+ * 改键名只会让一份已发布的资产多一次格式迁移，换不来任何东西。**映射规则写在这里：
+ * `danger_words` 即 I 级，`send_words` 即 II 级**，今后往哪张表里加词就是在选档位。
+ */
 class SafetyPolicy(
-    private val dangerWords: List<String> = DEFAULT_DANGER_WORDS,
-    private val sendWords: List<String> = DEFAULT_SEND_WORDS,
+    private val irreversibleWords: List<String> = DEFAULT_IRREVERSIBLE_WORDS,
+    private val retractableWords: List<String> = DEFAULT_RETRACTABLE_WORDS,
     private val sensitiveTargets: List<String> = emptyList(),
 ) {
     fun assess(
@@ -97,16 +128,26 @@ class SafetyPolicy(
             )
         }
 
+        // 档位与"要不要确认"是两件独立的事：这里先算出命中词与档位，放行判定在下面，
+        // 一字未动。档位算错不会让任何动作少走一次确认，只会让批次 2 的措辞选错。
+        var tier: RiskTier? = null
         val dynamicReason = when {
-            enterPressed ->
+            enterPressed -> {
+                tier = enterTier(context)
                 "按下 Enter，可能发送或提交当前输入内容"
+            }
 
             toolName == "ui_action" && args.optString("action") in setOf("click", "long_click") -> {
                 val label = listOf(context.target?.text, context.target?.description)
                     .filterNotNull().joinToString(" ").trim()
-                val hit = (dangerWords + sendWords + sensitiveTargets)
+                // 顺序与拆档前逐字相同（I 级 → II 级 → 敏感目标），因此"命中哪个词"这件事
+                // 不会因为拆档而改变——卡上那句「命中“X”」是黄金回归钉住的文本。
+                val hit = (irreversibleWords + retractableWords + sensitiveTargets)
                     .firstOrNull { it.isNotBlank() && label.contains(it, ignoreCase = true) }
-                hit?.let { "${args.optString("action")} 危险目标（命中“$it”）" }
+                hit?.let {
+                    tier = tierOfWord(it)
+                    "${args.optString("action")} 危险目标（命中“$it”）"
+                }
             }
 
             else -> null
@@ -122,9 +163,45 @@ class SafetyPolicy(
             actionSummary = "工具：$toolName\n动作：$reason",
             evidence = confirmationEvidence(toolName, args, context),
             argsFingerprint = fingerprint(args),
+            // 静态 D 级工具（走不到上面两条动态路）判不出档位——它们的危险性来自工具本身，
+            // 不来自词表。按 fail-safe 归 I 级：宁可把可撤回的说成不可逆，不可反过来。
+            riskTier = tier ?: RiskTier.IRREVERSIBLE,
             inputLength = context.target?.inputCommitEvidence?.length,
             inputSha256 = context.target?.inputCommitEvidence?.sha256,
         )
+    }
+
+    /**
+     * 命中词的档位。敏感目标（`sensitive_targets`，联系人/会话/文件关键词）没有撤销语义可言，
+     * 按 fail-safe 归 I 级。
+     */
+    private fun tierOfWord(word: String): RiskTier =
+        if (retractableWords.any { it.equals(word, ignoreCase = true) }) {
+            RiskTier.RETRACTABLE
+        } else {
+            RiskTier.IRREVERSIBLE
+        }
+
+    /**
+     * `press_key(enter)` 不吃词表，按**当前目标会话的性质**定档（spec §3 末段）：
+     * 私聊/群聊会话 → II 级；落在 I 级页面上的 Enter（支付密码框之类）→ I 级。
+     *
+     * 只吃这一刻手上已有的页面级信号，**不新造感知面**。真正有内容的那一条是
+     * `preparedTargetEvidence.label`——它就是确认卡上「目标会话」那一行，来自同一套已验证证据；
+     * press_key 路径下 target 的 text/description 本来就是空的，一并带上只为将来别漏。
+     */
+    private fun enterTier(context: SafetyContext): RiskTier {
+        val target = context.target
+        val signals = listOfNotNull(
+            target?.preparedTargetEvidence?.label,
+            target?.text,
+            target?.description,
+        ).filter { it.isNotBlank() }
+        return if (hasSensitiveSurfaceSemantics(signals, sensitiveTargets)) {
+            RiskTier.IRREVERSIBLE
+        } else {
+            RiskTier.RETRACTABLE
+        }
     }
 
     private fun confirmationEvidence(
@@ -180,23 +257,41 @@ class SafetyPolicy(
     }
 
     companion object {
-        private val DEFAULT_DANGER_WORDS = listOf(
+        /**
+         * I 级·不可逆（spec §3）。三类：资金、数据、账号与系统完整性。
+         * 与拆档前的 `DEFAULT_DANGER_WORDS` **逐字相同**，顺序也没动——
+         * 拆档只是给同一批词贴上档位，不是改判据。
+         */
+        internal val DEFAULT_IRREVERSIBLE_WORDS = listOf(
             "删除", "清空", "移除", "卸载", "支付", "付款", "转账", "确认交易", "立即购买", "提交订单",
             "注销", "退出登录", "解绑", "修改密码", "安装", "格式化", "恢复出厂",
         )
-        private val DEFAULT_SEND_WORDS = listOf("发送", "发布", "发表", "评论", "回复")
+
+        /**
+         * II 级·有撤回窗口（spec §3）。
+         *
+         * **「发布」「发表」是 spec §3.1 显式标注的边界项**：它们确有撤回入口，但公开发表的撤回
+         * 只删得掉副本、删不掉"已经被看到"这件事，弱于私聊撤回。本轮无实际后果（两档都照常
+         * 逐次确认，档位只影响下游措辞）；**一旦将来有任何方案拿档位当免确认资格的键，
+         * 这两个词的归档立刻变成承重的，必须重新走 B 道。**
+         */
+        internal val DEFAULT_RETRACTABLE_WORDS = listOf("发送", "发布", "发表", "评论", "回复")
 
         /**
          * 页面级 fail-closed 判定供受控导航复用。与针对单个点击目标的 [assess] 共用
          * 危险词源，并允许调用方叠加技能包词表；发送类普通页面文案不在这里一概拦截，
          * 确认弹窗由调用方结合页面结构判断。
+         *
+         * 拆档后这里仍**只吃 I 级词表**（加上密码/收款/风险/警告四个页面级词），与拆档前
+         * 的 `DEFAULT_DANGER_WORDS` 完全一致：受控导航拦的是"这一页有没有不可逆语义"，
+         * 把「发送」这类 II 级词并进来会让普通聊天页也被判成敏感页面。
          */
         internal fun hasSensitiveSurfaceSemantics(
             signals: Iterable<String>,
             additionalWords: Iterable<String> = emptyList(),
         ): Boolean {
             val words = (
-                DEFAULT_DANGER_WORDS + additionalWords +
+                DEFAULT_IRREVERSIBLE_WORDS + additionalWords +
                     listOf("密码", "收款", "风险", "警告")
                 ).filter(String::isNotBlank).distinct()
             return signals.any { signal -> words.any { word -> signal.contains(word, ignoreCase = true) } }
