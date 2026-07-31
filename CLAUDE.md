@@ -16,6 +16,7 @@
 
 | 要做什么 | 读什么 |
 |---|---|
+| 认领本会话该做什么 / 判断要不要流转会话 | [docs/backlog.md](docs/backlog.md)——工序三道（A 独立闭环 / B 你一个决定 / C 你在真机旁）、验收批次与流转协议 |
 | 改架构/产品设计 | docs/specs/ 对应篇 |
 | 执行某个操作规程 | docs/runbooks/ 对应篇 |
 | 设备/系统命令/App 特性/成本/链路等沉淀知识 | [docs/knowledge/README.md](docs/knowledge/README.md)——**渐进式披露单入口**：按「遇到什么情况→载入哪册」路由，不整目录读 |
