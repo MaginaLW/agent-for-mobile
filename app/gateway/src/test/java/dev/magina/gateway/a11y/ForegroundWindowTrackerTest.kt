@@ -623,6 +623,102 @@ class ForegroundWindowTrackerTest {
         )
     }
 
+    // ---------- 冷启动自举 ----------
+
+    @Test
+    fun `cold start bootstrap publishes package only identity from the active window`() {
+        val tracker = ForegroundWindowTracker(clock = { 0L })
+
+        assertTrue(tracker.bootstrapFromWindow(wechat.id, "com.tencent.mm", listOf(wechat)))
+
+        assertEquals(
+            ForegroundIdentity.Known(
+                windowId = wechat.id,
+                packageName = "com.tencent.mm",
+                activityName = "",
+                bootstrapped = true,
+            ),
+            tracker.current(),
+        )
+        assertEquals(
+            ResolvedForeground(
+                known = true,
+                packageName = "com.tencent.mm",
+                activityName = "",
+                bootstrapped = true,
+            ),
+            resolveForeground(tracker.current(), wechat.id, "com.tencent.mm"),
+        )
+        val event = tracker.recentEvents().single()
+        assertEquals(ForegroundEventDecision.BOOTSTRAPPED, event.decision)
+        assertEquals("bootstrap", event.kind)
+        assertEquals("", event.activityName)
+    }
+
+    @Test
+    fun `bootstrap never overwrites an identity that events already established`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+
+        assertFalse(tracker.bootstrapFromWindow(wechat.id, "com.tencent.mm", listOf(wechat)))
+
+        assertEquals(wechatIdentity, tracker.current())
+        assertTrue(tracker.recentEvents().none { it.decision == ForegroundEventDecision.BOOTSTRAPPED })
+    }
+
+    /**
+     * 身份已建立却与当前活动窗口对不上，是"窗口换了却没等到可接受事件"的真实信号。
+     * 自举若在这里接管，等于把 [ForegroundUnknownReason.WINDOW_ID_MISMATCH] 这条判据抹掉。
+     */
+    @Test
+    fun `bootstrap does not rescue a window id mismatch`() {
+        val other = ForegroundWindow(id = 99, type = ForegroundWindowType.APPLICATION, isActive = true)
+        val tracker = trackerAtWeChat(listOf(wechat))
+
+        assertFalse(tracker.bootstrapFromWindow(other.id, "com.android.settings", listOf(other)))
+
+        assertEquals(wechatIdentity, tracker.current())
+        assertEquals(
+            ForegroundUnknownReason.WINDOW_ID_MISMATCH,
+            resolveForeground(tracker.current(), other.id, "com.android.settings").reason,
+        )
+    }
+
+    @Test
+    fun `bootstrap requires a non empty package on the selected application window`() {
+        val tracker = ForegroundWindowTracker(clock = { 0L })
+
+        assertFalse(tracker.bootstrapFromWindow(wechat.id, "", listOf(wechat)))
+        // 传入窗口不是当前活动应用窗口时同样不自举（调用方读到的窗口已经过期）。
+        assertFalse(tracker.bootstrapFromWindow(77, "com.tencent.mm", listOf(wechat)))
+        assertFalse(
+            tracker.bootstrapFromWindow(
+                wechat.id,
+                "com.tencent.mm",
+                listOf(ForegroundWindow(id = wechat.id, type = ForegroundWindowType.INPUT_METHOD, isActive = true)),
+            )
+        )
+
+        assertTrue(tracker.current() is ForegroundIdentity.Unknown)
+        assertTrue(tracker.recentEvents().isEmpty())
+    }
+
+    /** 自举只是补上缺失的第一次；真事件一到就该被完整身份覆盖，且不再带 bootstrapped 标记。 */
+    @Test
+    fun `real window event replaces the bootstrapped identity`() {
+        val tracker = ForegroundWindowTracker(clock = { 0L })
+        tracker.bootstrapFromWindow(wechat.id, "com.tencent.mm", listOf(wechat))
+
+        assertTrue(tracker.onWindowStateChanged(
+            eventWindowId = wechat.id,
+            packageName = "com.tencent.mm",
+            activityName = "com.tencent.mm.ui.LauncherUI",
+            windows = listOf(wechat),
+        ))
+
+        assertEquals(wechatIdentity, tracker.current())
+        assertFalse(resolveForeground(tracker.current(), wechat.id, "com.tencent.mm").bootstrapped)
+    }
+
     private fun trackerAtWeChat(windows: List<ForegroundWindow>): ForegroundWindowTracker =
         ForegroundWindowTracker().also { tracker ->
             tracker.onWindowStateChanged(

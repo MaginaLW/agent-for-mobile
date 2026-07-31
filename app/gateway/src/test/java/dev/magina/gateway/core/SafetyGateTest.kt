@@ -208,6 +208,20 @@ class SafetyGateTest {
         assertContextChangeIsStale(initialContext.copy(activityName = ".plugin.SnsTimeLineUI"))
     }
 
+    /**
+     * 确认前是自举的包级身份、确认后换成事件身份时，两边 activityName 可能都恰好为空，
+     * 逐字段比较会"平凡相等"。身份来源本身必须参与比较（同 IdentitySource）。
+     */
+    @Test
+    fun `foreground identity source change after confirmation rejects as stale`() {
+        // 两边 activityName 都是空串：只比 package/activity 会平凡相等地放行。
+        val bootstrapped = initialContext.copy(activityName = "", identityBootstrapped = true)
+        assertContextChangeIsStale(
+            changedContext = bootstrapped.copy(identityBootstrapped = false),
+            confirmedContext = bootstrapped,
+        )
+    }
+
     @Test
     fun `dynamic target signature change after confirmation rejects as stale`() {
         val other = FocusIdentity(
@@ -677,7 +691,10 @@ class SafetyGateTest {
         assertEquals(0, executorCalls)
     }
 
-    private fun assertContextChangeIsStale(changedContext: SafetyContext) {
+    private fun assertContextChangeIsStale(
+        changedContext: SafetyContext,
+        confirmedContext: SafetyContext = initialContext,
+    ) {
         var contextReads = 0
         var executorCalls = 0
         var failureRecords = 0
@@ -686,7 +703,7 @@ class SafetyGateTest {
             confirmer = { true },
             contextProvider = {
                 contextReads++
-                if (contextReads == 1) initialContext else changedContext
+                if (contextReads == 1) confirmedContext else changedContext
             },
             onExecutionFailure = { failureRecords++ },
         )

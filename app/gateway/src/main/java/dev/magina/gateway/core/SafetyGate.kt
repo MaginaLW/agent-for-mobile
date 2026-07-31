@@ -10,6 +10,11 @@ data class SafetyContext(
     val activityName: String,
     val revision: Long,
     val foregroundKnown: Boolean = packageName.isNotEmpty(),
+    /**
+     * 前台身份是服务重启后由窗口自举出来的 package 级身份（[activityName] 必为空），
+     * 不是窗口事件给出的完整身份。参与确认前后的硬相等，并在确认卡上如实标注。
+     */
+    val identityBootstrapped: Boolean = false,
     val target: SafetyTarget? = null,
 )
 
@@ -127,7 +132,15 @@ class SafetyPolicy(
         args: JSONObject,
         context: SafetyContext,
     ): List<String> = buildList {
-        add("前台：${context.packageName.ifEmpty { "未知" }} / ${context.activityName.ifEmpty { "未知" }}")
+        // 自举身份天生没有 Activity。若只写成"未知"，真人看到的这一项与"事件给了身份但
+        // Activity 恰好为空"长得一模一样——同 IdentitySource.IME_ONLY 那两行的理由：
+        // 少一套证据时不得静默少展示一项，要说清楚少的是哪一套（design §3.6）。
+        add(
+            "前台：${context.packageName.ifEmpty { "未知" }} / " + when {
+                context.identityBootstrapped -> "Activity 未知（服务重启后由窗口自举的包级身份）"
+                else -> context.activityName.ifEmpty { "未知" }
+            }
+        )
         val target = context.target
         if (toolName == "ui_action" && target != null) {
             add("目标：ref=${target.ref} text=${target.text.take(40)} desc=${target.description.take(40)}")
@@ -292,6 +305,11 @@ class SafetyGate(
     ) {
         if (initial.packageName != current.packageName || initial.activityName != current.activityName) {
             stale("确认后前台 App/Activity 已变化")
+        }
+        // 身份来源也参与比较（同焦点身份的 IdentitySource）：确认前是自举的包级身份、确认后
+        // 换成事件身份时，两边 activityName 可能都恰好为空而"平凡相等"，但那已经是另一套证据了。
+        if (initial.identityBootstrapped != current.identityBootstrapped) {
+            stale("确认后前台身份来源已变化（自举包级身份 ↔ 窗口事件身份）")
         }
         when {
             toolName == "ui_action" -> {

@@ -102,6 +102,32 @@ class SafetyPolicyTest {
         }
     }
 
+    /**
+     * 自举身份没有 Activity。确认卡若只写"未知"，真人分不清这是"事件给了身份、Activity 恰好为空"
+     * 还是"整套 Activity 证据压根不存在"——必须点名少的是哪一套。
+     */
+    @Test
+    fun `bootstrapped foreground identity is spelled out on the confirmation card`() {
+        val bootstrapped = policy.assess(
+            "future_dangerous_tool",
+            Level.D,
+            JSONObject(),
+            normalContext.copy(activityName = "", identityBootstrapped = true),
+        )
+        val eventBased = policy.assess(
+            "future_dangerous_tool",
+            Level.D,
+            JSONObject(),
+            normalContext.copy(activityName = ""),
+        )
+
+        val bootstrappedCard = (bootstrapped as SafetyDecision.ConfirmationRequired).cardText("c-1")
+        val eventCard = (eventBased as SafetyDecision.ConfirmationRequired).cardText("c-1")
+        assertTrue(bootstrappedCard.contains("前台：com.tencent.mm / Activity 未知（服务重启后由窗口自举的包级身份）"))
+        assertTrue(eventCard.contains("前台：com.tencent.mm / 未知"))
+        assertTrue("事件身份不得被说成自举", !eventCard.contains("自举"))
+    }
+
     @Test
     fun `enter without matching prepared target is blocked before confirmation`() {
         val validTarget = SafetyTarget(

@@ -578,6 +578,7 @@ object ToolRegistry {
         val activityName = ctx.optString("activity")
         val revision = ctx.optLong("revision", -1)
         val foregroundKnown = ctx.optBoolean("foreground_known", false)
+        val identityBootstrapped = ctx.optString("foreground_identity_source") == "bootstrap"
         if (!foregroundKnown) return SafetyContext(
             packageName = packageName,
             activityName = activityName,
@@ -621,6 +622,7 @@ object ToolRegistry {
             activityName = activityName,
             revision = revision,
             foregroundKnown = true,
+            identityBootstrapped = identityBootstrapped,
             target = target,
         )
     }
