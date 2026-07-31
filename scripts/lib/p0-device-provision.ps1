@@ -550,6 +550,195 @@ function Start-P0TargetApp {
         -Operation '启动微信测试目标'
 }
 
+# ---------- 腿末 teardown（走 runner 自己的 adb 通道，不经执行器、不进 trace） ----------
+
+<#
+为什么 runner 可以在这里碰屏幕，而腿内不行：
+腿内「工具不碰微信」是为了不让**被测组件自己**制造它要证明的前置状态；teardown 跑在本腿
+判定完成、证据全部落盘之后，改不了任何已成定论的结论，性质与 Deny 腿的带外截屏一致
+（不经执行器、不进 trace、不消耗 token）。腿内业务动作仍然只能经 dispatch → gateway MCP。
+
+**顺序铁律：任何带外取证都必须排在 teardown 之前。** 被拦下的腿留在输入框里的 marker
+正是"消息没发出去"的正证据，先清框就等于先毁证。
+#>
+
+# KEYCODE_MOVE_END / KEYCODE_DEL / KEYCODE_BACK
+$script:P0KeyMoveEnd = 123
+$script:P0KeyDelete = 67
+$script:P0KeyBack = 4
+
+<#
+从 `dumpsys input_method` 读输入法窗口状态。两个字段必须分开看，合并会出人命：
+
+- `mInputShown`：输入法**会话**在不在。
+- `mImeWindowVis` 的 `IME_VISIBLE`(0x2) 位：输入法窗口**可不可见**。
+
+本仓自有 IME 是零 UI 的（`GatewayIme.onEvaluateInputViewShown()=false`），跑测期间它就是当前
+输入法——**会话在、但没有可见键盘**是常态。而 `InputMethodService` 只在 `isInputViewShown()`
+为真时才吃掉 BACK：此时按 BACK 不会"收键盘"，会被微信当成返回键直接退出会话页，把下一腿的
+前置条件毁掉。所以按 BACK 的判据只能是 visible，绝不能是 shown。
+
+任一字段读不出来一律回 $null（**不是 $false**）：调用方必须能区分"确定没有"与"读不出来"。
+#>
+function Get-P0ImeWindowState {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $shown = $null
+    $visible = $null
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        $shownMatch = [regex]::Match($Text, 'mInputShown\s*=\s*(true|false)')
+        if ($shownMatch.Success) { $shown = ($shownMatch.Groups[1].Value -ceq 'true') }
+        $visMatch = [regex]::Match($Text, 'mImeWindowVis\s*=\s*(?:0x([0-9a-fA-F]+)|(\d+))')
+        if ($visMatch.Success) {
+            $bits = if ($visMatch.Groups[1].Success) {
+                [Convert]::ToInt32($visMatch.Groups[1].Value, 16)
+            } else {
+                [int]$visMatch.Groups[2].Value
+            }
+            $visible = (($bits -band 0x2) -ne 0)
+        }
+    }
+    return [pscustomobject]@{ shown = $shown; visible = $visible }
+}
+
+<#
+teardown 的成功判据复用零 token 只读预检，不另立一套——它本来就是下一腿的前置条件。
+
+三态而非布尔（同发送后验 sent/not_sent/unverified）：把"验不了"记成"清干净了"是本仓踩过的
+原型错误。而 `dirty` 与 `unverified` 的分界要卡在**证据方向**上，不是卡在退出码上：
+
+- `empty=false` 是"框里还有字"的**正证据**，teardown 没做到自己那份活 → dirty（记 cleanup issue）。
+- `empty=true, probe_ready=false` 意味着框已经清了，探针不放行是别的原因（停错页、OCR 抖动、
+  输入法窗口）。把它也算 dirty，等于让一次 OCR 抖动把三腿全绿的跑测判成失败——那正是本仓
+  最忌讳的假信号。归 unverified：喊一句，交给下一腿带完整重试的预检去当闸门。
+#>
+function Get-P0TeardownVerdict {
+    param(
+        [Parameter(Mandatory)][int]$ExitCode,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Stdout
+    )
+    $detail = ([string]$Stdout).Trim()
+    if ($ExitCode -eq 0) { return [pscustomobject]@{ verdict = 'clean'; detail = '' } }
+    if ($ExitCode -eq 2) {
+        $empty = $null
+        if ($detail) {
+            try {
+                $payload = $detail | ConvertFrom-Json
+                $property = $payload.PSObject.Properties['empty']
+                if ($null -ne $property) { $empty = [bool]$property.Value }
+            }
+            catch { $empty = $null }
+        }
+        if ($empty -eq $false) { return [pscustomobject]@{ verdict = 'dirty'; detail = $detail } }
+        return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
+    }
+    return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
+}
+
+<#
+腿末收尾：清空微信输入框、收起键盘，并用只读预检核对结果。
+
+清框用「光标移到末尾 + 定量退格」而不是 Ctrl+A：`input keyevent` 不支持 metastate，
+全选只能靠 `input keycombination`（版本与实现都不稳）。退格数按本腿实际提交的文本长度
+加余量，并有硬上限——写死一个大数会在焦点不在输入框时把退格发到别处。
+
+**从不抛异常**：本腿的判定已经做完，收尾失败不该把一次有效结论作废；但也绝不静默——
+结果进 manifest，`dirty` 另计一条 cleanup issue。
+#>
+function Invoke-P0LegTeardown {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][int]$TypedLength,
+        [AllowEmptyString()][string]$PrecheckPath = '',
+        [int]$ExtraDeleteKeys = 8,
+        [int]$MaxDeleteKeys = 64,
+        [int]$MaxBackPresses = 2
+    )
+
+    $issues = [Collections.Generic.List[string]]::new()
+    $deleteKeys = [Math]::Min($MaxDeleteKeys, [Math]::Max(1, $TypedLength) + $ExtraDeleteKeys)
+    $keyboard = 'unknown'
+
+    try {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','input','keyevent',"$script:P0KeyMoveEnd") `
+            -Operation '腿末光标移到输入框末尾' -AllowFailure
+        $deleteArgs = @('shell','input','keyevent') + @(1..$deleteKeys | ForEach-Object { "$script:P0KeyDelete" })
+        $delete = Invoke-P0DeviceCommand -Session $Session -Arguments $deleteArgs `
+            -Operation '腿末清空输入框' -AllowFailure -TimeoutSec 60
+        if ($delete.ExitCode -ne 0) { $issues.Add('teardown_clear_keys') }
+
+        for ($press = 0; $press -le $MaxBackPresses; $press++) {
+            $probe = Invoke-P0DeviceCommand -Session $Session -Arguments @('shell','dumpsys','input_method') `
+                -Operation '腿末查询输入法窗口状态' -AllowFailure
+            $state = if ($probe.ExitCode -eq 0) {
+                Get-P0ImeWindowState -Text $probe.Stdout
+            } else {
+                [pscustomobject]@{ shown = $null; visible = $null }
+            }
+            if ($null -eq $state.visible) {
+                # 读不出可见性就**不按 BACK**：宁可把键盘留给下一腿的预检拦下，
+                # 也不冒"BACK 被微信当返回键、直接退出会话页"的险。
+                $keyboard = 'unknown'
+                $issues.Add('teardown_ime_state_unknown')
+                break
+            }
+            if (-not $state.visible) {
+                # 会话在、窗口不可见，正是零 UI IME 的常态：没有键盘可收，也没什么可做。
+                $keyboard = if ($state.shown -eq $true) { 'session_only' }
+                    elseif ($press -eq 0) { 'already_hidden' }
+                    else { 'hidden' }
+                break
+            }
+            if ($press -eq $MaxBackPresses) {
+                $keyboard = 'still_visible'
+                $issues.Add('teardown_ime_still_visible')
+                break
+            }
+            $null = Invoke-P0DeviceCommand -Session $Session `
+                -Arguments @('shell','input','keyevent',"$script:P0KeyBack") `
+                -Operation '腿末收起键盘' -AllowFailure
+        }
+    }
+    catch {
+        $issues.Add('teardown_adb_failed')
+    }
+
+    $verdict = 'unverified'
+    $detail = '未提供只读预检，无法核对收尾结果'
+    if (-not [string]::IsNullOrWhiteSpace($PrecheckPath) -and (Test-Path -LiteralPath $PrecheckPath -PathType Leaf)) {
+        try {
+            $check = Invoke-P0ExternalText -FilePath $PrecheckPath `
+                -Arguments @('-ConfigPath', $Session.ConfigPath, '-NotReadyRetries', '5', '-NotReadyRetryDelayMs', '1500') `
+                -Operation '腿末收尾核对' -AllowFailure -TimeoutSec 60
+            $resolved = Get-P0TeardownVerdict -ExitCode $check.ExitCode -Stdout ([string]$check.Stdout)
+            $verdict = $resolved.verdict
+            $detail = $resolved.detail
+        }
+        catch {
+            $verdict = 'unverified'
+            $detail = '收尾核对调用失败'
+        }
+    }
+    # 只有"框里还有字"这一条进 cleanup（会把整轮判失败）：它是 teardown 自己那份活的
+    # 正证据，且不受设备差异影响。键盘与 dumpsys 字段这两类是新路径、依赖机型输出格式，
+    # 让它们能把三腿全绿的跑测判失败风险太大——下一腿的预检本来就是它们的硬闸门。
+    $cleanupIssues = [Collections.Generic.List[string]]::new()
+    if ($verdict -eq 'dirty') {
+        $issues.Add('device_leg_teardown')
+        $cleanupIssues.Add('device_leg_teardown')
+    }
+
+    return [pscustomobject]@{
+        verdict = $verdict
+        detail = $detail
+        keyboard = $keyboard
+        delete_keys = $deleteKeys
+        issues = @($issues | Select-Object -Unique)
+        cleanup_issues = @($cleanupIssues)
+    }
+}
+
 function Set-P0PrivateControlFile {
     param(
         [Parameter(Mandatory)]$Session,

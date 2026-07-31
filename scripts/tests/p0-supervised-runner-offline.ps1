@@ -51,6 +51,19 @@ function Assert-NotMatches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -notmatch $Pattern) "不应匹配 /$Pattern/：`n$Actual"
 }
 
+# 假 adb 把整条命令原样记进 keyevent.log；一次 `input keyevent` 可带多个键码，因此按 token 数。
+function Get-TestKeyCount([string[]]$Lines, [int]$KeyCode) {
+    $count = 0
+    foreach ($line in $Lines) {
+        $index = $line.IndexOf('keyevent ')
+        if ($index -lt 0) { continue }
+        foreach ($token in ($line.Substring($index + 'keyevent '.Length) -split '\s+')) {
+            if ($token -eq "$KeyCode") { $count++ }
+        }
+    }
+    return $count
+}
+
 function Get-TestSha256([string]$Text) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
     try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
@@ -91,7 +104,9 @@ function New-Fixture {
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
-        'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside'
+        'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
+        'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
+        'teardown_keyboard_stuck', 'teardown_ime_unreadable'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -195,6 +210,21 @@ function Remove-P0PrivateTemporaryFile {
 
     Set-Content -LiteralPath (Join-Path $state 'token.txt') -Value $fakeToken -Encoding ascii
 
+    # 假 adb。腿末 teardown 相关的假状态：ime-vis.txt 存 mImeWindowVis 的十六进制位，
+    # 2 = IME_VISIBLE（有可见键盘），1 = 只有会话、没有可见窗口（零 UI IME 的常态）。
+    #
+    # **改这段 .cmd 之前先读这三条**，都是 2026-08-01 真踩到的：
+    # 1. 新增的 rem/注释一律**只写 ASCII**。文件按 UTF-8 落盘，cmd 却按 OEM 代码页（本机 936）
+    #    读：一串中文的字节数是 3 的倍数，按 GBK 双字节配对后会剩半个字，把行尾的 CRLF 一起
+    #    吃掉，于是下一行被并进 rem——整个 `if "%1"=="shell" (` 块就此消失，44/55 条用例全红，
+    #    而报出来的错是「重置无障碍配置以触发重绑 失败」，跟真因八竿子打不着。
+    # 2. **块内的 rem 仍然会被解析**：圆括号会提前闭合 if 块，重定向号会真的重定向。
+    #    要写说明就写在这里（PowerShell 注释里），不要写进 .cmd 的括号块。
+    # 3. **重定向号前面紧挨着数字，那个数字就变成了文件句柄号。** 两次都咬到：`echo 2>"file"`
+    #    是把 stderr 重定向走、内容一个字没写；而 `echo %*>>"adb.log"` 在命令以数字结尾时
+    #    （`... input keyevent 4`）变成 `4>>`，那一条**根本不会进日志**——于是"按了 BACK"
+    #    被读成"没按 BACK"，断言看起来铁证如山，其实是日志说了谎。一律把重定向写在前面：
+    #    `>"file" echo 2` / `>>"adb.log" echo %*`。
     $fakeAdb = Join-Path $bin 'fake-adb.cmd'
     @'
 @echo off
@@ -204,7 +234,7 @@ rem 与 Unix 同名的命令解析到 MSYS 版本。2026-07-26 实锤：`find /v
 rem 把 /v 和 /c 当成要搜索的目录（/c 就是整个 C 盘），递归扫盘到 30s 超时，整轮 16/39。
 rem 逐点改成绝对路径能修好，但这一行让同类问题不可能再犯。
 set "PATH=%SystemRoot%\System32;%PATH%"
-echo %*>>"%P0_FAKE_STATE%\adb.log"
+>>"%P0_FAKE_STATE%\adb.log" echo %*
 echo %*| findstr /c:" sh -c " >nul && exit /b 0
 findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"shell rm -f /data/local/tmp/p0-control-" >nul && exit /b 7
 findstr /x /c:"cleanup_once" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"files/test-confirmation-state.json" >nul && if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
@@ -251,8 +281,26 @@ if "%1"=="exec-out" (
     exit /b 0
   )
 )
+rem -- leg teardown fake device state: see the PowerShell comment above this here-string --
 if "%1"=="shell" (
   if "%2"=="date" (echo 20260723& exit /b 0)
+  if "%2 %3"=="input keyevent" (
+    >>"%P0_FAKE_STATE%\keyevent.log" echo %*
+    if "%4"=="4" (
+      findstr /x /c:"teardown_keyboard_stuck" "%P0_FAKE_STATE%\scenario.txt" >nul || >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
+    )
+    exit /b 0
+  )
+  if "%2 %3"=="dumpsys input_method" (
+    findstr /x /c:"teardown_ime_unreadable" "%P0_FAKE_STATE%\scenario.txt" >nul && (echo   mInputShown=true& exit /b 0)
+    findstr /x /c:"teardown_visible_keyboard" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    findstr /x /c:"teardown_keyboard_stuck" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
+    set /p IMEVIS=<"%P0_FAKE_STATE%\ime-vis.txt"
+    echo   mInputShown=true
+    call echo   mImeWindowVis=0x%%IMEVIS%%
+    exit /b 0
+  )
   if "%2 %3 %4 %5"=="settings get secure default_input_method" (type "%P0_FAKE_STATE%\current-ime.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings get secure enabled_accessibility_services" (type "%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (echo %6>"%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
@@ -332,6 +380,19 @@ findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["fake-leftover@100,2600,900,2700"]}
   exit /b 2
 )
+rem post-teardown re-check: keyevent.log existing means teardown has already run.
+rem NOTE: keep `exit /b` at this nesting level. Wrapping these in an outer `if exist (...)`
+rem block swallows the exit code (cmd reports 0), which silently turns the assertion green.
+if not exist "%P0_FAKE_STATE%\keyevent.log" goto :beforeteardown
+findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["P0LEFTOVER@100,2600,900,2700"]}
+  exit /b 2
+)
+findstr /x /c:"teardown_probe_not_ready" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":true,"probe_ready":false,"reason":"ocr-jitter"}
+  exit /b 2
+)
+:beforeteardown
 findstr /x /c:"probe_region_unavailable" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 1
 rem 只有显式声明的场景才回 region：默认不回，用来钉住"拿不到候选区就保持严格判据"。
 findstr /x /c:"find_focus_missing_with_band" "%P0_FAKE_STATE%\scenario.txt" >nul && (
@@ -1301,12 +1362,145 @@ try {
         Assert-Contains (Get-Content -LiteralPath (Join-Path $fixture.Repo 'configs\gateway-mcp.json') -Raw) 'original-config-marker'
     }
 
-    Test-Case 'runner/provisioner 禁止 ADB UI 输入和确认决定字段' {
+    Test-Case 'runner/provisioner 禁止腿内 ADB UI 输入和确认决定字段' {
         $source = (Get-Content -LiteralPath $SourceRunner -Raw) + "`n" +
             (Get-Content -LiteralPath $SourceProvisioner -Raw) + "`n" +
             (Get-Content -LiteralPath $SourceHealthProbe -Raw)
         Assert-NotMatches $source '(?i)(input\s+(tap|text)|keyevent\s+(enter|home|keycode_home))'
         Assert-NotMatches $source '(?i)["'']decision["'']\s*:'
+        # 腿末 teardown 是唯一允许的 ADB UI 输入，且只允许这三个键码：
+        # 移到末尾、退格、返回。多出任何一个都要有人重新想一遍它会不会碰到业务动作。
+        $keycodes = @([regex]::Matches($source, '\$script:P0Key[A-Za-z]+\s*=\s*(\d+)') |
+            ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+        Assert-True (($keycodes -join ',') -eq '4,67,123') `
+            "teardown 键码白名单被改动：$($keycodes -join ',')"
+    }
+
+    Test-Case '腿末 teardown 必须排在本腿判定与取证之后' {
+        # 被拦下的腿留在输入框里的 marker 就是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
+        # 先清框等于先毁证——这条顺序是判据的一部分，用源码顺序钉住。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $semantics = $source.IndexOf('Assert-P0LegSemantics -Leg')
+        $teardown = $source.IndexOf('Invoke-P0LegTeardown -Session')
+        Assert-True ($semantics -gt 0 -and $teardown -gt 0) 'runner 里找不到判定或 teardown 调用。'
+        Assert-True ($semantics -lt $teardown) 'teardown 跑在了本腿判定之前，会毁掉带外取证的证据。'
+    }
+
+    Test-Case '腿末 teardown 清空输入框并如实写进 manifest' {
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        $marker = @(Get-Content -LiteralPath (Join-Path $fixture.State 'markers.log'))[0]
+        Assert-Contains $keyevents[0] 'keyevent 123'
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq ($marker.Length + 8)) `
+            "退格数应为本腿提交长度 +8，实际 $(Get-TestKeyCount $keyevents 67)：$($keyevents -join ' | ')"
+        # 零 UI IME 只有会话、没有可见窗口：绝不能按 BACK（会被微信当返回键退出会话页）。
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 0) '无可见键盘时不该按 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.cleanup.ok -eq $true) 'teardown 正常时不该产生 cleanup issue。'
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'clean') 'manifest 未记录 teardown 通过。'
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'session_only') `
+            "零 UI IME 应记为 session_only，实际 $($manifestJson.legs[0].teardown.keyboard)"
+        Assert-True ($manifestJson.legs[0].teardown.delete_keys -eq ($marker.Length + 8)) 'manifest 退格数不符。'
+    }
+
+    Test-Case '腿末没清干净时报红并使整轮失败' {
+        $fixture = New-Fixture teardown_dirty
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '框里还有字却判整轮通过。'
+        Assert-Contains $result.Text '腿末没能清空输入框'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].verdict -ceq 'passed') '本腿判定已完成，不该被收尾失败改写。'
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'dirty') 'manifest 未记录 teardown 失败。'
+        Assert-True (@($manifestJson.cleanup.issues) -contains 'device_leg_teardown') 'cleanup 未收录残留输入。'
+    }
+
+    Test-Case '框已清空但探针不放行只算未核对，不把全绿跑测判失败' {
+        # empty=true, probe_ready=false 常见于 OCR 抖动/停错页：框是 teardown 的职责，
+        # 探针放不放行不是。算成失败等于让一次抖动把三腿全绿的跑测判死。
+        $fixture = New-Fixture teardown_probe_not_ready
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "抖动不该把整轮判失败：`n$($result.Text)"
+        Assert-Contains $result.Text '腿末收尾结果无法核对'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'unverified') '未核对不得记成 clean。'
+        Assert-True ($manifestJson.cleanup.ok -eq $true) '未核对不该计入 cleanup 失败。'
+    }
+
+    Test-Case '只有确认可见键盘才按 BACK，读不出可见性时一律不按' {
+        $visible = New-Fixture teardown_visible_keyboard
+        $null = Invoke-FixtureRunner $visible @('Allow')
+        $visibleKeys = @(Get-Content -LiteralPath (Join-Path $visible.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $visibleKeys 4) -eq 1) '确认有可见键盘时应按且只按一次 BACK。'
+
+        # mImeWindowVis 缺失（机型不报该字段）时必须什么都不做：此时按 BACK 就是拿会话页赌博。
+        $unreadable = New-Fixture teardown_ime_unreadable
+        $result = Invoke-FixtureRunner $unreadable @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "读不出输入法可见性不该判整轮失败：`n$($result.Text)"
+        $unreadableKeys = @(Get-Content -LiteralPath (Join-Path $unreadable.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $unreadableKeys 4) -eq 0) '读不出可见性却按了 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $unreadable.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'unknown') '未如实记录输入法状态读不出。'
+    }
+
+    Test-Case '键盘按不掉时有界重试并留证，但不判整轮失败' {
+        $fixture = New-Fixture teardown_keyboard_stuck
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "键盘收不起来由下一腿预检把关，不该判整轮失败：`n$($result.Text)"
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 2) 'BACK 重试必须有界（2 次）。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'still_visible') '未如实记录键盘仍可见。'
+        Assert-True (@($manifestJson.legs[0].teardown.issues) -contains 'teardown_ime_still_visible') `
+            'teardown issues 未留下键盘收不起来的记录。'
+    }
+
+    Test-Case 'teardown 纯判据：输入法窗口状态解析与三态结论' {
+        . $SourceProvisioner
+
+        # shown 与 visible 必须分开：零 UI IME 是"会话在、窗口不可见"。
+        $sessionOnly = Get-P0ImeWindowState -Text "  mInputShown=true`n  mImeWindowVis=0x1"
+        Assert-True ($sessionOnly.shown -eq $true -and $sessionOnly.visible -eq $false) '零 UI IME 解析错误。'
+        $visible = Get-P0ImeWindowState -Text 'mInputShown=true mImeWindowVis=0x3'
+        Assert-True ($visible.visible -eq $true) 'IME_VISIBLE 位未识别。'
+        $decimal = Get-P0ImeWindowState -Text 'mInputShown=false mImeWindowVis=2'
+        Assert-True ($decimal.shown -eq $false -and $decimal.visible -eq $true) '十进制 mImeWindowVis 未识别。'
+        foreach ($text in @('', 'mInputShown=true', 'mFoo=bar')) {
+            $state = Get-P0ImeWindowState -Text $text
+            Assert-True ($null -eq $state.visible) "读不出可见性必须回 null，不能当成 false：「$text」"
+        }
+
+        Assert-True ((Get-P0TeardownVerdict -ExitCode 0 -Stdout '{"ok":true,"empty":true}').verdict -ceq 'clean') `
+            '预检放行应判 clean。'
+        Assert-True ((Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":false}').verdict -ceq 'dirty') `
+            'empty=false 是"框里还有字"的正证据，应判 dirty。'
+        Assert-True (
+            (Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":true,"probe_ready":false}').verdict -ceq 'unverified'
+        ) '框已清空、探针不放行应判 unverified。'
+        foreach ($case in @(
+            @{ Code = 1; Out = '{"ok":false,"available":false}' },
+            @{ Code = 2; Out = 'not json' },
+            @{ Code = 9; Out = '' }
+        )) {
+            Assert-True ((Get-P0TeardownVerdict -ExitCode $case.Code -Stdout $case.Out).verdict -ceq 'unverified') `
+                "退出码 $($case.Code) 应判 unverified，绝不能当成清干净了。"
+        }
     }
 
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
@@ -1326,7 +1520,11 @@ finally {
     # 收尾清理不再静默吞失败：删不掉通常是被 kill 的子进程还攥着句柄，重试几次；
     # 仍然删不掉就如实报出来——攒着不说，最后会以"莫名其妙的超时"形式还回来。
     $leftover = [Collections.Generic.List[string]]::new()
-    foreach ($root in $TestRoots) {
+    # P0_KEEP_FIXTURE=1 保留临时仓库副本供事后翻 adb.log / manifest。用例一失败，能看的现场
+    # 只有一行断言消息，而 fixture 目录当场就被删了——2026-08-01 排一个假 adb 的重定向坑
+    # 全靠手工复刻现场，来回烧了近一小时。开跑前的自动清场会兜住忘记关掉的情况。
+    $roots = if ($env:P0_KEEP_FIXTURE) { Write-Host "KEEP: $($TestRoots -join '；')" -ForegroundColor Yellow; @() } else { $TestRoots }
+    foreach ($root in $roots) {
         $done = $false
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             try { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop; $done = $true; break }

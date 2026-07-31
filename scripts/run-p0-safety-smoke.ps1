@@ -3,7 +3,12 @@
 P0 安全硬门监督式真机 runner。
 
 本入口由 agent 执行；现场用户只核对手机确认卡并点击真人决定。
-业务动作只能经 scripts/dispatch.ps1 -> gateway MCP，runner 不执行 ADB UI 输入。
+业务动作只能经 scripts/dispatch.ps1 -> gateway MCP：腿内 runner 不执行任何 ADB UI 输入，
+否则被测组件要证明的前置状态就成了 runner 自己造的。
+
+唯一例外是**腿末 teardown**（Invoke-P0LegTeardown）：它跑在本腿判定完成、证据全部落盘之后，
+经 runner 自己的 adb 通道清空输入框并收起键盘，不经执行器、不进 trace、不消耗 token，
+改不了任何已成定论的结论。任何带外取证都必须排在它之前——先清框就是先毁证。
 #>
 [CmdletBinding()]
 param(
@@ -1134,6 +1139,26 @@ try {
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256
 
+        # 腿末收尾：清框 + 收键盘，走 runner 自己的 adb 通道。**必须排在本腿全部取证之后**——
+        # 被拦下的腿留在输入框里的 marker 正是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
+        # 判定已经做完，收尾失败不作废本腿结论，但会进 manifest 并计一条 cleanup issue。
+        $teardown = Invoke-P0LegTeardown -Session $session -TypedLength $markerLength `
+            -PrecheckPath $ProbeRegionPrecheckPath
+        $cleanupErrors += @($teardown.cleanup_issues)
+        switch ($teardown.verdict) {
+            'clean' {
+                Write-Host "[$leg] 腿末收尾完成：输入框已清空（键盘 $($teardown.keyboard)）。" -ForegroundColor DarkGray
+            }
+            'dirty' {
+                Write-Host ("[$leg] 腿末没能清空输入框，下一腿会被预检挡住，请在手机上处理：" +
+                    $teardown.detail) -ForegroundColor Red
+            }
+            default {
+                Write-Host ("[$leg] 腿末收尾结果无法核对（键盘 $($teardown.keyboard)）：$($teardown.detail)" +
+                    '——请在开下一腿前自己看一眼输入框。') -ForegroundColor Yellow
+            }
+        }
+
         $manifest.legs.Add([ordered]@{
             leg = $legLower
             slug = $slug
@@ -1162,6 +1187,14 @@ try {
             send_verification = [ordered]@{
                 verified = $trace.SendVerified
                 state = $trace.SendVerificationState
+            }
+            # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
+            # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
+            teardown = [ordered]@{
+                verdict = [string]$teardown.verdict
+                keyboard = [string]$teardown.keyboard
+                delete_keys = [int]$teardown.delete_keys
+                issues = @($teardown.issues)
             }
             trace_file = "$legLower/dispatch-trace.jsonl"
             audit_file = "$legLower/audit.jsonl"
