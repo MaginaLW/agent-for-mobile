@@ -361,6 +361,20 @@ exit /b 97
         Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'safety-denied') `
             '未取到 trace 里最后一个错误码。'
 
+        # 同一个 E_BLOCKED，channel 不同就是两件毫不相干的事。两条夹具都用真机原样形态：
+        #   overlay      真人在确认卡上点了拒绝 —— 安全门尽职
+        #   test-control debug 测试控制拒收这条腿 —— **确认卡根本没弹**
+        # 2026-08-01 实锤：Deny 腿白名单漏了 deny，这两种在台账里并排记成了同一个 safety-denied。
+        @('{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_BLOCKED\",\"message\":\"用户拒绝了危险操作：press_key\",\"channel\":\"overlay\",\"retryable\":false}}"}]}]}}') |
+            Set-Content -LiteralPath $trace -Encoding utf8
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'safety-denied') `
+            '真人拒绝（channel=overlay）必须仍归因为 safety-denied。'
+
+        @('{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_BLOCKED\",\"message\":\"debug 测试腿不在白名单\",\"channel\":\"test-control\",\"retryable\":false}}"}]}]}}') |
+            Set-Content -LiteralPath $trace -Encoding utf8
+        Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'test-control-blocked') `
+            '测试控制拒收（channel=test-control）不能记成 safety-denied——那一轮确认卡根本没弹。'
+
         @('{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_STALE_REF\"}}"}]}]}}') |
             Set-Content -LiteralPath $trace -Encoding utf8
         Assert-True ((Get-FailReason -Verdict 'fail' -Subtype 'success' -TraceFile $trace) -ceq 'stale-context') `

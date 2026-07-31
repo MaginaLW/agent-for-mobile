@@ -231,7 +231,12 @@ class DebugTestControl(
         if (!TOKEN_PATTERN.matches(command.runId) || !TOKEN_PATTERN.matches(command.nonce)) {
             throw blocked("debug run id 或 nonce 格式无效")
         }
-        if (command.leg !in setOf("allow", "stale")) throw blocked("debug 测试腿不在白名单")
+        // deny 是 2026-07-31 才接进 runner 的第三条腿，这里漏放开，真机上表现为
+        // press_key 直接回 E_BLOCKED("debug 测试腿不在白名单")、**确认卡根本不弹**。
+        // 执行器按任务卡看到 E_BLOCKED 会认为这一腿符合预期——拦住误判的是 runner 独立读
+        // 私有文件里的 confirmation 字段（没有真人决定即判失败）。这正好实锤了
+        // 「Deny 腿不能只信 E_BLOCKED」不是理论顾虑：同一个错误码可以来自完全无关的原因。
+        if (command.leg !in setOf("allow", "stale", "deny")) throw blocked("debug 测试腿不在白名单")
         if (command.staleAfterAllow != (command.leg == "stale")) {
             throw blocked("debug stale_after_allow 与测试腿不匹配")
         }

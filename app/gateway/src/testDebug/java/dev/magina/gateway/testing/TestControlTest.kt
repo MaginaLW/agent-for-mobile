@@ -67,6 +67,35 @@ class TestControlTest {
         assertFalse(state.contains("P0ALLOW"))
     }
 
+    /**
+     * Deny 腿必须能走到「弹卡 + 存证」这一步——**这正是它要测的东西**：卡出来了、真人点了拒绝。
+     * 白名单漏了 deny 的表现极具迷惑性：press_key 回 E_BLOCKED，而 E_BLOCKED 恰好是本腿的
+     * 预期错误码，执行器会照常报告"符合预期"，只有 runner 独立读 confirmation 字段才拦得住
+     * （2026-07-31 真机实锤，31 秒就结束、卡根本没弹）。
+     */
+    @Test
+    fun `deny command captures the card and never performs home`() {
+        writeControl(leg = "deny", nonce = "nonce-deny-0001")
+        val control = debugControl()
+        var homeCalls = 0
+
+        val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(4, 5), cardVisible = true, attempts = 1) }
+        control.onConfirmationDecision(session, TestConfirmationDecision.DENIED)
+
+        assertTrue(session.armed)
+        assertEquals(attempt.confirmationId, session.confirmId)
+        assertEquals(0, homeCalls)
+        assertStateContains("denied", session.confirmId)
+        assertTrue(File(temp.root, "confirmation-${attempt.confirmationId}.png").isFile)
+        // 拒绝之后不存在"允许后动作"，afterAllowed 走到就是错的。
+        expectError(ErrorCode.E_BLOCKED) {
+            control.afterAllowed(session, attempt, performHome = { homeCalls++; true }) {
+                TestForeground(known = true, packageName = "launcher")
+            }
+        }
+        assertEquals(0, homeCalls)
+    }
+
     @Test
     fun `state and evidence use the exact confirmation id already shown on card`() {
         writeControl(leg = "allow", nonce = "nonce-card-id-0001")
@@ -167,7 +196,11 @@ class TestControlTest {
         val cases = listOf(
             commandJson(expiresAtMs = now - 1),
             commandJson(runId = ""),
-            commandJson(leg = "deny"),
+            // 曾经写的是 leg="deny"，把「deny 不被支持」当成了预期行为——
+            // 2026-07-31 Deny 腿接进 runner 后，这条用例就变成了在**保护一个 bug**：
+            // 真机上确认卡根本不弹，press_key 直接回 E_BLOCKED("测试腿不在白名单")。
+            // 换成一个真正不支持的腿名，白名单本身仍然 fail-closed。
+            commandJson(leg = "purchase"),
             commandJson(tool = "ui_action"),
             commandJson(initialPackage = "com.example.other"),
             commandJson(extra = "\"decision\":\"allowed\",")
