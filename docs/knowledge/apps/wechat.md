@@ -12,7 +12,21 @@
 - ⚠️ **树空但 `findFocus(FOCUS_INPUT)` 可拿到焦点输入节点**（选择页搜索框实锤）——微信屏蔽树内容但焦点节点可获取；不过 **`ACTION_SET_TEXT` 报 true 不生效且读回 null**（与 Switch 假点击同族），**必须 IME 通道**（网关 typeText 已按「readback==null 也降级 IME + OCR 裁剪读回」实现）。
 - ⭐ **会话页聊天输入框全链探明（2026-07-22 P0 smoke，文传助手实锤）**：MMEditText（id `bkk`）聚焦后 findFocus 可取、`focusedInputId` 非空 → `press_key(enter)` 三道焦点复核可走通；SET_TEXT 假成功+节点读回 null 在此框复现，IME commit 生效；**type_text 的输入条 OCR 读回因小裁剪塌方恒 null → `verified` 不可达**，输入证据链改用「`committed=true` + `ime_commit` 通道 + 只读 `ui_find` 命中（O/0 归一）」；**空白输入框树空且无字可 OCR，任何通道拿不到 ref**——须现场人/前置动作先聚焦，再无 ref 调 `type_text`（打进文字后 OCR 才有锚点）。微信「使用回车键发送消息」开启时 `ACTION_IME_ENTER` 触发发送。
 
-- ⭐ **发送通道：Enter 能不能发，取决于微信自己的「使用回车键发送消息」开关，不取决于输入框契约**（2026-07-26 真机连撞两轮后确认）。
+- ✅ **发送通道 2026-07-31 打通（真人确认消息已发出）。真因不是通道选择，是「哪个节点算可用」的判据没统一。**
+  - **能发的那条路**：`enter_channel=editor_action:send`，即 IME 的 `performEditorAction(IME_ACTION_SEND)`。微信聊天框契约 `imeOptions=IME_ACTION_SEND` + 单行 + `no_enter_action=false`，本来就宣告了"回车即发送"。
+  - **为什么五轮没走到**：`press_key` 的 `viaNode` 用的是**未经过滤**的 `findFocus(FOCUS_INPUT)` 节点。微信会话页那个残留节点既不 focused 也不 editable，却**接受 `ACTION_IME_ENTER` 并返回 true**（假成功，与 SET_TEXT 假成功同族），于是 `viaNode || ImeBridge.enter()` 当场短路，IME 通道永远走不到。同一次调用里 `type_text` 报 `ime_commit_ocr`（无节点通道）而 `press_key` 报 `a11y_ime_enter`——**两个工具对"有没有可用节点"的判断互相矛盾**，这就是铁证。
+  - 这是《那个残留焦点节点会连累三处》的**第四处**，而那条教训原文就是"要把所有取用该节点的路径一起改"。判据已统一到 `FocusedInputSnapshot.nodeUsableForAction`（只认 `IdentitySource.A11Y`）并配离线用例。
+  - **发送成功时的形态**（供后续判定参考）：输入栏 OCR 读不到任何文字（框已清空，后验落 `unverified` 是**正常**的），marker 出现在输入栏上方的消息区（实测 y≈2503–2545，输入栏候选区 y≈2637–2727）。
+  - **OCR 会把 `P0ALLOW` 读成 `POALLOW`**（数字 0 ↔ 字母 O，S3 早已知）。凡是拿 marker 做机械判定的地方都必须按 `OcrEngine.norm` 同口径归一（含 o→0）——runner 侧曾漏掉这一步，把一次真正成功的发送判成"证据不匹配"。
+
+- 🔴 **下面这条 2026-07-31 早些时候的判断也已作废**（当时以为真因在通道选择本身）： 开关**已开启**的情况下 Allow 腿仍然发不出去（`press_key` → `E_VERIFY_FAIL`，后验 `channel=ocr` 正面读到 marker 仍在输入栏，用户肉眼独立确认）。真因是**我们自己选错了通道**：
+  - 微信聊天框契约是 `imeOptions=IME_ACTION_SEND`、`inputType=0x4001`（**单行**）、`no_enter_action=false`——它明确宣告了「回车即发送」。
+  - 而 `ImeBridge.enter()` 的选择逻辑按「是不是多行」二选一，且**接反了**：多行走 `performEditorAction`、单行发裸 `KeyEvent`。于是这个单行框恰恰绕开了它自己宣告的 SEND 动作。
+  - 安卓的约定是：**看 `IME_FLAG_NO_ENTER_ACTION` 与 actionCode，不看 multiLine**。单行框声明 SEND 时，软键盘那颗回车键就是发送键。已改为按此选择并加 6 条离线用例（`EnterStrategyTest`），微信那组实测契约直接作为回归数据。
+  - 同时修了裸按键的形态：旧代码用 5 参 `KeyEvent` 构造（deviceId=0、flags=0），不是软键盘该有的事件；已改为 AOSP 输入法的标准写法（`KeyCharacterMap.VIRTUAL_KEYBOARD` + `FLAG_SOFT_KEYBOARD|FLAG_KEEP_TOUCH_MODE`）。
+  - **仍待真机验证**：以上是离线推理 + 单测，尚未在设备上跑过。
+
+- ⭐ ~~**发送通道：Enter 能不能发，取决于微信自己的「使用回车键发送消息」开关，不取决于输入框契约**~~（2026-07-26 结论，**已被上条推翻**；开关是必要条件但不是全部原因）。
   - 用 R 级只读工具 `ime_editor_info`（读我们自己 IME 在 `onStartInput` 拿到的 `EditorInfo`）实测该聊天框：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行 TEXT|CAP_SENTENCES）、`no_enter_action=false`。**契约上两条路都该通，但 `performEditorAction(IME_ACTION_SEND)` 与 `KEYCODE_ENTER` 微信都不响应**——因为该开关关着时，微信压根没把回车接到发送上。契约只决定键盘画什么键，不决定 App 怎么处理。
   - 佐证：零 UI IME 下微信输入栏右侧**不渲染「发送」按钮**（它只在键盘弹起时替换 ⊕），所以"点发送按钮"这条路也不是凭空存在的。
   - **跑测前置条件**：微信 设置 → 聊天 → **使用回车键发送消息** 必须开启，否则整条 Enter 发送链在这台设备上不可能成立。本册 2026-07-22 那条早已写过这一点，后来排查时只读了 `android/common.md` 没读本册，为此多烧了两轮真机——**文档地图存在的意义就是按 app 路由，别只读通用册。**

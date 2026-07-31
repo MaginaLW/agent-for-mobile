@@ -9,6 +9,20 @@
 注意 `E_BLOCKED` 在 Deny 腿是**期望结果**——`safety-denied` 表示安全门尽到了职责，不是故障。
 #>
 
+<#
+终态报告的匹配模式。
+
+模型写 `**结果：失败**` 是常态，而旧模式只认裸行首 `^结果：失败`——两条都不匹配时
+dispatch 会落到兜底分支**把失败记成 success**（2026-07-31 真机实锤）。
+这里统一容忍：行首空白、markdown 强调（`*`/`_`，任意重数）、以及冒号后的空格。
+#>
+$script:P0AwaitConfirmPattern = '(?m)^[ \t]*[*_]{0,3}\[AWAIT_CONFIRM\]'
+
+function Get-P0FinalVerdictPattern {
+    param([Parameter(Mandatory)][ValidateSet('成功', '失败')][string]$Outcome)
+    return "(?m)^[ \t]*[*_]{0,3}结果[：:][ \t]*$Outcome"
+}
+
 function Get-FailReason {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Verdict,

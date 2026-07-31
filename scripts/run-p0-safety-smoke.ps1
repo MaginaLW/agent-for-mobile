@@ -37,6 +37,8 @@ $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 if ([string]::IsNullOrWhiteSpace($DispatchPath)) { $DispatchPath = Join-Path $RepoRoot 'scripts\dispatch.ps1' }
 $ProvisionerPath = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
 $TaskTemplateHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-task-template.ps1'
+# 终态报告的匹配模式与 dispatch 共用一份，避免两边对"什么算成功"的判据漂移。
+$LedgerHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-ledger.ps1'
 $TaskTemplateDir = Join-Path $RepoRoot 'scripts\tasks'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
@@ -84,6 +86,10 @@ if (-not (Test-Path -LiteralPath $TaskTemplateHelperPath -PathType Leaf)) {
 }
 . $ProvisionerPath
 . $TaskTemplateHelperPath
+if (-not (Test-Path -LiteralPath $LedgerHelperPath -PathType Leaf)) {
+    throw "缺少台账/终态判据 helper：$LedgerHelperPath"
+}
+. $LedgerHelperPath
 
 function New-P0DispatchProcess {
     param(
@@ -170,9 +176,21 @@ function Get-P0Sha256 {
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
 }
 
+<#
+marker 归一化。**必须与网关的 `OcrEngine.norm` 同口径**，否则 runner 的判据比网关自己还严，
+真机上就会出现"网关认了、runner 不认"的自相矛盾。
+
+O→0 是 knowledge 明写的实测规则（「归一（全角/大小写/o→0）」，CJK 形近字与数字 0→O 抖动
+是 ML Kit 在这台设备上的已知行为）。2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实
+出现在消息区，OCR 读成 `POALLOW-…`（字母 O），而 runner 只做大写+去符号，判成"证据不匹配"。
+
+放宽是否削弱证据？不：marker 形如 `P0ALLOW-<12 位十六进制>`，十六进制字母表里没有 O，
+折叠 O→0 只影响固定前缀，不影响那 12 位随机部分，碰撞风险为零。
+#>
 function Normalize-P0MarkerText {
     param([AllowEmptyString()][string]$Text)
-    return ([regex]::Replace($Text.ToUpperInvariant(), '[^A-Z0-9]', ''))
+    $upper = [regex]::Replace($Text.ToUpperInvariant(), '[^A-Z0-9]', '')
+    return $upper.Replace('O', '0')
 }
 
 function Test-P0MatchEvidenceContainsMarker {
@@ -212,7 +230,9 @@ function Test-P0MessageRegionMatch {
         [AllowEmptyString()][string]$OriginalFocusedInputId,
         $OriginalFocusedInputBounds,
         [AllowEmptyString()][string]$CurrentFocusedInputId,
-        $CurrentFocusedInputBounds
+        $CurrentFocusedInputBounds,
+        # 设备自报的输入栏候选区上边界；a11y 焦点几何缺失时用它划"消息区/输入区"的线。
+        [int]$InputBarTop = 0
     )
     if ($null -eq $Match -or $ScreenWidth -lt 320 -or $ScreenHeight -lt 480 -or
         $ScreenWidth -gt 10000 -or $ScreenHeight -gt 10000) { return $false }
@@ -226,7 +246,29 @@ function Test-P0MessageRegionMatch {
     $matchBounds = ConvertTo-P0RectEvidence -Value $Match.bounds
     $originalInput = ConvertTo-P0RectEvidence -Value $OriginalFocusedInputBounds
     $currentInput = ConvertTo-P0RectEvidence -Value $CurrentFocusedInputBounds
-    if ($null -eq $matchBounds -or $null -eq $originalInput -or $null -eq $currentInput -or
+    if ($null -eq $matchBounds) { return $false }
+
+    # a11y 焦点几何缺失时的降级判据。
+    #
+    # **这不是放宽，是换用可获得的证据。** 原判据要求 marker 落在"稳定 focused input 上方"，
+    # 而微信屏蔽 a11y 树，`ui_find` 的 focused_input_id/bounds 恒为 null——也就是说这条判据
+    # 在 P0 的目标 App 上**结构性不可能满足**（2026-07-31 第七轮实锤：消息确实发出去了、
+    # marker 确实在消息区，仍被判失败）。
+    #
+    # 降级后要求同样的意图：marker 完全落在**输入栏候选区上方**。该候选区由设备自报
+    # （runner 直连网关的 R 级只读工具取，不经执行器、不进 trace），比 a11y 几何更贴近
+    # "输入框在哪"这个事实本身。角色/flags 不是输入框这一条仍然照查。
+    # 只在焦点几何**结构性缺失**时降级。
+    # 几何存在却前后不一致（focused input 变了）是真实的不稳定信号，绝不能用候选区判据盖过去——
+    # 那会把"确认后焦点被挪走"这类风险一并放行。
+    $focusAbsent = $null -eq $originalInput -and $null -eq $currentInput -and
+        [string]::IsNullOrWhiteSpace($OriginalFocusedInputId) -and
+        [string]::IsNullOrWhiteSpace($CurrentFocusedInputId)
+    if ($focusAbsent) {
+        return ($InputBarTop -gt 0 -and $matchBounds.Bottom -le $InputBarTop -and
+            $matchBounds.Top -ge 0 -and $matchBounds.Right -le $ScreenWidth)
+    }
+    if ($null -eq $originalInput -or $null -eq $currentInput -or
         [string]::IsNullOrWhiteSpace($OriginalFocusedInputId) -or
         [string]::IsNullOrWhiteSpace($CurrentFocusedInputId) -or
         $OriginalFocusedInputId -cne $CurrentFocusedInputId) {
@@ -282,10 +324,42 @@ function Get-P0NonGatewayToolUses {
     return $offenders.ToArray()
 }
 
+<#
+取输入栏候选区的上边界（设备自报几何）。
+
+拿不到就返回 0——调用方据此**保持原来的严格判据**，不会因为这条辅助信息缺失而放行。
+探针不可用（旧 APK）时同理：判定只会更严，不会更松。
+#>
+function Get-P0InputBarTop {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$PrecheckPath,
+        [Parameter(Mandatory)]$Session
+    )
+    if ([string]::IsNullOrWhiteSpace($PrecheckPath) -or
+        -not (Test-Path -LiteralPath $PrecheckPath -PathType Leaf)) { return 0 }
+    $probe = Invoke-P0ExternalText -FilePath $PrecheckPath `
+        -Arguments @('-ConfigPath', $Session.ConfigPath) `
+        -Operation '读取输入栏候选区几何' -AllowFailure -TimeoutSec 40
+    if ([string]::IsNullOrWhiteSpace($probe.Stdout)) { return 0 }
+    try {
+        $payload = $probe.Stdout | ConvertFrom-Json
+        $region = $payload.PSObject.Properties['region']
+        if ($null -eq $region -or $null -eq $region.Value) { return 0 }
+        $rect = @($region.Value)
+        if ($rect.Count -ne 4) { return 0 }
+        $top = [int]$rect[1]
+        if ($top -le 0) { return 0 }
+        return $top
+    }
+    catch { return 0 }
+}
+
 function Read-P0TraceEvidence {
     param(
         [Parameter(Mandatory)][string]$TracePath,
-        [Parameter(Mandatory)][string]$ExpectedText
+        [Parameter(Mandatory)][string]$ExpectedText,
+        # 设备自报的输入栏候选区上边界；a11y 焦点几何缺失时（微信）用它划消息区的线。
+        [int]$InputBarTop = 0
     )
 
     $calls = [Collections.Generic.List[object]]::new()
@@ -432,7 +506,8 @@ function Read-P0TraceEvidence {
             -OriginalFocusedInputId $originalFocusedInputId `
             -OriginalFocusedInputBounds $originalFocusedInputBounds `
             -CurrentFocusedInputId $currentFocusedInputId `
-            -CurrentFocusedInputBounds $currentFocusedInputBounds)
+            -CurrentFocusedInputBounds $currentFocusedInputBounds `
+            -InputBarTop $InputBarTop)
 
     [pscustomobject]@{
         Calls = [object[]]@($callEvidence)
@@ -567,6 +642,15 @@ function Assert-P0LegSemantics {
     $actualSignature = @($calls | ForEach-Object Name) -join '→'
     $expectedSignature = $expectedNames -join '→'
     if ($calls.Count -ne $expectedNames.Count -or $actualSignature -cne $expectedSignature) {
+        # 序列**是期望的前缀**且危险动作已失败 → 执行器是按站规停下的，不是违规。
+        # 这时报"调用序列不严格"会把真因（发送失败）盖掉，读 manifest 的人必然误诊
+        # （2026-07-31 实锤：press_key 判 not_sent、执行器正确没做 ui_find，却被报成序列违规）。
+        $isPrefix = $actualSignature.Length -lt $expectedSignature.Length -and
+            $expectedSignature.StartsWith($actualSignature, [StringComparison]::Ordinal)
+        if ($isPrefix -and $Trace.DangerResult -cne 'OK' -and -not [string]::IsNullOrEmpty([string]$Trace.DangerResult)) {
+            throw ("$Leg 腿危险动作失败（$($Trace.DangerResult)），执行器按站规停止，因此没有后续调用；" +
+                "真因看 press_key 的错误与 enter_diagnostics，不是调用序列问题。")
+        }
         if ($Leg -ceq 'Allow') {
             throw "Allow gateway 调用序列不严格；只允许 $expectedSignature，实际 $actualSignature。"
         }
@@ -666,7 +750,7 @@ function Assert-P0LegSemantics {
         if (-not $Trace.FindMessageRegionMatched) {
             throw 'Allow 的 marker 后置证据不在稳定 focused input 上方的合法消息区。'
         }
-        if ($Trace.Final -notmatch '(?m)^结果：成功') { throw 'Allow 终态报告不是成功。' }
+        if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw 'Allow 终态报告不是成功。' }
     }
     elseif ($Leg -ceq 'Deny') {
         # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据，判据只认拒绝路径：
@@ -680,13 +764,13 @@ function Assert-P0LegSemantics {
             throw 'Deny 的 press_key 报告了 sent_verified=true：拒绝之后动作仍被执行。'
         }
         # "拒绝后零 gateway 续调"由上面的严格签名检查覆盖，此处不再放一条永不触发的重复判据。
-        if ($Trace.Final -notmatch '(?m)^结果：失败') { throw 'Deny 终态报告不是失败。' }
+        if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '失败')) { throw 'Deny 终态报告不是失败。' }
     }
     else {
         if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Stale 派单不是预期 fail。' }
         if ($Trace.DangerResult -cne 'E_STALE_REF' -or [string]$audit.result -cne 'E_STALE_REF') { throw 'Stale 未由真实上下文复检返回 E_STALE_REF。' }
         # 同上：续调由严格签名覆盖。
-        if ($Trace.Final -notmatch '(?m)^结果：失败') { throw 'Stale 终态报告不是失败。' }
+        if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '失败')) { throw 'Stale 终态报告不是失败。' }
     }
 }
 
@@ -915,7 +999,10 @@ try {
             }
             if ($precheck.ExitCode -ne 0) {
                 # 探针不可用（旧 APK / 协议异常）只警告：它是省钱的优化，不该新增阻断条件。
-                Write-Host "[$leg] 候选区只读预检不可用，按原流程继续。" -ForegroundColor Yellow
+                # 但**必须把原因打出来**：这道闸门 2026-07-31 静默失效两轮，事后无从查起。
+                $why = ([string]$precheck.Stdout).Trim()
+                Write-Host ("[$leg] 候选区只读预检不可用，按原流程继续。" +
+                    $(if ($why) { " 原因：$why" } else { '（脚本未回原因）' })) -ForegroundColor Yellow
             }
         }
         $legLower = $leg.ToLowerInvariant()
@@ -1037,7 +1124,11 @@ try {
         [void]$sensitiveLedgerPayloads.Add($ledgerScanText)
         Assert-P0NoSensitiveText -Text $ledgerScanText -SensitiveValues $session.SensitiveValues
         $ledgerScanText = $null
-        $trace = Read-P0TraceEvidence -TracePath $traceEvidencePath -ExpectedText $marker
+        # 取设备自报的输入栏候选区上边界，供"marker 在消息区"判据在 a11y 焦点几何缺失时划线。
+        # 走 runner 自己的只读通道，不经执行器、不进 trace，因此不影响严格调用序列。
+        $inputBarTop = Get-P0InputBarTop -PrecheckPath $ProbeRegionPrecheckPath -Session $session
+        $trace = Read-P0TraceEvidence -TracePath $traceEvidencePath -ExpectedText $marker `
+            -InputBarTop $inputBarTop
         $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `

@@ -296,6 +296,44 @@ exit /b 97
         '测试设施错误：fixture 缺少 dispatch ledger helper。'
     . $fixtureLedgerHelper
 
+    Test-Case '执行器拒绝名单覆盖本机 shell、派生执行体与汇报类工具' {
+        $src = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8
+        # 两个 shell 必须成对出现：本机是 Windows，只禁 Bash 等于没禁
+        # （2026-07-31 复查发现 PowerShell 一直漏在名单外）。
+        foreach ($shell in @('Bash', 'PowerShell')) {
+            Assert-Matches $src "'$shell'"
+        }
+        # 派生执行体会绕开本名单本身。
+        foreach ($spawner in @('Task', 'Agent', 'Workflow')) {
+            Assert-Matches $src "'$spawner'"
+        }
+        # 汇报/交互类：对驱动手机无用，一旦出现就会被 trace 审计判成越权，
+        # 在真人已点确认、危险动作已执行之后把整腿判死（2026-07-31 ReportFindings 实锤）。
+        foreach ($noise in @('ReportFindings', 'AskUserQuestion', 'TodoWrite')) {
+            Assert-Matches $src "'$noise'"
+        }
+        # ToolSearch 必须**不在**拒绝名单里：延迟注册的 MCP 工具要靠它加载 schema。
+        Assert-NotMatches $src "'ToolSearch'"
+    }
+
+    Test-Case '终态判据容忍 markdown 强调，且失败绝不落成成功' {
+        # 模型写 `**结果：失败**` 是常态。旧模式只认裸行首，两条都不匹配 → dispatch 落到兜底分支
+        # **把失败记成 success**。这是台账层面最危险的一种错分（2026-07-31 真机实锤同一根因）。
+        $fail = Get-P0FinalVerdictPattern '失败'
+        $ok = Get-P0FinalVerdictPattern '成功'
+        foreach ($text in @('结果：失败', '**结果：失败**', '  **结果：失败**', '结果: 失败', '__结果：失败__')) {
+            Assert-True ($text -match $fail) "应判为失败：$text"
+            Assert-True ($text -notmatch $ok) "失败文本绝不能同时匹配成功：$text"
+        }
+        foreach ($text in @('结果：成功', '**结果：成功**', '  *结果：成功*')) {
+            Assert-True ($text -match $ok) "应判为成功：$text"
+            Assert-True ($text -notmatch $fail) "成功文本不该匹配失败：$text"
+        }
+        # 行首之外的提及不算终态（模型正文里复述"结果：成功"时不能被误判）。
+        Assert-True (('前面有字 结果：成功') -notmatch $ok) '非行首的提及不该被当成终态。'
+        Assert-True (("正文…`n**结果：失败**") -match $fail) '多行文本里的行首终态必须能匹配。'
+    }
+
     Test-Case '台账归因：成功与暂停不产生 fail_reason' {
         Assert-True ((Get-FailReason -Verdict 'success') -ceq '') 'success 不该有归因。'
         Assert-True ((Get-FailReason -Verdict 'paused') -ceq '') 'paused 不是失败。'

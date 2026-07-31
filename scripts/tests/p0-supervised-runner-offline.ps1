@@ -90,7 +90,8 @@ function New-Fixture {
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
-        'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent'
+        'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
+        'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside'
     )][string]$Scenario)
 
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -154,6 +155,8 @@ function Remove-P0PrivateTemporaryFile {
     }
     # 任务模板不用假货：fixture 跑的必须是真机上会派发的同一份正文。
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
     foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md')) {
         Copy-Item -LiteralPath (Join-Path $SourceTaskTemplateDir $template) `
             -Destination (Join-Path $repo "scripts\tasks\$template")
@@ -330,6 +333,15 @@ findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   exit /b 2
 )
 findstr /x /c:"probe_region_unavailable" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 1
+rem 只有显式声明的场景才回 region：默认不回，用来钉住"拿不到候选区就保持严格判据"。
+findstr /x /c:"find_focus_missing_with_band" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":true,"empty":true,"region":[100,2000,980,2100]}
+  exit /b 0
+)
+findstr /x /c:"find_band_marker_inside" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":true,"empty":true,"region":[100,200,980,400]}
+  exit /b 0
+)
 echo {"ok":true,"empty":true}
 exit /b 0
 '@ | Set-Content -LiteralPath $fakePrecheck -Encoding ascii
@@ -423,7 +435,11 @@ function Emit-Macro {
             focused_input_id='wechat-input-a'
             focused_input_bounds=@(100,1900,980,2050)
         }
-        if ($scenario -eq 'find_focus_missing') { $macroData.Remove('focused_input_bounds') }
+        if ($scenario -in @('find_focus_missing','find_focus_missing_with_band','find_band_marker_inside')) {
+            # 复刻微信：a11y 树被屏蔽，宏与 ui_find 两侧都报不出焦点几何/身份（结构性缺失）。
+            $macroData.Remove('focused_input_bounds')
+            $macroData['focused_input_id'] = $null
+        }
         ToolResult 'm1' @{ok=$true;data=$macroData}
     }
 }
@@ -480,7 +496,12 @@ if ($code -eq 'OK') {
         ToolUse 'u1' 'future_write' @{value='x'}
         ToolResult 'u1' @{ok=$true;data=@{done=$true}}
     } else {
+        # find_ocr_zero_letter：复刻 ML Kit 把数字 0 读成字母 O 的实测抖动（2026-07-31 真机）。
+        # 查询参数仍是真 marker（执行器照抄任务卡），命中证据里的文本才带抖动。
         $findText = if ($scenario -eq 'unrelated_find') { 'UNRELATED' } else { $marker }
+        $findEvidenceText = if ($scenario -eq 'find_ocr_zero_letter') {
+            $marker -replace '^P0', 'PO'
+        } else { $findText }
         ToolUse 'f1' 'ui_find' @{text=$findText}
         $matchRole = if ($scenario -eq 'find_input') { 'input' } else { 'text' }
         $matchFlags = if ($scenario -eq 'find_input') { 'EF' } else { '' }
@@ -501,7 +522,7 @@ if ($code -eq 'OK') {
         }
         $findData = @{
             matches=@(@{
-                ref='e1';text=$findText;normalized=$findText;role=$matchRole;flags=$matchFlags
+                ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
                 bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
             })
             scrolls=0
@@ -510,7 +531,11 @@ if ($code -eq 'OK') {
             focused_input_id=$focusedInputId
             focused_input_bounds=$focusedInputBounds
         }
-        if ($scenario -eq 'find_focus_missing') { $findData.Remove('focused_input_bounds') }
+        if ($scenario -in @('find_focus_missing','find_focus_missing_with_band','find_band_marker_inside')) {
+            # 复刻微信：a11y 树被屏蔽 → ui_find 报不出 focused input 的 id 与几何。
+            $findData.Remove('focused_input_bounds')
+            $findData['focused_input_id'] = $null
+        }
         ToolResult 'f1' @{ok=$true;data=$findData}
         if ($scenario -eq 'extra_write') {
             ToolUse 'w1' 'future_write' @{value='x'}
@@ -836,6 +861,16 @@ try {
         Assert-NotMatches $result.Text ([regex]::Escape($fixture.Token))
     }
 
+    Test-Case 'marker 归一化与网关 OcrEngine.norm 同口径（O→0）' {
+        # 2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实出现在消息区，
+        # OCR 把 P0ALLOW 读成 POALLOW（字母 O），而 runner 只做大写+去符号 → 判成证据不匹配。
+        # runner 的判据不能比网关自己还严，否则真机上必然出现"网关认了、runner 不认"。
+        $fixture = New-Fixture find_ocr_zero_letter
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "O/0 抖动不该否决本腿：`n$($result.Text)"
+        Assert-Contains $result.Text '语义判定通过'
+    }
+
     Test-Case 'Deny 腿：真人拒绝后动作被拦下且零续调' {
         # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据。
         $fixture = New-Fixture happy
@@ -1028,6 +1063,25 @@ try {
             Assert-True ($result.ExitCode -ne 0) "$scenario 必须失败。"
             Assert-Contains $result.Text '消息区'
         }
+    }
+
+    Test-Case 'a11y 焦点几何缺失时改用设备自报的输入栏候选区划线' {
+        # 微信屏蔽 a11y 树 → ui_find 的 focused_input_id/bounds 恒为 null，
+        # 原判据"marker 必须在稳定 focused input 上方"在目标 App 上**结构性不可能满足**
+        # （2026-07-31 第七轮实锤：消息确实发出去了、marker 确实在消息区，仍被判失败）。
+        # 降级判据要求同样的意图：marker 完全落在输入栏候选区上方。
+        $fixture = New-Fixture find_focus_missing_with_band
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "焦点几何缺失但 marker 在候选区上方，应判通过：`n$($result.Text)"
+        Assert-Contains $result.Text '语义判定通过'
+    }
+
+    Test-Case '降级判据不放行落在输入栏候选区里的 marker' {
+        # 意图不变：marker 若在输入区内，说明它还在框里没发出去，必须判失败。
+        $fixture = New-Fixture find_band_marker_inside
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'marker 落在输入栏候选区内必须判失败。'
+        Assert-Contains $result.Text '消息区'
     }
 
     Test-Case 'Allow marker 必须位于稳定 focused input 上方且 OCR 输入框命中失败' {

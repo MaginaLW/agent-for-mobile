@@ -9,6 +9,7 @@ import dev.magina.gateway.a11y.FocusedInputIdentity
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.IdentitySource
 import dev.magina.gateway.core.InputCommitEvidence
 import dev.magina.gateway.core.PreparedTargetEvidence
 import dev.magina.gateway.core.SafetyTarget
@@ -36,7 +37,23 @@ object UiTools {
         val bounds: Rect?,
         /** 显式身份（含来源）；两侧都取不到时为 null，下游一律 fail-closed。 */
         val identity: FocusIdentity?,
-    )
+    ) {
+        /**
+         * 这个节点能不能拿去执行 a11y 动作（`ACTION_IME_ENTER` 等）。
+         *
+         * **必须与输入路径同一把尺子。** `findFocus(FOCUS_INPUT)` 在微信会话页会返回一个
+         * 既不 focused 也不 editable 的残留节点，它**接受 `ACTION_IME_ENTER` 并返回 true**
+         * ——假成功，与 SET_TEXT 假成功同族。而 `press_key` 早先直接用未过滤的节点做
+         * `viaNode`，于是 `viaNode || ImeBridge.enter()` 当场短路，IME 通道永远走不到。
+         *
+         * 2026-07-31 三轮真机实锤：同一次调用里 `type_text` 判 `ime_commit_ocr`（无节点通道）、
+         * `press_key` 却报 `a11y_ime_enter`，两个工具对"有没有可用节点"的判断互相矛盾。
+         * 这是 knowledge《那个残留焦点节点会连累三处》的**第四处**——那条教训原文就是
+         * "要把所有取用该节点的路径一起改"。
+         */
+        val nodeUsableForAction: Boolean
+            get() = identity?.source == IdentitySource.A11Y
+    }
 
     private val CAPTURE_REASONS = setOf(
         "low_confidence", "unknown_page", "icon_unrecognized", "layout_changed", "risk_review",
@@ -356,6 +373,9 @@ object UiTools {
     ): JSONObject {
         if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
+        // 送 Enter 走了哪条通道 —— 成功和失败都要带出去。危险动作发不出去时，
+        // "按哪条路送的"是第一诊断位；缺了它只能靠重跑真机去猜（2026-07-31 两轮实锤）。
+        var enterChannel: String? = null
         val ok = when (key) {
             "enter" -> {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
@@ -369,9 +389,14 @@ object UiTools {
                     snapshot,
                     a11y,
                 )
-                val viaNode = focused?.performAction(
-                    AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-                ) ?: false
+                // 只有 a11y 侧给出**合法输入身份**时才允许走节点通道；否则那是残留节点，
+                // 它会接受动作并返回 true，把真正可能工作的 IME 通道短路掉（见 nodeUsableForAction）。
+                val viaNode = snapshot.nodeUsableForAction && (
+                    focused?.performAction(
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                    ) ?: false
+                    )
+                if (viaNode) enterChannel = "a11y_ime_enter"
                 viaNode || run {
                     val current = focusedInputSnapshot(a11y)
                     requireFocusedIdentity(expectedFocusIdentity, current.identity)
@@ -382,7 +407,7 @@ object UiTools {
                         current,
                         a11y,
                     )
-                    ImeBridge.enter()
+                    ImeBridge.enter().also { enterChannel = ImeBridge.lastEnterChannel }
                 }
             }
             "del" -> ImeBridge.deleteBack(1)
@@ -407,6 +432,9 @@ object UiTools {
             channel = verdict.channel,
             retryable = false,
             fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
+            // 失败信封必须自带诊断位：走的哪条通道、当时的输入框契约是什么。
+            // 没有它，"发不出去"就只能靠再烧一轮真机去分辨走的是哪条分支。
+            extra = enterDiagnostics(enterChannel),
         )
         // UNVERIFIED 不当失败报：判不了 ≠ 没发出去，报失败会诱导重试，而重试发送等于冒重复发送。
         // 如实把"没有发送证据"带进信封，下一步只能是只读复核。
@@ -416,6 +444,7 @@ object UiTools {
             .put("verification_state", verdict.state.name.lowercase())
             .put("verification_channel", verdict.channel)
             .put("verification_detail", verdict.detail)
+            .put("enter_diagnostics", enterDiagnostics(enterChannel))
             .apply {
                 if (verdict.state == SendVerification.UNVERIFIED) put(
                     "next_step",
@@ -474,6 +503,15 @@ object UiTools {
         }
         return SendVerdictPolicy.fromOcrReadback(committed, after, OcrEngine::norm)
     }
+
+    /**
+     * Enter 的通道与当时的输入框契约。只含标志位与动作名，不含 hintText/initialText
+     * 这类可能带内容的字段（与 `ime_editor_info` 同一条脱敏口径）。
+     */
+    private fun enterDiagnostics(channel: String?): JSONObject = JSONObject()
+        .put("enter_channel", channel ?: "unknown")
+        .put("ime_active", ImeBridge.active)
+        .put("editor_contract", ImeBridge.editorContractSummary() ?: JSONObject.NULL)
 
     /** `[l,t][r,b]` → Rect；格式不符一律返回 null，由调用方退回默认输入栏带。 */
     private fun parseBoundsString(bounds: String?): Rect? {

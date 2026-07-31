@@ -22,6 +22,8 @@ pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale,Deny -Ex
 
 这条命令由 Agent 执行，不转交用户。`-Legs` 必须显式给出；runner 接受 `Allow|Stale|Deny`，即使参数次序颠倒也固定按 Allow→Stale→Deny 串行执行。任一腿失败、超时、拒绝、证据缺失或清理失败都会停止整组，危险动作不会自动重派。
 
+**`-Provision` 每一轮都要带，不是只在第一轮。** runner 的 `finally` 每轮收尾都会把输入法恢复成用户原来的（这是故意的：不该让跑测把设备留在网关输入法上），所以下一轮不带 `-Provision` 必然 `setup-fail：gateway 输入法未成为默认输入法`。这条在派单之前失败，不花钱，但会白等一轮（2026-07-31 实际踩到）。
+
 `-Provision` 会安装 debug APK、设置可机械建立的权限/无障碍/IME/前台服务与端口转发，经 `run-as` 在内存中读取私有 token 并同步 gitignored 本地配置。无法机械建立的设备或厂商能力会返回 `setup-fail`；当次运行停止，不要求用户现场接手设置后续跑。
 
 ## 3. 用户监督步骤

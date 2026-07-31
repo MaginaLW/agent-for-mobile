@@ -235,7 +235,30 @@ try {
     # 真的跑起了本机 Bash）。执行器的职责只有驱动手机，本机 shell / 文件 / 网络一律拒绝：
     # 仓库里就放着 gateway 私密 token，让它能读本机文件等于给证据脱敏链开后门。
     # ToolSearch 不在此列——延迟注册的 MCP 工具要靠它加载 schema，禁掉 gateway 工具就没法调。
-    $LocalToolDenyList = 'Bash,BashOutput,KillShell,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent'
+    #
+    # **这份名单是"枚举已知工具"，天生会漏——两次真机事故都栽在漏项上：**
+    # · 2026-07-26 ToolSearch 被 trace 审计当成越权（那次是白名单漏）；
+    # · 2026-07-31 执行器调了 ReportFindings，Allow 腿在真人已点允许、危险动作已执行之后
+    #   被判死，白烧一轮真机。
+    # 同一轮复查还发现 **PowerShell 一直没被禁**：注释说"本机 shell 一律拒绝"，实际只禁了
+    # Bash，而本机是 Windows——执行器手里很可能一直握着一个等价的本机 shell。
+    # 所以除了补齐漏项，下面按类分组列出，加新工具时对着组补，别再一条条追。
+    $LocalToolDenyList = @(
+        # 本机 shell（Bash 与 PowerShell 等价，漏一个等于没禁）
+        'Bash', 'BashOutput', 'KillShell', 'PowerShell',
+        # 本机文件与检索
+        'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep',
+        # 网络
+        'WebFetch', 'WebSearch',
+        # 派生执行体（会绕开本名单）
+        'Task', 'Agent', 'Workflow', 'SendMessage', 'TaskCreate', 'TaskUpdate',
+        'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop',
+        # 汇报 / 交互 / 调度类：对驱动手机毫无用处，出现即污染 trace 审计
+        'ReportFindings', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode',
+        'SlashCommand', 'Skill', 'Artifact', 'SendUserFile', 'Monitor', 'PushNotification',
+        'ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger',
+        'EnterWorktree', 'ExitWorktree', 'DesignSync'
+    ) -join ','
     $argList = @('-p', '--output-format', 'stream-json', '--verbose',
                  '--mcp-config', $McpConfig, '--strict-mcp-config',
                  '--allowedTools', $AllowedTools,
@@ -279,10 +302,14 @@ try {
     elseif ("$($resultEvent.subtype)" -match 'budget|max_turns') { $verdict = 'step-cap'; $note = $resultEvent.subtype }
     elseif ("$($resultEvent.subtype)" -ne 'success') { $verdict = 'fail'; $note = $resultEvent.subtype }
     else {
-        # 全文按行首匹配（模型偶尔在报告前多说一句话）；暂停标记优先——宁可误暂停交人看，不可漏暂停
-        if ($final -match '(?m)^\[AWAIT_CONFIRM\]') { $verdict = 'paused' }
-        elseif ($final -match '(?m)^结果：失败') { $verdict = 'fail' }
-        elseif ($final -match '(?m)^结果：成功') { $verdict = 'success' }
+        # 全文按行首匹配（模型偶尔在报告前多说一句话）；暂停标记优先——宁可误暂停交人看，不可漏暂停。
+        #
+        # **必须容忍 markdown 强调**：模型很自然会写 `**结果：失败**`。旧模式只认裸行首，于是
+        # 失败与成功两条都不匹配，一路落到 else —— **把一次失败的危险动作记成 success**。
+        # 2026-07-31 真机实锤（那轮台账 note 写着"报告未循例"，正是同一根因的良性表现）。
+        if ($final -match $script:P0AwaitConfirmPattern) { $verdict = 'paused' }
+        elseif ($final -match (Get-P0FinalVerdictPattern '失败')) { $verdict = 'fail' }
+        elseif ($final -match (Get-P0FinalVerdictPattern '成功')) { $verdict = 'success' }
         else { $verdict = 'success'; $note = '报告未循例' }
     }
 

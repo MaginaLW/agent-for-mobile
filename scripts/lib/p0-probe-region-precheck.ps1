@@ -14,7 +14,11 @@
 param(
     [Parameter(Mandatory)][string]$ConfigPath,
     [int]$Port = 8848,
-    [int]$TimeoutSec = 20
+    [int]$TimeoutSec = 20,
+    # -Provision 刚重装完 APK 时无障碍服务还在重启，工具会回错误信封。
+    # 2026-07-31 实测：三轮里两轮预检因此报"不可用"，而它是省钱的闸门，静默失效等于没有。
+    [int]$ReadyRetries = 6,
+    [int]$ReadyRetryDelayMs = 1000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,23 +51,52 @@ try {
         [Net.Http.HttpMethod]::Post,
         "http://127.0.0.1:$Port/mcp"
     )
-    $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
     $body = '{"jsonrpc":"2.0","id":"p0-probe-region","method":"tools/call",' +
         '"params":{"name":"p0_probe_region_state","arguments":{}}}'
-    $request.Content = [Net.Http.StringContent]::new($body, [Text.Encoding]::UTF8, 'application/json')
-    $response = $client.Send($request)
-    if (-not $response.IsSuccessStatusCode) { throw 'http status' }
-    $json = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
-    if ([string]$json.id -cne 'p0-probe-region' -or $null -eq $json.result) { throw 'protocol mismatch' }
-    $text = [string]$json.result.content[0].text
-    if ([string]::IsNullOrWhiteSpace($text)) { throw 'empty tool payload' }
-    $envelope = $text | ConvertFrom-Json
-    if ($envelope.ok -ne $true -or $null -eq $envelope.data) { throw 'tool returned error envelope' }
-    $data = $envelope.data
-    if ($null -eq $data.PSObject.Properties['empty']) { throw 'tool payload missing empty' }
+    # 就绪重试：错误信封基本都是"服务刚重启还没绑好"，等一等就好；
+    # 协议不符/HTTP 失败这类结构性问题重试也没用，但一并等一轮代价极小。
+    $data = $null
+    $lastProblem = 'unknown'
+    for ($attempt = 1; $attempt -le ([Math]::Max(1, $ReadyRetries)); $attempt++) {
+        if ($null -ne $response) { $response.Dispose(); $response = $null }
+        if ($null -ne $request) { $request.Dispose() }
+        $request = [Net.Http.HttpRequestMessage]::new(
+            [Net.Http.HttpMethod]::Post,
+            "http://127.0.0.1:$Port/mcp"
+        )
+        $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
+        $request.Content = [Net.Http.StringContent]::new($body, [Text.Encoding]::UTF8, 'application/json')
+        try {
+            $response = $client.Send($request)
+            if (-not $response.IsSuccessStatusCode) { throw 'http status' }
+            $json = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+            if ([string]$json.id -cne 'p0-probe-region' -or $null -eq $json.result) { throw 'protocol mismatch' }
+            $text = [string]$json.result.content[0].text
+            if ([string]::IsNullOrWhiteSpace($text)) { throw 'empty tool payload' }
+            $envelope = $text | ConvertFrom-Json
+            if ($envelope.ok -ne $true -or $null -eq $envelope.data) { throw 'tool returned error envelope' }
+            $candidate = $envelope.data
+            if ($null -eq $candidate.PSObject.Properties['empty']) { throw 'tool payload missing empty' }
+            $data = $candidate
+            break
+        }
+        catch {
+            $lastProblem = "$($_.Exception.GetType().Name): $($_.Exception.Message)"
+            if ($attempt -lt $ReadyRetries) { Start-Sleep -Milliseconds $ReadyRetryDelayMs }
+        }
+    }
+    if ($null -eq $data) { throw "重试 $ReadyRetries 次仍不可用（$lastProblem）" }
 }
 catch {
-    [Console]::Error.WriteLine('候选区只读预检不可用（工具缺失或协议不符），跳过预检。')
+    # **必须说出是哪一步坏的。** 这道闸门的全部价值是省掉一轮真机，而它静默失效时
+    # 只会打印一句"不可用"，于是 2026-07-31 连着两轮跑测都在没有预检的情况下开跑，
+    # 事后连"为什么不可用"都无从查起（脚本单独跑却是好的）。
+    # 脱敏：token 只出现在请求头里，不会进异常消息；仍按 32 位裸 hex 兜底擦一遍。
+    $reason = "$($_.Exception.GetType().Name): $($_.Exception.Message)" -replace '[0-9a-f]{32}', '<redacted>'
+    # 原因走 **stdout**：调用方 Invoke-P0ExternalText 只回 ExitCode 与 Stdout，stderr 会被丢掉，
+    # 只写 stderr 等于白写（这正是它静默失效两轮的原因）。
+    [pscustomobject]@{ ok = $false; available = $false; reason = $reason } | ConvertTo-Json -Compress
+    [Console]::Error.WriteLine("候选区只读预检不可用（$reason），跳过预检。")
     exit 1
 }
 finally {
@@ -76,8 +109,11 @@ finally {
 }
 
 $probeReady = Get-P0ProbeProperty -Object $data -Name 'probe_ready'
+# region 一并带出：runner 的"marker 必须在消息区"判据在微信上拿不到 a11y 焦点几何，
+# 需要用设备自报的输入栏候选区来划线（见 run-p0-safety-smoke.ps1 的 Test-P0MessageRegionMatch）。
+$region = Get-P0ProbeProperty -Object $data -Name 'region'
 if ($data.empty -eq $true -and $probeReady -ne $false) {
-    [pscustomobject]@{ ok = $true; empty = $true } | ConvertTo-Json -Compress
+    [pscustomobject]@{ ok = $true; empty = $true; region = $region } | ConvertTo-Json -Compress -Depth 4
     exit 0
 }
 
@@ -88,6 +124,7 @@ if ($data.empty -ne $true) {
     [pscustomobject]@{
         ok = $false
         empty = $false
+        region = $region
         remedy = '请在手机上清空微信输入框后重跑'
         leftovers = $leftovers
     } | ConvertTo-Json -Compress -Depth 4
@@ -100,6 +137,7 @@ if ($data.empty -ne $true) {
     ok = $false
     empty = $true
     probe_ready = $false
+    region = $region
     remedy = '请把微信停在「文件传输助手」会话页后重跑'
     reason = [string]$data.reason
 } | ConvertTo-Json -Compress -Depth 4

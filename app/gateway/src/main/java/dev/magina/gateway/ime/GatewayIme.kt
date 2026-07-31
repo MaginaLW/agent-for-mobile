@@ -2,6 +2,7 @@ package dev.magina.gateway.ime
 
 import android.inputmethodservice.InputMethodService
 import android.os.SystemClock
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -101,6 +102,9 @@ data class ImeSessionIdentity(
  * App 完全可以不理会；要判断"这个框能不能靠 Enter 发送"，必须看它自己声明的
  * imeOptions/inputType，而不是看调用返回值。只保留契约字段，不含任何内容。
  */
+/** Enter 的送法。**一次调用只走一条**——两条都试等于冒重复发送。 */
+enum class EnterStrategy { EDITOR_ACTION, KEY_EVENT }
+
 data class ImeEditorContract(
     val inputType: Int,
     val imeOptions: Int,
@@ -117,6 +121,32 @@ data class ImeEditorContract(
     val multiLine: Boolean
         get() = (inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 ||
             (inputType and android.text.InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE) != 0
+
+    /**
+     * 这一次 Enter 该怎么送。
+     *
+     * **判据是「编辑器有没有宣告可用的回车动作」，不是「是不是多行」**——安卓的约定里，
+     * 单行框声明 `IME_ACTION_SEND` 时软键盘那颗回车键**就是**发送键，正确做法是
+     * `performEditorAction(actionCode)`；回车要不要退化成换行由 `IME_FLAG_NO_ENTER_ACTION`
+     * 表达（多行框通常由框架顺带置上该位），multiLine 本身不是决策位。
+     *
+     * 旧实现把两者接反了：多行才走动作、单行一律发裸按键。后果实锤于 2026-07-31 真机——
+     * 微信聊天框 `imeOptions=0x4`（SEND）、`inputType=0x4001`（单行）、`no_enter_action=false`，
+     * 也就是它**明确宣告了"回车即发送"，而我们恰恰因为它是单行框绕开了这条路**，
+     * 去发了个 KeyEvent，于是消息发不出去（后验正确判 not_sent）。
+     */
+    val enterStrategy: EnterStrategy
+        get() = when {
+            noEnterAction -> EnterStrategy.KEY_EVENT
+            actionCode == EditorInfo.IME_ACTION_NONE ||
+                actionCode == EditorInfo.IME_ACTION_UNSPECIFIED -> EnterStrategy.KEY_EVENT
+            else -> EnterStrategy.EDITOR_ACTION
+        }
+
+    /** 一行诊断摘要，只含契约标志位，不含 hintText/initialText 这类可能带内容的字段。 */
+    fun describe(): String =
+        "action=${actionName()},multiLine=$multiLine,noEnterAction=$noEnterAction," +
+            "inputType=0x%08x,imeOptions=0x%08x".format(inputType, imeOptions)
 
     fun actionName(): String = when (actionCode) {
         EditorInfo.IME_ACTION_UNSPECIFIED -> "unspecified"
@@ -235,25 +265,42 @@ object ImeBridge {
      *
      * 返回值只表示"这次投递被受理"，**不代表 App 真的发送了**——是否发出由调用方后验。
      */
+    /**
+     * 上一次 `enter()` 实际走的通道。危险动作失败时必须能说出"我按哪条路送的"，
+     * 否则只能靠猜——2026-07-31 两轮真机都卡在发送，而返回里没有这个信息，
+     * 第二轮结束时依然分不清是走了 editor_action 还是退回了 key_event。
+     */
+    @Volatile
+    var lastEnterChannel: String? = null
+        private set
+
     fun enter(): Boolean {
         synchronized(sessionLock) {
-            val c = ic() ?: return false
+            val c = ic() ?: run { lastEnterChannel = "no_input_connection"; return false }
             val contract = editorContract
-            val actionable = contract != null && !contract.noEnterAction &&
-                contract.actionCode != EditorInfo.IME_ACTION_NONE &&
-                contract.actionCode != EditorInfo.IME_ACTION_UNSPECIFIED
-            if (contract != null && contract.multiLine) {
-                if (!actionable) return false
+            // 契约缺失时只能退到裸按键；有契约就按它的宣告走（见 ImeEditorContract.enterStrategy）。
+            if (contract != null && contract.enterStrategy == EnterStrategy.EDITOR_ACTION) {
+                lastEnterChannel = "editor_action:${contract.actionName()}"
                 return c.performEditorAction(contract.actionCode)
             }
+            lastEnterChannel = if (contract == null) "key_event:no_contract" else "key_event"
+            // 规范的**软键盘**按键事件：deviceId 用 VIRTUAL_KEYBOARD，并置 FLAG_SOFT_KEYBOARD |
+            // FLAG_KEEP_TOUCH_MODE。旧实现用 5 参构造，deviceId=0、flags=0、source 未知——
+            // 那不是软键盘该有的形态，接收方按 flags 或来源过滤时会当噪声丢掉。
+            // 这是 AOSP 输入法（LatinIME.sendDownUpKeyEvent）的标准写法。
             val now = SystemClock.uptimeMillis()
-            return c.sendKeyEvent(
-                KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0),
-            ) && c.sendKeyEvent(
-                KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0),
+            fun enterKey(action: Int) = KeyEvent(
+                now, now, action, KeyEvent.KEYCODE_ENTER, 0, 0,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE,
             )
+            return c.sendKeyEvent(enterKey(KeyEvent.ACTION_DOWN)) &&
+                c.sendKeyEvent(enterKey(KeyEvent.ACTION_UP))
         }
     }
+
+    /** 当前输入框契约的一行摘要；无会话时为 null。供危险动作的失败信封带诊断位。 */
+    fun editorContractSummary(): String? = editorContract?.describe()
 
     fun deleteBack(count: Int): Boolean {
         synchronized(sessionLock) {
