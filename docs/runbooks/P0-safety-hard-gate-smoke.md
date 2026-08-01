@@ -141,7 +141,19 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 | Stale | 允许本次 | fail / `E_STALE_REF` | debug hook 后零发送、零 gateway 续调 |
 | Deny | **拒绝** | fail / `E_BLOCKED` | 零 gateway 续调（含只读复核），且 `sent_verified` 不得为 true |
 
-**Deny 腿目前的证明力有限，用它的结论时要知道边界**：这四条判据（`E_BLOCKED`、审计一致、零续调、`sent_verified` 非 true）**全部来自被测组件自己的报告**，runner 没有任何独立观察屏幕的步骤。因此它能证明"网关声称拒绝了"，不能证明"消息确实没发出去"——若网关有 bug、Enter 已经投递出去而后续流程判 denied，这条腿照样全绿。Allow 腿有 `ui_find` 在消息区命中 marker 这条独立正证据，Deny 腿目前没有对应的反向证据。补法是 runner 在腿结束后经自己的 adb 通道做一次带外截屏/OCR 比对（不经执行器、不进 trace），确认 marker 未出现在消息区；在补上之前，manifest 的 `send_postcondition` 如实记为 `gateway_reported_blocked_no_independent_check`。
+**Deny 腿原本的四条判据（`E_BLOCKED`、审计一致、零续调、`sent_verified` 非 true）全部来自被测组件自己的报告**，runner 没有任何独立观察屏幕的步骤。它能证明"网关声称拒绝了"，不能证明"消息确实没发出去"——若网关有 bug、Enter 已经投递出去而后续流程判 denied，这条腿照样全绿（2026-08-01 那次假通过就是同一形态）。
+
+2026-08-02 起补上**带外验证**（批次 3）：腿末经 runner 自己的 adb 通道 `exec-out screencap -p` 截屏，再由本机系统 OCR（`Windows.Media.Ocr`）与本腿 marker 比对。**不经执行器、不进 trace、不花 token**，与手机上的网关没有任何共享状态。
+
+- **顺序**：本腿判定 → **带外验证** → teardown。teardown 会清空输入框，而"marker 原封不动留在框里"是这条验证唯一的强证据，**先清框就是先毁证**；离线用例按源码顺序钉死。
+- **两条证据分开记，证明力完全不同**（manifest `legs[].deny_out_of_band`）：
+  - `input_box_marker=present` —— **正证据**。微信发送后会清空输入栏，文字还在就说明发送没发生。
+  - `message_area_marker=absent` —— **负证据，而且很弱，不参与"没发出去"的判定**。消息列表可能已经往上滚，没看见不等于没有（2026-08-01 手工那次正是如此，结论扛在输入框那条正证据上）。
+  - `message_area_marker=present` —— **强反证**，直接判本腿失败：网关声称拦下了，而消息确实发出去了。
+- **`send_postcondition` 由实际结论给出**：验到正证据记 `independent_ocr_marker_still_in_input_box`（只说验到的那一条，**不写"已确认未发送"**）；判不了原样退回 `gateway_reported_blocked_no_independent_check`。
+- **判不了就说判不了**：OCR 读不出、本机没装 OCR 语言包、拿不到输入栏候选区上边界，一律 `inconclusive` 并黄字提示，**不倒向任何一边、也不否决本腿**。
+
+**第一次跑请对着 manifest 的 `deny_out_of_band` 看一眼**：`ocr` 字段是 `windows-media-ocr` 还是 `unavailable`，`input_box_marker` 是不是 `present`。本机实测系统 OCR 会把 `P0` 读成 `PO`（marker 归一已含 O→0），且会把 marker 切成多个词（判据已先按行拼词再比对）——这两条都覆盖过，但真机截图的字号与背景与合成图不同，第一次要确认能读出来。
 
 Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
 
