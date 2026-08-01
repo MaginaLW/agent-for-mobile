@@ -1693,12 +1693,101 @@ try {
         Assert-NotMatches $checkSource 'dispatch'
     }
 
+    Test-Case '带外 OCR：marker 被切成多个词也要拼回来' {
+        # 实测 OCR 把 P0ALLOW-1D97824FD778 切成 POALLOW- / 1 / D97824FD778 三个词，
+        # 还带 O→0 误识。拿单个词去 contains 必然漏判，所以必须先按行拼词、再走归一。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        $normalize = { param($t) [regex]::Replace("$t".ToUpperInvariant(), '[^A-Z0-9]', '').Replace('O', '0') }
+
+        $words = ConvertFrom-P0OcrWords -Text @'
+POALLOW-|72|817|207|32
+1|287|817|11|32
+D97824FD778|310|817|273|32
+PODENY-DCA2222F6441|72|2117|472|32
+'@
+        Assert-True ($words.Count -eq 4) "应解析出 4 个词，实际 $($words.Count)"
+        $lines = Join-P0OcrLines -Words $words
+        Assert-True ($lines.Count -eq 2) "应拼成 2 行，实际 $($lines.Count)"
+        Assert-True ($lines[0].Text -ceq 'POALLOW-1D97824FD778') "拼行结果不符：$($lines[0].Text)"
+
+        # 消息区（y<2000）有 Allow 的 marker；输入框带（y>=2000）有 Deny 的。
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0ALLOW-1D97824FD778' `
+            -BandTop 0 -BandBottom 2000 -Normalize $normalize) -ceq 'present') '拼行后应能命中被切开的 marker。'
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 2000 -BandBottom 3000 -Normalize $normalize) -ceq 'present') '输入框带应命中 Deny marker。'
+        # 带里有字但不是这个 marker → absent；带里一个字都没有 → unreadable，两者不能混。
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 0 -BandBottom 2000 -Normalize $normalize) -ceq 'absent') '带里有字但无该 marker 应为 absent。'
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 3000 -BandBottom 4000 -Normalize $normalize) -ceq 'unreadable') '带里没字应为 unreadable，不是 absent。'
+
+        # 解析不出来的行丢弃，不让它污染判定，也不让整次判定失败。
+        Assert-True ((ConvertFrom-P0OcrWords -Text "坏行`nA|1|2|3").Count -eq 0) '格式不对的行应被丢弃。'
+        Assert-True ((ConvertFrom-P0OcrWords -Text '').Count -eq 0) '空输入应回空列表。'
+
+        # 行归并阈值：相邻两行不得被串成一行，否则会拼出并不存在的 marker。
+        $twoRows = ConvertFrom-P0OcrWords -Text "P0DENY-|10|100|100|32`nDCA2222F6441|10|400|200|32"
+        Assert-True ((Join-P0OcrLines -Words $twoRows).Count -eq 2) '相隔很远的两行不得被并成一行。'
+    }
+
+    Test-Case '带外结论三态：消息区没找到永远不算"没发出去"' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+
+        # 强反证：Deny 腿声称拦下了，消息区却读到了 marker。压过一切，直接判发出去了。
+        foreach ($inputBox in @('present', 'absent', 'unreadable')) {
+            $sent = Get-P0DenyOobVerdict -InputBox $inputBox -MessageArea 'present'
+            Assert-True ($sent.Verdict -ceq 'sent_detected') "消息区命中 marker 必须判 sent_detected（输入框=$inputBox）。"
+        }
+
+        # 唯一的强正证据：marker 原封不动留在输入框（微信发送后会清空输入栏）。
+        $ok = Get-P0DenyOobVerdict -InputBox 'present' -MessageArea 'absent'
+        Assert-True ($ok.Verdict -ceq 'not_sent_confirmed') '输入框仍有 marker 应判 not_sent_confirmed。'
+        # 措辞只说验到的那一条，不得写成"已确认未发送"——消息区那条负证据仍未被视觉证实。
+        Assert-True ($ok.Postcondition -ceq 'independent_ocr_marker_still_in_input_box') "postcondition 措辞夸大：$($ok.Postcondition)"
+
+        # **本用例的核心**：消息区 absent 不是"没发出去"的证据（列表可能滚上去了）。
+        foreach ($messageArea in @('absent', 'unreadable')) {
+            $weak = Get-P0DenyOobVerdict -InputBox 'absent' -MessageArea $messageArea
+            Assert-True ($weak.Verdict -ceq 'inconclusive') "输入框没 marker 时不得凭消息区 $messageArea 判定未发送。"
+            # 判不了就退回原样的措辞，不许因为"跑过一次带外验证"把结论写得更强。
+            Assert-True ($weak.Postcondition -ceq 'gateway_reported_blocked_no_independent_check') `
+                "判不了时 postcondition 必须退回原样：$($weak.Postcondition)"
+        }
+        $blind = Get-P0DenyOobVerdict -InputBox 'unreadable' -MessageArea 'unreadable'
+        Assert-True ($blind.Verdict -ceq 'inconclusive') 'OCR 全读不到必须 inconclusive，不得倒向任何一边。'
+
+        $verdicts = @('sent_detected', 'not_sent_confirmed', 'inconclusive')
+        Assert-True (@($verdicts | Select-Object -Unique).Count -eq 3) '三态必须互不相同。'
+    }
+
+    Test-Case '带外 OCR helper 以 UTF-8 BOM 落盘且能被 5.1 解析' {
+        # 5.1 没有 BOM 时按 ANSI 读，中文注释乱码成解析错误；而 pwsh 7 侧的 AST 检查
+        # 看不出来（它按 UTF-8 读一切正常）。2026-08-02 实锤过一次"语法可解析、一执行就整片报错"。
+        $helper = Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-ocr.ps1'
+        Assert-True (Test-Path -LiteralPath $helper -PathType Leaf) "缺少带外 OCR helper：$helper"
+        $bytes = [IO.File]::ReadAllBytes($helper)
+        Assert-True ($bytes.Length -gt 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) `
+            'p0-oob-ocr.ps1 必须以 UTF-8 BOM 落盘，否则 Windows PowerShell 5.1 按 ANSI 读会解析失败。'
+
+        # 真拿 5.1 解析一遍：BOM 断言只挡住已知的那一种坏法，这一条挡住其余的。
+        $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $ps51 -PathType Leaf) {
+            $probe = & $ps51 -NoProfile -ExecutionPolicy Bypass -Command @"
+`$errors = `$null
+[void][System.Management.Automation.Language.Parser]::ParseFile('$helper', [ref]`$null, [ref]`$errors)
+if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
+"@
+            Assert-True (($probe -join '') -match 'OK') "5.1 解析 helper 失败：$probe"
+        }
+    }
+
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
