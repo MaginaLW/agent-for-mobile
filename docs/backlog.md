@@ -164,7 +164,51 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 3. 连续两次 stale 后，**第 3 次确实停在 `[AWAIT_CONFIRM]`**
 
 | 3 | `3cb9133` | `claude/serene-faraday-42d1fb` | **待验收**（并入下方合并跑） | Deny 腿带外验证自动化 |
-| **2+3 合并跑** | **`33b9eac`** | `claude/serene-faraday-42d1fb` | **就绪待用户手机时间** | 批次 2 二次 + 批次 3，须分别归因 |
+| **2+3 合并跑** | **`33b9eac`** | `claude/serene-faraday-42d1fb` | 批次 3 **✅ 通过** · 批次 2 **❌ 未达成** | 08-02 00:11 |
+
+**批次 3 通过（主会话独立核 manifest）**：`deny_out_of_band = {captured:true, ocr:"windows-media-ocr",
+input_box_marker:"present", message_area_marker:"absent", verdict:"not_sent_confirmed"}`，
+`send_postcondition` 由 `gateway_reported_blocked_no_independent_check` **升级为
+`independent_ocr_marker_still_in_input_box`**。**真机截图 OCR 读得出来**，没退化成 `unavailable`；
+`absent` 按设计未参与判定。**「Deny 腿四条判据全部来自被测组件自报」这条从 07-31 挂到现在，
+第一次有了独立反向证据。**
+
+**批次 2 判据 1 仍未达成，但形态变了——从"根本没出现"变成"发得出、留不住"。**
+新增的 `approval_notification` 观测确认修复已落地：`id=36865 channel=gateway-approval
+importance=4 **flags=0**`（`ONGOING_EVENT` 已消失，上轮同一位置就是它）、`category=call`、
+`actions=3`、`vis=PRIVATE`、`publicVersion(vis=PUBLIC)` 齐全，且 C 道在让用户锁屏**之前**用 adb
+独立确认过该记录活着。用户观察：**通知随卡同步出现、很快消失，锁屏上没有**。最可能是去掉
+`setOngoing` 的副作用（ongoing 连带 `NO_CLEAR` 让它粘住）。**下一轮必须把「可见」与「持久」
+当两件事分别验。** 另：第一次锁屏尝试撞到混杂变量 `zen_mode=1`（vivo 定时睡眠，通道
+`mBypassDnd=false`），已关 DND 重测，最终结论取自 `zen_mode=0`。
+
+**协议缺口：线性堆叠让通过的批次合不进 main。** 批次 2（`2b5bc90`）是批次 3（`3cb9133`）的
+**祖先**，而 §7.2 要求「合钉住的 SHA」——合批次 3 必然带上未通过的批次 2。本轮据此**暂不合并**，
+批次 3 留在分支上等批次 2 过。**根因是 §7.2 默认批次可独立合并，而 A 道是线性往前做的**；
+若将来某批长期卡住，应让它单开分支而不是让后续批次陪绑。
+
+**五条真机回流（全部回流 A 道）：**
+
+1. **跨零点丢审计**：设备审计按日期分文件，Stale 腿 23:59:44 起、00:00:28 止，行落进
+   `20260802.jsonl` 而 runner 读 `20260801.jsonl` → 判「新增 `press_key` 审计证据行数不是 1」（实为 0）。
+   trace 里 `press_key` 与 `E_STALE_REF` 都在，**安全语义正常，纯属证据采集缺陷**。
+2. **Allow 腿 `ui_find`「恰好一个命中」判据误杀——同族第二次，且这次消息真的发出去了。**
+   `run-p0-safety-smoke.ps1:655` 要求 `$matches.Count -eq 1`，而 OCR 对**同一条气泡**返回两个
+   重叠框（bounds 相差 3px，text 分别为 `POALLOW-0681 BCD5A91B` 与 `POALLOW-0681BCD5A91B`），
+   `Count=2` 直接短路，**文本比对根本没跑到**——归一化本身没问题，两条归一后都等于期望值。
+   与 STATUS 里「归一化把成功判成证据不匹配」是同一族。
+3. **网关侧 `type_text` 落框 OCR 复核误杀**：两次读回 `") POALLOW-913851547D50 )"`（C→0）与
+   `") POALLOW-55DD1C1BBF2d )"`（D→d），判 `E_STALE_REF`、卡未弹、未发送。**行为正确（fail-closed）
+   但合法输入被拦**；marker 用十六进制字符集，`0/O`、`C/0`、`D/d` 混淆面很大。
+   **②③ 合起来让今晚 5 次 Allow 尝试只有 1 次走完——这是直接烧用户手机时间的两条。**
+4. **回流②的 `aborted` 行重复记账**：dispatch 已落 `fail` 行时 runner 仍补一行 `aborted`
+   （同一腿两行），且归因写 `confirm-timeout` 而真因是卡出现**之前**的 `type_text` `E_STALE_REF`。
+5. **C 道自己的一次失误已自纠**：一条 monitor replay 的旧日志行让它误告用户"卡出来了"，实际
+   那轮卡在预检；**该轮用户的锁屏观察已作废不计入判据**，最终结论取自随后经 adb 独立确认
+   通知活着的那一轮。——旧日志行被当成当前状态，也是「判据看不见」的一种。
+
+**C 道未动 STATUS/knowledge 是对的**：`33b9eac` 上的 STATUS 停在批次 1 验收前，在该基线上编辑
+会回退 main 已有内容。批次 3 的收尾须在 main 基线上写。
 
 **批次 3（`3cb9133`，4 个提交，与批次 2 的 `2b5bc90` 完全分开）。** A 道自报 `check.ps1` 五项全绿、
 离线 runner 60 → **67**；**主会话的全套复核刻意推迟**——C 道当时正在同一台机器上跑批次 2 真机验收，
