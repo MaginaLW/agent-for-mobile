@@ -334,6 +334,9 @@ object ConfirmOverlay {
                         target = request.target,
                         targetPackage = request.targetPackage,
                         preview = request.preview,
+                        // 通知的存活时长跟着确认窗口走（见 ConfirmNotifier 的 setTimeoutAfter）：
+                        // 「可见」靠不做 ongoing，「持久」靠超时，两件事分开解决。
+                        timeoutMs = timeoutMs,
                     )
                 }.onFailure { error ->
                     // 推不出通知不该让整条链失败：悬浮卡仍然在屏幕上，人照样能点。

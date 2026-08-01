@@ -1038,6 +1038,30 @@ function Save-P0AuditIncrement {
     Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
         -Arguments @('-s',$Session.Serial,'exec-out','tail','-n',"+$firstLine",[string]$Cursor.Path) `
         -Destination $Destination -Operation '拉取本腿 gateway 审计增量'
+
+    # **跨零点**：设备审计按日期分文件。2026-08-02 实锤——Stale 腿 23:59:44 起、00:00:28 止，
+    # 那一行落进了第二天的文件，而游标钉着头一天的，于是"新增审计行数"读成 0、判本腿失败。
+    # 安全语义完全正常，纯粹是证据采集缺了一块。
+    #
+    # 补法：腿末重新问一次设备日期，跨天了就把新那一天**从头**接到增量末尾。
+    # 不改游标语义，也不猜行数——新的一天从第 1 行起全是本腿之后产生的。
+    $dayProbe = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','date','+%Y%m%d') -Operation '复核设备审计日期' -AllowFailure
+    $today = $dayProbe.Stdout.Trim()
+    if ($dayProbe.ExitCode -ne 0 -or $today -notmatch '^\d{8}$' -or $today -ceq [string]$Cursor.Day) { return }
+
+    $rolled = "/sdcard/Android/data/$script:P0PackageName/files/audit/$today.jsonl"
+    $tail = Join-Path ([IO.Path]::GetTempPath()) ("p0-audit-rollover-" + [guid]::NewGuid().ToString('N') + '.jsonl')
+    try {
+        Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
+            -Arguments @('-s',$Session.Serial,'exec-out','tail','-n','+1',$rolled) `
+            -Destination $tail -Operation '拉取跨零点后的 gateway 审计增量'
+        $rolledText = Get-Content -LiteralPath $tail -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($rolledText)) {
+            Add-Content -LiteralPath $Destination -Value $rolledText -Encoding utf8 -NoNewline
+        }
+    }
+    finally { Remove-Item -LiteralPath $tail -Force -ErrorAction SilentlyContinue }
 }
 
 function Clear-P0DebugArtifacts {

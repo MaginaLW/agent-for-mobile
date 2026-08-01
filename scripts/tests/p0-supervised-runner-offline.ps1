@@ -1792,6 +1792,38 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-True (@($verdicts | Select-Object -Unique).Count -eq 3) '三态必须互不相同。'
     }
 
+    Test-Case '跨零点时审计增量要把新那一天接上' {
+        # 设备审计按日期分文件。2026-08-02 实锤：Stale 腿 23:59:44 起、00:00:28 止，
+        # 那一行落进第二天的文件，而游标钉着头一天的 → "新增审计行数"读成 0、判本腿失败。
+        # 安全语义完全正常，纯粹是证据采集缺了一块。
+        $source = Get-Content -LiteralPath $SourceProvisioner -Raw
+        $start = $source.IndexOf('function Save-P0AuditIncrement')
+        $body = $source.Substring($start, [Math]::Min(2500, $source.Length - $start))
+        # 腿末必须再问一次设备日期，并在跨天时把新那一天从第 1 行起接上。
+        Assert-Contains $body '复核设备审计日期'
+        Assert-Contains $body "'+1'"
+        Assert-Contains $body '$Cursor.Day'
+        # 只在真跨天时才动，避免把同一天的行重复接一遍。
+        Assert-Contains $body '-ceq [string]$Cursor.Day) { return }'
+    }
+
+    Test-Case 'dispatch 已记过台账时不再补 aborted 行' {
+        # 2026-08-02 实锤：dispatch 自己落了 fail 行，runner 又补一行 aborted，同一腿两行；
+        # 而且补的那行归因写 confirm-timeout，真因却是卡出现之前的 type_text E_STALE_REF。
+        # 补台账的本意是"人花了时间却零留痕"，dispatch 留了痕就没这个前提。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $start = $source.IndexOf('function Write-P0AbortedLegLedgerRow')
+        $body = $source.Substring($start, [Math]::Min(1600, $source.Length - $start))
+        Assert-Contains $body '-AllowMissing'
+        Assert-True ($body.IndexOf('-AllowMissing') -lt $body.IndexOf('Add-P0LedgerRow')) `
+            '必须先查有没有既有行，再决定补不补。'
+
+        # -AllowMissing 只给"补记前先看看"用；判定路径不带它，缺行仍是硬失败。
+        $judge = $source.Substring($source.IndexOf('function Get-P0LedgerRow'), 900)
+        Assert-Contains $judge "throw '缺少 dispatch ledger。'"
+        Assert-Contains $judge '行数不是 1'
+    }
+
     Test-Case '派单被提前掐掉时台账必须留痕，且三类归因分得开' {
         # 2026-08-01 批次 2 验收：一次误点拒绝 + 两次确认超时，三轮跑测在台账上**零留痕**——
         # runner 检出决定不符即 kill dispatch，dispatch 来不及写自己那行。
@@ -1913,6 +1945,25 @@ PODENY-DCA2222F6441|72|2117|472|32
             Join-Path $SourceRepoRoot 'docs\specs\2026-07-17-执行harness-design.md'
         ) -Raw
         Assert-Contains $harness '尚未调用危险工具'
+    }
+
+    Test-Case '审批通知靠超时维持存在，而不是靠 ongoing' {
+        # 「可见」与「持久」是两件事。上一轮把它们混在一个 setOngoing 里解决 → 上了锁屏黑名单；
+        # 去掉之后锁屏能显示了（flags=0 实测），但通知随卡出现随即消失——ongoing 顺带给的
+        # NO_CLEAR 粘性也没了。所以持久改用 setTimeoutAfter，跟着确认窗口走。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        Assert-True ($notifier -match '(?m)^\s*\.setTimeoutAfter\(') '必须用 setTimeoutAfter 维持存在。'
+        # 超时必须由确认窗口推导，不能写死——两者一旦脱钩，改了 -ConfirmationTimeoutSec 就会
+        # 出现"人还能点、通知已经没了"。
+        Assert-Contains $notifier 'timeoutMs + TIMEOUT_SLACK_MS'
+        Assert-True ($notifier -notmatch '(?m)^\s*\.setOngoing\(') '不得为了持久把 ongoing 加回来。'
+
+        $overlay = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmOverlay.kt'
+        ) -Raw
+        Assert-Contains $overlay 'timeoutMs = timeoutMs'
     }
 
     Test-Case '审批通知不得是 ongoing，且状态要能被读出来' {

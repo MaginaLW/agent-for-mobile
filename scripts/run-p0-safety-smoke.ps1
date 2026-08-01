@@ -399,6 +399,17 @@ function Write-P0AbortedLegLedgerRow {
         [Parameter(Mandatory)][AllowEmptyString()][string]$Actual
     )
     try {
+        # **dispatch 已经记过就别再记一遍。** 2026-08-02 实锤：dispatch 自己落了 fail 行，
+        # runner 又补一行 aborted，同一腿两行；而且补的那行归因写 confirm-timeout，
+        # 真因却是卡出现**之前**的 type_text E_STALE_REF——两行里错的那行反而更显眼。
+        #
+        # 补台账的本意是"人花了时间却零留痕"，前提是 dispatch **没**留痕。它留了就没这个前提。
+        $existing = Get-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') `
+            -Slug $Slug -AllowMissing
+        if ($null -ne $existing) {
+            Write-Host "[$Slug] dispatch 已写入台账（result=$($existing.result)），不再补记 aborted 行。" -ForegroundColor DarkGray
+            return
+        }
         $reason = Get-P0AbortedLegFailReason -Expected $Expected -Actual $Actual
         $observed = if ([string]::IsNullOrWhiteSpace($Actual)) { 'none' } else { $Actual }
         Add-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') `
@@ -720,10 +731,24 @@ function Read-P0AuditEvidence {
     return @($press)
 }
 
+<#
+取本腿的台账行。
+
+`-AllowMissing` 只给"补记前先看看 dispatch 记没记过"这一个用途：那时台账文件可能还不存在、
+本腿也可能确实没有行，两者都不是错误。判定路径**不带**这个开关，缺行仍是硬失败。
+#>
 function Get-P0LedgerRow {
-    param([Parameter(Mandatory)][string]$LedgerPath, [Parameter(Mandatory)][string]$Slug)
-    if (-not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) { throw '缺少 dispatch ledger。' }
+    param(
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [Parameter(Mandatory)][string]$Slug,
+        [switch]$AllowMissing
+    )
+    if (-not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) {
+        if ($AllowMissing) { return $null }
+        throw '缺少 dispatch ledger。'
+    }
     $rows = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq $Slug })
+    if ($AllowMissing) { return $(if ($rows.Count -ge 1) { $rows[0] } else { $null }) }
     if ($rows.Count -ne 1) { throw "ledger 中 slug=$Slug 的行数不是 1。" }
     return $rows[0]
 }

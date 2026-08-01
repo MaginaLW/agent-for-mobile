@@ -61,6 +61,7 @@ object ConfirmNotifier {
         target: String,
         targetPackage: String,
         preview: String?,
+        timeoutMs: Long,
     ) {
         ensureChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -96,6 +97,14 @@ object ConfirmNotifier {
             // 绝不会因为一次误划而产生 allowed/denied。所以这里也没有 setDeleteIntent——
             // 给"划走"接一个回执，等于给它安一个决定的语义。
             .setAutoCancel(false)
+            // 「可见」与「持久」是两件事，上一轮把它们混在一个 setOngoing 里解决，结果是通知
+            // 上了锁屏黑名单。2026-08-02 真机：去掉 ongoing 后 flags=0、锁屏能显示了，
+            // 但通知**随卡出现、随即消失**——ongoing 顺带给的 FLAG_NO_CLEAR 粘性也一并没了。
+            //
+            // 用超时而不是 ongoing 来维持存在：确认窗口多长，它就活多长，到点由系统自己收走。
+            // 这样既不进锁屏黑名单，也不会在确认结束后留下一条僵尸通知。
+            // 多给一点余量，免得系统先于确认窗口把它收走；正常路径上收摊时会主动 cancel。
+            .setTimeoutAfter(timeoutMs + TIMEOUT_SLACK_MS)
             // 通知本体只放脱敏版本上锁屏；完整三项锚点要解锁展开才看得到。
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion)
@@ -186,6 +195,9 @@ object ConfirmNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
+
+    /** 确认窗口之外再多给 15s：宁可晚一点被系统收走，不可早于人还能点的时候就消失。 */
+    private const val TIMEOUT_SLACK_MS = 15_000L
 
     private const val REQUEST_ALLOW = 0x9101
     private const val REQUEST_DENY = 0x9102
