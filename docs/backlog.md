@@ -100,7 +100,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 | 批次 | 钉住 commit | 来源分支 | 状态 | 备注 |
 |---|---|---|---|---|
-| 1 | `899c095` | `claude/serene-faraday-42d1fb` | **待验收**（离线复核已过） | **验收范围已扩大**，见下 |
+| 1 | `899c095` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 10:17，main 未动） | 五条回流 A 道，见下 |
 | 2 | — | — | 未开始 | |
 | 3 | — | — | 未开始 | |
 
@@ -115,6 +115,38 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 这条耦合是内在的、不是 A 道越界，但它说明 §4 的"批次 2 单独一批"只挡得住**主动**碰确认路径的
 改动，挡不住这种被动牵连。后续批次划分要按**改动触达的表面**判，不按改动的意图判。
+
+**批次 1 验收失败（2026-08-01 10:17，C 道）。安全门没有退步，退步的是自动化。**
+三腿安全语义全对（Allow `allowed/OK`、Stale `allowed/E_STALE_REF`、Deny `denied/E_BLOCKED`，
+`dangerous_calls` 各 1、`card_visible` 各 true）；判据 4（新 stale 判据没误伤）**通过**。
+失败在判据 1、2，判据 3 **未触达**。回流 A 道五条：
+
+1. **（主因）teardown 在 Stale 腿后失效，因为设备停在桌面。** Stale 腿按定义在 debug hook
+   之后切到 Home，28 次退格打给了桌面，探针连拿 6 次错误信封 → `unverified`；下一腿预检
+   抓到 `leftovers` 且 `empty:false`。**判别式已被 Deny 腿钉死：Deny 的 `keyboard` 同为
+   `already_hidden` 却 `clean`——差别不在键盘分支，只在微信是否前台。** 修法不得越界：
+   teardown 走 runner 自己的 adb 通道，不能用执行器把微信弄回前台。
+2. **`unverified` 三态的语义被证伪了一半。** 设计意图是"没核对成 ≠ 脏"，而这次
+   `unverified` 对应的**就是真脏**。闸门（下一腿预检）确实尽职、没污染 Deny 腿结论，
+   但代价是三腿连跑做不到——而三腿连跑是批次 3 的前提。
+3. **自举路径三次 `-Provision` 都没走到**，不是通过也不是失败。trace 里 `bootstrap`
+   **零次出现**（主会话独立核实），三张确认卡前台行都是完整 `LauncherUI`，没有自举标注。
+   重装后拉起微信本身就产生窗口事件，身份被事件填上，而自举只在"从未建立过身份"时生效。
+   **没被 `identity_unset` 卡死是事实，但不能记在自举头上。** A 道需先设计一个真能复现
+   "服务重启后不产生窗口事件"的场景，否则这个分支在本流程里验不了。
+4. **runbook 与 runner 对 `unverified` 的判据打架**：钉住 commit 的 runbook §5 写
+   "`unverified` …判失败"，runner 实际只禁矛盾（`not_sent`）。runner 与 STATUS 记的设计
+   意图一致，像是 runbook 那段没跟着改。**同族风险：文档把错误行为钉成预期。**
+5. `send_verification.state` 在 Stale/Deny 腿是空串，不是三态里的任何一个值。
+
+**搭便车项有结论**：`run-as` 读 filesDir **没问题**（实证列出了 `files/` 下的
+`profileInstalled`、`test-control-consumed-nonces`）。但**审计目录尚未迁移**，仍在
+`/storage/emulated/0/…/files/audit`——"迁移后能否读"的前置答案是能，真迁完再复验一次。
+
+**意外收获（批次 3 的可行性证据）**：Deny 腿确认卡截图里，消息区能看到
+`P0ALLOW-1D97824FD778` 是一条已发出的绿色气泡（10:11）——**Allow 腿网关侧自证不了的那次发送，
+被后一轮的截图独立确认了**。同一张图上既能看输入框也能看消息区，说明批次 3 的
+Deny 带外截屏比对可行。
 
 ## 6. 待决策队列（B 道）
 
@@ -213,7 +245,12 @@ if isinstance(c,list) and any(b.get('type')=='tool_result' for b in c): continue
 1. A 在自己分支完成 → 提交 → 报告 SHA → 主会话写进 §5
 2. C 在自己 worktree `git checkout <SHA>` 构建验收（不等合并）
 3. **验收通过** → 主会话合回 main，连同 C 写的 STATUS.md / knowledge
-4. **验收失败** → main 一动不动，A 在原分支上继续改，不需要 revert
+4. **验收失败** → 被验收的**改动**一动不动留在分支上，A 继续改，不需要 revert
+
+**但台账例外：`docs/runs/ledger.csv` 无论通过与否都要落 main。** 它记的是"这次跑测发生过"，
+不是被验收的改动——跑都跑了，行不该因为结论是失败就消失。2026-08-01 首次验收失败时，
+三行台账留在 C 道 worktree 里差点丢掉。证据目录 `docs/runs/evidence/` 已被 .gitignore，
+本就只在本地，不受此条影响。
 
 **合的是钉住的那个 SHA，不是分支 tip**（`git merge 899c095`，不是 `git merge claude/xxx`）。
 A 道不会停在批次边界上等——它在同一条分支上继续往前做，钉住的 SHA 很快就不是 tip 了。
