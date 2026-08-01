@@ -156,16 +156,17 @@ class SafetyPolicy(
         if (dynamicReason == null && level != Level.D) return SafetyDecision.Allowed
 
         val reason = dynamicReason ?: "工具静态风险等级为 D"
+        val resolvedTier = tier ?: RiskTier.IRREVERSIBLE
         return SafetyDecision.ConfirmationRequired(
             toolName = toolName,
             action = if (toolName == "press_key") args.optString("key") else args.optString("action"),
             initialPackage = context.packageName,
             actionSummary = "工具：$toolName\n动作：$reason",
-            evidence = confirmationEvidence(toolName, args, context),
+            evidence = confirmationEvidence(toolName, args, context, resolvedTier),
             argsFingerprint = fingerprint(args),
             // 静态 D 级工具（走不到上面两条动态路）判不出档位——它们的危险性来自工具本身，
             // 不来自词表。按 fail-safe 归 I 级：宁可把可撤回的说成不可逆，不可反过来。
-            riskTier = tier ?: RiskTier.IRREVERSIBLE,
+            riskTier = resolvedTier,
             inputLength = context.target?.inputCommitEvidence?.length,
             inputSha256 = context.target?.inputCommitEvidence?.sha256,
         )
@@ -208,7 +209,11 @@ class SafetyPolicy(
         toolName: String,
         args: JSONObject,
         context: SafetyContext,
+        riskTier: RiskTier,
     ): List<String> = buildList {
+        // L3 唯一的增量（批次 2）：现有 8 项内容与顺序一字不动，档位标注加在最前面——
+        // 它回答的是"这件事做完能不能反悔"，先于任何身份/内容细节。
+        add(ConfirmNotificationContent.tierEvidenceLine(riskTier, context.packageName))
         // 自举身份天生没有 Activity。若只写成"未知"，真人看到的这一项与"事件给了身份但
         // Activity 恰好为空"长得一模一样——同 IdentitySource.IME_ONLY 那两行的理由：
         // 少一套证据时不得静默少展示一项，要说清楚少的是哪一套（design §3.6）。
@@ -326,6 +331,13 @@ class SafetyGate(
     private val onExecutionFailure: (Throwable) -> Unit,
     private val afterConfirmationAllowed: (String, JSONObject, SafetyContext) -> Unit = { _, _, _ -> },
     private val afterExecutionSuccess: (String, SafetyContext) -> Unit = { _, _ -> },
+    /**
+     * **真人已经批准、随后复核判 stale** 时回调一次（批次 2 决定四的计数点）。
+     *
+     * 只在这一种情况回调：门前阻断、确认被拒、确认超时都不算——那三种里用户要么没批准过，
+     * 要么本来就得到了"停下"的指示，不该占用重弹次数。
+     */
+    private val onStaleAfterApproval: (String, SafetyContext) -> Unit = { _, _ -> },
 ) {
     fun <T> execute(
         toolName: String,
@@ -349,16 +361,26 @@ class SafetyGate(
                     channel = "overlay",
                     fallback = "按站规收尾，不要换路重试同一危险动作",
                 )
-                if (SafetyPolicy.fingerprint(args) != initialArgsFingerprint) stale("确认后工具参数已变化")
-                afterConfirmationAllowed(toolName, deepCopy(frozenArgs), initialContext)
-                val currentContext = try {
-                    contextProvider(deepCopy(frozenArgs))
-                } catch (error: Throwable) {
-                    stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
+                // 从这里往下，真人已经批准过了。这一段里冒出来的每一个 E_STALE_REF 都属于
+                // 「批准了、却因为证据变了没做成」——正是决定四要限次的那种。计数点放在这里，
+                // 而不是放在 catch 全部 GatewayError 的地方：门前阻断与确认被拒不该占次数。
+                try {
+                    if (SafetyPolicy.fingerprint(args) != initialArgsFingerprint) stale("确认后工具参数已变化")
+                    afterConfirmationAllowed(toolName, deepCopy(frozenArgs), initialContext)
+                    val currentContext = try {
+                        contextProvider(deepCopy(frozenArgs))
+                    } catch (error: Throwable) {
+                        stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
+                    }
+                    requireKnownForeground(toolName, level, currentContext)
+                    validateContext(toolName, frozenArgs, initialContext, currentContext)
+                    currentContext
+                } catch (error: GatewayError) {
+                    if (error.code == ErrorCode.E_STALE_REF) {
+                        runCatching { onStaleAfterApproval(toolName, initialContext) }
+                    }
+                    throw error
                 }
-                requireKnownForeground(toolName, level, currentContext)
-                validateContext(toolName, frozenArgs, initialContext, currentContext)
-                currentContext
             }
         }
 

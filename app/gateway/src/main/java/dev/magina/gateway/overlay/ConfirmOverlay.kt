@@ -12,6 +12,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.testing.TestConfirmationDecision
@@ -41,6 +42,14 @@ object ConfirmOverlay {
         timeoutMs: Long = 60_000,
         onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
         onDecisionObserved: (TestConfirmationDecision) -> Unit = {},
+        /**
+         * 并联的通知栏审批（批次 2）。给了它就同时推一条通知，锁屏上也能点。
+         *
+         * **两条通道共用下面那个 `future`**：`CompletableFuture.complete` 只会成功一次，
+         * 所以先点的那一边赢，后到的一律被丢弃——这就是接缝 2 要的那个 CAS，
+         * 不存在"卡上拒绝、通知上允许"同时生效的状态。
+         */
+        notification: ConfirmNotificationRequest? = null,
     ): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) throw GatewayError(
             ErrorCode.E_CHANNEL_DOWN,
@@ -269,6 +278,8 @@ object ConfirmOverlay {
         var result: Boolean? = null
         var failure: GatewayError? = null
         var waitingForHuman = false
+        /** 已在裁决点登记的确认编号；收摊时只关自己这一次，不误关别人后开的。 */
+        var notificationOpened: String? = null
         try {
             cardShown.get(2, TimeUnit.SECONDS)
             readiness.beginEvidence()
@@ -300,6 +311,28 @@ object ConfirmOverlay {
             }
             if (!enablePosted) throw IllegalStateException("主线程 Handler 已停止")
             buttonsEnabled.get(2, TimeUnit.SECONDS)
+            // 通知在**卡的按钮已经可点之后**才推：早于它就会出现"锁屏上能批准，而卡还没画完、
+            // 取证也还没就绪"的窗口，等于让审批跑到证据前面去。
+            notification?.let { request ->
+                ConfirmApprovalArbiter.open(request.confirmationId, request.nonce, future::complete)
+                notificationOpened = request.confirmationId
+                runCatching {
+                    ConfirmNotifier.post(
+                        context = context,
+                        confirmationId = request.confirmationId,
+                        nonce = request.nonce,
+                        tier = request.riskTier,
+                        action = request.action,
+                        target = request.target,
+                        targetPackage = request.targetPackage,
+                        preview = request.preview,
+                    )
+                }.onFailure { error ->
+                    // 推不出通知不该让整条链失败：悬浮卡仍然在屏幕上，人照样能点。
+                    // 但必须留痕，否则"锁屏批准用不了"会被当成用户没看见。
+                    android.util.Log.w("GatewayApproval", "审批通知推送失败，仅保留悬浮卡：$error")
+                }
+            }
             waitingForHuman = true
             result = future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: java.util.concurrent.TimeoutException) {
@@ -320,6 +353,13 @@ object ConfirmOverlay {
         }
 
         if (failure != null) readiness.fail()
+
+        // 收摊顺序：先关审批窗口再撤通知。反过来的话，通知已经没了、裁决点还开着，
+        // 一条迟到的回执仍能落到这次确认上。
+        notificationOpened?.let { id ->
+            ConfirmApprovalArbiter.close(id)
+            runCatching { ConfirmNotifier.cancel(context) }
+        }
 
         dismissBlocking()?.let { dismissError ->
             failure?.let { dismissError.addSuppressed(it) }
