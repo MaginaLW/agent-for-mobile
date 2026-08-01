@@ -1805,6 +1805,45 @@ PODENY-DCA2222F6441|72|2117|472|32
         finally { Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue }
     }
 
+    Test-Case '任何危险路径的 fallback 都不得指示 [AWAIT_CONFIRM]' {
+        # 2026-08-02 一口气查出**五处** fallback 写着"输出 [AWAIT_CONFIRM]"，而站规 §4 把
+        # E_CONFIRM_TIMEOUT / E_PERM_MISSING / E_CHANNEL_DOWN 等逐个点名列为终态、明令不得输出它。
+        # 不依赖措辞的机械理由更硬：dispatch.ps1 -Confirm 对 gateway 暂停件的终态码检查里，
+        # 这些码全在**拒绝恢复**的名单上——旧措辞指的是一条保证走不通的路。
+        #
+        # 这条断言是给第 6 处准备的：它迟早会长出来，除非有判据看着。
+        $allowed = @()   # 白名单：确有例外时在这里显式列出并写明理由。当前为空。
+        $offenders = [Collections.Generic.List[string]]::new()
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'app\gateway\src') `
+                -Filter *.kt -Recurse -File | Where-Object { $_.FullName -notmatch '\\test' })) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            # **先剥注释再匹配**：源码文本断言分不清代码与注释，而这几个文件的注释里正解释着
+            # "为什么不这么写"。不剥的话断言会被自己的解释性文字触发（本轮已被咬过一次）。
+            $code = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
+            $code = [regex]::Replace($code, '(?m)//.*$', '')
+            foreach ($m in [regex]::Matches($code, 'fallback\s*=\s*"([^"]*)"')) {
+                if ($m.Groups[1].Value -match 'AWAIT_CONFIRM' -and $file.Name -notin $allowed) {
+                    $offenders.Add("$($file.Name)：$($m.Groups[1].Value)")
+                }
+            }
+        }
+        Assert-True ($offenders.Count -eq 0) ("以下 fallback 在教大脑违反站规（应报「结果：失败」）：`n  " +
+            ($offenders -join "`n  "))
+
+        # 措辞必须放在判据看得见的地方，而不是内联进抛错处——那正是它错了这么久没被发现的原因。
+        $fallbacks = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\core\SafetyFallbacks.kt'
+        ) -Raw
+        Assert-Contains $fallbacks '结果：失败'
+        Assert-Contains $fallbacks '不得输出 [AWAIT_CONFIRM]'
+
+        # harness spec §5.1 本身没写错，是代码引着它写了相反的话。它若哪天改了，这条会提醒。
+        $harness = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'docs\specs\2026-07-17-执行harness-design.md'
+        ) -Raw
+        Assert-Contains $harness '尚未调用危险工具'
+    }
+
     Test-Case '审批通知不得是 ongoing，且状态要能被读出来' {
         # 2026-08-01 批次 2 验收：锁屏上根本看不到审批通知，两次 timed_out。
         # 最强候选是 setOngoing(true)——锁屏通知列表历来过滤 ongoing 通知，

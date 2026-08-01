@@ -15,14 +15,18 @@ import android.widget.TextView
 import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.SafetyFallbacks
 import dev.magina.gateway.testing.TestConfirmationDecision
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 /**
  * 统一安全门内部的确认悬浮窗（不暴露为 MCP 工具，harness §5.3 带内确认）。
- * 危险动作弹网关生成的卡片，人在手机上点头；超时抛 E_CONFIRM_TIMEOUT——大脑随即按
- * [AWAIT_CONFIRM] 协议输出暂停报告走带外兜底，传输层可替换、协议不动。
+ * 危险动作弹网关生成的卡片，人在手机上点头。
+ *
+ * **本类抛出的每一个错误都是 safety 终态**（`E_CONFIRM_TIMEOUT` / `E_PERM_MISSING` /
+ * `E_CHANNEL_DOWN`）：它们全都发生在危险工具**已经在调用中**，大脑必须按站规常规失败，
+ * **不得输出 `[AWAIT_CONFIRM]`**。措辞集中在 [SafetyFallbacks]，由离线用例逐条钉住。
  */
 object ConfirmOverlay {
 
@@ -55,11 +59,11 @@ object ConfirmOverlay {
             ErrorCode.E_CHANNEL_DOWN,
             "统一安全门不能在主线程等待确认",
             channel = "overlay",
-            fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式",
+            fallback = SafetyFallbacks.OVERLAY_CHANNEL_DOWN,
         )
         if (!Settings.canDrawOverlays(context)) throw GatewayError(
             ErrorCode.E_PERM_MISSING, "悬浮窗权限未授予，带内确认不可用",
-            channel = "overlay", fallback = "直接输出 [AWAIT_CONFIRM] 走带外两段式",
+            channel = "overlay", fallback = SafetyFallbacks.OVERLAY_PERMISSION_MISSING,
         )
 
         val future = CompletableFuture<Boolean>()
@@ -98,7 +102,11 @@ object ConfirmOverlay {
                 code,
                 "确认悬浮窗${operation}失败：${root.javaClass.simpleName}: ${root.message.orEmpty()}",
                 channel = "overlay",
-                fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式",
+                fallback = if (code == ErrorCode.E_PERM_MISSING) {
+                    SafetyFallbacks.OVERLAY_PERMISSION_MISSING
+                } else {
+                    SafetyFallbacks.OVERLAY_CHANNEL_DOWN
+                },
             ).apply { initCause(root) }
         }
 
@@ -340,7 +348,11 @@ object ConfirmOverlay {
                 GatewayError(
                     ErrorCode.E_CONFIRM_TIMEOUT, "带内确认 ${timeoutMs / 1000}s 无人响应",
                     channel = "overlay",
-                    fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式（harness §5.1）",
+                    // 原文引着 harness spec §5.1 却写了与它相反的指令。§5.1 本身没错，
+                    // 它写的是：gateway 只在**尚未调用危险工具**时才可输出 [AWAIT_CONFIRM]，
+                    // 一旦危险工具已返回超时/拒绝/stale/blocked/缺权限，本腿必须常规失败。
+                    // 引用一份说着相反话的 spec，会让错误的指令看起来是被授权的。
+                    fallback = SafetyFallbacks.CONFIRM_TIMEOUT,
                 )
             } else mappedFailure("显示或启用", e)
         } catch (error: java.util.concurrent.ExecutionException) {
