@@ -1153,6 +1153,13 @@ try {
                 Write-Host ("[$leg] 腿末没能清空输入框，下一腿会被预检挡住，请在手机上处理：" +
                     $teardown.detail) -ForegroundColor Red
             }
+            'skipped_not_foreground' {
+                # 与 unverified 分开报：这一条不是"没核对成"，而是**确知没清**——微信没在前台，
+                # 一个键都没发，marker 按定义还在框里。混进 default 会让人以为只是探针抖了一下。
+                Write-Host ("[$leg] 腿末未执行：微信不在前台，一个键都没发（避免盲打给别的应用）。" +
+                    "输入框里的 marker 仍在，下一腿会被预检挡住，请在手机上清一次：$($teardown.detail)") `
+                    -ForegroundColor Red
+            }
             default {
                 Write-Host ("[$leg] 腿末收尾结果无法核对（键盘 $($teardown.keyboard)）：$($teardown.detail)" +
                     '——请在开下一腿前自己看一眼输入框。') -ForegroundColor Yellow

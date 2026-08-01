@@ -652,7 +652,8 @@ function Invoke-P0LegTeardown {
         [AllowEmptyString()][string]$PrecheckPath = '',
         [int]$ExtraDeleteKeys = 8,
         [int]$MaxDeleteKeys = 64,
-        [int]$MaxBackPresses = 2
+        [int]$MaxBackPresses = 2,
+        [int]$ForegroundSettleMs = 1200
     )
 
     $issues = [Collections.Generic.List[string]]::new()
@@ -660,6 +661,32 @@ function Invoke-P0LegTeardown {
     $keyboard = 'unknown'
 
     try {
+        # 动手之前必须确认前台是微信。teardown 发的全是**盲打键码**，前台不对时那串退格
+        # 会打给别的应用（2026-08-01 真机实锤：Stale 腿按定义在 debug hook 之后切到 Home，
+        # 28 次退格全打给了桌面，探针连拿 6 次错误信封 → 报成 unverified，而输入框其实是脏的，
+        # 下一腿预检抓到 leftovers）。判别式由同一轮的 Deny 腿钉死：Deny 的 keyboard 同为
+        # already_hidden 却 clean——差别不在键盘分支，只在微信是否前台。
+        if (-not (Test-P0TargetAppForeground -Session $Session)) {
+            # 复用带守卫的 Start-P0TargetApp：它在微信已在前台时是 no-op，不会冲掉人工建立的
+            # 焦点/IME 连接（那个副作用 2026-07-24 实锤过）。这里走的是 runner 自己的 adb 通道，
+            # 不经执行器——teardown 在本腿判定与取证之后才跑，改不了任何已成定论的结论。
+            try { Start-P0TargetApp -Session $Session }
+            catch { $issues.Add('teardown_relaunch_failed') }
+            Start-Sleep -Milliseconds $ForegroundSettleMs
+        }
+        if (-not (Test-P0TargetAppForeground -Session $Session)) {
+            # 一个键都不发。此时输入框里的 marker 按定义仍在，报 clean 或 unverified 都是
+            # 谎报：前者假称已清，后者假称"只是没核对成"。给它自己的终态。
+            $issues.Add('teardown_not_foreground')
+            return [pscustomobject]@{
+                verdict = 'skipped_not_foreground'
+                detail = '腿末微信不在前台，未发送任何按键；输入框里的 marker 按定义仍在，需人工清或由下一腿预检拦下'
+                keyboard = 'unknown'
+                delete_keys = 0
+                issues = @($issues | Select-Object -Unique)
+                cleanup_issues = @()
+            }
+        }
         $null = Invoke-P0DeviceCommand -Session $Session `
             -Arguments @('shell','input','keyevent',"$script:P0KeyMoveEnd") `
             -Operation '腿末光标移到输入框末尾' -AllowFailure

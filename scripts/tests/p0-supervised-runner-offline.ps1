@@ -131,7 +131,8 @@ function New-Fixture {
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
-        'teardown_keyboard_stuck', 'teardown_ime_unreadable'
+        'teardown_keyboard_stuck', 'teardown_ime_unreadable',
+        'teardown_not_foreground', 'teardown_foreground_stuck'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -359,6 +360,19 @@ if "%1"=="shell" (
   if "%2 %3"=="pm path" (echo package:/data/app/fake/base.apk& exit /b 0)
   if "%2 %3 %4"=="run-as dev.magina.gateway sh" (exit /b 0)
   if "%2 %3 %4"=="dumpsys activity services" (echo ServiceRecord dev.magina.gateway/.GatewayService isForeground=true& exit /b 0)
+  rem 前台 Activity：默认微信在前台。teardown_not_foreground 在 am start 之前报桌面、之后报微信
+  rem （模拟"切到 Home 后被拉回"）；teardown_foreground_stuck 则永远报桌面，用来钉住"拉不回来
+  rem 就一个键都不发"。
+  if "%2 %3 %4"=="dumpsys activity activities" (
+    if "%SCEN%"=="teardown_foreground_stuck" (echo   mResumedActivity: ActivityRecord{1 u0 com.android.launcher3/.Launcher t1}& exit /b 0)
+    if "%SCEN%"=="teardown_not_foreground" if not exist "%P0_FAKE_STATE%\am-start.log" (
+      echo   mResumedActivity: ActivityRecord{1 u0 com.android.launcher3/.Launcher t1}
+      exit /b 0
+    )
+    echo   mResumedActivity: ActivityRecord{1 u0 com.tencent.mm/.ui.LauncherUI t1}
+    exit /b 0
+  )
+  if "%2 %3"=="am start" (>>"%P0_FAKE_STATE%\am-start.log" echo %*& exit /b 0)
   if "%2 %3"=="dumpsys accessibility" (
     if "%SCEN%"=="enabled_but_not_bound" (
       echo Enabled services: dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
@@ -1447,6 +1461,45 @@ try {
         Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'session_only') `
             "零 UI IME 应记为 session_only，实际 $($manifestJson.legs[0].teardown.keyboard)"
         Assert-True ($manifestJson.legs[0].teardown.delete_keys -eq ($marker.Length + 8)) 'manifest 退格数不符。'
+    }
+
+    Test-Case '腿末微信不在前台时先拉回再清，不盲打' {
+        # 2026-08-01 真机实锤的主因：Stale 腿按定义切到 Home，28 次退格全打给了桌面。
+        $fixture = New-Fixture teardown_not_foreground
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'am-start.log')) `
+            '微信不在前台却没有拉起它。'
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        $marker = @(Get-Content -LiteralPath (Join-Path $fixture.State 'markers.log'))[0]
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq ($marker.Length + 8)) `
+            "拉回前台后应照常清框，实际退格 $(Get-TestKeyCount $keyevents 67)"
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'clean') `
+            "拉回前台后应清干净，实际 $($manifestJson.legs[0].teardown.verdict)"
+    }
+
+    Test-Case '拉不回前台就一个键都不发，且不谎报为已清' {
+        $fixture = New-Fixture teardown_foreground_stuck
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        # 不把三腿全绿的跑测判失败——闸门仍是下一腿那道带完整重试的预检；
+        # 但终态必须如实说出"没清"，不能报 clean（假称已清）也不能报 unverified（假称只是没核对成）。
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        $logPath = Join-Path $fixture.State 'keyevent.log'
+        $keyevents = if (Test-Path -LiteralPath $logPath) { @(Get-Content -LiteralPath $logPath) } else { @() }
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq 0) `
+            "前台不是微信却发了退格，会打给别的应用：$($keyevents -join ' | ')"
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 0) '前台不是微信却按了 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'skipped_not_foreground') `
+            "终态应为 skipped_not_foreground，实际 $($manifestJson.legs[0].teardown.verdict)"
+        Assert-True ($manifestJson.legs[0].teardown.delete_keys -eq 0) '一个键都没发，delete_keys 却不是 0。'
     }
 
     Test-Case '腿末没清干净时报红并使整轮失败' {
