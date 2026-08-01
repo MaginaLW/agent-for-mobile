@@ -3,7 +3,13 @@
 param(
     [string]$Filter = '*',
     # 防挂死的墙钟预算，不是性能断言。见 Invoke-FixtureRunner 处的说明。
-    [ValidateRange(15, 600)][int]$FixtureTimeoutSec = 60
+    [ValidateRange(15, 600)][int]$FixtureTimeoutSec = 60,
+    # 分片：整套 98% 的墙钟花在互不相干的 runner 子进程上，天然可以并行。
+    # 但**不做进程内并行**——那要把几十个函数搬进 runspace，而且共享计数器/临时目录都得重写；
+    # 分片是同一个脚本起 N 份、各跑一部分，语义与顺序跑逐字相同，出问题也能单独重跑一片。
+    # 分配按"过滤后的第几条"取模，与用例内容无关，因此每片跑的集合是确定的。
+    [ValidateRange(1, 16)][int]$ShardCount = 1,
+    [ValidateRange(1, 16)][int]$ShardIndex = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,8 +27,13 @@ $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
 $PwshPath = (Get-Process -Id $PID).Path
 $script:Passed = 0
 $script:Failed = 0
+$script:Skipped = 0
+$script:MatchedCases = 0
+if ($ShardIndex -gt $ShardCount) { throw "ShardIndex($ShardIndex) 不能大于 ShardCount($ShardCount)。" }
 $TestRoots = [Collections.Generic.List[string]]::new()
 $script:SlowRuns = [Collections.Generic.List[object]]::new()
+$script:CaseTimes = [Collections.Generic.List[object]]::new()
+$script:FixturePhases = [Collections.Generic.List[object]]::new()
 
 # 开跑前自愈：上一轮被 kill 的跑测留下的临时仓库副本不会自己消失，攒到几十个就会把这台机器
 # 压到进程启动都超时（2026-07-26 实测 81 个残留 + 常驻 daemon → 整轮 11/38，全是假超时）。
@@ -72,16 +83,30 @@ function Get-TestSha256([string]$Text) {
 
 function Test-Case([string]$Name, [scriptblock]$Body) {
     if ($Name -notlike $Filter) { return }
+    # 先数、再决定跑不跑：序号必须在**所有分片里一致**，所以只能按"过滤后的第几条"算，
+    # 不能按"本片跑到第几条"算。
+    $script:MatchedCases++
+    if ((($script:MatchedCases - 1) % $ShardCount) + 1 -ne $ShardIndex) {
+        $script:Skipped++
+        return
+    }
+    # 逐条计时：整套跑几百秒时，"慢在哪"必须能直接读出来，不能靠猜（2026-08-01 提速那轮的第一步）。
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     try {
         & $Body
         $script:Passed++
-        Write-Host "PASS  $Name" -ForegroundColor Green
+        $watch.Stop()
+        Write-Host ("PASS  {0,6:0.0}s  $Name" -f $watch.Elapsed.TotalSeconds) -ForegroundColor Green
     }
     catch {
         $script:Failed++
-        Write-Host "FAIL  $Name" -ForegroundColor Red
+        $watch.Stop()
+        Write-Host ("FAIL  {0,6:0.0}s  $Name" -f $watch.Elapsed.TotalSeconds) -ForegroundColor Red
         Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
         Write-Host "      $($_.ScriptStackTrace -replace "`r?`n", "`n      ")"
+    }
+    finally {
+        $script:CaseTimes.Add([pscustomobject]@{ Name = $Name; Seconds = $watch.Elapsed.TotalSeconds })
     }
 }
 
@@ -109,6 +134,7 @@ function New-Fixture {
         'teardown_keyboard_stuck', 'teardown_ime_unreadable'
     )][string]$Scenario)
 
+    $buildWatch = [Diagnostics.Stopwatch]::StartNew()
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
     $script:TestRoots.Add($root)
     $repo = Join-Path $root 'repo'
@@ -220,6 +246,12 @@ function Remove-P0PrivateTemporaryFile {
     #    而报出来的错是「重置无障碍配置以触发重绑 失败」，跟真因八竿子打不着。
     # 2. **块内的 rem 仍然会被解析**：圆括号会提前闭合 if 块，重定向号会真的重定向。
     #    要写说明就写在这里（PowerShell 注释里），不要写进 .cmd 的括号块。
+    # 4. **这个 .cmd 在热路径上，每多一个进程都要乘以约 4400。** 整套跑测 98% 的墙钟花在
+    #    runner 子进程里，而一次 runner 跑 56 次假 adb（79 次 runner × 56 ≈ 4400 次）。
+    #    原来每次调用都无条件先跑 `echo %*| findstr`（管道 = 额外两个 cmd）加两次
+    #    `findstr scenario.txt`，五个进程之后才开始真正分发，单次 68ms。现在场景名由
+    #    New-Fixture 直接烤进脚本（`set "SCEN=..."`），分发一律用 `if "%n"==` 位置判据
+    #    与 `if exist`——都是 cmd 内建，零进程。**新增判据请照这个来，别再引入管道或 findstr。**
     # 3. **重定向号前面紧挨着数字，那个数字就变成了文件句柄号。** 两次都咬到：`echo 2>"file"`
     #    是把 stderr 重定向走、内容一个字没写；而 `echo %*>>"adb.log"` 在命令以数字结尾时
     #    （`... input keyevent 4`）变成 `4>>`，那一条**根本不会进日志**——于是"按了 BACK"
@@ -234,13 +266,22 @@ rem 与 Unix 同名的命令解析到 MSYS 版本。2026-07-26 实锤：`find /v
 rem 把 /v 和 /c 当成要搜索的目录（/c 就是整个 C 盘），递归扫盘到 30s 超时，整轮 16/39。
 rem 逐点改成绝对路径能修好，但这一行让同类问题不可能再犯。
 set "PATH=%SystemRoot%\System32;%PATH%"
+set "SCEN=__P0_SCENARIO__"
 >>"%P0_FAKE_STATE%\adb.log" echo %*
-echo %*| findstr /c:" sh -c " >nul && exit /b 0
-findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"shell rm -f /data/local/tmp/p0-control-" >nul && exit /b 7
-findstr /x /c:"cleanup_once" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"files/test-confirmation-state.json" >nul && if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
-  echo 1>"%P0_FAKE_STATE%\cleanup-once-fired.txt"
+rem run-as ... sh -c '...'：位置固定，用位置判据而不是子串匹配，省掉一次管道 + findstr。
+if "%6 %7"=="sh -c" exit /b 0
+rem `shell rm -f <path>` 只有 p0-control 中转文件这一处（run-as 的删除是 %4=run-as），位置判据已足够。
+if "%SCEN%"=="remote_cleanup_failure" if "%3 %4 %5"=="shell rm -f" exit /b 7
+rem 提确认状态文件的两种形态：exec-out ... cat <file>（%7）与 shell run-as ... rm -f <file>（%8）。
+if "%SCEN%"=="cleanup_once" if "%7"=="files/test-confirmation-state.json" goto :cleanuponce
+if "%SCEN%"=="cleanup_once" if "%8"=="files/test-confirmation-state.json" goto :cleanuponce
+goto :notcleanuponce
+:cleanuponce
+if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
+  >"%P0_FAKE_STATE%\cleanup-once-fired.txt" echo 1
   exit /b 7
 )
+:notcleanuponce
 if "%1"=="-s" shift
 if "%1"=="FAKE123" shift
 if "%1"=="devices" (
@@ -249,7 +290,7 @@ if "%1"=="devices" (
   exit /b 0
 )
 if "%1"=="get-serialno" (echo FAKE123& exit /b 0)
-  if "%1 %2"=="forward --remove" (findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7)
+  if "%1 %2"=="forward --remove" if "%SCEN%"=="cleanup_failure" exit /b 7
 if "%1"=="push" (copy /y "%2" "%P0_FAKE_STATE%\staged-control.json" >nul& exit /b 0)
 if "%1"=="exec-out" (
   if "%5"=="shared_prefs/gateway.xml" (
@@ -261,8 +302,8 @@ if "%1"=="exec-out" (
     type "%P0_FAKE_STATE%\confirmation-state.json"
     exit /b 0
   )
-  echo %*| findstr /c:"cache/confirmation-" >nul
-  if not errorlevel 1 (
+  rem exec-out 里唯一的 .png 就是确认卡截图，扩展名判据比子串匹配便宜一个进程。
+  if "%~x5"==".png" (
     if not exist "%P0_FAKE_STATE%\%~nx5" exit /b 1
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
@@ -287,14 +328,14 @@ if "%1"=="shell" (
   if "%2 %3"=="input keyevent" (
     >>"%P0_FAKE_STATE%\keyevent.log" echo %*
     if "%4"=="4" (
-      findstr /x /c:"teardown_keyboard_stuck" "%P0_FAKE_STATE%\scenario.txt" >nul || >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
+      if not "%SCEN%"=="teardown_keyboard_stuck" >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
     )
     exit /b 0
   )
   if "%2 %3"=="dumpsys input_method" (
-    findstr /x /c:"teardown_ime_unreadable" "%P0_FAKE_STATE%\scenario.txt" >nul && (echo   mInputShown=true& exit /b 0)
-    findstr /x /c:"teardown_visible_keyboard" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
-    findstr /x /c:"teardown_keyboard_stuck" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    if "%SCEN%"=="teardown_ime_unreadable" (echo   mInputShown=true& exit /b 0)
+    if "%SCEN%"=="teardown_visible_keyboard" if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    if "%SCEN%"=="teardown_keyboard_stuck" if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
     if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
     set /p IMEVIS=<"%P0_FAKE_STATE%\ime-vis.txt"
     echo   mInputShown=true
@@ -305,7 +346,7 @@ if "%1"=="shell" (
   if "%2 %3 %4 %5"=="settings get secure enabled_accessibility_services" (type "%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (echo %6>"%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3"=="ime set" (
-    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
+    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
     echo %4>"%P0_FAKE_STATE%\current-ime.txt"& exit /b 0
   )
   if "%2 %3 %4"=="appops get dev.magina.gateway" (echo SYSTEM_ALERT_WINDOW: allow& exit /b 0)
@@ -319,7 +360,7 @@ if "%1"=="shell" (
   if "%2 %3 %4"=="run-as dev.magina.gateway sh" (exit /b 0)
   if "%2 %3 %4"=="dumpsys activity services" (echo ServiceRecord dev.magina.gateway/.GatewayService isForeground=true& exit /b 0)
   if "%2 %3"=="dumpsys accessibility" (
-    findstr /x /c:"enabled_but_not_bound" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+    if "%SCEN%"=="enabled_but_not_bound" (
       echo Enabled services: dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
       echo Bound services: com.other/.Service
       exit /b 0
@@ -329,21 +370,19 @@ if "%1"=="shell" (
   )
   if "%2 %3"=="dumpsys deviceidle" (echo system-excidle,dev.magina.gateway,10000& exit /b 0)
   if "%2 %3 %4 %6"=="run-as dev.magina.gateway cp files/test-control.json" (copy /y "%P0_FAKE_STATE%\staged-control.json" "%P0_FAKE_STATE%\test-control.json" >nul& exit /b 0)
-  echo %*| findstr /c:"run-as dev.magina.gateway rm" >nul
-  if not errorlevel 1 (
-    echo %*| findstr /c:"test-control" >nul && del /q "%P0_FAKE_STATE%\test-control.json" 2>nul
-    echo %*| findstr /c:"test-confirmation-state" >nul && (
+  if "%2 %3 %4"=="run-as dev.magina.gateway rm" (
+    if "%6"=="files/test-control.json" del /q "%P0_FAKE_STATE%\test-control.json" 2>nul
+    if "%6"=="files/test-confirmation-state.json" (
       del /q "%P0_FAKE_STATE%\confirmation-state.json" 2>nul
-      findstr /x /c:"cleanup_once" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
-        echo 1>"%P0_FAKE_STATE%\cleanup-once-fired.txt"
+      if "%SCEN%"=="cleanup_once" if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
+        >"%P0_FAKE_STATE%\cleanup-once-fired.txt" echo 1
         exit /b 7
       )
-      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
+      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
     )
     exit /b 0
   )
-  echo %*| findstr /c:"p0-control-" >nul
-  if not errorlevel 1 (
+  if "%2 %3"=="rm -f" (
     findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
     del /q "%P0_FAKE_STATE%\staged-control.json" 2>nul
     exit /b 0
@@ -351,7 +390,7 @@ if "%1"=="shell" (
   exit /b 0
 )
 exit /b 0
-'@ | Set-Content -LiteralPath $fakeAdb -Encoding utf8
+'@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
     @'
@@ -693,6 +732,7 @@ Set-Content -LiteralPath (Join-Path $state 'dispatch-finished.txt') -Value '1' -
 exit $exit
 '@ | Set-Content -LiteralPath $fakeDispatch -Encoding utf8
 
+    $script:FixturePhases.Add([pscustomobject]@{ Phase = 'new-fixture'; Seconds = $buildWatch.Elapsed.TotalSeconds })
     [pscustomobject]@{
         Root = $root
         Repo = $repo
@@ -754,6 +794,7 @@ function Invoke-FixtureRunner {
         $watch.Stop()
         # 耗时留痕：慢到逼近预算时要在它变成失败之前就看得见。
         $script:SlowRuns.Add([pscustomobject]@{ Seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) })
+        $script:FixturePhases.Add([pscustomobject]@{ Phase = 'runner'; Seconds = $watch.Elapsed.TotalSeconds })
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         [pscustomobject]@{ ExitCode=$process.ExitCode; Text=$stdout+"`n"+$stderr; Stdout=$stdout; Stderr=$stderr }
@@ -1507,7 +1548,9 @@ try {
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
             $PSCommandPath
         )) {
             $tokens = $null; $errors = $null
@@ -1546,5 +1589,21 @@ if ($script:SlowRuns.Count -gt 0) {
     }
 }
 
-Write-Host "`n离线监督式 runner：$script:Passed passed, $script:Failed failed"
+# 耗时归因：整套跑几百秒时，"该优化哪一段"必须是读出来的，不是猜出来的。
+if ($script:CaseTimes.Count -gt 0) {
+    $total = ($script:CaseTimes | Measure-Object Seconds -Sum).Sum
+    Write-Host ("`n耗时归因（用例合计 {0:0}s）：" -f $total)
+    foreach ($group in ($script:FixturePhases | Group-Object Phase | Sort-Object { -($_.Group | Measure-Object Seconds -Sum).Sum })) {
+        $sum = ($group.Group | Measure-Object Seconds -Sum).Sum
+        Write-Host ("  {0,-12} {1,3} 次 · 合计 {2,5:0}s · 均 {3,4:0.00}s · 占比 {4,3:0}%" -f
+            $group.Name, $group.Count, $sum, ($sum / $group.Count), (100 * $sum / [Math]::Max($total, 0.001)))
+    }
+    Write-Host '  最慢 5 条用例：'
+    foreach ($case in ($script:CaseTimes | Sort-Object Seconds -Descending | Select-Object -First 5)) {
+        Write-Host ("    {0,6:0.0}s  {1}" -f $case.Seconds, $case.Name)
+    }
+}
+
+$shardTag = if ($ShardCount -gt 1) { "（分片 $ShardIndex/$ShardCount，另 $script:Skipped 条归其它分片）" } else { '' }
+Write-Host "`n离线监督式 runner：$script:Passed passed, $script:Failed failed$shardTag"
 if ($script:Failed -gt 0) { exit 1 }

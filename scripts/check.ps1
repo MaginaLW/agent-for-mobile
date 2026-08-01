@@ -20,7 +20,10 @@ diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚�
 [CmdletBinding()]
 param(
     [switch]$SkipGradle,
-    [switch]$Clean
+    [switch]$Clean,
+    # 监督式 runner 套件的分片数。0=按机器状态自动决定（健康 3 片、不健康 1 片）；
+    # 1=顺序跑（怀疑并行导致假失败时用这个复现）。
+    [ValidateRange(0, 16)][int]$Shards = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -150,10 +153,77 @@ Invoke-Check '监督式 runner 离线测试' {
     # daemon 每个占 1GB 上下；这套件几十条各起一个子进程，内存紧张时会更容易出问题。
     # 这里**不加 -Aggressive**：常规校验不该去动其它项目的构建 daemon。
     if (-not $SkipGradle) { Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot | Out-Null }
-    Invoke-Logged -LogName 'runner-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\p0-supervised-runner-offline.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'runner-offline.log')
+
+    # 分片并行。这套件的墙钟 97% 花在互不相干的 runner 子进程里，分片是最后一个大杠杆。
+    # **机器不健康就退回顺序跑**：这套件的失败率是机器状态的函数（dev-env.ps1 开头那段实测），
+    # 在已经紧张的机器上再乘 3，等于亲手制造它最擅长伪装的那种"成片假超时"。
+    # 想复现某一片：scripts/tests/p0-supervised-runner-offline.ps1 -ShardCount N -ShardIndex K。
+    $suite = Join-Path $RepoRoot 'scripts\tests\p0-supervised-runner-offline.ps1'
+    $shards = $Shards
+    if ($shards -le 0) {
+        # 按可用内存分档，不用 Healthy 那个布尔：它的阈值（4GB）是为"顺序跑会不会假超时"定的，
+        # 拿来当并行开关会让 3–4GB 这一档永远退回顺序跑——而本机常态就在这一档。
+        #
+        # 档位取自实测，不是拍的：2026-08-01 本机可用内存 ~3.3GB 时，3 片并行 55 条全过、
+        # 170s，同机顺序跑 350s。所以 3GB 这一档跑 3 片是**验过的**，不是猜的。
+        # 2GB 那一档没验过，按"每多一片约多两个 pwsh 常驻"保守放 2 片。
+        $free = (Get-DevEnvSnapshot).FreeMemoryMb
+        $shards = if ($free -ge 3072) { 3 } elseif ($free -ge 2048) { 2 } else { 1 }
+    }
+    if ($shards -eq 1) {
+        Write-Host '  分片：1（顺序跑）' -ForegroundColor DarkGray
+        Invoke-Logged -LogName 'runner-offline.log' -FilePath $PwshPath -Arguments @(
+            '-NoProfile', '-File', $suite
+        ) | Out-Null
+        return Get-LastMeaningfulLine (Join-Path $LogDir 'runner-offline.log')
+    }
+    # 分片数必须打出来：并行度随可用内存变化，一次假失败若不知道当时跑的是几片，
+    # 就分不清是代码问题还是并发压出来的。复现用 -Shards 1。
+    Write-Host "  分片：$shards（并行；复现用 -Shards 1）" -ForegroundColor DarkGray
+
+    $running = foreach ($index in 1..$shards) {
+        $logPath = Join-Path $LogDir "runner-offline.shard$index.log"
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = $PwshPath
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        # 同 New-P0StartInfo：stdin 立刻给 EOF，别让子进程链挂在继承来的句柄上。
+        $start.RedirectStandardInput = $true
+        foreach ($argument in @(
+            '-NoProfile', '-File', $suite, '-ShardCount', "$shards", '-ShardIndex', "$index"
+        )) { $start.ArgumentList.Add($argument) }
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $start
+        if (-not $process.Start()) { throw "分片 $index 启动失败。" }
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        [pscustomobject]@{ Index = $index; Process = $process; LogPath = $logPath; Stdout = $stdout; Stderr = $stderr }
+    }
+
+    $failures = [Collections.Generic.List[string]]::new()
+    $summaries = [Collections.Generic.List[string]]::new()
+    foreach ($shard in $running) {
+        $shard.Process.WaitForExit()
+        $text = $shard.Stdout.GetAwaiter().GetResult() + "`n" + $shard.Stderr.GetAwaiter().GetResult()
+        Set-Content -LiteralPath $shard.LogPath -Value $text -Encoding utf8
+        $exitCode = $shard.Process.ExitCode
+        $shard.Process.Dispose()
+        $summaries.Add((Get-LastMeaningfulLine $shard.LogPath))
+        if ($exitCode -ne 0) {
+            $failures.Add("分片 $($shard.Index) 退出码 $exitCode，日志 .checks/$(Split-Path $shard.LogPath -Leaf)")
+        }
+    }
+    if ($failures.Count -gt 0) { throw ($failures -join "`n    ") }
+
+    # 逐片的 passed 数相加再报，避免"某片一条没跑却全绿"这种看起来通过的失败。
+    $passed = 0
+    foreach ($line in $summaries) {
+        if ($line -match 'runner：(\d+) passed') { $passed += [int]$Matches[1] }
+    }
+    "$shards 片并行，合计 $passed passed"
 }
 
 Invoke-Check '凭据扫描' {
