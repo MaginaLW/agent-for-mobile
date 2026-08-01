@@ -130,6 +130,7 @@ function New-Fixture {
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
+        'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck'
@@ -202,6 +203,8 @@ function Remove-P0PrivateTemporaryFile {
     # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\p0-marker.ps1')
     foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md')) {
         Copy-Item -LiteralPath (Join-Path $SourceTaskTemplateDir $template) `
             -Destination (Join-Path $repo "scripts\tasks\$template")
@@ -484,7 +487,7 @@ if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: 
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
 Set-Content -LiteralPath (Join-Path $state 'task-file.log') -Value $TaskFile -Encoding utf8
 $taskText = Get-Content -LiteralPath $TaskFile -Raw -Encoding utf8
-$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY)-[A-F0-9]{12}')
+$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY)-[3479AHKMPTXY]{12}')
 if (-not $markerMatch.Success) { throw 'dynamic marker missing from task' }
 $marker = $markerMatch.Value
 $markerBytes = [Text.Encoding]::UTF8.GetBytes($marker)
@@ -637,11 +640,37 @@ if ($code -eq 'OK') {
         } else {
             @(100,1900,980,2050)
         }
-        $findData = @{
-            matches=@(@{
-                ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
-                bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
+        # OCR 对同一条气泡回两个重叠框（bounds 差 3px，其中一个带空格）是 2026-08-02 真机实测的
+        # 形态；两条归一后都等于期望 marker。find_ocr_extra_text 则相反：混进一条别的文本。
+        # 重叠框：整体偏移 3px。**每一项都要自己的括号**——PowerShell 里逗号比 `+` 结合得更紧，
+        # `@($a[0]+3, $a[1]+3)` 会被解析成 `$a[0] + (3, $a[1]) + 3`，于是对 Object[] 做加法、
+        # 报 op_Addition 失败。这个坑与判据无关，纯粹是语法，但它把用例挂了三轮。
+        $nudged = @(
+            ([int]$matchBounds[0] + 3), ([int]$matchBounds[1] + 3),
+            ([int]$matchBounds[2] + 3), ([int]$matchBounds[3] + 3)
+        )
+        $extraMatches = @()
+        if ($scenario -eq 'find_ocr_split_bubble') {
+            $spaced = $findEvidenceText.Insert([Math]::Min(12, $findEvidenceText.Length), ' ')
+            $extraMatches = @(@{
+                ref='e2';text=$spaced;normalized=$spaced;role=$matchRole;flags=$matchFlags
+                bounds=$nudged;source='ocr'
             })
+        }
+        if ($scenario -eq 'find_ocr_extra_text') {
+            $extraMatches = @(@{
+                ref='e2';text='OTHER-MESSAGE';normalized='OTHER-MESSAGE';role=$matchRole;flags=$matchFlags
+                bounds=$nudged;source='ocr'
+            })
+        }
+        # 在哈希表字面量里对数组做 `+` 会解析成 op_Addition 失败，先拼好再塞进去。
+        $allMatches = @(@{
+            ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
+            bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
+        })
+        foreach ($extra in $extraMatches) { $allMatches += $extra }
+        $findData = @{
+            matches=$allMatches
             scrolls=0
             screen_width=1080
             screen_height=2400
@@ -1805,6 +1834,48 @@ PODENY-DCA2222F6441|72|2117|472|32
         finally { Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue }
     }
 
+    Test-Case 'marker 字符集躲开 OCR 易混字符，且判据不看框数只看内容' {
+        # 2026-08-02 真机：5 次 Allow 尝试只有 1 次走完，两个原因都出在"判据把实现细节当语义"。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1')
+
+        # ③ 字符集：十六进制把 0/O、C/0、B/8、D/0、E/F 全塞进一个集合，而 marker 每腿要被
+        # OCR 读两遍。修字符集不损失任何严格性；放宽 fail-closed 那一侧才是拿安全换通过率。
+        $forbidden = @('0', 'O', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'L', 'J', 'Q', 'S', 'U', 'V', 'N', 'R', 'Z',
+            '1', '2', '5', '6', '8')
+        foreach ($bad in $forbidden) {
+            Assert-True (-not $script:P0MarkerAlphabet.Contains($bad)) "marker 字符集不得含易混字符 $bad。"
+        }
+        Assert-True ($script:P0MarkerAlphabet.Length -ge 10) 'marker 字符集太小会削弱唯一性。'
+
+        $suffixes = 1..200 | ForEach-Object { New-P0MarkerSuffix }
+        foreach ($suffix in $suffixes) {
+            Assert-True ($suffix -cmatch "^[$script:P0MarkerAlphabet]{12}$") "marker 后缀越界：$suffix"
+        }
+        Assert-True (@($suffixes | Select-Object -Unique).Count -ge 195) 'marker 后缀重复过多，随机性有问题。'
+
+        # 归一后仍必须能区分：两侧归一（runner 大写+O→0、网关小写+o→0）都不折叠这些字符。
+        $normalized = @($script:P0MarkerAlphabet.ToCharArray() | ForEach-Object { Normalize-P0MarkerText "$_" })
+        Assert-True (@($normalized | Select-Object -Unique).Count -eq $script:P0MarkerAlphabet.Length) `
+            'marker 字符集里存在归一后互相塌缩的字符。'
+    }
+
+    Test-Case 'Allow 判据：同一条气泡被 OCR 切成两个框仍应通过' {
+        # 真机实锤：OCR 对同一条气泡回了两个重叠框（bounds 差 3px，文本 `POALLOW-0681 BCD5A91B`
+        # 与 `POALLOW-0681BCD5A91B`），旧判据 `Count -eq 1` 当场短路，文本比对根本没跑到——
+        # 而消息**真的发出去了**。要判的是"有没有别的东西混进来"，框数是 OCR 的实现细节。
+        $fixture = New-Fixture find_ocr_split_bubble
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "同一 marker 被切成两个框不该否决本腿：`n$($result.Text)"
+        Assert-Contains $result.Text '语义判定通过'
+    }
+
+    Test-Case 'Allow 判据：混进别的文本仍必须判失败' {
+        # 严格性不能因为放开框数而丢：任何一个框归一后不等于期望 marker，整条判据就不成立。
+        $fixture = New-Fixture find_ocr_extra_text
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '命中里混进别的文本必须判失败。'
+    }
+
     Test-Case '任何危险路径的 fallback 都不得指示 [AWAIT_CONFIRM]' {
         # 2026-08-02 一口气查出**五处** fallback 写着"输出 [AWAIT_CONFIRM]"，而站规 §4 把
         # E_CONFIRM_TIMEOUT / E_PERM_MISSING / E_CHANNEL_DOWN 等逐个点名列为终态、明令不得输出它。
@@ -1975,6 +2046,7 @@ if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
             (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),

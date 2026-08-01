@@ -62,6 +62,11 @@ if (-not (Test-Path -LiteralPath $OobVerifyHelperPath -PathType Leaf)) {
     throw "缺少带外判据 helper：$OobVerifyHelperPath"
 }
 . $OobVerifyHelperPath
+$MarkerHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-marker.ps1'
+if (-not (Test-Path -LiteralPath $MarkerHelperPath -PathType Leaf)) {
+    throw "缺少 marker helper：$MarkerHelperPath"
+}
+. $MarkerHelperPath
 
 function Get-P0OptionalProperty {
     param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
@@ -190,23 +195,6 @@ function Get-P0Sha256 {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
     try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
-}
-
-<#
-marker 归一化。**必须与网关的 `OcrEngine.norm` 同口径**，否则 runner 的判据比网关自己还严，
-真机上就会出现"网关认了、runner 不认"的自相矛盾。
-
-O→0 是 knowledge 明写的实测规则（「归一（全角/大小写/o→0）」，CJK 形近字与数字 0→O 抖动
-是 ML Kit 在这台设备上的已知行为）。2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实
-出现在消息区，OCR 读成 `POALLOW-…`（字母 O），而 runner 只做大写+去符号，判成"证据不匹配"。
-
-放宽是否削弱证据？不：marker 形如 `P0ALLOW-<12 位十六进制>`，十六进制字母表里没有 O，
-折叠 O→0 只影响固定前缀，不影响那 12 位随机部分，碰撞风险为零。
-#>
-function Normalize-P0MarkerText {
-    param([AllowEmptyString()][string]$Text)
-    $upper = [regex]::Replace($Text.ToUpperInvariant(), '[^A-Z0-9]', '')
-    return $upper.Replace('O', '0')
 }
 
 function Test-P0MatchEvidenceContainsMarker {
@@ -652,16 +640,29 @@ function Read-P0TraceEvidence {
         $findData.focused_input_bounds
     } else { $null }
     $expectedNormalized = Normalize-P0MarkerText $ExpectedText
-    $matchedEvidence = $matches.Count -eq 1 -and
-        (Test-P0MatchEvidenceContainsMarker -Value $matches[0] -ExpectedNormalized $expectedNormalized)
-    $messageRegionEvidence = $matches.Count -eq 1 -and
-        (Test-P0MessageRegionMatch -Match $matches[0] -ExpectedNormalized $expectedNormalized `
-            -ScreenWidth $screenWidth -ScreenHeight $screenHeight `
-            -OriginalFocusedInputId $originalFocusedInputId `
-            -OriginalFocusedInputBounds $originalFocusedInputBounds `
-            -CurrentFocusedInputId $currentFocusedInputId `
-            -CurrentFocusedInputBounds $currentFocusedInputBounds `
-            -InputBarTop $InputBarTop)
+    # 判据是「**归一后全部命中同一个 marker**」，不是「恰好返回一个框」。
+    #
+    # 2026-08-02 真机实锤：OCR 对**同一条气泡**返回了两个重叠框（bounds 相差 3px，文本分别是
+    # `POALLOW-0681 BCD5A91B` 与 `POALLOW-0681BCD5A91B`），`Count -eq 1` 当场短路，
+    # 文本比对根本没跑到——而消息**真的发出去了**，两条归一后都等于期望值。
+    #
+    # 要判的是"有没有别的东西混进来"，**框数是 OCR 的实现细节，不该进判据**。
+    # 这与「marker 归一化把一次成功发送判成证据不匹配」是同一族第二次。
+    # 严格性一分没少：任何一个框归一后不等于期望 marker，整条判据仍然不成立。
+    $matchedEvidence = $matches.Count -ge 1 -and
+        (@($matches | Where-Object {
+            -not (Test-P0MatchEvidenceContainsMarker -Value $_ -ExpectedNormalized $expectedNormalized)
+        }).Count -eq 0)
+    $messageRegionEvidence = $matchedEvidence -and
+        (@($matches | Where-Object {
+            Test-P0MessageRegionMatch -Match $_ -ExpectedNormalized $expectedNormalized `
+                -ScreenWidth $screenWidth -ScreenHeight $screenHeight `
+                -OriginalFocusedInputId $originalFocusedInputId `
+                -OriginalFocusedInputBounds $originalFocusedInputBounds `
+                -CurrentFocusedInputId $currentFocusedInputId `
+                -CurrentFocusedInputBounds $currentFocusedInputBounds `
+                -InputBarTop $InputBarTop
+        }).Count -eq $matches.Count)
 
     [pscustomobject]@{
         Calls = [object[]]@($callEvidence)
@@ -1162,7 +1163,7 @@ try {
         $legLower = $leg.ToLowerInvariant()
         $legStarted = [DateTime]::UtcNow
         $nonce = [guid]::NewGuid().ToString('N')
-        $marker = "P0$($leg.ToUpperInvariant())-$([guid]::NewGuid().ToString('N').Substring(0, 12).ToUpperInvariant())"
+        $marker = "P0$($leg.ToUpperInvariant())-$(New-P0MarkerSuffix)"
         $markerLength = $marker.Length
         $markerSha256 = Get-P0Sha256 $marker
         $slug = "p0-safety-$legLower-$runId"
