@@ -20,6 +20,7 @@ param(
     [string]$AdbPath = 'adb',
     [string]$HealthProbePath,
     [string]$ProbeRegionPrecheckPath,
+    [string]$OobOcrHelperPath,
     [string]$DispatchPath,
     [int]$ConfirmationTimeoutSec = 120,
     [int]$DispatchTimeoutMin = 15,
@@ -51,6 +52,16 @@ if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
 if ([string]::IsNullOrWhiteSpace($ProbeRegionPrecheckPath)) {
     $ProbeRegionPrecheckPath = Join-Path $RepoRoot 'scripts\lib\p0-probe-region-precheck.ps1'
 }
+if ([string]::IsNullOrWhiteSpace($OobOcrHelperPath)) {
+    $OobOcrHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-oob-ocr.ps1'
+}
+# 带外判据是纯函数、不碰设备，缺了就直接硬失败；OCR helper 由它单独外挂 5.1 进程调用，
+# 那一条允许缺席（缺了只让 Deny 腿结论退回 inconclusive，不阻断跑测）。
+$OobVerifyHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-oob-verify.ps1'
+if (-not (Test-Path -LiteralPath $OobVerifyHelperPath -PathType Leaf)) {
+    throw "缺少带外判据 helper：$OobVerifyHelperPath"
+}
+. $OobVerifyHelperPath
 
 function Get-P0OptionalProperty {
     param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
@@ -357,6 +368,90 @@ function Get-P0InputBarTop {
         return $top
     }
     catch { return 0 }
+}
+
+<#
+Deny 腿带外验证（批次 3）：经 runner 自己的 adb 通道截屏 + 系统 OCR 比对。
+
+**不经执行器、不进 trace、不花 token。** Deny 腿的四条判据全部来自被测组件自报
+（`E_BLOCKED`、审计一致、零续调、`sent_verified` 非 true），2026-08-01 那次假通过就是
+栽在这上面。这里补的是唯一一条不来自网关的证据。
+
+**必须排在 teardown 之前**：teardown 会清空输入框，而"marker 原封不动留在框里"正是这条
+验证唯一的强证据。先清框就是先毁证——runner 的调用顺序由离线用例按源码顺序钉住。
+
+从不抛异常：本腿判定已经做完，带外验证失败只让结论退回 `inconclusive`，不作废已成定论的结论。
+#>
+function Invoke-P0DenyOutOfBandCheck {
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][string]$Marker,
+        [Parameter(Mandatory)][string]$ScreenshotPath,
+        [Parameter(Mandatory)][int]$InputBarTop,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$OcrHelperPath
+    )
+
+    $result = [ordered]@{
+        captured = $false
+        ocr = 'unavailable'
+        input_box_marker = 'unreadable'
+        message_area_marker = 'unreadable'
+        verdict = 'inconclusive'
+        postcondition = 'gateway_reported_blocked_no_independent_check'
+        detail = ''
+    }
+    try {
+        # 截屏走 exec-out：设备侧 PNG 直接落到 PC，不经手机上的任何 App。
+        Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
+            -Arguments @('-s', $Session.Serial, 'exec-out', 'screencap', '-p') `
+            -Destination $ScreenshotPath -Operation '带外截屏' -TimeoutSec 60
+        $result.captured = (Test-Path -LiteralPath $ScreenshotPath -PathType Leaf) -and
+            ((Get-Item -LiteralPath $ScreenshotPath).Length -gt 0)
+        if (-not $result.captured) {
+            $result.detail = '截屏为空'
+            return [pscustomobject]$result
+        }
+        # 输入栏候选区的上边界拿不到就不划线：宁可整条判 inconclusive，
+        # 也不用一个猜出来的 y 去区分"输入框"和"消息区"——分错带比读不出更坏。
+        if ($InputBarTop -le 0) {
+            $result.detail = '拿不到输入栏候选区上边界，无法区分输入框与消息区'
+            return [pscustomobject]$result
+        }
+        if ([string]::IsNullOrWhiteSpace($OcrHelperPath) -or
+            -not (Test-Path -LiteralPath $OcrHelperPath -PathType Leaf)) {
+            $result.detail = '缺少带外 OCR helper'
+            return [pscustomobject]$result
+        }
+        # WinRT OCR 只有 Windows PowerShell 5.1 自带投影，pwsh 7 调不动，必须外挂一个进程。
+        $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $ps51 -PathType Leaf)) {
+            $result.detail = '本机没有 Windows PowerShell 5.1，无法调用系统 OCR'
+            return [pscustomobject]$result
+        }
+        $ocr = Invoke-P0ExternalText -FilePath $ps51 `
+            -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $OcrHelperPath, '-Path', $ScreenshotPath) `
+            -Operation '带外 OCR' -AllowFailure -TimeoutSec 120
+        if ($ocr.ExitCode -ne 0) {
+            $result.detail = "OCR 不可用（退出码 $($ocr.ExitCode)）"
+            return [pscustomobject]$result
+        }
+        $result.ocr = 'windows-media-ocr'
+        $lines = Join-P0OcrLines -Words (ConvertFrom-P0OcrWords -Text $ocr.Stdout)
+        $normalize = { param($t) Normalize-P0MarkerText $t }
+        # 两条带：输入栏候选区上边界之下算输入框，之上算消息区。同一张图、同一次 OCR。
+        $result.input_box_marker = Get-P0OcrMarkerPresence -Lines $lines -Marker $Marker `
+            -BandTop $InputBarTop -BandBottom ([int]::MaxValue) -Normalize $normalize
+        $result.message_area_marker = Get-P0OcrMarkerPresence -Lines $lines -Marker $Marker `
+            -BandTop 0 -BandBottom $InputBarTop -Normalize $normalize
+        $verdict = Get-P0DenyOobVerdict -InputBox $result.input_box_marker -MessageArea $result.message_area_marker
+        $result.verdict = $verdict.Verdict
+        $result.postcondition = $verdict.Postcondition
+        $result.detail = $verdict.Reason
+    }
+    catch {
+        $result.detail = "带外验证失败：$($_.Exception.Message)"
+    }
+    return [pscustomobject]$result
 }
 
 function Read-P0TraceEvidence {
@@ -1139,6 +1234,29 @@ try {
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256
 
+        # Deny 腿带外验证：**必须排在 teardown 之前**——teardown 会清空输入框，而"marker
+        # 原封不动留在框里"正是这条验证唯一的强证据。先清框就是先毁证。
+        $oob = $null
+        if ($leg -ceq 'Deny') {
+            $oobShot = Join-Path $legDir 'oob-after.png'
+            [void]$sensitiveArtifactPaths.Add($oobShot)
+            $oob = Invoke-P0DenyOutOfBandCheck -Session $session -Marker $marker `
+                -ScreenshotPath $oobShot -InputBarTop $inputBarTop -OcrHelperPath $OobOcrHelperPath
+            switch ($oob.verdict) {
+                'not_sent_confirmed' {
+                    Write-Host "[$leg] 带外验证：marker 原封不动留在输入框，发送未发生。" -ForegroundColor Green
+                }
+                'sent_detected' {
+                    # 独立证据与网关自报的结论直接冲突。这是整条 Deny 腿最该炸的地方。
+                    throw "$leg 腿带外验证在消息区读到了 marker：$($oob.detail)"
+                }
+                default {
+                    Write-Host ("[$leg] 带外验证判不了（输入框=$($oob.input_box_marker)，" +
+                        "消息区=$($oob.message_area_marker)）：$($oob.detail)") -ForegroundColor Yellow
+                }
+            }
+        }
+
         # 腿末收尾：清框 + 收键盘，走 runner 自己的 adb 通道。**必须排在本腿全部取证之后**——
         # 被拦下的腿留在输入框里的 marker 正是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
         # 判定已经做完，收尾失败不作废本腿结论，但会进 manifest 并计一条 cleanup issue。
@@ -1182,11 +1300,15 @@ try {
                 [int]$confirmation.input_length -eq $markerLength -and
                 [string]$confirmation.input_sha256 -ceq $markerSha256)
             # 只写"验过什么"，不写"结论是什么"。Allow 的 single_match 背后是 ui_find 在消息区
-            # 命中 marker 这条独立正证据；Stale/Deny 两腿**没有任何独立观察屏幕的步骤**——
-            # 判据全部来自被测组件自己的报告（E_STALE_REF / E_BLOCKED + 零续调）。
+            # 命中 marker 这条独立正证据；Stale 腿**没有任何独立观察屏幕的步骤**——
+            # 判据全部来自被测组件自己的报告（E_STALE_REF + 零续调）。
             # 写成 not_executed_denied 会让 manifest 读起来像"已验证消息未发出"，其实没验过。
+            #
+            # Deny 腿从批次 3 起有带外验证（见下面的 deny_out_of_band）：这里的值由那次验证的
+            # 实际结论给出，**判不了时原样退回 gateway_reported_blocked_no_independent_check**。
             send_postcondition = switch ($leg) {
                 'Allow' { 'single_match' }
+                'Deny' { if ($null -ne $oob) { [string]$oob.postcondition } else { 'gateway_reported_blocked_no_independent_check' } }
                 default { 'gateway_reported_blocked_no_independent_check' }
             }
             # 网关侧后验（内容离开输入框）与 runner 侧 ui_find 正证据（内容出现在会话里）是两套判据，
@@ -1202,6 +1324,22 @@ try {
                     [string]$trace.SendVerificationState
                 }
             }
+            # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
+            # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
+            # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），
+            # 它只在 present 时说话，而那一说就是重大失败。
+            deny_out_of_band = $(
+                if ($null -eq $oob) { $null } else {
+                    [ordered]@{
+                        captured = [bool]$oob.captured
+                        ocr = [string]$oob.ocr
+                        input_box_marker = [string]$oob.input_box_marker
+                        message_area_marker = [string]$oob.message_area_marker
+                        verdict = [string]$oob.verdict
+                        screenshot = "$legLower/oob-after.png"
+                    }
+                }
+            )
             # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
             # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
             teardown = [ordered]@{

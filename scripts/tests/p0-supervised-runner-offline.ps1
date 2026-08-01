@@ -199,6 +199,9 @@ function Remove-P0PrivateTemporaryFile {
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
+    # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
     foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md')) {
         Copy-Item -LiteralPath (Join-Path $SourceTaskTemplateDir $template) `
             -Destination (Join-Path $repo "scripts\tasks\$template")
@@ -1758,6 +1761,69 @@ PODENY-DCA2222F6441|72|2117|472|32
 
         $verdicts = @('sent_detected', 'not_sent_confirmed', 'inconclusive')
         Assert-True (@($verdicts | Select-Object -Unique).Count -eq 3) '三态必须互不相同。'
+    }
+
+    Test-Case '带外验证必须排在 teardown 之前（先清框就是先毁证）' {
+        # teardown 会清空输入框，而"marker 原封不动留在框里"是这条验证唯一的强证据。
+        # 顺序颠倒的后果是带外验证永远读不到正证据、永远 inconclusive——**而且看起来像正常运行**。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $semantics = $source.IndexOf('Assert-P0LegSemantics -Leg')
+        $oob = $source.IndexOf('Invoke-P0DenyOutOfBandCheck -Session')
+        $teardown = $source.IndexOf('Invoke-P0LegTeardown -Session')
+        Assert-True ($semantics -gt 0 -and $oob -gt 0 -and $teardown -gt 0) 'runner 里找不到判定/带外验证/teardown 三处调用。'
+        Assert-True ($semantics -lt $oob) '带外验证必须排在本腿判定之后。'
+        Assert-True ($oob -lt $teardown) '带外验证必须排在 teardown 之前，否则先清框就是先毁证。'
+    }
+
+    Test-Case 'Deny 腿：带外验证截屏被尝试，读不出时如实退回原结论' {
+        # **本套件刻意不依赖本机有没有装 OCR 语言包**：装了才绿的用例会让安全网变成机器的函数。
+        # 所以这里验的是"截屏真的被尝试了"+"读不出来时的降级形态"，OCR 本身由纯函数用例覆盖。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -eq 0) "带外验证判不了不该否决本腿：`n$($result.Text)"
+
+        $adbLog = Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw
+        Assert-Contains $adbLog 'exec-out screencap -p'
+
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        $oob = $manifestJson.legs[0].deny_out_of_band
+        Assert-True ($null -ne $oob) 'Deny 腿 manifest 缺少 deny_out_of_band。'
+        Assert-True ($oob.captured -eq $false) '假设备回空截图，captured 应为 false。'
+        Assert-True ($oob.verdict -ceq 'inconclusive') '读不出来必须 inconclusive，不得倒向任何一边。'
+        # 判不了就退回原样的措辞——不许因为"跑过一次带外验证"把结论写得更强。
+        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'gateway_reported_blocked_no_independent_check') `
+            "判不了时 send_postcondition 必须退回原样：$($manifestJson.legs[0].send_postcondition)"
+        Assert-Contains $result.Text '带外验证判不了'
+    }
+
+    Test-Case 'Allow/Stale 两腿不做带外验证' {
+        # 带外验证只对 Deny 腿有意义（它是唯一四条判据全部自报的腿）。
+        # Allow 腿有 ui_find 那条独立正证据；给它加截屏只会平白多一次设备往返。
+        $fixture = New-Fixture happy
+        $null = Invoke-FixtureRunner $fixture @('Allow')
+        $adbLog = Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw
+        Assert-NotMatches $adbLog 'screencap'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($null -eq $manifestJson.legs[0].deny_out_of_band) 'Allow 腿不该有 deny_out_of_band。'
+        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'single_match') 'Allow 腿判据不该被批次 3 改动。'
+    }
+
+    Test-Case '带外验证不经执行器、不进 trace' {
+        # 它的全部价值就是"不来自被测组件"。一旦经执行器走，就退化成又一条自报证据。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $start = $source.IndexOf('function Invoke-P0DenyOutOfBandCheck')
+        $end = $source.IndexOf("`nfunction ", $start + 10)
+        $body = $source.Substring($start, $end - $start)
+        Assert-NotMatches $body 'dispatch|DispatchPath|mcp__'
+        # 截屏只走 adb exec-out screencap；不得混进任何 UI 注入。
+        Assert-Contains $body "'exec-out', 'screencap', '-p'"
+        Assert-NotMatches $body '(?i)input\s+(tap|text|keyevent)'
     }
 
     Test-Case '带外 OCR helper 以 UTF-8 BOM 落盘且能被 5.1 解析' {
