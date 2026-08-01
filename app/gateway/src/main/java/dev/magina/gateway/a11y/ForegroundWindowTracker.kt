@@ -20,6 +20,11 @@ internal sealed interface ForegroundIdentity {
         val windowId: Int,
         val packageName: String,
         val activityName: String,
+        /**
+         * true = 冷启动自举得来的 **package 级**身份（见 [ForegroundWindowTracker.bootstrapFromWindow]）。
+         * 此时 [activityName] 必为空——窗口列表里没有 Activity 类名可取。
+         */
+        val bootstrapped: Boolean = false,
     ) : ForegroundIdentity
 }
 
@@ -43,6 +48,8 @@ internal data class ResolvedForeground(
     val packageName: String,
     val activityName: String,
     val reason: ForegroundUnknownReason = ForegroundUnknownReason.NONE,
+    /** 身份是自举来的（package 级、无 Activity）；确认卡与 ctx 都要如实说出这件事。 */
+    val bootstrapped: Boolean = false,
 )
 
 /** 将事件身份与当前应用窗口绑定；窗口不一致时只暴露 package-only 尽力后备。 */
@@ -56,6 +63,7 @@ internal fun resolveForeground(
             known = true,
             packageName = identity.packageName,
             activityName = identity.activityName,
+            bootstrapped = identity.bootstrapped,
         )
 
     else -> ResolvedForeground(
@@ -89,6 +97,9 @@ internal enum class ForegroundEventDecision {
 
     /** 列表刷新时没有与活动应用窗口对应的候选。 */
     DROPPED_NO_CANDIDATE,
+
+    /** 冷启动自举：从未收到任何事件，直接用活动应用窗口自报的包名建立 package 级身份。 */
+    BOOTSTRAPPED,
 }
 
 /** 一条前台事件的处置记录。时间与序号让"两次工具调用之间发生了什么"可事后复盘。 */
@@ -167,6 +178,54 @@ internal class ForegroundWindowTracker(
         pendingCandidates.remove(eventWindowId)
         note(ForegroundEventDecision.DROPPED_NOT_SELECTED)
         return false
+    }
+
+    /**
+     * 冷启动自举：从未收到过任何窗口状态事件时，直接用当前活动应用窗口自报的包名建立身份。
+     *
+     * 无障碍服务重启后 [identity] 恒为 [ForegroundIdentity.Unknown]，而窗口事件只在窗口
+     * **发生变化**时才来——用户不切窗口就永远等不到。于是 `foreground_reason:identity_unset`
+     * 会把所有 W/D 级工具挡死（`SafetyGate.requireKnownForeground`），此前只能靠人手动切一次
+     * 窗口绕过。自举补的就是这缺失的第一次。
+     *
+     * 三条约束把它限制成"只补第一次"，既有判据一字未动：
+     * 1. **只在从未建立过身份时生效。** 身份已建立却与当前活动窗口对不上
+     *    （[ForegroundUnknownReason.WINDOW_ID_MISMATCH]）是"窗口换了却没等到可接受事件"的
+     *    真实信号；自举若在那时接管，等于把这条判据抹掉。
+     * 2. **只给 package 级身份，[ForegroundIdentity.Known.activityName] 留空。** 窗口列表里
+     *    没有 Activity 类名可取；拿 `window.title` 之类冒充会让确认前后的逐字段相等比较
+     *    拿到一条**编造的**证据，比空着危险得多。
+     * 3. 必须确有活动应用窗口、且传入包名非空。
+     *
+     * 失败方向是安全的：自举之后真切了窗口或换了 Activity，事件会以真实 activityName 覆盖
+     * 身份，于是确认前后比较立刻不等 → `E_STALE_REF`（宁可多失效，不可假通过）。
+     */
+    @Synchronized
+    fun bootstrapFromWindow(
+        applicationWindowId: Int,
+        packageName: String,
+        windows: List<ForegroundWindow>,
+    ): Boolean {
+        if (identity !is ForegroundIdentity.Unknown) return false
+        if (packageName.isEmpty()) return false
+        if (applicationWindow(windows)?.id != applicationWindowId) return false
+
+        identity = ForegroundIdentity.Known(
+            windowId = applicationWindowId,
+            packageName = packageName,
+            activityName = "",
+            bootstrapped = true,
+        )
+        record(
+            kind = "bootstrap",
+            eventWindowId = applicationWindowId,
+            packageName = packageName,
+            activityName = "",
+            decision = ForegroundEventDecision.BOOTSTRAPPED,
+            selectedApplicationWindowId = applicationWindowId,
+            windows = windows,
+        )
+        return true
     }
 
     /**

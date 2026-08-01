@@ -3,7 +3,13 @@
 param(
     [string]$Filter = '*',
     # 防挂死的墙钟预算，不是性能断言。见 Invoke-FixtureRunner 处的说明。
-    [ValidateRange(15, 600)][int]$FixtureTimeoutSec = 60
+    [ValidateRange(15, 600)][int]$FixtureTimeoutSec = 60,
+    # 分片：整套 98% 的墙钟花在互不相干的 runner 子进程上，天然可以并行。
+    # 但**不做进程内并行**——那要把几十个函数搬进 runspace，而且共享计数器/临时目录都得重写；
+    # 分片是同一个脚本起 N 份、各跑一部分，语义与顺序跑逐字相同，出问题也能单独重跑一片。
+    # 分配按"过滤后的第几条"取模，与用例内容无关，因此每片跑的集合是确定的。
+    [ValidateRange(1, 16)][int]$ShardCount = 1,
+    [ValidateRange(1, 16)][int]$ShardIndex = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,8 +27,13 @@ $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
 $PwshPath = (Get-Process -Id $PID).Path
 $script:Passed = 0
 $script:Failed = 0
+$script:Skipped = 0
+$script:MatchedCases = 0
+if ($ShardIndex -gt $ShardCount) { throw "ShardIndex($ShardIndex) 不能大于 ShardCount($ShardCount)。" }
 $TestRoots = [Collections.Generic.List[string]]::new()
 $script:SlowRuns = [Collections.Generic.List[object]]::new()
+$script:CaseTimes = [Collections.Generic.List[object]]::new()
+$script:FixturePhases = [Collections.Generic.List[object]]::new()
 
 # 开跑前自愈：上一轮被 kill 的跑测留下的临时仓库副本不会自己消失，攒到几十个就会把这台机器
 # 压到进程启动都超时（2026-07-26 实测 81 个残留 + 常驻 daemon → 整轮 11/38，全是假超时）。
@@ -51,6 +62,19 @@ function Assert-NotMatches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -notmatch $Pattern) "不应匹配 /$Pattern/：`n$Actual"
 }
 
+# 假 adb 把整条命令原样记进 keyevent.log；一次 `input keyevent` 可带多个键码，因此按 token 数。
+function Get-TestKeyCount([string[]]$Lines, [int]$KeyCode) {
+    $count = 0
+    foreach ($line in $Lines) {
+        $index = $line.IndexOf('keyevent ')
+        if ($index -lt 0) { continue }
+        foreach ($token in ($line.Substring($index + 'keyevent '.Length) -split '\s+')) {
+            if ($token -eq "$KeyCode") { $count++ }
+        }
+    }
+    return $count
+}
+
 function Get-TestSha256([string]$Text) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
     try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
@@ -59,16 +83,30 @@ function Get-TestSha256([string]$Text) {
 
 function Test-Case([string]$Name, [scriptblock]$Body) {
     if ($Name -notlike $Filter) { return }
+    # 先数、再决定跑不跑：序号必须在**所有分片里一致**，所以只能按"过滤后的第几条"算，
+    # 不能按"本片跑到第几条"算。
+    $script:MatchedCases++
+    if ((($script:MatchedCases - 1) % $ShardCount) + 1 -ne $ShardIndex) {
+        $script:Skipped++
+        return
+    }
+    # 逐条计时：整套跑几百秒时，"慢在哪"必须能直接读出来，不能靠猜（2026-08-01 提速那轮的第一步）。
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     try {
         & $Body
         $script:Passed++
-        Write-Host "PASS  $Name" -ForegroundColor Green
+        $watch.Stop()
+        Write-Host ("PASS  {0,6:0.0}s  $Name" -f $watch.Elapsed.TotalSeconds) -ForegroundColor Green
     }
     catch {
         $script:Failed++
-        Write-Host "FAIL  $Name" -ForegroundColor Red
+        $watch.Stop()
+        Write-Host ("FAIL  {0,6:0.0}s  $Name" -f $watch.Elapsed.TotalSeconds) -ForegroundColor Red
         Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
         Write-Host "      $($_.ScriptStackTrace -replace "`r?`n", "`n      ")"
+    }
+    finally {
+        $script:CaseTimes.Add([pscustomobject]@{ Name = $Name; Seconds = $watch.Elapsed.TotalSeconds })
     }
 }
 
@@ -91,9 +129,13 @@ function New-Fixture {
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
-        'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside'
+        'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
+        'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
+        'teardown_keyboard_stuck', 'teardown_ime_unreadable',
+        'teardown_not_foreground', 'teardown_foreground_stuck'
     )][string]$Scenario)
 
+    $buildWatch = [Diagnostics.Stopwatch]::StartNew()
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
     $script:TestRoots.Add($root)
     $repo = Join-Path $root 'repo'
@@ -195,6 +237,27 @@ function Remove-P0PrivateTemporaryFile {
 
     Set-Content -LiteralPath (Join-Path $state 'token.txt') -Value $fakeToken -Encoding ascii
 
+    # 假 adb。腿末 teardown 相关的假状态：ime-vis.txt 存 mImeWindowVis 的十六进制位，
+    # 2 = IME_VISIBLE（有可见键盘），1 = 只有会话、没有可见窗口（零 UI IME 的常态）。
+    #
+    # **改这段 .cmd 之前先读这三条**，都是 2026-08-01 真踩到的：
+    # 1. 新增的 rem/注释一律**只写 ASCII**。文件按 UTF-8 落盘，cmd 却按 OEM 代码页（本机 936）
+    #    读：一串中文的字节数是 3 的倍数，按 GBK 双字节配对后会剩半个字，把行尾的 CRLF 一起
+    #    吃掉，于是下一行被并进 rem——整个 `if "%1"=="shell" (` 块就此消失，44/55 条用例全红，
+    #    而报出来的错是「重置无障碍配置以触发重绑 失败」，跟真因八竿子打不着。
+    # 2. **块内的 rem 仍然会被解析**：圆括号会提前闭合 if 块，重定向号会真的重定向。
+    #    要写说明就写在这里（PowerShell 注释里），不要写进 .cmd 的括号块。
+    # 4. **这个 .cmd 在热路径上，每多一个进程都要乘以约 4400。** 整套跑测 98% 的墙钟花在
+    #    runner 子进程里，而一次 runner 跑 56 次假 adb（79 次 runner × 56 ≈ 4400 次）。
+    #    原来每次调用都无条件先跑 `echo %*| findstr`（管道 = 额外两个 cmd）加两次
+    #    `findstr scenario.txt`，五个进程之后才开始真正分发，单次 68ms。现在场景名由
+    #    New-Fixture 直接烤进脚本（`set "SCEN=..."`），分发一律用 `if "%n"==` 位置判据
+    #    与 `if exist`——都是 cmd 内建，零进程。**新增判据请照这个来，别再引入管道或 findstr。**
+    # 3. **重定向号前面紧挨着数字，那个数字就变成了文件句柄号。** 两次都咬到：`echo 2>"file"`
+    #    是把 stderr 重定向走、内容一个字没写；而 `echo %*>>"adb.log"` 在命令以数字结尾时
+    #    （`... input keyevent 4`）变成 `4>>`，那一条**根本不会进日志**——于是"按了 BACK"
+    #    被读成"没按 BACK"，断言看起来铁证如山，其实是日志说了谎。一律把重定向写在前面：
+    #    `>"file" echo 2` / `>>"adb.log" echo %*`。
     $fakeAdb = Join-Path $bin 'fake-adb.cmd'
     @'
 @echo off
@@ -204,13 +267,22 @@ rem 与 Unix 同名的命令解析到 MSYS 版本。2026-07-26 实锤：`find /v
 rem 把 /v 和 /c 当成要搜索的目录（/c 就是整个 C 盘），递归扫盘到 30s 超时，整轮 16/39。
 rem 逐点改成绝对路径能修好，但这一行让同类问题不可能再犯。
 set "PATH=%SystemRoot%\System32;%PATH%"
-echo %*>>"%P0_FAKE_STATE%\adb.log"
-echo %*| findstr /c:" sh -c " >nul && exit /b 0
-findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"shell rm -f /data/local/tmp/p0-control-" >nul && exit /b 7
-findstr /x /c:"cleanup_once" "%P0_FAKE_STATE%\scenario.txt" >nul && echo %*| findstr /c:"files/test-confirmation-state.json" >nul && if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
-  echo 1>"%P0_FAKE_STATE%\cleanup-once-fired.txt"
+set "SCEN=__P0_SCENARIO__"
+>>"%P0_FAKE_STATE%\adb.log" echo %*
+rem run-as ... sh -c '...'：位置固定，用位置判据而不是子串匹配，省掉一次管道 + findstr。
+if "%6 %7"=="sh -c" exit /b 0
+rem `shell rm -f <path>` 只有 p0-control 中转文件这一处（run-as 的删除是 %4=run-as），位置判据已足够。
+if "%SCEN%"=="remote_cleanup_failure" if "%3 %4 %5"=="shell rm -f" exit /b 7
+rem 提确认状态文件的两种形态：exec-out ... cat <file>（%7）与 shell run-as ... rm -f <file>（%8）。
+if "%SCEN%"=="cleanup_once" if "%7"=="files/test-confirmation-state.json" goto :cleanuponce
+if "%SCEN%"=="cleanup_once" if "%8"=="files/test-confirmation-state.json" goto :cleanuponce
+goto :notcleanuponce
+:cleanuponce
+if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
+  >"%P0_FAKE_STATE%\cleanup-once-fired.txt" echo 1
   exit /b 7
 )
+:notcleanuponce
 if "%1"=="-s" shift
 if "%1"=="FAKE123" shift
 if "%1"=="devices" (
@@ -219,7 +291,7 @@ if "%1"=="devices" (
   exit /b 0
 )
 if "%1"=="get-serialno" (echo FAKE123& exit /b 0)
-  if "%1 %2"=="forward --remove" (findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7)
+  if "%1 %2"=="forward --remove" if "%SCEN%"=="cleanup_failure" exit /b 7
 if "%1"=="push" (copy /y "%2" "%P0_FAKE_STATE%\staged-control.json" >nul& exit /b 0)
 if "%1"=="exec-out" (
   if "%5"=="shared_prefs/gateway.xml" (
@@ -231,8 +303,8 @@ if "%1"=="exec-out" (
     type "%P0_FAKE_STATE%\confirmation-state.json"
     exit /b 0
   )
-  echo %*| findstr /c:"cache/confirmation-" >nul
-  if not errorlevel 1 (
+  rem exec-out 里唯一的 .png 就是确认卡截图，扩展名判据比子串匹配便宜一个进程。
+  if "%~x5"==".png" (
     if not exist "%P0_FAKE_STATE%\%~nx5" exit /b 1
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
@@ -251,13 +323,31 @@ if "%1"=="exec-out" (
     exit /b 0
   )
 )
+rem -- leg teardown fake device state: see the PowerShell comment above this here-string --
 if "%1"=="shell" (
   if "%2"=="date" (echo 20260723& exit /b 0)
+  if "%2 %3"=="input keyevent" (
+    >>"%P0_FAKE_STATE%\keyevent.log" echo %*
+    if "%4"=="4" (
+      if not "%SCEN%"=="teardown_keyboard_stuck" >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
+    )
+    exit /b 0
+  )
+  if "%2 %3"=="dumpsys input_method" (
+    if "%SCEN%"=="teardown_ime_unreadable" (echo   mInputShown=true& exit /b 0)
+    if "%SCEN%"=="teardown_visible_keyboard" if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    if "%SCEN%"=="teardown_keyboard_stuck" if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 2
+    if not exist "%P0_FAKE_STATE%\ime-vis.txt" >"%P0_FAKE_STATE%\ime-vis.txt" echo 1
+    set /p IMEVIS=<"%P0_FAKE_STATE%\ime-vis.txt"
+    echo   mInputShown=true
+    call echo   mImeWindowVis=0x%%IMEVIS%%
+    exit /b 0
+  )
   if "%2 %3 %4 %5"=="settings get secure default_input_method" (type "%P0_FAKE_STATE%\current-ime.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings get secure enabled_accessibility_services" (type "%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (echo %6>"%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3"=="ime set" (
-    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
+    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
     echo %4>"%P0_FAKE_STATE%\current-ime.txt"& exit /b 0
   )
   if "%2 %3 %4"=="appops get dev.magina.gateway" (echo SYSTEM_ALERT_WINDOW: allow& exit /b 0)
@@ -270,8 +360,21 @@ if "%1"=="shell" (
   if "%2 %3"=="pm path" (echo package:/data/app/fake/base.apk& exit /b 0)
   if "%2 %3 %4"=="run-as dev.magina.gateway sh" (exit /b 0)
   if "%2 %3 %4"=="dumpsys activity services" (echo ServiceRecord dev.magina.gateway/.GatewayService isForeground=true& exit /b 0)
+  rem 前台 Activity：默认微信在前台。teardown_not_foreground 在 am start 之前报桌面、之后报微信
+  rem （模拟"切到 Home 后被拉回"）；teardown_foreground_stuck 则永远报桌面，用来钉住"拉不回来
+  rem 就一个键都不发"。
+  if "%2 %3 %4"=="dumpsys activity activities" (
+    if "%SCEN%"=="teardown_foreground_stuck" (echo   mResumedActivity: ActivityRecord{1 u0 com.android.launcher3/.Launcher t1}& exit /b 0)
+    if "%SCEN%"=="teardown_not_foreground" if not exist "%P0_FAKE_STATE%\am-start.log" (
+      echo   mResumedActivity: ActivityRecord{1 u0 com.android.launcher3/.Launcher t1}
+      exit /b 0
+    )
+    echo   mResumedActivity: ActivityRecord{1 u0 com.tencent.mm/.ui.LauncherUI t1}
+    exit /b 0
+  )
+  if "%2 %3"=="am start" (>>"%P0_FAKE_STATE%\am-start.log" echo %*& exit /b 0)
   if "%2 %3"=="dumpsys accessibility" (
-    findstr /x /c:"enabled_but_not_bound" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+    if "%SCEN%"=="enabled_but_not_bound" (
       echo Enabled services: dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
       echo Bound services: com.other/.Service
       exit /b 0
@@ -281,21 +384,19 @@ if "%1"=="shell" (
   )
   if "%2 %3"=="dumpsys deviceidle" (echo system-excidle,dev.magina.gateway,10000& exit /b 0)
   if "%2 %3 %4 %6"=="run-as dev.magina.gateway cp files/test-control.json" (copy /y "%P0_FAKE_STATE%\staged-control.json" "%P0_FAKE_STATE%\test-control.json" >nul& exit /b 0)
-  echo %*| findstr /c:"run-as dev.magina.gateway rm" >nul
-  if not errorlevel 1 (
-    echo %*| findstr /c:"test-control" >nul && del /q "%P0_FAKE_STATE%\test-control.json" 2>nul
-    echo %*| findstr /c:"test-confirmation-state" >nul && (
+  if "%2 %3 %4"=="run-as dev.magina.gateway rm" (
+    if "%6"=="files/test-control.json" del /q "%P0_FAKE_STATE%\test-control.json" 2>nul
+    if "%6"=="files/test-confirmation-state.json" (
       del /q "%P0_FAKE_STATE%\confirmation-state.json" 2>nul
-      findstr /x /c:"cleanup_once" "%P0_FAKE_STATE%\scenario.txt" >nul && if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
-        echo 1>"%P0_FAKE_STATE%\cleanup-once-fired.txt"
+      if "%SCEN%"=="cleanup_once" if not exist "%P0_FAKE_STATE%\cleanup-once-fired.txt" (
+        >"%P0_FAKE_STATE%\cleanup-once-fired.txt" echo 1
         exit /b 7
       )
-      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" findstr /x /c:"cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
+      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
     )
     exit /b 0
   )
-  echo %*| findstr /c:"p0-control-" >nul
-  if not errorlevel 1 (
+  if "%2 %3"=="rm -f" (
     findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
     del /q "%P0_FAKE_STATE%\staged-control.json" 2>nul
     exit /b 0
@@ -303,7 +404,7 @@ if "%1"=="shell" (
   exit /b 0
 )
 exit /b 0
-'@ | Set-Content -LiteralPath $fakeAdb -Encoding utf8
+'@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
     @'
@@ -332,6 +433,19 @@ findstr /x /c:"probe_region_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["fake-leftover@100,2600,900,2700"]}
   exit /b 2
 )
+rem post-teardown re-check: keyevent.log existing means teardown has already run.
+rem NOTE: keep `exit /b` at this nesting level. Wrapping these in an outer `if exist (...)`
+rem block swallows the exit code (cmd reports 0), which silently turns the assertion green.
+if not exist "%P0_FAKE_STATE%\keyevent.log" goto :beforeteardown
+findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["P0LEFTOVER@100,2600,900,2700"]}
+  exit /b 2
+)
+findstr /x /c:"teardown_probe_not_ready" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":true,"probe_ready":false,"reason":"ocr-jitter"}
+  exit /b 2
+)
+:beforeteardown
 findstr /x /c:"probe_region_unavailable" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 1
 rem 只有显式声明的场景才回 region：默认不回，用来钉住"拿不到候选区就保持严格判据"。
 findstr /x /c:"find_focus_missing_with_band" "%P0_FAKE_STATE%\scenario.txt" >nul && (
@@ -632,6 +746,7 @@ Set-Content -LiteralPath (Join-Path $state 'dispatch-finished.txt') -Value '1' -
 exit $exit
 '@ | Set-Content -LiteralPath $fakeDispatch -Encoding utf8
 
+    $script:FixturePhases.Add([pscustomobject]@{ Phase = 'new-fixture'; Seconds = $buildWatch.Elapsed.TotalSeconds })
     [pscustomobject]@{
         Root = $root
         Repo = $repo
@@ -693,6 +808,7 @@ function Invoke-FixtureRunner {
         $watch.Stop()
         # 耗时留痕：慢到逼近预算时要在它变成失败之前就看得见。
         $script:SlowRuns.Add([pscustomobject]@{ Seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) })
+        $script:FixturePhases.Add([pscustomobject]@{ Phase = 'runner'; Seconds = $watch.Elapsed.TotalSeconds })
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         [pscustomobject]@{ ExitCode=$process.ExitCode; Text=$stdout+"`n"+$stderr; Stdout=$stdout; Stderr=$stderr }
@@ -1301,19 +1417,291 @@ try {
         Assert-Contains (Get-Content -LiteralPath (Join-Path $fixture.Repo 'configs\gateway-mcp.json') -Raw) 'original-config-marker'
     }
 
-    Test-Case 'runner/provisioner 禁止 ADB UI 输入和确认决定字段' {
+    Test-Case 'runner/provisioner 禁止腿内 ADB UI 输入和确认决定字段' {
         $source = (Get-Content -LiteralPath $SourceRunner -Raw) + "`n" +
             (Get-Content -LiteralPath $SourceProvisioner -Raw) + "`n" +
             (Get-Content -LiteralPath $SourceHealthProbe -Raw)
         Assert-NotMatches $source '(?i)(input\s+(tap|text)|keyevent\s+(enter|home|keycode_home))'
         Assert-NotMatches $source '(?i)["'']decision["'']\s*:'
+        # 腿末 teardown 是唯一允许的 ADB UI 输入，且只允许这三个键码：
+        # 移到末尾、退格、返回。多出任何一个都要有人重新想一遍它会不会碰到业务动作。
+        $keycodes = @([regex]::Matches($source, '\$script:P0Key[A-Za-z]+\s*=\s*(\d+)') |
+            ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+        Assert-True (($keycodes -join ',') -eq '4,67,123') `
+            "teardown 键码白名单被改动：$($keycodes -join ',')"
+    }
+
+    Test-Case '腿末 teardown 必须排在本腿判定与取证之后' {
+        # 被拦下的腿留在输入框里的 marker 就是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
+        # 先清框等于先毁证——这条顺序是判据的一部分，用源码顺序钉住。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $semantics = $source.IndexOf('Assert-P0LegSemantics -Leg')
+        $teardown = $source.IndexOf('Invoke-P0LegTeardown -Session')
+        Assert-True ($semantics -gt 0 -and $teardown -gt 0) 'runner 里找不到判定或 teardown 调用。'
+        Assert-True ($semantics -lt $teardown) 'teardown 跑在了本腿判定之前，会毁掉带外取证的证据。'
+    }
+
+    Test-Case '腿末 teardown 清空输入框并如实写进 manifest' {
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        $marker = @(Get-Content -LiteralPath (Join-Path $fixture.State 'markers.log'))[0]
+        Assert-Contains $keyevents[0] 'keyevent 123'
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq ($marker.Length + 8)) `
+            "退格数应为本腿提交长度 +8，实际 $(Get-TestKeyCount $keyevents 67)：$($keyevents -join ' | ')"
+        # 零 UI IME 只有会话、没有可见窗口：绝不能按 BACK（会被微信当返回键退出会话页）。
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 0) '无可见键盘时不该按 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.cleanup.ok -eq $true) 'teardown 正常时不该产生 cleanup issue。'
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'clean') 'manifest 未记录 teardown 通过。'
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'session_only') `
+            "零 UI IME 应记为 session_only，实际 $($manifestJson.legs[0].teardown.keyboard)"
+        Assert-True ($manifestJson.legs[0].teardown.delete_keys -eq ($marker.Length + 8)) 'manifest 退格数不符。'
+    }
+
+    Test-Case '腿末微信不在前台时先拉回再清，不盲打' {
+        # 2026-08-01 真机实锤的主因：Stale 腿按定义切到 Home，28 次退格全打给了桌面。
+        $fixture = New-Fixture teardown_not_foreground
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'am-start.log')) `
+            '微信不在前台却没有拉起它。'
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        $marker = @(Get-Content -LiteralPath (Join-Path $fixture.State 'markers.log'))[0]
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq ($marker.Length + 8)) `
+            "拉回前台后应照常清框，实际退格 $(Get-TestKeyCount $keyevents 67)"
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'clean') `
+            "拉回前台后应清干净，实际 $($manifestJson.legs[0].teardown.verdict)"
+    }
+
+    Test-Case '拉不回前台就一个键都不发，且不谎报为已清' {
+        $fixture = New-Fixture teardown_foreground_stuck
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        # 不把三腿全绿的跑测判失败——闸门仍是下一腿那道带完整重试的预检；
+        # 但终态必须如实说出"没清"，不能报 clean（假称已清）也不能报 unverified（假称只是没核对成）。
+        Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
+        $logPath = Join-Path $fixture.State 'keyevent.log'
+        $keyevents = if (Test-Path -LiteralPath $logPath) { @(Get-Content -LiteralPath $logPath) } else { @() }
+        Assert-True ((Get-TestKeyCount $keyevents 67) -eq 0) `
+            "前台不是微信却发了退格，会打给别的应用：$($keyevents -join ' | ')"
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 0) '前台不是微信却按了 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'skipped_not_foreground') `
+            "终态应为 skipped_not_foreground，实际 $($manifestJson.legs[0].teardown.verdict)"
+        Assert-True ($manifestJson.legs[0].teardown.delete_keys -eq 0) '一个键都没发，delete_keys 却不是 0。'
+    }
+
+    Test-Case '腿末没清干净时报红并使整轮失败' {
+        $fixture = New-Fixture teardown_dirty
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '框里还有字却判整轮通过。'
+        Assert-Contains $result.Text '腿末没能清空输入框'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].verdict -ceq 'passed') '本腿判定已完成，不该被收尾失败改写。'
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'dirty') 'manifest 未记录 teardown 失败。'
+        Assert-True (@($manifestJson.cleanup.issues) -contains 'device_leg_teardown') 'cleanup 未收录残留输入。'
+    }
+
+    Test-Case '框已清空但探针不放行只算未核对，不把全绿跑测判失败' {
+        # empty=true, probe_ready=false 常见于 OCR 抖动/停错页：框是 teardown 的职责，
+        # 探针放不放行不是。算成失败等于让一次抖动把三腿全绿的跑测判死。
+        $fixture = New-Fixture teardown_probe_not_ready
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "抖动不该把整轮判失败：`n$($result.Text)"
+        Assert-Contains $result.Text '腿末收尾结果无法核对'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'unverified') '未核对不得记成 clean。'
+        Assert-True ($manifestJson.cleanup.ok -eq $true) '未核对不该计入 cleanup 失败。'
+    }
+
+    Test-Case '只有确认可见键盘才按 BACK，读不出可见性时一律不按' {
+        $visible = New-Fixture teardown_visible_keyboard
+        $null = Invoke-FixtureRunner $visible @('Allow')
+        $visibleKeys = @(Get-Content -LiteralPath (Join-Path $visible.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $visibleKeys 4) -eq 1) '确认有可见键盘时应按且只按一次 BACK。'
+
+        # mImeWindowVis 缺失（机型不报该字段）时必须什么都不做：此时按 BACK 就是拿会话页赌博。
+        $unreadable = New-Fixture teardown_ime_unreadable
+        $result = Invoke-FixtureRunner $unreadable @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "读不出输入法可见性不该判整轮失败：`n$($result.Text)"
+        $unreadableKeys = @(Get-Content -LiteralPath (Join-Path $unreadable.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $unreadableKeys 4) -eq 0) '读不出可见性却按了 BACK。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $unreadable.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'unknown') '未如实记录输入法状态读不出。'
+    }
+
+    Test-Case '键盘按不掉时有界重试并留证，但不判整轮失败' {
+        $fixture = New-Fixture teardown_keyboard_stuck
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "键盘收不起来由下一腿预检把关，不该判整轮失败：`n$($result.Text)"
+        $keyevents = @(Get-Content -LiteralPath (Join-Path $fixture.State 'keyevent.log'))
+        Assert-True ((Get-TestKeyCount $keyevents 4) -eq 2) 'BACK 重试必须有界（2 次）。'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.keyboard -ceq 'still_visible') '未如实记录键盘仍可见。'
+        Assert-True (@($manifestJson.legs[0].teardown.issues) -contains 'teardown_ime_still_visible') `
+            'teardown issues 未留下键盘收不起来的记录。'
+    }
+
+    Test-Case 'teardown 纯判据：输入法窗口状态解析与三态结论' {
+        . $SourceProvisioner
+
+        # shown 与 visible 必须分开：零 UI IME 是"会话在、窗口不可见"。
+        $sessionOnly = Get-P0ImeWindowState -Text "  mInputShown=true`n  mImeWindowVis=0x1"
+        Assert-True ($sessionOnly.shown -eq $true -and $sessionOnly.visible -eq $false) '零 UI IME 解析错误。'
+        $visible = Get-P0ImeWindowState -Text 'mInputShown=true mImeWindowVis=0x3'
+        Assert-True ($visible.visible -eq $true) 'IME_VISIBLE 位未识别。'
+        $decimal = Get-P0ImeWindowState -Text 'mInputShown=false mImeWindowVis=2'
+        Assert-True ($decimal.shown -eq $false -and $decimal.visible -eq $true) '十进制 mImeWindowVis 未识别。'
+        foreach ($text in @('', 'mInputShown=true', 'mFoo=bar')) {
+            $state = Get-P0ImeWindowState -Text $text
+            Assert-True ($null -eq $state.visible) "读不出可见性必须回 null，不能当成 false：「$text」"
+        }
+
+        Assert-True ((Get-P0TeardownVerdict -ExitCode 0 -Stdout '{"ok":true,"empty":true}').verdict -ceq 'clean') `
+            '预检放行应判 clean。'
+        Assert-True ((Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":false}').verdict -ceq 'dirty') `
+            'empty=false 是"框里还有字"的正证据，应判 dirty。'
+        Assert-True (
+            (Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":true,"probe_ready":false}').verdict -ceq 'unverified'
+        ) '框已清空、探针不放行应判 unverified。'
+        foreach ($case in @(
+            @{ Code = 1; Out = '{"ok":false,"available":false}' },
+            @{ Code = 2; Out = 'not json' },
+            @{ Code = 9; Out = '' }
+        )) {
+            Assert-True ((Get-P0TeardownVerdict -ExitCode $case.Code -Stdout $case.Out).verdict -ceq 'unverified') `
+                "退出码 $($case.Code) 应判 unverified，绝不能当成清干净了。"
+        }
+    }
+
+    Test-Case '冷启动自举判据：未触达必须与通过分得开' {
+        # 2026-08-01 批次 1 验收的教训：自举分支三次都没被触达，trace 里 bootstrap 零次出现，
+        # 而当时**没有任何判据能把"没触达"和"通过"分开**。这条用例就是钉这件事。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1')
+
+        $eventData = [pscustomobject]@{
+            foreground_known = $true; foreground_identity_source = 'event'
+            package = 'com.tencent.mm'; activity = 'com.tencent.mm.ui.LauncherUI'
+            tracked_identity = [pscustomobject]@{ bootstrapped = $false }
+        }
+        $bootstrapData = [pscustomobject]@{
+            foreground_known = $true; foreground_identity_source = 'bootstrap'
+            package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        }
+        $unsetData = [pscustomobject]@{
+            foreground_known = $false; foreground_identity_source = 'unknown'
+            package = ''; activity = ''; tracked_identity = $null
+        }
+        # 旧 APK：整个字段不存在。不能按 foreground_known 猜——"这个构建没有自举"与
+        # "自举没触发"要采取的行动完全不同。
+        $legacyData = [pscustomobject]@{ foreground_known = $true; package = 'com.tencent.mm'; activity = 'X' }
+
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $eventData) -ceq 'event') 'event 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $bootstrapData) -ceq 'bootstrap') 'bootstrap 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $unsetData) -ceq 'unset') 'unset 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $legacyData) -ceq 'unknown') '旧 APK 缺字段必须归 unknown。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $null) -ceq 'unknown') '读不到数据必须归 unknown。'
+
+        # **本用例的核心**：重绑后仍是 event（真机那次的形态）绝不能判通过。
+        $notReproduced = Get-P0BootstrapVerdict -Before 'event' -After 'event' -AfterSelfConsistent $true
+        Assert-True ($notReproduced.Verdict -ceq 'not_reproduced') '重绑后仍是 event 必须记未触达，不得判通过。'
+        Assert-Contains $notReproduced.Reason '未被触达'
+
+        $passed = Get-P0BootstrapVerdict -Before 'event' -After 'bootstrap' -AfterSelfConsistent $true
+        Assert-True ($passed.Verdict -ceq 'passed') 'event → bootstrap 应判通过。'
+
+        # unset 是自举要修的那个症状本身：自举该生效却没生效 → 失败，不是"未触达"。
+        $failed = Get-P0BootstrapVerdict -Before 'event' -After 'unset' -AfterSelfConsistent $true
+        Assert-True ($failed.Verdict -ceq 'failed') '重绑后仍 identity_unset 应判失败。'
+
+        $unavailable = Get-P0BootstrapVerdict -Before 'event' -After 'unknown' -AfterSelfConsistent $true
+        Assert-True ($unavailable.Verdict -ceq 'unavailable') '读不出字段应判无法判定。'
+
+        # 起点就已经是自举身份 → 现场不是干净的事件身份，同样不算复现。
+        $dirtyStart = Get-P0BootstrapVerdict -Before 'bootstrap' -After 'bootstrap' -AfterSelfConsistent $true
+        Assert-True ($dirtyStart.Verdict -ceq 'not_reproduced') '起点已是自举身份时不得判通过。'
+
+        # 四种结局两两不同，避免日后有人把某两种合并。
+        $verdicts = @($passed.Verdict, $notReproduced.Verdict, $failed.Verdict, $unavailable.Verdict)
+        Assert-True (@($verdicts | Select-Object -Unique).Count -eq 4) '四种结局必须互不相同。'
+    }
+
+    Test-Case '冷启动自举自洽性：自举身份不得带 activity' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1')
+
+        $good = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        })
+        Assert-True $good.Ok "干净的自举读数应自洽：$($good.Issues -join '；')"
+
+        # 自举唯一被允许做的事是补一个 package 级身份。带回 activity 说明有别的路径在编造证据，
+        # 而编造出来的 activity 会进确认前后的逐字段相等比较——比没有 activity 危险得多。
+        $withActivity = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = 'com.tencent.mm.ui.LauncherUI'
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        })
+        Assert-True (-not $withActivity.Ok) '自举身份带 activity 必须判不自洽。'
+        Assert-Contains ($withActivity.Issues -join '；') 'activity'
+
+        $notTracked = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $false }
+        })
+        Assert-True (-not $notTracked.Ok) 'tracker 自己不认是自举时必须判不自洽。'
+
+        $verdict = Get-P0BootstrapVerdict -Before 'event' -After 'bootstrap' -AfterSelfConsistent $false
+        Assert-True ($verdict.Verdict -ceq 'failed') '自举读数不自洽必须判失败，不得判通过。'
+    }
+
+    Test-Case '自举检查脚本 DryRun 零设备、零重绑' {
+        $script = Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'
+        Assert-True (Test-Path -LiteralPath $script -PathType Leaf) "缺少自举检查脚本：$script"
+        $output = & $PwshPath -NoProfile -File $script -DryRun 2>&1
+        Assert-True ($LASTEXITCODE -eq 0) "DryRun 失败：$($output -join "`n")"
+        Assert-Contains ($output -join "`n") '不连接设备'
+        # 重绑实现必须只有一份：provision 与本检查各写一遍，两边一漂移，
+        # 检查验的就不是 provision 真正做的事了。
+        $checkSource = Get-Content -LiteralPath $script -Raw
+        Assert-Contains $checkSource 'Invoke-P0AccessibilityRebind'
+        Assert-NotMatches $checkSource "settings','put','secure','enabled_accessibility_services"
+        # 零 token、不派单：整条链里不许出现 dispatch。
+        Assert-NotMatches $checkSource 'dispatch'
     }
 
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
             $PSCommandPath
         )) {
             $tokens = $null; $errors = $null
@@ -1326,7 +1714,11 @@ finally {
     # 收尾清理不再静默吞失败：删不掉通常是被 kill 的子进程还攥着句柄，重试几次；
     # 仍然删不掉就如实报出来——攒着不说，最后会以"莫名其妙的超时"形式还回来。
     $leftover = [Collections.Generic.List[string]]::new()
-    foreach ($root in $TestRoots) {
+    # P0_KEEP_FIXTURE=1 保留临时仓库副本供事后翻 adb.log / manifest。用例一失败，能看的现场
+    # 只有一行断言消息，而 fixture 目录当场就被删了——2026-08-01 排一个假 adb 的重定向坑
+    # 全靠手工复刻现场，来回烧了近一小时。开跑前的自动清场会兜住忘记关掉的情况。
+    $roots = if ($env:P0_KEEP_FIXTURE) { Write-Host "KEEP: $($TestRoots -join '；')" -ForegroundColor Yellow; @() } else { $TestRoots }
+    foreach ($root in $roots) {
         $done = $false
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             try { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop; $done = $true; break }
@@ -1348,5 +1740,21 @@ if ($script:SlowRuns.Count -gt 0) {
     }
 }
 
-Write-Host "`n离线监督式 runner：$script:Passed passed, $script:Failed failed"
+# 耗时归因：整套跑几百秒时，"该优化哪一段"必须是读出来的，不是猜出来的。
+if ($script:CaseTimes.Count -gt 0) {
+    $total = ($script:CaseTimes | Measure-Object Seconds -Sum).Sum
+    Write-Host ("`n耗时归因（用例合计 {0:0}s）：" -f $total)
+    foreach ($group in ($script:FixturePhases | Group-Object Phase | Sort-Object { -($_.Group | Measure-Object Seconds -Sum).Sum })) {
+        $sum = ($group.Group | Measure-Object Seconds -Sum).Sum
+        Write-Host ("  {0,-12} {1,3} 次 · 合计 {2,5:0}s · 均 {3,4:0.00}s · 占比 {4,3:0}%" -f
+            $group.Name, $group.Count, $sum, ($sum / $group.Count), (100 * $sum / [Math]::Max($total, 0.001)))
+    }
+    Write-Host '  最慢 5 条用例：'
+    foreach ($case in ($script:CaseTimes | Sort-Object Seconds -Descending | Select-Object -First 5)) {
+        Write-Host ("    {0,6:0.0}s  {1}" -f $case.Seconds, $case.Name)
+    }
+}
+
+$shardTag = if ($ShardCount -gt 1) { "（分片 $ShardIndex/$ShardCount，另 $script:Skipped 条归其它分片）" } else { '' }
+Write-Host "`n离线监督式 runner：$script:Passed passed, $script:Failed failed$shardTag"
 if ($script:Failed -gt 0) { exit 1 }

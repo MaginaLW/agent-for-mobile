@@ -376,30 +376,7 @@ function Start-P0DeviceProvision {
                 -Arguments @('shell','appops','set',$script:P0PackageName,'SYSTEM_ALERT_WINDOW','allow') `
                 -Operation '授予悬浮窗能力'
 
-            $enabled = (Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
-                -Operation '读取无障碍配置').Stdout.Trim()
-            if ($enabled -eq 'null') { $enabled = '' }
-            $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
-            # 值不变的 settings put 不触发 AMS observer，重装后只能等慢速回补重绑（vivo 实测 60-90s）；
-            # 先写一个必然不同的值（去掉本服务，空则 delete）再写全量，强制立即重绑。
-            $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
-            if ($withoutGateway.Count -gt 0) {
-                $null = Invoke-P0DeviceCommand -Session $session `
-                    -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
-                    -Operation '重置无障碍配置以触发重绑'
-            } else {
-                $null = Invoke-P0DeviceCommand -Session $session `
-                    -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
-                    -Operation '重置无障碍配置以触发重绑' -AllowFailure
-            }
-            $null = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
-                -Operation '启用 gateway 无障碍'
-            $null = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','put','secure','accessibility_enabled','1') `
-                -Operation '启用无障碍总开关'
+            Invoke-P0AccessibilityRebind -Session $session
             $null = Invoke-P0DeviceCommand -Session $session `
                 -Arguments @('shell','ime','enable',$script:P0ImeComponent) -Operation '启用 gateway 输入法'
             $null = Invoke-P0DeviceCommand -Session $session `
@@ -455,22 +432,7 @@ function Start-P0DeviceProvision {
         if ($a11yProbe.ExitCode -ne 0 -or $script:P0AccessibilityComponent -notin $enabledAfter) {
             throw 'setup-fail：gateway 无障碍未就绪。'
         }
-        # 重装 APK 后系统重绑无障碍服务需要数秒到数十秒（vivo 实测），单次探测必然竞态，按上限轮询。
-        $a11yBound = $false
-        $a11yBindDeadline = [DateTime]::UtcNow.AddSeconds($A11yBindTimeoutSec)
-        while ($true) {
-            $a11yBoundProbe = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
-            if ($a11yBoundProbe.ExitCode -eq 0 -and
-                (Test-P0AccessibilityComponentBound -DumpsysText $a11yBoundProbe.Stdout `
-                    -Component $script:P0AccessibilityComponent -Label $script:P0AccessibilityLabel)) {
-                $a11yBound = $true
-                break
-            }
-            if ([DateTime]::UtcNow -ge $a11yBindDeadline) { break }
-            Start-Sleep -Milliseconds 1000
-        }
-        if (-not $a11yBound) {
+        if (-not (Wait-P0AccessibilityBound -Session $session -TimeoutSec $A11yBindTimeoutSec)) {
             throw 'setup-fail：gateway 无障碍服务未实际 bound/connected。'
         }
         $imeProbe = Invoke-P0DeviceCommand -Session $session `
@@ -511,6 +473,66 @@ function Start-P0DeviceProvision {
     }
 }
 
+<#
+强制无障碍服务重绑：先写一个必然不同的值（去掉本服务，空则 delete）再写回全量。
+
+值不变的 `settings put` 不触发 AMS observer，重装后只能等慢速回补重绑（vivo 实测 60–90s）。
+
+**这一步会让 `GatewayA11yService` 重建，随之而来的是 `ForegroundWindowTracker` 归零**——
+前台身份回到 `Unknown`，直到下一个可接受的窗口状态事件到来。冷启动自举检查
+（scripts/p0-foreground-bootstrap-check.ps1）正是靠这一点构造"服务重启后没有窗口事件"
+的真实场景，所以这段必须是**唯一一份实现**：provision 与那个检查各写一遍，两边一旦漂移，
+检查验的就不是 provision 真正做的事了。
+#>
+function Invoke-P0AccessibilityRebind {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Session)
+
+    $enabled = (Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+        -Operation '读取无障碍配置').Stdout.Trim()
+    if ($enabled -eq 'null') { $enabled = '' }
+    $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
+    $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
+    if ($withoutGateway.Count -gt 0) {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
+            -Operation '重置无障碍配置以触发重绑'
+    } else {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
+            -Operation '重置无障碍配置以触发重绑' -AllowFailure
+    }
+    $null = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
+        -Operation '启用 gateway 无障碍'
+    $null = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','put','secure','accessibility_enabled','1') `
+        -Operation '启用无障碍总开关'
+}
+
+<# 等无障碍服务真正 bound/connected；重装或重绑后系统要数秒到数十秒（vivo 实测），单次探测必然竞态。 #>
+function Wait-P0AccessibilityBound {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Session,
+        [int]$TimeoutSec = 45
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    while ($true) {
+        $probe = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
+        if ($probe.ExitCode -eq 0 -and
+            (Test-P0AccessibilityComponentBound -DumpsysText $probe.Stdout `
+                -Component $script:P0AccessibilityComponent -Label $script:P0AccessibilityLabel)) {
+            return $true
+        }
+        if ([DateTime]::UtcNow -ge $deadline) { return $false }
+        Start-Sleep -Milliseconds 1000
+    }
+}
+
 function Test-P0TargetAppForeground {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Session)
@@ -548,6 +570,222 @@ function Start-P0TargetApp {
     $null = Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('shell','am','start','-n',[string]$component[0]) `
         -Operation '启动微信测试目标'
+}
+
+# ---------- 腿末 teardown（走 runner 自己的 adb 通道，不经执行器、不进 trace） ----------
+
+<#
+为什么 runner 可以在这里碰屏幕，而腿内不行：
+腿内「工具不碰微信」是为了不让**被测组件自己**制造它要证明的前置状态；teardown 跑在本腿
+判定完成、证据全部落盘之后，改不了任何已成定论的结论，性质与 Deny 腿的带外截屏一致
+（不经执行器、不进 trace、不消耗 token）。腿内业务动作仍然只能经 dispatch → gateway MCP。
+
+**顺序铁律：任何带外取证都必须排在 teardown 之前。** 被拦下的腿留在输入框里的 marker
+正是"消息没发出去"的正证据，先清框就等于先毁证。
+#>
+
+# KEYCODE_MOVE_END / KEYCODE_DEL / KEYCODE_BACK
+$script:P0KeyMoveEnd = 123
+$script:P0KeyDelete = 67
+$script:P0KeyBack = 4
+
+<#
+从 `dumpsys input_method` 读输入法窗口状态。两个字段必须分开看，合并会出人命：
+
+- `mInputShown`：输入法**会话**在不在。
+- `mImeWindowVis` 的 `IME_VISIBLE`(0x2) 位：输入法窗口**可不可见**。
+
+本仓自有 IME 是零 UI 的（`GatewayIme.onEvaluateInputViewShown()=false`），跑测期间它就是当前
+输入法——**会话在、但没有可见键盘**是常态。而 `InputMethodService` 只在 `isInputViewShown()`
+为真时才吃掉 BACK：此时按 BACK 不会"收键盘"，会被微信当成返回键直接退出会话页，把下一腿的
+前置条件毁掉。所以按 BACK 的判据只能是 visible，绝不能是 shown。
+
+任一字段读不出来一律回 $null（**不是 $false**）：调用方必须能区分"确定没有"与"读不出来"。
+#>
+function Get-P0ImeWindowState {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $shown = $null
+    $visible = $null
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        $shownMatch = [regex]::Match($Text, 'mInputShown\s*=\s*(true|false)')
+        if ($shownMatch.Success) { $shown = ($shownMatch.Groups[1].Value -ceq 'true') }
+        $visMatch = [regex]::Match($Text, 'mImeWindowVis\s*=\s*(?:0x([0-9a-fA-F]+)|(\d+))')
+        if ($visMatch.Success) {
+            $bits = if ($visMatch.Groups[1].Success) {
+                [Convert]::ToInt32($visMatch.Groups[1].Value, 16)
+            } else {
+                [int]$visMatch.Groups[2].Value
+            }
+            $visible = (($bits -band 0x2) -ne 0)
+        }
+    }
+    return [pscustomobject]@{ shown = $shown; visible = $visible }
+}
+
+<#
+teardown 的成功判据复用零 token 只读预检，不另立一套——它本来就是下一腿的前置条件。
+
+三态而非布尔（同发送后验 sent/not_sent/unverified）：把"验不了"记成"清干净了"是本仓踩过的
+原型错误。而 `dirty` 与 `unverified` 的分界要卡在**证据方向**上，不是卡在退出码上：
+
+- `empty=false` 是"框里还有字"的**正证据**，teardown 没做到自己那份活 → dirty（记 cleanup issue）。
+- `empty=true, probe_ready=false` 意味着框已经清了，探针不放行是别的原因（停错页、OCR 抖动、
+  输入法窗口）。把它也算 dirty，等于让一次 OCR 抖动把三腿全绿的跑测判成失败——那正是本仓
+  最忌讳的假信号。归 unverified：喊一句，交给下一腿带完整重试的预检去当闸门。
+#>
+function Get-P0TeardownVerdict {
+    param(
+        [Parameter(Mandatory)][int]$ExitCode,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Stdout
+    )
+    $detail = ([string]$Stdout).Trim()
+    if ($ExitCode -eq 0) { return [pscustomobject]@{ verdict = 'clean'; detail = '' } }
+    if ($ExitCode -eq 2) {
+        $empty = $null
+        if ($detail) {
+            try {
+                $payload = $detail | ConvertFrom-Json
+                $property = $payload.PSObject.Properties['empty']
+                if ($null -ne $property) { $empty = [bool]$property.Value }
+            }
+            catch { $empty = $null }
+        }
+        if ($empty -eq $false) { return [pscustomobject]@{ verdict = 'dirty'; detail = $detail } }
+        return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
+    }
+    return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
+}
+
+<#
+腿末收尾：清空微信输入框、收起键盘，并用只读预检核对结果。
+
+清框用「光标移到末尾 + 定量退格」而不是 Ctrl+A：`input keyevent` 不支持 metastate，
+全选只能靠 `input keycombination`（版本与实现都不稳）。退格数按本腿实际提交的文本长度
+加余量，并有硬上限——写死一个大数会在焦点不在输入框时把退格发到别处。
+
+**从不抛异常**：本腿的判定已经做完，收尾失败不该把一次有效结论作废；但也绝不静默——
+结果进 manifest，`dirty` 另计一条 cleanup issue。
+#>
+function Invoke-P0LegTeardown {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][int]$TypedLength,
+        [AllowEmptyString()][string]$PrecheckPath = '',
+        [int]$ExtraDeleteKeys = 8,
+        [int]$MaxDeleteKeys = 64,
+        [int]$MaxBackPresses = 2,
+        [int]$ForegroundSettleMs = 1200
+    )
+
+    $issues = [Collections.Generic.List[string]]::new()
+    $deleteKeys = [Math]::Min($MaxDeleteKeys, [Math]::Max(1, $TypedLength) + $ExtraDeleteKeys)
+    $keyboard = 'unknown'
+
+    try {
+        # 动手之前必须确认前台是微信。teardown 发的全是**盲打键码**，前台不对时那串退格
+        # 会打给别的应用（2026-08-01 真机实锤：Stale 腿按定义在 debug hook 之后切到 Home，
+        # 28 次退格全打给了桌面，探针连拿 6 次错误信封 → 报成 unverified，而输入框其实是脏的，
+        # 下一腿预检抓到 leftovers）。判别式由同一轮的 Deny 腿钉死：Deny 的 keyboard 同为
+        # already_hidden 却 clean——差别不在键盘分支，只在微信是否前台。
+        if (-not (Test-P0TargetAppForeground -Session $Session)) {
+            # 复用带守卫的 Start-P0TargetApp：它在微信已在前台时是 no-op，不会冲掉人工建立的
+            # 焦点/IME 连接（那个副作用 2026-07-24 实锤过）。这里走的是 runner 自己的 adb 通道，
+            # 不经执行器——teardown 在本腿判定与取证之后才跑，改不了任何已成定论的结论。
+            try { Start-P0TargetApp -Session $Session }
+            catch { $issues.Add('teardown_relaunch_failed') }
+            Start-Sleep -Milliseconds $ForegroundSettleMs
+        }
+        if (-not (Test-P0TargetAppForeground -Session $Session)) {
+            # 一个键都不发。此时输入框里的 marker 按定义仍在，报 clean 或 unverified 都是
+            # 谎报：前者假称已清，后者假称"只是没核对成"。给它自己的终态。
+            $issues.Add('teardown_not_foreground')
+            return [pscustomobject]@{
+                verdict = 'skipped_not_foreground'
+                detail = '腿末微信不在前台，未发送任何按键；输入框里的 marker 按定义仍在，需人工清或由下一腿预检拦下'
+                keyboard = 'unknown'
+                delete_keys = 0
+                issues = @($issues | Select-Object -Unique)
+                cleanup_issues = @()
+            }
+        }
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','input','keyevent',"$script:P0KeyMoveEnd") `
+            -Operation '腿末光标移到输入框末尾' -AllowFailure
+        $deleteArgs = @('shell','input','keyevent') + @(1..$deleteKeys | ForEach-Object { "$script:P0KeyDelete" })
+        $delete = Invoke-P0DeviceCommand -Session $Session -Arguments $deleteArgs `
+            -Operation '腿末清空输入框' -AllowFailure -TimeoutSec 60
+        if ($delete.ExitCode -ne 0) { $issues.Add('teardown_clear_keys') }
+
+        for ($press = 0; $press -le $MaxBackPresses; $press++) {
+            $probe = Invoke-P0DeviceCommand -Session $Session -Arguments @('shell','dumpsys','input_method') `
+                -Operation '腿末查询输入法窗口状态' -AllowFailure
+            $state = if ($probe.ExitCode -eq 0) {
+                Get-P0ImeWindowState -Text $probe.Stdout
+            } else {
+                [pscustomobject]@{ shown = $null; visible = $null }
+            }
+            if ($null -eq $state.visible) {
+                # 读不出可见性就**不按 BACK**：宁可把键盘留给下一腿的预检拦下，
+                # 也不冒"BACK 被微信当返回键、直接退出会话页"的险。
+                $keyboard = 'unknown'
+                $issues.Add('teardown_ime_state_unknown')
+                break
+            }
+            if (-not $state.visible) {
+                # 会话在、窗口不可见，正是零 UI IME 的常态：没有键盘可收，也没什么可做。
+                $keyboard = if ($state.shown -eq $true) { 'session_only' }
+                    elseif ($press -eq 0) { 'already_hidden' }
+                    else { 'hidden' }
+                break
+            }
+            if ($press -eq $MaxBackPresses) {
+                $keyboard = 'still_visible'
+                $issues.Add('teardown_ime_still_visible')
+                break
+            }
+            $null = Invoke-P0DeviceCommand -Session $Session `
+                -Arguments @('shell','input','keyevent',"$script:P0KeyBack") `
+                -Operation '腿末收起键盘' -AllowFailure
+        }
+    }
+    catch {
+        $issues.Add('teardown_adb_failed')
+    }
+
+    $verdict = 'unverified'
+    $detail = '未提供只读预检，无法核对收尾结果'
+    if (-not [string]::IsNullOrWhiteSpace($PrecheckPath) -and (Test-Path -LiteralPath $PrecheckPath -PathType Leaf)) {
+        try {
+            $check = Invoke-P0ExternalText -FilePath $PrecheckPath `
+                -Arguments @('-ConfigPath', $Session.ConfigPath, '-NotReadyRetries', '5', '-NotReadyRetryDelayMs', '1500') `
+                -Operation '腿末收尾核对' -AllowFailure -TimeoutSec 60
+            $resolved = Get-P0TeardownVerdict -ExitCode $check.ExitCode -Stdout ([string]$check.Stdout)
+            $verdict = $resolved.verdict
+            $detail = $resolved.detail
+        }
+        catch {
+            $verdict = 'unverified'
+            $detail = '收尾核对调用失败'
+        }
+    }
+    # 只有"框里还有字"这一条进 cleanup（会把整轮判失败）：它是 teardown 自己那份活的
+    # 正证据，且不受设备差异影响。键盘与 dumpsys 字段这两类是新路径、依赖机型输出格式，
+    # 让它们能把三腿全绿的跑测判失败风险太大——下一腿的预检本来就是它们的硬闸门。
+    $cleanupIssues = [Collections.Generic.List[string]]::new()
+    if ($verdict -eq 'dirty') {
+        $issues.Add('device_leg_teardown')
+        $cleanupIssues.Add('device_leg_teardown')
+    }
+
+    return [pscustomobject]@{
+        verdict = $verdict
+        detail = $detail
+        keyboard = $keyboard
+        delete_keys = $deleteKeys
+        issues = @($issues | Select-Object -Unique)
+        cleanup_issues = @($cleanupIssues)
+    }
 }
 
 function Set-P0PrivateControlFile {

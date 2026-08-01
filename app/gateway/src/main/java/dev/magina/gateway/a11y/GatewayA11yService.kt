@@ -170,6 +170,8 @@ class GatewayA11yService : AccessibilityService() {
             .put("foreground_known", foreground.known)
             // 前台身份判不出来时，让失败的那次调用自己带上原因，不必事后另起一次诊断。
             .put("foreground_reason", foreground.reason.name.lowercase())
+            // known=true 还不够：自举来的身份没有 Activity，安全门要据此在确认卡上说明白。
+            .put("foreground_identity_source", identitySourceName(foreground))
             .put("revision", revision)
             .put("keyboard", keyboardState())
             .put("screen", "on") // 服务在收事件即亮屏；灭屏感知 M1b 接 PowerManager
@@ -177,15 +179,40 @@ class GatewayA11yService : AccessibilityService() {
     }
 
     /**
-     * 冷启动仅从活动应用窗口取 package-only 后备；overlay/IME root 不参与，root 为空则保持未知。
+     * 冷启动仅从活动应用窗口取 package 级身份；overlay/IME root 不参与，root 为空则保持未知。
      */
-    private fun currentForeground(): ResolvedForeground {
-        val currentWindow = applicationWindow(settledWindows())
+    private fun currentForeground(): ResolvedForeground = resolveForegroundOf(settledWindows())
+
+    /**
+     * 解析前台身份；身份从未建立过（服务刚重启、没人切过窗口）时先做一次冷启动自举。
+     *
+     * 自举写进 tracker 是**幂等的读取副作用**：它只把"正在被解析的这一份窗口列表里、活动
+     * 应用窗口自己上报的包名"固化下来，不引入窗口列表以外的任何信息，因此挂在只读路径上
+     * 不会让结论依赖谁先调用。约束与失败方向见
+     * [ForegroundWindowTracker.bootstrapFromWindow]。
+     */
+    private fun resolveForegroundOf(currentWindows: List<AccessibilityWindowInfo>): ResolvedForeground {
+        val currentWindow = applicationWindow(currentWindows)
+        val rootPackage = runCatching { currentWindow?.root?.packageName?.toString() }.getOrNull()
+        if (currentWindow != null && !rootPackage.isNullOrEmpty()) {
+            foregroundWindowTracker.bootstrapFromWindow(
+                applicationWindowId = currentWindow.id,
+                packageName = rootPackage,
+                windows = foregroundWindows(currentWindows),
+            )
+        }
         return resolveForeground(
             identity = foregroundWindowTracker.current(),
             applicationWindowId = currentWindow?.id,
-            applicationWindowPackageName = currentWindow?.root?.packageName?.toString(),
+            applicationWindowPackageName = rootPackage,
         )
+    }
+
+    /** 身份来源：事件得来 / 冷启动自举得来 / 尚未建立。 */
+    private fun identitySourceName(resolved: ResolvedForeground): String = when {
+        !resolved.known -> "unknown"
+        resolved.bootstrapped -> "bootstrap"
+        else -> "event"
     }
 
     /**
@@ -196,12 +223,10 @@ class GatewayA11yService : AccessibilityService() {
     fun foregroundDiagnostics(): JSONObject {
         val currentWindows = windows
         val selected = applicationWindow(currentWindows)
+        // 先解析（必要时自举）再读 identity：否则同一次诊断里会出现"resolved 已自举、
+        // tracked_identity 仍是 null"这种自相矛盾的输出。
+        val resolved = resolveForegroundOf(currentWindows)
         val identity = foregroundWindowTracker.current()
-        val resolved = resolveForeground(
-            identity = identity,
-            applicationWindowId = selected?.id,
-            applicationWindowPackageName = runCatching { selected?.root?.packageName?.toString() }.getOrNull(),
-        )
         val windowsJson = JSONArray()
         for (window in currentWindows) {
             val b = Rect().also(window::getBoundsInScreen)
@@ -238,6 +263,7 @@ class GatewayA11yService : AccessibilityService() {
             .put("activity", resolved.activityName)
             .put("foreground_known", resolved.known)
             .put("foreground_reason", resolved.reason.name.lowercase())
+            .put("foreground_identity_source", identitySourceName(resolved))
             .put("selected_window_id", selected?.id ?: JSONObject.NULL)
             .put(
                 "tracked_identity",
@@ -246,6 +272,7 @@ class GatewayA11yService : AccessibilityService() {
                         .put("window_id", it.windowId)
                         .put("package", it.packageName)
                         .put("activity", it.activityName)
+                        .put("bootstrapped", it.bootstrapped)
                 } ?: JSONObject.NULL,
             )
             .put("now_ms", System.currentTimeMillis())
@@ -263,7 +290,9 @@ class GatewayA11yService : AccessibilityService() {
         else -> "other_$type"
     }
 
-    private fun foregroundWindows(): List<ForegroundWindow> = windows.map { window ->
+    private fun foregroundWindows(
+        source: List<AccessibilityWindowInfo> = windows,
+    ): List<ForegroundWindow> = source.map { window ->
         ForegroundWindow(
             id = window.id,
             type = when (window.type) {
@@ -664,11 +693,10 @@ class GatewayA11yService : AccessibilityService() {
         val revisionBefore = rev.get()
         val currentWindows = windows
         val applicationWindow = applicationWindow(currentWindows)
-        val resolved = resolveForeground(
-            identity = foregroundWindowTracker.current(),
-            applicationWindowId = applicationWindow?.id,
-            applicationWindowPackageName = applicationWindow?.root?.packageName?.toString(),
-        )
+        // 与 ctx 走同一条解析（含冷启动自举）：否则服务重启后 ctx 已能给出身份、这里却仍报
+        // unknown，动作会在最后一道新鲜度守卫上莫名其妙地失败。自举不改 revision，不影响
+        // 本段"期间不得有事件"的原子性。
+        val resolved = resolveForegroundOf(currentWindows)
         val exposed = exposedWindows(currentWindows)
         val blockingOverlay = hasBlockingOverlay(exposed, applicationWindow?.id)
         val imeVisible = currentWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }

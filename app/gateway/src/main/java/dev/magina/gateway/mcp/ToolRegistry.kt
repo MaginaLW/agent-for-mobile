@@ -321,6 +321,128 @@ object ToolRegistry {
         }
     }
 
+    /**
+     * 一次工具调用期间、安全门几个回调之间共享的可变状态。
+     *
+     * 提出来只为把 `callInternal` 里那段 78 行的 [SafetyGate] 构造搬进 [newSafetyGate]——
+     * 原来这些是局部 `var`，闭包直接捕获；换成字段后捕获的是同一个对象，可见性与写入顺序
+     * 与之前逐字相同。**字段语义一个都没改。**
+     */
+    private class CallScope(val toolName: String, val argsFingerprint: String) {
+        /** 进审计 note 的安全轨迹；确认、复核、重试记录失败都往这上面追加。 */
+        var safetyNote: String = ""
+
+        /** 上下文读了几次；>1 即确认后复核发生过。 */
+        var contextReads: Int = 0
+        var testSession: TestControlSession = InactiveTestControlSession
+        var testAttempt: TestConfirmationAttempt? = null
+    }
+
+    /**
+     * 装配这一次调用的安全门。纯搬运：策略、五个回调的内容与顺序与拆分前逐字一致，
+     * 只是把捕获局部 `var` 换成读写 [CallScope] 的字段。
+     */
+    private fun newSafetyGate(call: CallScope): SafetyGate = SafetyGate(
+        policy = SafetyPolicy(
+            // 技能包资产的 danger_words 即 I 级、send_words 即 II 级（见 SafetyPolicy 类注释）。
+            irreversibleWords = Gateway.skills.dangerWords,
+            retractableWords = Gateway.skills.sendWords,
+            sensitiveTargets = Gateway.skills.sensitiveTargets,
+        ),
+        confirmer = { decision ->
+            call.safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
+            val attempt = TestConfirmationAttempt(
+                confirmationId = ConfirmationIdGenerator.next(),
+                toolName = decision.toolName,
+                action = decision.action,
+                initialPackage = decision.initialPackage,
+                inputLength = decision.inputLength,
+                inputSha256 = decision.inputSha256,
+            )
+            call.testAttempt = attempt
+            try {
+                ConfirmOverlay.ask(
+                    context = Gateway.appContext,
+                    actionDesc = decision.cardText(attempt.confirmationId),
+                    onShownBeforeButtonsEnabled = { cardTarget ->
+                        call.testSession = Gateway.testControl.onConfirmationShown(attempt) {
+                            captureConfirmCardEvidence(cardTarget)
+                        }
+                    },
+                    onDecisionObserved = { observed ->
+                        Gateway.testControl.onConfirmationDecision(call.testSession, observed)
+                    },
+                ).also { confirmed ->
+                    call.safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
+                }
+            } catch (error: Throwable) {
+                call.safetyNote += ";confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}"
+                throw error
+            }
+        },
+        contextProvider = { frozenArgs ->
+            call.contextReads += 1
+            safetyContext(call.toolName, frozenArgs).also {
+                if (call.contextReads > 1) call.safetyNote += ";context=rechecked"
+            }
+        },
+        onExecutionFailure = { error ->
+            if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
+                Gateway.retryGuard.recordFailure(call.toolName, call.argsFingerprint)
+            }
+        },
+        afterConfirmationAllowed = { confirmedTool, confirmedArgs, initialContext ->
+            val attempt = call.testAttempt ?: throw GatewayError(
+                ErrorCode.E_INTERNAL,
+                "确认完成但缺少同一次确认编号",
+                channel = "safety",
+            )
+            val a11y = GatewayA11yService.require()
+            Gateway.testControl.afterAllowed(
+                session = call.testSession,
+                attempt = attempt,
+                performHome = { a11y.globalKey("home") },
+                foreground = {
+                    val current = a11y.ctx(Gateway.caps())
+                    TestForeground(
+                        known = current.optBoolean("foreground_known", false),
+                        packageName = current.optString("app"),
+                    )
+                },
+            )
+        },
+        afterExecutionSuccess = { executedTool, executedContext ->
+            if (
+                executedTool == "press_key" &&
+                executedContext.target?.preparedTargetEvidence != null
+            ) {
+                Gateway.preparedTargetEvidence.clear()
+            }
+        },
+    )
+
+    /**
+     * a11y 不在时的降级 ctx。与正常 ctx 一样恒定带上 `audit_write_failures`——
+     * 审计写不进去而动作照常执行，是比动作失败更坏的状态（事后回看会以为这些动作从没发生过）。
+     *
+     * **恒定上报，不做"仅 >0 才带"**：字段缺席时大脑分不清"没失败"与"装的是旧 APK"，
+     * 与本仓 card_visible 用 unknown 而非省略的 fail-closed 惯例一致。
+     *
+     * 已知局限：本次调用自己的审计行是在这之后才写的，所以这一次的失败要到**下一次**调用
+     * 才出现在信封里；若这是本轮最后一次调用就看不到。跑测侧另有 audit.jsonl 的独立采集兜底，
+     * 不依赖这个字段做最终判定。
+     */
+    private fun ctxSnapshot(): JSONObject {
+        val ctx = GatewayA11yService.instance?.ctx(Gateway.caps())
+            ?: JSONObject().put("app", "").put("activity", "")
+                .put("foreground_known", false).put("revision", -1)
+                .put("keyboard", JSONObject().put("visible", false).put("height", 0))
+                .put("caps", JSONArray(Gateway.caps()))
+                .put("note", "a11y 未开启，ctx 降级")
+        ctx.put("audit_write_failures", Gateway.audit.writeFailures)
+        return ctx
+    }
+
     private fun callInternal(name: String, args: JSONObject): ToolResult {
         val spec = byName[name]
         invalidateInputEvidenceForMutation(
@@ -340,42 +462,20 @@ object ToolRegistry {
         )
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
-        val fingerprint = SafetyPolicy.fingerprint(args)
+        val call = CallScope(toolName = name, argsFingerprint = SafetyPolicy.fingerprint(args))
         val auditArgs = sanitizeAuditArgs(name, args)
-
-        fun ctxNow(): JSONObject {
-            val ctx = GatewayA11yService.instance?.ctx(Gateway.caps())
-                ?: JSONObject().put("app", "").put("activity", "")
-                    .put("foreground_known", false).put("revision", -1)
-                    .put("keyboard", JSONObject().put("visible", false).put("height", 0))
-                    .put("caps", JSONArray(Gateway.caps()))
-                    .put("note", "a11y 未开启，ctx 降级")
-            // 审计写不进去时必须让大脑当场看见：证据链断了而动作照常执行，
-            // 是比动作失败更坏的状态（事后回看会以为这些动作从没发生过）。
-            //
-            // **恒定上报，不做"仅 >0 才带"**：字段缺席时大脑分不清"没失败"与"装的是旧 APK"，
-            // 与本仓 card_visible 用 unknown 而非省略的 fail-closed 惯例一致。
-            //
-            // 已知局限：本次调用自己的审计行是在 ctxNow() 之后才写的，所以这一次的失败要到
-            // **下一次**调用才出现在信封里；若这是本轮最后一次调用就看不到。跑测侧另有
-            // audit.jsonl 的独立采集兜底，不依赖这个字段做最终判定。
-            ctx.put("audit_write_failures", Gateway.audit.writeFailures)
-            return ctx
-        }
-
-        var safetyNote = ""
 
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
             Gateway.audit.write(
                 auditId, name, auditArgs, code, channel, SystemClock.elapsedRealtime() - start,
-                note = safetyNote,
+                note = call.safetyNote,
             )
             return ToolResult(env, image)
         }
 
         if (spec == null) {
             val e = GatewayError(ErrorCode.E_INVALID_ARG, "未知工具：$name")
-            return finish(Envelope.err(e, ctxNow(), auditId), e.code.name, "")
+            return finish(Envelope.err(e, ctxSnapshot(), auditId), e.code.name, "")
         }
 
         return try {
@@ -394,92 +494,13 @@ object ToolRegistry {
                     fallback = "press_key(home) 离开后继续任务，并在报告中说明",
                 )
             }
-            var contextReads = 0
-            var testSession: TestControlSession = InactiveTestControlSession
-            var testAttempt: TestConfirmationAttempt? = null
-            val gate = SafetyGate(
-                policy = SafetyPolicy(
-                    dangerWords = Gateway.skills.dangerWords,
-                    sendWords = Gateway.skills.sendWords,
-                    sensitiveTargets = Gateway.skills.sensitiveTargets,
-                ),
-                confirmer = { decision ->
-                    safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
-                    val attempt = TestConfirmationAttempt(
-                        confirmationId = ConfirmationIdGenerator.next(),
-                        toolName = decision.toolName,
-                        action = decision.action,
-                        initialPackage = decision.initialPackage,
-                        inputLength = decision.inputLength,
-                        inputSha256 = decision.inputSha256,
-                    )
-                    testAttempt = attempt
-                    try {
-                        ConfirmOverlay.ask(
-                            context = Gateway.appContext,
-                            actionDesc = decision.cardText(attempt.confirmationId),
-                            onShownBeforeButtonsEnabled = { cardTarget ->
-                                testSession = Gateway.testControl.onConfirmationShown(attempt) {
-                                    captureConfirmCardEvidence(cardTarget)
-                                }
-                            },
-                            onDecisionObserved = { observed ->
-                                Gateway.testControl.onConfirmationDecision(testSession, observed)
-                            },
-                        ).also { confirmed ->
-                            safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
-                        }
-                    } catch (error: Throwable) {
-                        safetyNote += ";confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}"
-                        throw error
-                    }
-                },
-                contextProvider = { frozenArgs ->
-                    contextReads += 1
-                    safetyContext(name, frozenArgs).also {
-                        if (contextReads > 1) safetyNote += ";context=rechecked"
-                    }
-                },
-                onExecutionFailure = { error ->
-                    if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
-                        Gateway.retryGuard.recordFailure(name, fingerprint)
-                    }
-                },
-                afterConfirmationAllowed = { confirmedTool, confirmedArgs, initialContext ->
-                    val attempt = testAttempt ?: throw GatewayError(
-                        ErrorCode.E_INTERNAL,
-                        "确认完成但缺少同一次确认编号",
-                        channel = "safety",
-                    )
-                    val a11y = GatewayA11yService.require()
-                    Gateway.testControl.afterAllowed(
-                        session = testSession,
-                        attempt = attempt,
-                        performHome = { a11y.globalKey("home") },
-                        foreground = {
-                            val current = a11y.ctx(Gateway.caps())
-                            TestForeground(
-                                known = current.optBoolean("foreground_known", false),
-                                packageName = current.optString("app"),
-                            )
-                        },
-                    )
-                },
-                afterExecutionSuccess = { executedTool, executedContext ->
-                    if (
-                        executedTool == "press_key" &&
-                        executedContext.target?.preparedTargetEvidence != null
-                    ) {
-                        Gateway.preparedTargetEvidence.clear()
-                    }
-                },
-            )
+            val gate = newSafetyGate(call)
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
-                Gateway.retryGuard.checkAllowed(name, fingerprint)
+                Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
                 val result = executeValidated(spec, frozenArgs, validatedContext)
-                runCatching { Gateway.retryGuard.recordSuccess(name, fingerprint) }
+                runCatching { Gateway.retryGuard.recordSuccess(name, call.argsFingerprint) }
                     .onFailure { error ->
-                        safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
+                        call.safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
                     }
                 result
             }
@@ -490,14 +511,14 @@ object ToolRegistry {
                 image = data.optString("base64").ifEmpty { null }
                 data.remove("base64")
             }
-            finish(Envelope.ok(data, ctxNow(), auditId), "OK", channelOf(name), image)
+            finish(Envelope.ok(data, ctxSnapshot(), auditId), "OK", channelOf(name), image)
         } catch (e: GatewayError) {
             if (name == "type_text") Gateway.preparedTargetEvidence.clear()
-            finish(Envelope.err(e, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), e.code.name, e.channel)
+            finish(Envelope.err(e, runCatching { ctxSnapshot() }.getOrElse { JSONObject() }, auditId), e.code.name, e.channel)
         } catch (e: Exception) {
             if (name == "type_text") Gateway.preparedTargetEvidence.clear()
             val ge = GatewayError(ErrorCode.E_INTERNAL, "${e.javaClass.simpleName}: ${e.message}")
-            finish(Envelope.err(ge, runCatching { ctxNow() }.getOrElse { JSONObject() }, auditId), "E_INTERNAL", "")
+            finish(Envelope.err(ge, runCatching { ctxSnapshot() }.getOrElse { JSONObject() }, auditId), "E_INTERNAL", "")
         }
     }
 
@@ -578,6 +599,7 @@ object ToolRegistry {
         val activityName = ctx.optString("activity")
         val revision = ctx.optLong("revision", -1)
         val foregroundKnown = ctx.optBoolean("foreground_known", false)
+        val identityBootstrapped = ctx.optString("foreground_identity_source") == "bootstrap"
         if (!foregroundKnown) return SafetyContext(
             packageName = packageName,
             activityName = activityName,
@@ -621,6 +643,7 @@ object ToolRegistry {
             activityName = activityName,
             revision = revision,
             foregroundKnown = true,
+            identityBootstrapped = identityBootstrapped,
             target = target,
         )
     }
