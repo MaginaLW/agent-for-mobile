@@ -101,7 +101,27 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 批次 | 钉住 commit | 来源分支 | 状态 | 备注 |
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
-| 2 | — | 待 A 道实现 | **可开工**（四道题已拍板、布局方案 `6c43bf6` 就绪） | 通知栏审批 |
+| 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **待验收**（离线复核已过） | 通知栏审批，验收范围见下 |
+
+**批次 2 待验收（`2b5bc90`）。** 主会话独立复核：`check.ps1` 五项全绿，JVM 单测 **308 → 331**
+（Arbiter 8 / 通知文案 7 / 限次 8）；四条决定逐条查过源码——FSI 在 manifest 里只是**注释**、
+`uses-permission` 清单确无此项；`setAuthenticationRequired` 缺席处写明是用户明示选择并附重开条件；
+`StaleReconfirmGuard` 上限 2、第 3 次抛 `E_CONFIRM_REQUIRED` 要求 `[AWAIT_CONFIRM]`（**是拒绝，
+不是静默放弃**）；nonce 只进 PendingIntent extras，receiver 唯一那条 `Log` 打的是
+`confirmationId`/`outcome` 而非 nonce，`exported=false`。
+
+**验收比批次 1 多三条**，因为 **Android 侧（Notification 构建、PendingIntent、receiver 分发）
+没有 JVM 用例**——判据性逻辑已全部抽成纯 Kotlin 并钉住，Android 侧只剩装配，而装配只能真机验：
+
+1. 免解锁批准真的可用，且**锁屏只显示脱敏行**（明文不上锁屏）
+2. **没有任何路径依赖 FSI**——权限没声明，若有路径偷偷依赖它会静默失效
+3. 连续两次 stale 后，**第 3 次确实停在 `[AWAIT_CONFIRM]`**
+
+**两处判断主会话已裁决**：①II 级**不编造撤回时长**（撤回窗口由目标 App 定，网关无从得知；
+只点名微信 2 分钟、其余"以该 App 规则为准"）——与"自举身份不许编造 activity"同一条规矩，
+spec 字面在这里是错的，改实现去迁就它才是退步。②A 道抓到一条**靠巧合存活的过时断言**
+（「档位不得出现在确认卡上」被本批次取代，而当时 I 级文案恰好不含"不可逆"三字所以至今仍绿）
+——"用例把错误行为钉成预期"的变体，比写错更难发现。
 
 **批次 1 二次验收通过（run `20260801T143739-ff105d203a35`）**：三腿**一次连跑**，
 `status=passed`、`cleanup.ok=true`、三腿 `teardown.verdict` **均 `clean`**，人只点 3 次确认卡、
