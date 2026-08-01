@@ -85,7 +85,16 @@ object ConfirmNotifier {
                 )
             )
             .setCategory(Notification.CATEGORY_CALL)
-            .setOngoing(true)
+            // **刻意不调 setOngoing(true)。** 2026-08-01 批次 2 真机验收：用户锁屏后根本看不到
+            // 这条通知，两次 timed_out；系统与厂商的每 App 锁屏开关都是开的、通道 importance=4、
+            // 通知确实 posted 且 actions=3 带 publicVersion、fullscreenIntent=null。
+            // 同机旁证很硬：本包那条**常驻的前台服务通知（ongoing）同样不上锁屏**。
+            // ongoing 通知带 FLAG_ONGOING_EVENT，锁屏通知列表历来把它过滤掉——而批次 2 的
+            // 全部收益就是"锁屏上点一下"，为了防误划走而牺牲掉整个功能是本末倒置。
+            //
+            // 代价是用户可以把它划掉。**划掉不是决定**：悬浮卡还在屏幕上，60 秒超时照旧，
+            // 绝不会因为一次误划而产生 allowed/denied。所以这里也没有 setDeleteIntent——
+            // 给"划走"接一个回执，等于给它安一个决定的语义。
             .setAutoCancel(false)
             // 通知本体只放脱敏版本上锁屏；完整三项锚点要解锁展开才看得到。
             .setVisibility(Notification.VISIBILITY_PRIVATE)

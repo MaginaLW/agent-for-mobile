@@ -1763,6 +1763,88 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-True (@($verdicts | Select-Object -Unique).Count -eq 3) '三态必须互不相同。'
     }
 
+    Test-Case '派单被提前掐掉时台账必须留痕，且三类归因分得开' {
+        # 2026-08-01 批次 2 验收：一次误点拒绝 + 两次确认超时，三轮跑测在台账上**零留痕**——
+        # runner 检出决定不符即 kill dispatch，dispatch 来不及写自己那行。
+        # 消耗了真人时间却完全不可见，而台账存在的全部意义就是让烧掉的东西可见。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1')
+
+        # 三类必须分得开：它们要采取的行动完全不同。
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'denied') -ceq 'safety-denied') `
+            '本腿期望允许而真人点了拒绝 → safety-denied。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'denied' -Actual 'allowed') -ceq 'decision-mismatch') `
+            'Deny 腿被批准是最严重的一种，必须单独归因。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual '') -ceq 'confirm-timeout') `
+            '没等到任何决定 → confirm-timeout。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'timed_out') -ceq 'confirm-timeout') `
+            '设备侧报 timed_out 同样归 confirm-timeout。'
+        # 决定与预期一致时不该有 fail_reason——这条路径不写台账行，但函数本身不能乱归因。
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'denied' -Actual 'denied') -ceq '') 'Deny 腿如愿被拒不算失败。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'allowed') -ceq '') '如愿被允许不算失败。'
+        $reasons = @('safety-denied', 'decision-mismatch', 'confirm-timeout')
+        Assert-True (@($reasons | Select-Object -Unique).Count -eq 3) '三类归因必须互不相同。'
+
+        # 表头只有一份：两处各写一遍必然漂移，而台账列的语义漂移正是归因失效的开始。
+        $dispatchSource = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1') -Raw
+        Assert-NotMatches $dispatchSource "time,slug,leg,brain,model"
+        Assert-Contains $dispatchSource 'Add-P0LedgerRow'
+
+        # 真写一行看看：成本列**留空而不是填 0**——token 确实烧了，只是没机会汇报，填 0 是假数据。
+        $ledger = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-ledger-" + [guid]::NewGuid().ToString('N') + '.csv')
+        try {
+            Add-P0LedgerRow -LedgerPath $ledger -Slug 'p0-safety-deny-x' -Leg 1 -Brain 'claude' -Model '' `
+                -Result 'aborted' -Note 'runner 提前终止 | expected=denied observed=allowed' -FailReason 'decision-mismatch'
+            $rows = @(Import-Csv -LiteralPath $ledger)
+            Assert-True ($rows.Count -eq 1) '应恰好写入一行。'
+            Assert-True ($rows[0].result -ceq 'aborted') "result 应为 aborted，实际 $($rows[0].result)"
+            Assert-True ($rows[0].fail_reason -ceq 'decision-mismatch') 'fail_reason 未落盘。'
+            Assert-True ($rows[0].cost_usd -ceq '') '成本未知时必须留空，不得填 0 冒充已知。'
+            Assert-True ($rows[0].out_tok -ceq '') 'token 未知时必须留空。'
+            Assert-Contains $rows[0].note 'observed=allowed'
+        }
+        finally { Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case '审批通知不得是 ongoing，且状态要能被读出来' {
+        # 2026-08-01 批次 2 验收：锁屏上根本看不到审批通知，两次 timed_out。
+        # 最强候选是 setOngoing(true)——锁屏通知列表历来过滤 ongoing 通知，
+        # 同机旁证是本包那条常驻前台服务通知同样不上锁屏。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        # 只匹配**调用**，不匹配注释——注释里正解释着为什么不调它。
+        Assert-NotMatches $notifier '(?m)^\s*\.setOngoing\('
+        # 划走不是决定：给"划走"接一个回执等于给它安一个决定的语义。
+        Assert-NotMatches $notifier '(?m)^\s*\.setDeleteIntent\('
+
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        # FLAG_ONGOING_EVENT = 0x2。下一轮不必再猜：dump 里直接读得到。
+        $ongoing = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000062
+    mVisibility=0
+'@
+        Assert-True ($ongoing.Found) '应认出审批通道那条记录。'
+        Assert-True ($ongoing.Ongoing -eq $true) 'flags 含 0x2 时应判 ongoing。'
+        Assert-True ($ongoing.Visibility -eq 0) 'visibility 应被读出。'
+
+        $notOngoing = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000060
+'@
+        Assert-True ($notOngoing.Ongoing -eq $false) 'flags 不含 0x2 时应判非 ongoing。'
+        Assert-True ($null -eq $notOngoing.Visibility) '读不到的字段必须回 null，不许猜。'
+
+        # 只认审批通道那一段：同一份 dump 里还有前台服务那条常驻通知（它就是 ongoing 的），
+        # 混起来读出来的 flags 正好会得出最容易误导的结论。
+        $otherChannel = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=1 channel=gateway)
+    flags=0x00000062
+'@
+        Assert-True (-not $otherChannel.Found) '不得把前台服务那条通知当成审批通知。'
+        Assert-True (-not (Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText '').Found) '空 dump 应判未找到。'
+    }
+
     Test-Case '带外验证必须排在 teardown 之前（先清框就是先毁证）' {
         # teardown 会清空输入框，而"marker 原封不动留在框里"是这条验证唯一的强证据。
         # 顺序颠倒的后果是带外验证永远读不到正证据、永远 inconclusive——**而且看起来像正常运行**。

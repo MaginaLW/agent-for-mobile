@@ -371,6 +371,60 @@ function Get-P0InputBarTop {
 }
 
 <#
+抓一次审批通知的真实状态（零 token，走 runner 自己的 adb 通道）。
+
+**存在的理由**：2026-08-01 批次 2 验收，用户锁屏后看不到审批通知，而"为什么"当时只能靠猜——
+posted 了、importance 也对、actions 也在，唯独没人能说出系统把它过滤掉的理由。
+这一份 dump 让下一轮直接读 flags，不必再拿真人的手机时间去试。
+
+**不用 `--noredact`**：那会把通知正文（含明文预览）原样打出来。这里只要 flags/visibility。
+#>
+function Save-P0ApprovalNotificationState {
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    try {
+        $dump = Invoke-P0DeviceCommand -Session $Session -Arguments @('shell','dumpsys','notification') `
+            -Operation '读取审批通知状态' -AllowFailure -TimeoutSec 30
+        if ($dump.ExitCode -ne 0) { return $null }
+        Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
+        return Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
+    }
+    catch { return $null }
+}
+
+<#
+派单被提前掐掉时补一行台账。
+
+runner 检出真人决定与本腿预期不符就立刻 kill dispatch——这是对的（Deny 腿若真被批准，
+再让它跑下去就会真的发出去），代价是 dispatch 来不及写自己那行。2026-08-01 三轮跑测
+（一次误点拒绝、两次确认超时）因此**零留痕**：消耗了真人时间却完全不可见。
+
+**成本列留空而不是填 0**：token 确实烧了，只是被 kill 得没机会汇报，填 0 是假数据。
+留空读起来就是"这一轮发生过，花了多少不知道"，那才是实情。
+#>
+function Write-P0AbortedLegLedgerRow {
+    param(
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Expected,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Actual
+    )
+    try {
+        $reason = Get-P0AbortedLegFailReason -Expected $Expected -Actual $Actual
+        $observed = if ([string]::IsNullOrWhiteSpace($Actual)) { 'none' } else { $Actual }
+        Add-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') `
+            -Slug $Slug -Leg 1 -Brain $Brain -Model '' -Result 'aborted' `
+            -Note "runner 提前终止 | expected=$Expected observed=$observed | 成本未知（dispatch 被 kill）" `
+            -FailReason $reason
+    }
+    catch {
+        # 补台账失败不该盖过真正的失败原因；只提示，不改变调用方随后抛出的那个异常。
+        Write-Host "警告：未能补写台账行（$($_.Exception.Message)）。" -ForegroundColor Yellow
+    }
+}
+
+<#
 Deny 腿带外验证（批次 3）：经 runner 自己的 adb 通道截屏 + 系统 OCR 比对。
 
 **不经执行器、不进 trace、不花 token。** Deny 腿的四条判据全部来自被测组件自报
@@ -1171,12 +1225,23 @@ try {
                         Write-Host "[$leg] 警告：确认截图里没有拍到确认卡本身，这张证据无法证明现场核对内容。" -ForegroundColor Red
                     }
                     $prompted = $true
+                    # 卡与通知都已就位、正等真人决定——这是唯一能看到审批通知真实状态的窗口。
+                    # 零 token、走 runner 自己的 adb 通道。2026-08-01 锁屏上看不到通知，
+                    # 而"为什么"当时只能靠猜；这一份 dump 让下一轮不必再猜。
+                    $notificationDump = Join-Path $legDir 'approval-notification.txt'
+                    $notificationState = Save-P0ApprovalNotificationState -Session $session `
+                        -Destination $notificationDump
+                    [void]$sensitiveArtifactPaths.Add($notificationDump)
                 }
                 # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
                 # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
                 $expectedState = $LegExpectedConfirmation[$leg]
                 if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
                 if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
+                    # 人已经花了时间，dispatch 却要被掐掉、来不及写自己那行台账。
+                    # 不补这一行，这一轮在台账上就是**零留痕**——烧掉的东西必须可见。
+                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState `
+                        -Actual ([string]$state.state)
                     throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
                 }
             }
@@ -1184,6 +1249,8 @@ try {
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
+            # 同上：没等到任何决定也是烧掉了真人时间，台账要留痕。
+            Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
             Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
             $dispatchHandle = $null
             throw "$leg 腿确认超时或派单在真人决定前结束。"

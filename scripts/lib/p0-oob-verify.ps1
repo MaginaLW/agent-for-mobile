@@ -120,6 +120,58 @@ function Get-P0OcrMarkerPresence {
 }
 
 <#
+从 `dumpsys notification` 里读审批通知的真实状态。
+
+**为什么要它**：2026-08-01 批次 2 验收，锁屏上根本看不到审批通知，而"为什么"当时只能靠猜——
+posted 了、importance 也对、actions 也在，唯独没人能说出系统把它过滤掉的理由。这一册把
+系统自己报的 flags 抓下来，让下一轮不必再猜（"修不动的时候先加可观测性，别加假设"）。
+
+`FLAG_ONGOING_EVENT`(0x2) 是当前最强嫌疑：锁屏通知列表历来过滤 ongoing 通知，而同机旁证是
+本包那条常驻前台服务通知同样不上锁屏。**这个函数就是用来证实或推翻它的**——
+去掉 `setOngoing` 之后仍然看不到的话，看这里的 flags 就知道该往哪查。
+
+读不出来一律回 `$null` 字段，不猜。
+#>
+function Get-P0NotificationState {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$DumpText,
+        [Parameter(Mandatory)][string]$ChannelId
+    )
+
+    $state = [pscustomobject]@{
+        Found = $false
+        Flags = $null
+        Ongoing = $null
+        Visibility = $null
+    }
+    if ([string]::IsNullOrWhiteSpace($DumpText)) { return $state }
+    # 只认属于本审批通道的那一段：同一份 dump 里还有前台服务那条常驻通知，
+    # 把两者混起来读出来的 flags 正好是最容易得出错误结论的那种。
+    $lines = $DumpText -split "`r?`n"
+    $index = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match [regex]::Escape("channel=$ChannelId") -or
+            $lines[$i] -match ('mChannelId=' + [regex]::Escape($ChannelId))) { $index = $i; break }
+    }
+    if ($index -lt 0) { return $state }
+    $state.Found = $true
+    # flags/visibility 与 channel 行的相对位置在各版本上不一样，围绕命中行取一窗口。
+    $from = [Math]::Max(0, $index - 40)
+    $to = [Math]::Min($lines.Count - 1, $index + 40)
+    $window = ($lines[$from..$to] -join "`n")
+    $flagMatch = [regex]::Match($window, 'flags=0x([0-9a-fA-F]+)')
+    if ($flagMatch.Success) {
+        $flags = [Convert]::ToInt32($flagMatch.Groups[1].Value, 16)
+        $state.Flags = $flags
+        # FLAG_ONGOING_EVENT = 0x00000002
+        $state.Ongoing = (($flags -band 0x2) -ne 0)
+    }
+    $visMatch = [regex]::Match($window, '(?:mVisibility|visibility)=(-?\d+)')
+    if ($visMatch.Success) { $state.Visibility = [int]$visMatch.Groups[1].Value }
+    return $state
+}
+
+<#
 Deny 腿的带外结论。
 
 **注意 `MessageArea` 的 `absent` 不参与"没发出去"的判定**——消息列表可能滚上去了。
