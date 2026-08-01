@@ -120,6 +120,27 @@ worktree 里，每人手上都有一份 backlog.md 副本，在自己分支上�
 "唯一交接面"会被 worktree 隔离切成三份。现在的规矩是队列只由主会话写，工序会话把队列
 变更当结论报告出来；读队列一律 `git show main:docs/backlog.md`，不读自己 worktree 的副本。
 
+## C 道真机验收踩出的三条（2026-08-01，批次 1 连跑两轮验收）
+
+- **新 worktree 首跑必然空转两轮，除非先构建。** ①`run-p0-safety-smoke.ps1` **只装不构建**，
+  没有 APK 直接 `setup-fail：缺少 debug APK`；②`app/local.properties` 是 gitignored 的，
+  **不随 `git checkout` 进 worktree**，于是 `assembleDebug` 报 `SDK location not found`。
+  两条都在人已经守在手机旁之后才暴露。**C 道开跑前的固定动作：先 `assembleDebug` 出 APK，
+  再派单**；`local.properties` 缺就补（内容只有 `sdk.dir=`，gitignored，不污染钉住的 SHA）。
+- **验收判据里，"场景没构造成功"必须是独立的一态。** 批次 1 首轮验 tracker 冷启动自举：
+  三次 `-Provision` 全程 `foreground_identity_source=event`、`bootstrap` 零次出现——
+  **自举分支压根没被执行到**，而"没触达"与"通过"在当时的判据下长得一模一样（都不报错、
+  都没被 `identity_unset` 卡死）。真因是 `-Provision` 重绑之后还要 `am start` 拉面板、
+  再拉回微信，**每一步都产生窗口事件**，而自举只在"从未收到窗口事件"时生效。修法不是调参数，
+  是给"未触达"一个自己的名字：专用零 token 脚本四态 `passed`/`not_reproduced`/`unavailable`/
+  `failed`，退出码即结论。二次验收当场拿到 `event → bootstrap` 的真跃迁。
+  **这是"把错误行为/未触达钉成预期"的同族风险第三次出现**，前两次分别在用例和台账归因上。
+- **定位真机故障，先找只差一个变量的对照腿，比加日志快一轮。** teardown 首轮在 Stale 腿
+  失效（`unverified` 且框真脏），当轮 Deny 腿 `keyboard` **同为 `already_hidden` 却 `clean`**
+  ——一个对照直接排除了"键盘分支判错"，把真因锁死在"微信在不在前台"（Stale 腿按定义停在桌面，
+  28 次退格打给了桌面）。这条与《修不动的时候先加可观测性》互补：**可观测性解决"看不见"，
+  对照实验解决"看得见但归因不了"。**
+
 ## 离线套件提速：先量，再动手（2026-08-01，567s → 213s）
 
 - **"慢在哪"必须是读出来的。** 第一步只加逐条用例计时与 new-fixture/runner 分段归因，
