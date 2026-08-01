@@ -7,11 +7,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 决定四的限次重弹。B 道只钉了三条不变量、把键的定义交给 A 道，所以这里**逐条**验：
+ * 限次重弹的判据。
  *
- * 1. 计数不得把两个不同的语义动作并成一次（否则第二个动作会莫名其妙被拒）；
- * 2. 计数不得把同一个语义动作的重试拆成多次（否则限次形同虚设，退化回无界循环）；
- * 3. 停下时走 `[AWAIT_CONFIRM]`，不是静默放弃——那条在 ToolRegistry，见其 confirmer。
+ * **这条机制在当前站规下走不到**（2026-08-02 用户重新拍板：维持「安全失败即终态」，
+ * 不开有界重试口子）——大脑在第一次 stale 就必须停下报告失败，计数器连 1 都到不了。
+ * 保留它作为纵深防御：上限本身没错，将来若真有路径能重试，上限仍该是 2。
+ *
+ * 键的三条不变量仍逐条验（它们不依赖重弹路径怎么实现）：
+ * 1. 不得把两个不同的语义动作并成一次（否则第二个动作会莫名其妙被拒）；
+ * 2. 不得把同一个语义动作的重试拆成多次（否则限次形同虚设，退化回无界循环）；
+ * 3. 用尽时给大脑的下一步**必须与站规一致**——见下面那条 fallback 用例。
  */
 class StaleReconfirmGuardTest {
 
@@ -111,6 +116,31 @@ class StaleReconfirmGuardTest {
         val refreshed = toWechat.let { it.copy(target = it.target!!.copy(ref = "r-new")) }
         assertNotEquals(toWechat.target?.ref, refreshed.target?.ref)
         assertEquals("而真正的键必须把它们串起来", keyFor("press_key", toWechat), keyFor("press_key", refreshed))
+    }
+
+    /**
+     * **代码不得反过来教大脑违规。**
+     *
+     * 站规 §4 把 `E_CONFIRM_REQUIRED` 列为终态，明令「立即报告『结果：失败』」且
+     * 「不得输出 `[AWAIT_CONFIRM]`、不得重试同一危险动作」。而这条路径原来的 fallback
+     * 写的恰恰是"输出 [AWAIT_CONFIRM] 暂停报告"——与站规正面矛盾。
+     *
+     * 措辞放在纯 Kotlin 常量里就是为了能被这条用例钉住：内联进 ToolRegistry 的字符串
+     * 没有任何判据看得见它（那正是它错了这么久都没被发现的原因）。
+     */
+    @Test
+    fun `exhausted fallback follows the station rules instead of contradicting them`() {
+        val fallback = StaleReconfirmGuard.EXHAUSTED_FALLBACK
+
+        assertFalse("站规明令不得输出 [AWAIT_CONFIRM]", fallback.contains("[AWAIT_CONFIRM]") &&
+            !fallback.contains("不得输出 [AWAIT_CONFIRM]"))
+        assertTrue("必须指向站规的常规终态格式", fallback.contains("结果：失败"))
+        assertTrue("必须重申不得重试同一危险动作", fallback.contains("不得重试"))
+        assertTrue(
+            "消息要说清是什么状况，不能只丢一个错误码",
+            StaleReconfirmGuard.EXHAUSTED_MESSAGE.contains("批准后") &&
+                StaleReconfirmGuard.EXHAUSTED_MESSAGE.contains("${StaleReconfirmGuard.MAX_RECONFIRMS}"),
+        )
     }
 
     @Test

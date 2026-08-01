@@ -385,16 +385,20 @@ object ToolRegistry {
             sensitiveTargets = Gateway.skills.sensitiveTargets,
         ),
         confirmer = { decision ->
-            // 决定四：批准后连着 stale 两次就不再弹第三张卡，改为要求大脑按 [AWAIT_CONFIRM]
-            // 停下报告。**这是拒绝，不是静默放弃**——用户必须知道自己批准过的事情没做成。
+            // 纵深防御，**当前站规下走不到**：站规 §4「安全失败就是终态」要求大脑在第一次
+            // stale 就停下报告失败、不得重试同一危险动作，所以计数器连 1 都到不了
+            // （2026-08-02 用户重新拍板：维持站规，不开有界重试口子）。留着是因为上限本身没错，
+            // 将来若真有路径能重试，上限仍该是 2。详见 StaleReconfirmGuard 的类注释。
             if (Gateway.staleReconfirmGuard.isExhausted(call.staleKey)) {
                 Gateway.staleReconfirmGuard.clear(call.staleKey)
                 call.safetyNote += ";reconfirm=exhausted"
                 throw GatewayError(
                     ErrorCode.E_CONFIRM_REQUIRED,
-                    "同一危险动作已在批准后连续 ${StaleReconfirmGuard.MAX_RECONFIRMS} 次因证据变化未能执行，不再重复打扰用户",
+                    StaleReconfirmGuard.EXHAUSTED_MESSAGE,
                     channel = "safety",
-                    fallback = "输出 [AWAIT_CONFIRM] 暂停报告，说明已获批准但目标状态反复变化，交由人工处置",
+                    // 原来这里写的是"输出 [AWAIT_CONFIRM] 暂停报告"——与站规正面矛盾，
+                    // 等于代码反过来教大脑违规。
+                    fallback = StaleReconfirmGuard.EXHAUSTED_FALLBACK,
                 )
             }
             call.safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
