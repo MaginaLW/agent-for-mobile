@@ -23,6 +23,87 @@ function Get-P0FinalVerdictPattern {
     return "(?m)^[ \t]*[*_]{0,3}结果[：:][ \t]*$Outcome"
 }
 
+<#
+台账表头与写行。**两处共用一份**：dispatch 正常收尾写一行，runner 在"人已经花了时间、
+但派单被提前掐掉"时也要写一行——各写各的必然漂移，而台账列的语义漂移正是归因失效的开始。
+
+`fail_reason` 追加在末尾而不是插在 result 后面：既有 60+ 行历史记录列数少一列，
+`Import-Csv` 会把缺的尾列读成空，插在中间则会整体错位。
+#>
+$P0LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason'
+
+function ConvertTo-P0CsvField {
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    $text = [string]$Value
+    if ($text -match '[",\r\n]') { return '"' + $text.Replace('"', '""') + '"' }
+    return $text
+}
+
+function Add-P0LedgerRow {
+    param(
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][int]$Leg,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Brain,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Model,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Result,
+        [AllowEmptyString()][string]$Turns = '',
+        [AllowEmptyString()][string]$InTok = '',
+        [AllowEmptyString()][string]$OutTok = '',
+        [AllowEmptyString()][string]$CacheRead = '',
+        [AllowEmptyString()][string]$CacheWrite = '',
+        [AllowEmptyString()][string]$CostUsd = '',
+        [AllowEmptyString()][string]$DurS = '',
+        [AllowEmptyString()][string]$SessionId = '',
+        [AllowEmptyString()][string]$TraceFile = '',
+        [AllowEmptyString()][string]$Note = '',
+        [AllowEmptyString()][string]$FailReason = ''
+    )
+    $directory = Split-Path -Parent $LedgerPath
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+    if (-not (Test-Path -LiteralPath $LedgerPath)) {
+        Set-Content -LiteralPath $LedgerPath -Value $P0LedgerHeader -Encoding utf8
+    }
+    $row = @(
+        (Get-Date -Format 's'), (ConvertTo-P0CsvField $Slug), $Leg, $Brain, $Model,
+        $Turns, $InTok, $OutTok, $CacheRead, $CacheWrite, $CostUsd, $DurS,
+        $Result, $SessionId, (ConvertTo-P0CsvField $TraceFile),
+        (ConvertTo-P0CsvField $Note), $FailReason
+    ) -join ','
+    Add-Content -LiteralPath $LedgerPath -Value $row -Encoding utf8
+}
+
+<#
+监督式跑测被提前掐掉时的归因。
+
+runner 检出真人决定与本腿预期不符就立刻 kill dispatch——这是对的（Deny 腿若真被批准，
+再让它跑下去就会真的发出去），代价是 dispatch 来不及写自己那行台账。2026-08-01 三轮跑测
+（一次误点拒绝、两次确认超时）因此在台账上**零留痕**：消耗了真人时间却完全不可见，
+而台账存在的全部意义就是让烧掉的东西可见。
+
+三类必须分得开——它们要采取的行动完全不同：
+- `safety-denied`      真人点了拒绝，而本腿期望允许。安全门尽职，是人或剧本的问题。
+- `decision-mismatch`  本腿期望拒绝、真人却点了允许。**最严重**：Deny 腿被批准了。
+- `confirm-timeout`    没等到任何决定。人没看见卡/通知，或者根本没弹。
+#>
+function Get-P0AbortedLegFailReason {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Expected,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Actual
+    )
+    if ([string]::IsNullOrWhiteSpace($Actual)) { return 'confirm-timeout' }
+    switch ($Actual) {
+        'timed_out' { return 'confirm-timeout' }
+        'denied'    { return $(if ($Expected -ceq 'denied') { '' } else { 'safety-denied' }) }
+        'allowed'   { return $(if ($Expected -ceq 'allowed') { '' } else { 'decision-mismatch' }) }
+        'error'     { return 'confirm-error' }
+        'dismissed' { return 'confirm-dismissed' }
+        default     { return "confirm-$Actual" }
+    }
+}
+
 function Get-FailReason {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Verdict,

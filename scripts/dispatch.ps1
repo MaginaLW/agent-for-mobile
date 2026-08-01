@@ -36,9 +36,6 @@ $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
 $LedgerPath   = Join-Path $RepoRoot 'docs\runs\ledger.csv'
 $LockFile     = Join-Path $PSScriptRoot '.dispatch.lock'
-# fail_reason 追加在末尾而不是插在 result 后面：既有 60+ 行历史记录列数少一列，
-# Import-Csv 会把缺的尾列读成空，插在中间则会整体错位。
-$LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason'
 $ProfileHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-profile.ps1'
 . $ProfileHelperPath
 $LockHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
@@ -48,18 +45,17 @@ $LedgerHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-ledger.ps1'
 $PauseHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-pause.ps1'
 . $PauseHelperPath
 
-function CsvQuote([string]$s) { '"' + ("$s" -replace '"', '""') + '"' }
 
 function Add-LedgerRow([int]$Turns, [long]$InTok, [long]$OutTok, [long]$CacheRead, [long]$CacheWrite,
                        [double]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
                        [string]$Note, [string]$FailReason = '') {
-    if (-not (Test-Path $LedgerPath)) { Set-Content -Path $LedgerPath -Value $LedgerHeader -Encoding utf8 }
+    # 表头与拼行都在 dispatch-ledger.ps1：runner 也要写台账（派单被提前掐掉那种），
+    # 各写各的必然漂移，而台账列的语义漂移正是归因失效的开始。
     $noteWithExecutor = if ([string]::IsNullOrWhiteSpace($Note)) { "executor=$Executor" } else { "executor=$Executor | $Note" }
-    $row = @((Get-Date -Format 's'), (CsvQuote $Slug), $Leg, $Brain, $Model,
-             $Turns, $InTok, $OutTok, $CacheRead, $CacheWrite,
-             [math]::Round($CostUsd, 4), $DurS, $Result, $SessionId, (CsvQuote $Trace),
-             (CsvQuote $noteWithExecutor), $FailReason) -join ','
-    Add-Content -Path $LedgerPath -Value $row -Encoding utf8
+    Add-P0LedgerRow -LedgerPath $LedgerPath -Slug $Slug -Leg $Leg -Brain $Brain -Model $Model `
+        -Result $Result -Turns "$Turns" -InTok "$InTok" -OutTok "$OutTok" `
+        -CacheRead "$CacheRead" -CacheWrite "$CacheWrite" -CostUsd "$([math]::Round($CostUsd, 4))" `
+        -DurS "$DurS" -SessionId $SessionId -TraceFile $Trace -Note $noteWithExecutor -FailReason $FailReason
 }
 
 # ── codex 接口占位（spec §8，决策点 4：首个真实对照需求再实现）──────────────
