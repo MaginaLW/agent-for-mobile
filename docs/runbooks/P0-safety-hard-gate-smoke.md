@@ -102,7 +102,9 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 
 Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
 
-网关侧后验是三态的：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，报失败会诱导重试，而重试发送的代价是重复发送；此时信封里带 `verification_state=unverified` 和"只能只读复核"的下一步。但**监督式跑测的标准更严：拿不到发送证据就不算 P0 通过**，`unverified` 与旧 APK 不报该字段一样判失败。
+网关侧后验是三态的：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，报失败会诱导重试，而重试发送的代价是重复发送；此时信封里带 `verification_state=unverified` 和"只能只读复核"的下一步。**runner 侧只禁矛盾，不强求网关自证**：`not_sent` 与 ui_find 在消息区命中 marker 直接打架，判失败；`unverified` 只黄字提示、照常按 ui_find 那条正证据判通过。理由是微信屏蔽 a11y 树后后验只剩 OCR 腿，而**发送成功后输入栏本来就是空的**，OCR 常常一个字都读不到——那种情况下 `unverified` 是物理上正确的结论，要求它必须 `sent` 会让 P0 因"拿不到证据"而永远过不了。只有**字段整个缺失**（旧 APK 不报）才判失败。
+
+> 这段 2026-08-01 更正过一次：原文写的是「`unverified` 与旧 APK 不报该字段一样判失败」，停在 07-27 那次复查**之前**——那次复查的结论恰恰是此前写反了。runner 的行为始终与 STATUS 记的设计意图一致，是本文档没跟着改。**文档把错误行为钉成预期，与用例把错误行为钉成预期是同一族风险。**
 
 只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，整组才可判通过。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败。
 

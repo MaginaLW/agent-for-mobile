@@ -1193,7 +1193,14 @@ try {
             # 分开记：日后哪一套先松动，manifest 里看得出来。
             send_verification = [ordered]@{
                 verified = $trace.SendVerified
-                state = $trace.SendVerificationState
+                # 空串不是三态里的任何一个值，在 manifest 里读起来像"数据丢了"。写成 absent
+                # 并说清它意味着什么：网关根本没报告这个字段。Stale/Deny 两腿这是**预期**
+                # （危险动作被拦下，压根没走到发送），Allow 腿则在上面被当成旧 APK 直接判失败。
+                state = if ([string]::IsNullOrEmpty([string]$trace.SendVerificationState)) {
+                    'absent'
+                } else {
+                    [string]$trace.SendVerificationState
+                }
             }
             # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
             # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
