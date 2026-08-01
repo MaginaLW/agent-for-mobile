@@ -45,6 +45,8 @@ $LockHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
 . $LockHelperPath
 $LedgerHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-ledger.ps1'
 . $LedgerHelperPath
+$PauseHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-pause.ps1'
+. $PauseHelperPath
 
 function CsvQuote([string]$s) { '"' + ("$s" -replace '"', '""') + '"' }
 
@@ -72,15 +74,26 @@ $TaskText = ''
 if ($Confirm) {
     if (-not (Test-Path $Confirm)) { throw "暂停件不存在：$Confirm" }
     $pauseRaw = Get-Content $Confirm -Raw -Encoding utf8
-    $parts = $pauseRaw -split '(?m)^---\s*$', 2
-    if ($parts.Count -lt 2) { throw "暂停件格式异常（缺 --- 分隔）：$Confirm" }
-    $meta = @{}
-    foreach ($line in ($parts[0] -split "`r?`n")) {
-        if ($line -match '^(\w+):\s*(.*)$') { $meta[$Matches[1]] = $Matches[2].Trim() }
+    $pauseDocument = Read-DispatchPauseDocument -Text $pauseRaw
+    $meta = $pauseDocument.Meta
+
+    # 暂停件是"人在键盘上按过一次 CONFIRM"的凭据，与手机确认卡同属**一次性授权**
+    # （硬门不变量 4：一次确认只授权当前这一次调用，不生成可重放令牌）。而落盘的文件天然
+    # 可重放：同一份 -Confirm 跑两次就是两次执行，人却只点过一次头。所以消费即作废。
+    if ($pauseDocument.Consumed) {
+        throw "暂停件已于 $($pauseDocument.Consumed) 被消费，拒绝重放：$Confirm`n" +
+            '一次人工确认只授权一次执行。要再跑一次就重跑第一腿，重新走一遍两段式。'
     }
-    $Slug = $meta['slug']
+
+    $Slug = [string]$(if ($meta.Contains('slug')) { $meta['slug'] } else { '' })
+    # leg 直接进 trace 文件名与台账，且**没有上界的话，pause→confirm 可以无限接龙**，
+    # 每一跳还把上一跳的报告原样再灌进提示词。两段式按定义只有第二腿。
+    if ([string]$meta['leg'] -notmatch '^\d+$') { throw "暂停件 leg 非法：$($meta['leg'])" }
     $Leg = [int]$meta['leg'] + 1
-    $pauseReport = $parts[1].Trim()
+    if ($Leg -gt 2) {
+        throw "暂停件 leg=$($meta['leg']) 会产生第 $Leg 腿；两段式只有第二腿，拒绝接龙。"
+    }
+    $pauseReport = $pauseDocument.Body
     $pauseExecutor = if ([string]::IsNullOrWhiteSpace($meta['executor'])) { 'mobile' } else { $meta['executor'] }
     if ($pauseExecutor -notin @('mobile', 'gateway')) {
         throw "暂停件 executor 无效：$pauseExecutor"
@@ -112,6 +125,12 @@ if ($Confirm) {
         # 代理经非交互 shell 调用时 Read-Host 直接报错，机械上无法代答。
         $answer = Read-Host '两段式确认门：人工核对暂停报告与手机屏幕后，键入 CONFIRM 执行（其他输入取消）'
         if ($answer -cne 'CONFIRM') { Write-Host '已取消，未执行任何动作。'; exit 3 }
+        # 就地作废：写在**人点头之后、派单之前**。派单失败也不回滚——那次授权已经用掉了，
+        # 想再来一次就得有一次新的人工决定。取消（非 CONFIRM）不作废，因为什么都没执行。
+        # 不改名、只加一行 meta：路径可能已经被人复制到别处，改名会让那些引用凭空失效。
+        Set-Content -LiteralPath $Confirm -Encoding utf8 -Value (
+            Set-DispatchPauseConsumed -Text $pauseRaw -At ([DateTime]::UtcNow.ToString('o'))
+        )
     }
 
     if ($Executor -eq 'gateway') {
@@ -150,6 +169,13 @@ elseif ($Task) {
     if (-not $Slug) { $Slug = 'adhoc' }
 }
 else { throw '需要 -Task / -TaskFile / -Confirm 之一。' }
+
+# slug 直接拼进 trace/pause 文件名（$base）与台账行。四个来源里有两个不是本机人手打的：
+# 暂停件的 meta 与任务卡文件名。带上路径分隔符或 .. 就能把 trace 写到 docs/runs 之外，
+# 而台账的 trace_file 列正是跑测判据的锚点（runner 已为此单独校验过一次文件名）。
+if ($Slug -notmatch '^[A-Za-z0-9._-]{1,80}$' -or $Slug -match '\.\.') {
+    throw "slug 非法（只允许字母数字与 . _ -，且不含 ..，长度 1..80）：$Slug"
+}
 
 # ── executor profile + 只读提示词模板 ────────────────────────────────────
 $profile = Get-ExecutorProfile -Executor $Executor -RepoRoot $RepoRoot -ScriptsRoot $PSScriptRoot

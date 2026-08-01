@@ -538,10 +538,114 @@ session_id: offline
         Assert-NoRepoEffects $before
     }
 
+    Test-Case '暂停件作废是真的写得进去（拒绝重放的另一半）' {
+        # 「拒绝重放」有两半：挡住已消费文件的那一半下面有用例，**把文件标成已消费**的那一半
+        # 只在人真的键入 CONFIRM 之后才走，离线跑不到。所以那一半抽成了纯函数单独钉住——
+        # 否则这条判据看起来有两条用例撑着，实际只验了一半。
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
+
+        $raw = "slug: s1`nleg: 1`nexecutor: gateway`n---`n[AWAIT_CONFIRM]`n屏幕现状：x`n"
+        $document = Read-DispatchPauseDocument -Text $raw
+        Assert-True ($document.Meta['slug'] -ceq 's1') 'meta 解析错误。'
+        Assert-True ($document.Consumed -ceq '') '未消费的暂停件不该带 consumed。'
+        Assert-Contains $document.Body '[AWAIT_CONFIRM]'
+
+        $marked = Set-DispatchPauseConsumed -Text $raw -At '2026-08-01T12:00:00Z'
+        $after = Read-DispatchPauseDocument -Text $marked
+        Assert-True ($after.Consumed -ceq '2026-08-01T12:00:00Z') '作废后必须带 consumed 时刻。'
+        # 作废只加一行，正文与其余 meta 一字不改——第二腿的提示词就是从正文来的。
+        Assert-True ($after.Body -ceq $document.Body) '作废不得改动报告正文。'
+        Assert-True ($after.Meta['slug'] -ceq 's1' -and $after.Meta['leg'] -ceq '1') '作废不得改动原有 meta。'
+
+        $threw = $false
+        try { $null = Set-DispatchPauseConsumed -Text $marked -At '2026-08-01T13:00:00Z' }
+        catch { $threw = $true }
+        Assert-True $threw '已消费的暂停件不得被二次作废（否则重放窗口会被刷新）。'
+
+        foreach ($bad in @('没有分隔符的文本', '')) {
+            $threw = $false
+            try { $null = Read-DispatchPauseDocument -Text $bad } catch { $threw = $true }
+            Assert-True $threw "格式非法必须抛错，不得兜底猜测：「$bad」"
+        }
+    }
+
+    Test-Case '暂停件 leg 接龙被拒（两段式只有第二腿）' {
+        $chained = Join-Path $TestRoot 'chained.pause.md'
+        Set-Content -LiteralPath $chained -Encoding utf8 -Value @'
+slug: offline-chained
+leg: 2
+executor: gateway
+session_id: offline
+---
+[AWAIT_CONFIRM]
+屏幕现状：离线测试。
+待执行动作：不该被允许。
+剩余步骤：无。
+'@
+        $result = Invoke-Dispatch @('-Confirm', $chained, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) 'leg=2 的暂停件会产生第三腿，必须拒绝。'
+        Assert-Matches $result.Text '两段式只有第二腿|接龙'
+        Assert-NoRepoEffects $before
+    }
+
+    Test-Case '暂停件 leg 非数字时 fail-fast' {
+        $bogus = Join-Path $TestRoot 'bogus-leg.pause.md'
+        Set-Content -LiteralPath $bogus -Encoding utf8 -Value @'
+slug: offline-bogus-leg
+leg: 一
+executor: gateway
+session_id: offline
+---
+[AWAIT_CONFIRM]
+屏幕现状：离线测试。
+待执行动作：无。
+剩余步骤：无。
+'@
+        $result = Invoke-Dispatch @('-Confirm', $bogus, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) 'leg 非数字必须直接失败，不能悄悄当 0。'
+        Assert-Contains $result.Text 'leg'
+        Assert-NoRepoEffects $before
+    }
+
+    Test-Case '已消费的暂停件拒绝重放' {
+        # 一次人工确认只授权一次执行（硬门不变量 4）。落盘的暂停件天然可重放——
+        # 同一份 -Confirm 跑两次就是两次执行，而人只点过一次头。
+        $consumed = Join-Path $TestRoot 'consumed.pause.md'
+        Set-Content -LiteralPath $consumed -Encoding utf8 -Value @'
+slug: offline-consumed
+leg: 1
+executor: gateway
+session_id: offline
+consumed: 2026-08-01T00:00:00.0000000Z
+---
+[AWAIT_CONFIRM]
+屏幕现状：secret-consumed-body-must-not-leak
+待执行动作：不该被允许。
+剩余步骤：无。
+'@
+        $result = Invoke-Dispatch @('-Confirm', $consumed, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) '已消费的暂停件必须拒绝。'
+        Assert-Matches $result.Text '已.*消费|重放'
+        Assert-NotMatches $result.Text 'secret-consumed-body-must-not-leak'
+        Assert-NoRepoEffects $before
+    }
+
+    Test-Case 'slug 不得带路径分隔符或 ..' {
+        # slug 直接拼进 trace 文件名与台账 trace_file 列，而它有两个来源不是本机人手打的。
+        foreach ($bad in @('../escape', 'a/b', 'a\b', 'ok..ok')) {
+            $result = Invoke-Dispatch @('-Task', '离线', '-Slug', $bad, '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) "非法 slug 应被拒绝：$bad"
+            Assert-Contains $result.Text 'slug'
+        }
+        $ok = Invoke-Dispatch @('-Task', '离线', '-Slug', 'p0-safety-allow_1.2', '-DryRun')
+        Assert-ExitCode $ok 0
+        Assert-NoRepoEffects $before
+    }
+
     $legacyPause = Join-Path $TestRoot 'legacy.pause.md'
     Set-Content -LiteralPath $legacyPause -Encoding utf8 -Value @'
 slug: offline-legacy-confirm
-leg: 2
+leg: 1
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -554,7 +658,7 @@ session_id: offline
         $result = Invoke-Dispatch @('-Confirm', $legacyPause, '-DryRun')
         Assert-ExitCode $result 0
         Assert-Contains $result.Text 'executor=mobile'
-        Assert-Contains $result.Text 'leg=3'
+        Assert-Contains $result.Text 'leg=2'
         Assert-Matches $result.Text 'configs[\\/]mobile-mcp\.json'
         Assert-Contains $result.Text 'mcp__mobile'
         Assert-NotMatches $result.Text '键入\s*CONFIRM|Read-Host'
