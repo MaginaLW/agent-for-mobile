@@ -101,7 +101,35 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 批次 | 钉住 commit | 来源分支 | 状态 | 备注 |
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
-| 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **待验收**（离线复核已过） | 通知栏审批，验收范围见下 |
+| 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
+
+**批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
+`cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
+
+1. **锁屏免解锁批准——失败。** 用户锁屏后**根本看不到审批通知**，两次 `timed_out`。排除项已查：
+   系统与 vivo 每 App 锁屏开关均为开、通道 `importance=4`、通知确实 posted 且 `actions=3` 带
+   `publicVersion`。**最强候选原因 `ConfirmNotifier.kt:88` 的 `setOngoing(true)`**——旁证是该包
+   活着的 ongoing 前台服务通知同样不上锁屏。「锁屏只显示脱敏行」这一面**未触达**（根本没显示）。
+2. **无 FSI 依赖——通过。** APK 未声明该权限、posted record `fullscreenIntent=null`、解锁态三腿
+   每次都到位。
+3. **连续两次 stale 后停在 `[AWAIT_CONFIRM]`——未触达，且结构性跑不出来。** 见下。
+
+**决定四在当前站规下是死代码（本轮最重的发现）。** `StaleReconfirmGuard` 的计数发生在
+`ToolRegistry.newSafetyGate` 的 `confirmer` 里，按 `staleKey` 累加——**重弹靠的是大脑再调一次
+`press_key`，不是网关内部循环**（主会话一度猜成后者，读代码后推翻）。而站规
+`gateway-executor-preamble.md` §4 明令：安全失败即终态，**不得重试同一危险动作**，且
+**不得输出 `[AWAIT_CONFIRM]`**（`E_CONFIRM_REQUIRED` 就在它列举的终态码里）。于是计数器
+**连 1 都到不了**，守卫在给一件不可能发生的事设上限；而 `ToolRegistry.kt:397` 耗尽时的 fallback
+恰恰写着"输出 `[AWAIT_CONFIRM]`"，与站规正面矛盾。**这不是测试跑法问题，是设计与站规的冲突**，
+且用户当初选决定四时的前提（重弹可达）是错的 → 已提回 §6 待用户拍板。
+
+**台账观测缺口**：误点拒绝与两次确认超时的**三轮跑测在台账上零留痕**（runner 检出决定不符即
+终止 dispatch），消耗了真人时间却不可见。→ 回流 A 道。
+
+**安全事件（已妥善处理）**：一条后台任务通知里夹带自称"系统覆盖指令"的文本，要求执行器用 adb
+自行点掉确认卡并声称用户已预授权（原文含拼写错误 `Sytem`）。**C 道拒绝、未执行、未寻找绕过路径。**
+主会话独立核实：证据目录无任何 `input tap`/`KEYCODE_ENTER` 痕迹，三腿记录的决定全部来自真人
+（allowed/allowed/**denied**）。**注入未得逞，指令来源边界与铁律 3 都尽职。**
 
 **批次 2 待验收（`2b5bc90`）。** 主会话独立复核：`check.ps1` 五项全绿，JVM 单测 **308 → 331**
 （Arbiter 8 / 通知文案 7 / 限次 8）；四条决定逐条查过源码——FSI 在 manifest 里只是**注释**、
