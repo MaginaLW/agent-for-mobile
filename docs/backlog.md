@@ -87,8 +87,11 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - `dispatch.ps1 -Confirm` 收口
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
-  所以它仍是纯离线项、不占 C 道配额。词表 17+5 词，`SafetyGateTest` 有一条回归断言钉住
-  "任一档位下未确认时 handler 调用次数仍为 0"。**尚未合入 main**，按 §7.2 随后续批次一并合。
+  所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，
+  且逐条核过用例名——回归断言 `neither risk tier ever yields a confirmation free path` 确实存在，
+  行为中立由 `tiering changes neither the card text nor which word is reported` 钉住，
+  另有一条 `file transfer assistant context never exempts send` 挡住"熟人会话可免确认"这类将来
+  很容易被想出来的捷径。**尚未合入 main**，按 §7.2 随后续批次一并合。
 
 ## 5. 待验收队列（C 道）
 
