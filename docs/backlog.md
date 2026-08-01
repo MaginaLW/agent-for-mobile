@@ -100,7 +100,15 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 | 批次 | 钉住 commit | 来源分支 | 状态 | 备注 |
 |---|---|---|---|---|
-| 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **待验收** | 回流五条已全部处理 |
+| 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
+| 2 | — | 待 A 道实现 | **可开工**（四道题已拍板、布局方案 `6c43bf6` 就绪） | 通知栏审批 |
+
+**批次 1 二次验收通过（run `20260801T143739-ff105d203a35`）**：三腿**一次连跑**，
+`status=passed`、`cleanup.ok=true`、三腿 `teardown.verdict` **均 `clean`**，人只点 3 次确认卡、
+中途一次框都没清。判据 3 由零 token 脚本单独验：**重绑前 `event` → 重绑后 `bootstrap`**，
+package 级无 activity，退出码 0——上一轮"没触达被读成通过"的地方这次拿到了真跃迁。
+主会话独立核过 manifest：三处修复都被真机确认（Stale 腿 teardown 由 `unverified`（实为真脏）
+转 `clean`；`send.state` 在 Stale/Deny 记 `absent`；Allow 腿 `unverified` 按更正后的判据照常通过）。
 
 回流五条已闭环，主会话每一步独立跑过 `check.ps1`（最终五项全绿，离线用例 55 → **60**，
 派单离线 23 → **28**）：
