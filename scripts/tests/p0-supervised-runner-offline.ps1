@@ -1597,11 +1597,109 @@ try {
         }
     }
 
+    Test-Case '冷启动自举判据：未触达必须与通过分得开' {
+        # 2026-08-01 批次 1 验收的教训：自举分支三次都没被触达，trace 里 bootstrap 零次出现，
+        # 而当时**没有任何判据能把"没触达"和"通过"分开**。这条用例就是钉这件事。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1')
+
+        $eventData = [pscustomobject]@{
+            foreground_known = $true; foreground_identity_source = 'event'
+            package = 'com.tencent.mm'; activity = 'com.tencent.mm.ui.LauncherUI'
+            tracked_identity = [pscustomobject]@{ bootstrapped = $false }
+        }
+        $bootstrapData = [pscustomobject]@{
+            foreground_known = $true; foreground_identity_source = 'bootstrap'
+            package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        }
+        $unsetData = [pscustomobject]@{
+            foreground_known = $false; foreground_identity_source = 'unknown'
+            package = ''; activity = ''; tracked_identity = $null
+        }
+        # 旧 APK：整个字段不存在。不能按 foreground_known 猜——"这个构建没有自举"与
+        # "自举没触发"要采取的行动完全不同。
+        $legacyData = [pscustomobject]@{ foreground_known = $true; package = 'com.tencent.mm'; activity = 'X' }
+
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $eventData) -ceq 'event') 'event 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $bootstrapData) -ceq 'bootstrap') 'bootstrap 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $unsetData) -ceq 'unset') 'unset 归类错误。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $legacyData) -ceq 'unknown') '旧 APK 缺字段必须归 unknown。'
+        Assert-True ((Get-P0ForegroundIdentityKind -Data $null) -ceq 'unknown') '读不到数据必须归 unknown。'
+
+        # **本用例的核心**：重绑后仍是 event（真机那次的形态）绝不能判通过。
+        $notReproduced = Get-P0BootstrapVerdict -Before 'event' -After 'event' -AfterSelfConsistent $true
+        Assert-True ($notReproduced.Verdict -ceq 'not_reproduced') '重绑后仍是 event 必须记未触达，不得判通过。'
+        Assert-Contains $notReproduced.Reason '未被触达'
+
+        $passed = Get-P0BootstrapVerdict -Before 'event' -After 'bootstrap' -AfterSelfConsistent $true
+        Assert-True ($passed.Verdict -ceq 'passed') 'event → bootstrap 应判通过。'
+
+        # unset 是自举要修的那个症状本身：自举该生效却没生效 → 失败，不是"未触达"。
+        $failed = Get-P0BootstrapVerdict -Before 'event' -After 'unset' -AfterSelfConsistent $true
+        Assert-True ($failed.Verdict -ceq 'failed') '重绑后仍 identity_unset 应判失败。'
+
+        $unavailable = Get-P0BootstrapVerdict -Before 'event' -After 'unknown' -AfterSelfConsistent $true
+        Assert-True ($unavailable.Verdict -ceq 'unavailable') '读不出字段应判无法判定。'
+
+        # 起点就已经是自举身份 → 现场不是干净的事件身份，同样不算复现。
+        $dirtyStart = Get-P0BootstrapVerdict -Before 'bootstrap' -After 'bootstrap' -AfterSelfConsistent $true
+        Assert-True ($dirtyStart.Verdict -ceq 'not_reproduced') '起点已是自举身份时不得判通过。'
+
+        # 四种结局两两不同，避免日后有人把某两种合并。
+        $verdicts = @($passed.Verdict, $notReproduced.Verdict, $failed.Verdict, $unavailable.Verdict)
+        Assert-True (@($verdicts | Select-Object -Unique).Count -eq 4) '四种结局必须互不相同。'
+    }
+
+    Test-Case '冷启动自举自洽性：自举身份不得带 activity' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1')
+
+        $good = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        })
+        Assert-True $good.Ok "干净的自举读数应自洽：$($good.Issues -join '；')"
+
+        # 自举唯一被允许做的事是补一个 package 级身份。带回 activity 说明有别的路径在编造证据，
+        # 而编造出来的 activity 会进确认前后的逐字段相等比较——比没有 activity 危险得多。
+        $withActivity = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = 'com.tencent.mm.ui.LauncherUI'
+            tracked_identity = [pscustomobject]@{ bootstrapped = $true }
+        })
+        Assert-True (-not $withActivity.Ok) '自举身份带 activity 必须判不自洽。'
+        Assert-Contains ($withActivity.Issues -join '；') 'activity'
+
+        $notTracked = Test-P0BootstrapSelfConsistent -Data ([pscustomobject]@{
+            foreground_known = $true; package = 'com.tencent.mm'; activity = ''
+            tracked_identity = [pscustomobject]@{ bootstrapped = $false }
+        })
+        Assert-True (-not $notTracked.Ok) 'tracker 自己不认是自举时必须判不自洽。'
+
+        $verdict = Get-P0BootstrapVerdict -Before 'event' -After 'bootstrap' -AfterSelfConsistent $false
+        Assert-True ($verdict.Verdict -ceq 'failed') '自举读数不自洽必须判失败，不得判通过。'
+    }
+
+    Test-Case '自举检查脚本 DryRun 零设备、零重绑' {
+        $script = Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'
+        Assert-True (Test-Path -LiteralPath $script -PathType Leaf) "缺少自举检查脚本：$script"
+        $output = & $PwshPath -NoProfile -File $script -DryRun 2>&1
+        Assert-True ($LASTEXITCODE -eq 0) "DryRun 失败：$($output -join "`n")"
+        Assert-Contains ($output -join "`n") '不连接设备'
+        # 重绑实现必须只有一份：provision 与本检查各写一遍，两边一漂移，
+        # 检查验的就不是 provision 真正做的事了。
+        $checkSource = Get-Content -LiteralPath $script -Raw
+        Assert-Contains $checkSource 'Invoke-P0AccessibilityRebind'
+        Assert-NotMatches $checkSource "settings','put','secure','enabled_accessibility_services"
+        # 零 token、不派单：整条链里不许出现 dispatch。
+        Assert-NotMatches $checkSource 'dispatch'
+    }
+
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
             $PSCommandPath

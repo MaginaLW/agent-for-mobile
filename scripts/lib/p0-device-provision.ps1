@@ -376,30 +376,7 @@ function Start-P0DeviceProvision {
                 -Arguments @('shell','appops','set',$script:P0PackageName,'SYSTEM_ALERT_WINDOW','allow') `
                 -Operation '授予悬浮窗能力'
 
-            $enabled = (Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
-                -Operation '读取无障碍配置').Stdout.Trim()
-            if ($enabled -eq 'null') { $enabled = '' }
-            $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
-            # 值不变的 settings put 不触发 AMS observer，重装后只能等慢速回补重绑（vivo 实测 60-90s）；
-            # 先写一个必然不同的值（去掉本服务，空则 delete）再写全量，强制立即重绑。
-            $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
-            if ($withoutGateway.Count -gt 0) {
-                $null = Invoke-P0DeviceCommand -Session $session `
-                    -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
-                    -Operation '重置无障碍配置以触发重绑'
-            } else {
-                $null = Invoke-P0DeviceCommand -Session $session `
-                    -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
-                    -Operation '重置无障碍配置以触发重绑' -AllowFailure
-            }
-            $null = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
-                -Operation '启用 gateway 无障碍'
-            $null = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','settings','put','secure','accessibility_enabled','1') `
-                -Operation '启用无障碍总开关'
+            Invoke-P0AccessibilityRebind -Session $session
             $null = Invoke-P0DeviceCommand -Session $session `
                 -Arguments @('shell','ime','enable',$script:P0ImeComponent) -Operation '启用 gateway 输入法'
             $null = Invoke-P0DeviceCommand -Session $session `
@@ -455,22 +432,7 @@ function Start-P0DeviceProvision {
         if ($a11yProbe.ExitCode -ne 0 -or $script:P0AccessibilityComponent -notin $enabledAfter) {
             throw 'setup-fail：gateway 无障碍未就绪。'
         }
-        # 重装 APK 后系统重绑无障碍服务需要数秒到数十秒（vivo 实测），单次探测必然竞态，按上限轮询。
-        $a11yBound = $false
-        $a11yBindDeadline = [DateTime]::UtcNow.AddSeconds($A11yBindTimeoutSec)
-        while ($true) {
-            $a11yBoundProbe = Invoke-P0DeviceCommand -Session $session `
-                -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
-            if ($a11yBoundProbe.ExitCode -eq 0 -and
-                (Test-P0AccessibilityComponentBound -DumpsysText $a11yBoundProbe.Stdout `
-                    -Component $script:P0AccessibilityComponent -Label $script:P0AccessibilityLabel)) {
-                $a11yBound = $true
-                break
-            }
-            if ([DateTime]::UtcNow -ge $a11yBindDeadline) { break }
-            Start-Sleep -Milliseconds 1000
-        }
-        if (-not $a11yBound) {
+        if (-not (Wait-P0AccessibilityBound -Session $session -TimeoutSec $A11yBindTimeoutSec)) {
             throw 'setup-fail：gateway 无障碍服务未实际 bound/connected。'
         }
         $imeProbe = Invoke-P0DeviceCommand -Session $session `
@@ -508,6 +470,66 @@ function Start-P0DeviceProvision {
         }
         $session.SensitiveValues.Clear()
         throw $setupException
+    }
+}
+
+<#
+强制无障碍服务重绑：先写一个必然不同的值（去掉本服务，空则 delete）再写回全量。
+
+值不变的 `settings put` 不触发 AMS observer，重装后只能等慢速回补重绑（vivo 实测 60–90s）。
+
+**这一步会让 `GatewayA11yService` 重建，随之而来的是 `ForegroundWindowTracker` 归零**——
+前台身份回到 `Unknown`，直到下一个可接受的窗口状态事件到来。冷启动自举检查
+（scripts/p0-foreground-bootstrap-check.ps1）正是靠这一点构造"服务重启后没有窗口事件"
+的真实场景，所以这段必须是**唯一一份实现**：provision 与那个检查各写一遍，两边一旦漂移，
+检查验的就不是 provision 真正做的事了。
+#>
+function Invoke-P0AccessibilityRebind {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Session)
+
+    $enabled = (Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+        -Operation '读取无障碍配置').Stdout.Trim()
+    if ($enabled -eq 'null') { $enabled = '' }
+    $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
+    $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
+    if ($withoutGateway.Count -gt 0) {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
+            -Operation '重置无障碍配置以触发重绑'
+    } else {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
+            -Operation '重置无障碍配置以触发重绑' -AllowFailure
+    }
+    $null = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
+        -Operation '启用 gateway 无障碍'
+    $null = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','settings','put','secure','accessibility_enabled','1') `
+        -Operation '启用无障碍总开关'
+}
+
+<# 等无障碍服务真正 bound/connected；重装或重绑后系统要数秒到数十秒（vivo 实测），单次探测必然竞态。 #>
+function Wait-P0AccessibilityBound {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Session,
+        [int]$TimeoutSec = 45
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    while ($true) {
+        $probe = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','dumpsys','accessibility') -Operation '复核无障碍绑定状态' -AllowFailure
+        if ($probe.ExitCode -eq 0 -and
+            (Test-P0AccessibilityComponentBound -DumpsysText $probe.Stdout `
+                -Component $script:P0AccessibilityComponent -Label $script:P0AccessibilityLabel)) {
+            return $true
+        }
+        if ([DateTime]::UtcNow -ge $deadline) { return $false }
+        Start-Sleep -Milliseconds 1000
     }
 }
 
