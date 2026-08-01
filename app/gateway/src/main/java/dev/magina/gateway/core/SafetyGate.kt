@@ -332,7 +332,8 @@ class SafetyGate(
     private val afterConfirmationAllowed: (String, JSONObject, SafetyContext) -> Unit = { _, _, _ -> },
     private val afterExecutionSuccess: (String, SafetyContext) -> Unit = { _, _ -> },
     /**
-     * **真人已经批准、随后复核判 stale** 时回调一次（批次 2 决定四的计数点）。
+     * **真人已经批准、随后复核判 stale** 时回调一次（[StaleReconfirmGuard] 的计数点；
+     * 那条机制在当前站规下走不到，见其类注释）。
      *
      * 只在这一种情况回调：门前阻断、确认被拒、确认超时都不算——那三种里用户要么没批准过，
      * 要么本来就得到了"停下"的指示，不该占用重弹次数。
@@ -362,7 +363,7 @@ class SafetyGate(
                     fallback = "按站规收尾，不要换路重试同一危险动作",
                 )
                 // 从这里往下，真人已经批准过了。这一段里冒出来的每一个 E_STALE_REF 都属于
-                // 「批准了、却因为证据变了没做成」——正是决定四要限次的那种。计数点放在这里，
+                // 「批准了、却因为证据变了没做成」——正是限次守卫要数的那种。计数点放在这里，
                 // 而不是放在 catch 全部 GatewayError 的地方：门前阻断与确认被拒不该占次数。
                 try {
                     if (SafetyPolicy.fingerprint(args) != initialArgsFingerprint) stale("确认后工具参数已变化")
