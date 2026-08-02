@@ -478,6 +478,9 @@ object ToolRegistry {
                     TestForeground(
                         known = current.optBoolean("foreground_known", false),
                         packageName = current.optString("app"),
+                        // 等不到目标前台时，"读到的是什么"比"没等到"值钱得多——
+                        // 2026-08-02 真机上这一条超时，事后只知道它失败了，不知道它看见了什么。
+                        reason = current.optString("foreground_reason"),
                     )
                 },
             )

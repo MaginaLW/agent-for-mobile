@@ -191,8 +191,11 @@ class DebugTestControl(
         val started = monotonicClock()
         val deadline = if (Long.MAX_VALUE - started < foregroundTimeoutMs) Long.MAX_VALUE
         else started + foregroundTimeoutMs
+        // 只加可观测性，判据与超时值一字未动（没有真机证据支持调数值）。
+        val trace = ForegroundWaitTrace()
         while (true) {
             val current = foreground()
+            trace.add(current)
             if (current.known && current.packageName.isNotBlank() && current.packageName != WECHAT_PACKAGE) return
             val remaining = deadline - monotonicClock()
             if (remaining <= 0) break
@@ -200,10 +203,35 @@ class DebugTestControl(
         }
         throw GatewayError(
             ErrorCode.E_CHANNEL_DOWN,
-            "监督式上下文切换后前台未成为已知非目标 App",
+            // 2026-08-02 真机上这条超时过一次，而消息只说"没等到"——**读了几次、每次读到什么、
+            // 等了多久全都不知道**，只能靠猜，下一轮又得烧用户一次往返。现在它自己说。
+            "监督式上下文切换后前台未成为已知非目标 App（${trace.describe(monotonicClock() - started)}）",
             channel = "test-control",
             retryable = false,
         )
+    }
+
+    /**
+     * 等待期间每次前台读数的汇总。**相同读数合并计数**——等 5 秒会读上百次，逐条列出来
+     * 只会把真正的信号淹掉；要的是"它一直看到的是什么"，不是每一帧。
+     */
+    internal class ForegroundWaitTrace {
+        private val counts = LinkedHashMap<String, Int>()
+        private var reads = 0
+
+        fun add(current: TestForeground) {
+            reads += 1
+            val key = buildString {
+                append(current.packageName.ifBlank { "-" })
+                append(if (current.known) "/known" else "/unknown")
+                if (current.reason.isNotBlank()) append(":").append(current.reason)
+            }
+            counts[key] = (counts[key] ?: 0) + 1
+        }
+
+        fun describe(waitedMs: Long): String =
+            "reads=$reads waited_ms=$waitedMs observed=[" +
+                counts.entries.joinToString(", ") { "${it.key}×${it.value}" } + "]"
     }
 
     private fun claimControlFile(source: File): File {

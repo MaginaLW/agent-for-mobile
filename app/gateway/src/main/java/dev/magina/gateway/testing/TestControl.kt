@@ -28,6 +28,11 @@ enum class TestConfirmationDecision {
 data class TestForeground(
     val known: Boolean,
     val packageName: String,
+    /**
+     * 前台身份判不出来时的原因（`foreground_reason`，如 `no_application_window`）。
+     * 只进诊断消息，不参与任何判定；默认空串是"调用方没提供"，不是"没有原因"。
+     */
+    val reason: String = "",
 )
 
 /**

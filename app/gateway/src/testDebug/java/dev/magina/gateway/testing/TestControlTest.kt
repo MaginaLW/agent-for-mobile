@@ -183,6 +183,50 @@ class TestControlTest {
         assertEquals(3, foregroundReads)
     }
 
+    /**
+     * 2026-08-02 真机上这条等待超时过一次（1a 那腿：人从通知点了允许，网关侧仍认为前台是微信）。
+     * 当时的消息只说"没等到"——**读了几次、每次读到什么、等了多久全都不知道**，只能靠猜，
+     * 下一轮又得烧用户一次往返。这条用例钉住"它自己会说"，**只加可观测性，判据与超时值不动**。
+     */
+    @Test
+    fun `foreground wait timeout reports what it actually saw`() {
+        var monotonic = 0L
+        writeControl(leg = "stale", nonce = "nonce-wait-0001")
+        val control = debugControl(monotonicClock = { monotonic }, sleep = { monotonic += it })
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(7), cardVisible = true, attempts = 1)
+        }
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.NOTIFICATION)
+
+        val error = expectError(ErrorCode.E_CHANNEL_DOWN) {
+            // 真机上看到的就是这个：前台身份是**已知的**，但仍旧是微信——切 App 没做完。
+            control.afterAllowed(session, attempt, performHome = { true }) {
+                TestForeground(known = true, packageName = "com.tencent.mm", reason = "none")
+            }
+        }
+
+        val message = error.message.orEmpty()
+        assertTrue("缺读取次数：$message", message.contains("reads="))
+        assertTrue("缺等待时长：$message", message.contains("waited_ms="))
+        // 关键的一条：必须说出它一直看到的是谁，否则"没等到"依旧是句废话。
+        assertTrue("没说出看到的包名：$message", message.contains("com.tencent.mm"))
+        assertTrue("没说出身份是否已知：$message", message.contains("/known"))
+    }
+
+    @Test
+    fun `foreground wait trace merges identical reads instead of listing every frame`() {
+        val trace = DebugTestControl.ForegroundWaitTrace()
+        repeat(3) { trace.add(TestForeground(known = true, packageName = "com.tencent.mm", reason = "none")) }
+        trace.add(TestForeground(known = false, packageName = "", reason = "no_application_window"))
+
+        val described = trace.describe(1234)
+
+        assertEquals(
+            "reads=4 waited_ms=1234 observed=[com.tencent.mm/known:none×3, -/unknown:no_application_window×1]",
+            described,
+        )
+    }
+
     @Test
     fun `home requires exactly one observed allowed decision`() {
         val decisions = listOf<TestConfirmationDecision?>(

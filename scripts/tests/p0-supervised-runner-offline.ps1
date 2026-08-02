@@ -316,18 +316,18 @@ if "%1"=="exec-out" (
     exit /b 0
   )
   if "%5"=="files/test-confirmation-state.json" (
-    if not exist "%P0_FAKE_STATE%\confirmation-state.json" exit /b 1
+    if not exist "%P0_FAKE_STATE%\confirmation-state.json" goto :missingfile
     type "%P0_FAKE_STATE%\confirmation-state.json"
     exit /b 0
   )
   rem exec-out 里唯一的 .png 就是确认卡截图，扩展名判据比子串匹配便宜一个进程。
   if "%~x5"==".png" (
-    if not exist "%P0_FAKE_STATE%\%~nx5" exit /b 1
+    if not exist "%P0_FAKE_STATE%\%~nx5" goto :missingfile
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
   )
   if "%2"=="wc" (
-    if not exist "%P0_FAKE_STATE%\audit.jsonl" exit /b 1
+    if not exist "%P0_FAKE_STATE%\audit.jsonl" goto :missingfile
     rem find 必须走绝对路径：继承到的 PATH 若把 Git Bash 的 Unix find 排在 System32 前面，
     rem `find /v /c ""` 会被当成"递归搜索 /v 和 /c 两个目录"——/c 在 Git Bash 里就是整个 C 盘，
     rem 于是这一句一直扫到 30 秒超时被 kill。2026-07-26 靠它误诊了好几轮（先怪机器负载、再怪 stdin）。
@@ -335,7 +335,7 @@ if "%1"=="exec-out" (
     exit /b 0
   )
   if "%2"=="tail" (
-    if not exist "%P0_FAKE_STATE%\audit-increment.jsonl" exit /b 1
+    if not exist "%P0_FAKE_STATE%\audit-increment.jsonl" goto :missingfile
     type "%P0_FAKE_STATE%\audit-increment.jsonl"
     exit /b 0
   )
@@ -364,7 +364,7 @@ if "%1"=="shell" (
   if "%2 %3 %4 %5"=="settings get secure enabled_accessibility_services" (type "%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (echo %6>"%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
   if "%2 %3"=="ime set" (
-    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
+    if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" goto :cleanupfail
     echo %4>"%P0_FAKE_STATE%\current-ime.txt"& exit /b 0
   )
   if "%2 %3 %4"=="appops get dev.magina.gateway" (echo SYSTEM_ALERT_WINDOW: allow& exit /b 0)
@@ -421,12 +421,12 @@ if "%1"=="shell" (
         >"%P0_FAKE_STATE%\cleanup-once-fired.txt" echo 1
         exit /b 7
       )
-      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
+      if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" goto :cleanupfail
     )
     exit /b 0
   )
   if "%2 %3"=="rm -f" (
-    findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && exit /b 7
+    findstr /x /c:"remote_cleanup_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && goto :cleanupfail
     del /q "%P0_FAKE_STATE%\staged-control.json" 2>nul
     exit /b 0
   )
@@ -435,6 +435,10 @@ if "%1"=="shell" (
 exit /b 0
 :dumpsysnotifail
 exit /b 3
+:missingfile
+exit /b 1
+:cleanupfail
+exit /b 7
 '@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
@@ -1435,6 +1439,14 @@ try {
         $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') -Filter run-manifest.json -Recurse | Select-Object -First 1
         $json = Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json
         Assert-True ($json.cleanup.ok -eq $false -and $json.cleanup.issues.Count -gt 0) 'manifest 未记录脱敏 cleanup 失败。'
+        # **逐条点名，不再只数个数**：这个场景往假 adb 里注了三处失败（恢复输入法、删设备端
+        # 状态文件、移除端口转发），而 `Count -gt 0` 只要一处生效就绿。2026-08-02 实测其中
+        # 两处的 `exit /b 7` 因为写在块内且后面还有命令，退出码被吞成 0——**注入根本没生效，
+        # 而用例照绿**。用例名说的是"单步失败仍继续其余步骤"，那就得看见"其余步骤"也失败了。
+        foreach ($issue in @('restore_ime', 'device_confirmation_state', 'remove_port_forward')) {
+            Assert-True ($json.cleanup.issues -contains $issue) `
+                "cleanup issues 缺 $issue：注入可能又静默失效了（issues=$($json.cleanup.issues -join ','))"
+        }
     }
 
     Test-Case '设备 session cleanup 可重复调用且部分失败可在第二次收敛' {
