@@ -165,6 +165,34 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 | 3 | `3cb9133` | `claude/serene-faraday-42d1fb` | **待验收**（并入下方合并跑） | Deny 腿带外验证自动化 |
 | **2+3 合并跑** | **`33b9eac`** | `claude/serene-faraday-42d1fb` | 批次 3 **✅ 通过** · 批次 2 **❌ 未达成** | 08-02 00:11 |
+| **2（收窄后）** | **`075e698`** | `claude/serene-faraday-42d1fb` | **就绪待用户手机时间** | 判据 1 挂已有腿，不加真机成本 |
+
+**收窄后的批次 2（`075e698`，主会话独立复核 `check.ps1` 五项全绿、离线 runner 82）：**
+
+- **判据 1 拆两条挂在已有的腿上，不新增真机成本**：**1a 可达且送达**挂 Stale 腿——切到别的 App
+  再从通知点允许，前台变了必判 `E_STALE_REF`，**而那正是 Stale 腿的预期终态，该腿照常通过**；
+  **1b 能真的放行**挂 Allow 腿——微信留前台、在 heads-up 浮窗上点。
+- **A 道自己补了一件没被要求的事，且正是本仓核心教训的应用**：判据 1 原本只能靠**真人自报**
+  "我点的是通知"，与 Deny 腿那次「判据全部来自自报」同一形态。现在 app 私有状态写
+  `decided_via`、审计 note 一份，runner 转记进 manifest `confirmation_channel`。
+  设计经主会话核对：`ApprovalChannel` 只有 `OVERLAY`/`NOTIFICATION` **两个值、无默认值**；
+  `decide()` 只记**真正胜出**的那次；**没人决定时 `winner()` 返回 null**（"null 就是没人点"），
+  超时那次一个字不写——**凭空写 overlay 等于伪造"人点过卡"**。不新增裁决点。
+- **一条现场必须知道的预判（未实测，已写进 runbook）**：1b 若**下拉通知栏**再点，预计以
+  `E_BLOCKED`（前台身份未知）结束——通知栏展开时自己获焦。旁证很硬：确认卡当初必须加
+  `FLAG_NOT_FOCUSABLE` 就是同一机制。runbook 写明**照点不误，两种结果都不许改判据、
+  不许重跑凑绿**。
+- 锁屏两条已按拍板归档进 spec §5.4（**从未验过，现在也不当成通过**，重开条件写死）；
+  决定三"当前无实际后果"进 spec §5.5 + `ConfirmNotifier` 注释，并写明**锁屏能力一旦重开，
+  这个决定当场变成承重的，要在同一轮重新确认**。
+
+**语义意图审批 spec 草稿已交**（[spec](specs/2026-08-02-语义意图审批-design.md)，只起草未实现）。
+两个离线结论：①**锁屏那道墙不用拆也能绕开**——危险动作是在手机亮着、微信在前台时**发起**的，
+锁屏发生在等人决定那段，故 `requireKnownForeground` 位置不动、判据不松；代价是锁屏上按了允许，
+动作要等前台恢复才发生。②**「把 60 秒调大」在今天这套证据下是空话**——`InputCommitEvidence`
+与 `PreparedTargetEvidence` 的 TTL 都是 **120s**，从建立意图到执行总共两分钟。
+**四题待用户拍板**（见 spec §6，各带推荐）：意图有效期走哪条路 · 硬门不变量 4 的措辞改写 ·
+§2.3 两处"更弱"接不接受 · I 级要不要也走"批准后延后执行"。
 
 **批次 3 通过（主会话独立核 manifest）**：`deny_out_of_band = {captured:true, ocr:"windows-media-ocr",
 input_box_marker:"present", message_area_marker:"absent", verdict:"not_sent_confirmed"}`，
