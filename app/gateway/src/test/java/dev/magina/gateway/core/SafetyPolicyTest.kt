@@ -209,21 +209,53 @@ class SafetyPolicyTest {
     }
 
     /**
-     * 拆档**只贴标签，不改判据**：确认卡逐字不变（spec §7 不动现有 8 项证据），
-     * 「命中“X”」里那个词也不变——匹配顺序与拆档前逐字相同。
+     * 拆档不改判据：「命中“X”」里那个词不变——匹配顺序与拆档前逐字相同。
+     *
+     * 卡面在**批次 2** 里加了唯一一项增量：档位标注（L3 的 8 项内容与顺序仍一字未动）。
+     * 分级那一轮写的是「档位不得出现在本轮的确认卡上」，那条已被批次 2 取代——
+     * 留着它会变成"靠巧合通过的过时断言"（当时的 I 级文案恰好不含"不可逆"三字），
+     * 与本仓两次栽过的「用例把错误行为钉成预期」是同一族。这里改成正面钉住新的预期。
      */
     @Test
-    fun `tiering changes neither the card text nor which word is reported`() {
+    fun `tiering keeps the reported word and adds exactly one card line`() {
         val decision = policy.assess(
             "ui_action",
             Level.W,
             JSONObject().put("ref", "r1").put("action", "click"),
             normalContext.copy(target = SafetyTarget(ref = "r1", text = "删除订单", bounds = "[0,0][1,1]")),
         ) as SafetyDecision.ConfirmationRequired
+        val card = decision.cardText("c-1")
 
-        assertTrue(decision.cardText("c-1").contains("动作：click 危险目标（命中“删除”）"))
-        assertTrue("档位不得出现在本轮的确认卡上", !decision.cardText("c-1").contains("不可逆"))
-        assertTrue("档位不得出现在本轮的确认卡上", !decision.cardText("c-1").contains("撤回"))
+        assertTrue(card.contains("动作：click 危险目标（命中“删除”）"))
+        assertTrue("I 级要在卡上明说不可撤销", card.contains("风险档位：I 级 · 不可撤销"))
+        // 原有 8 项一项不少、顺序不变：档位加在证据段最前面，其后仍是「前台：…」。
+        val evidenceHead = card.lines().first { it.startsWith("风险档位：") }
+        assertEquals(card.lines().indexOf(evidenceHead) + 1, card.lines().indexOfFirst { it.startsWith("前台：") })
+    }
+
+    /** II 级不编造撤回时长；微信是有据可查的，其余 App 一律说"以该 App 规则为准"。 */
+    @Test
+    fun `retractable tier card line never fabricates a retract window`() {
+        val send = policy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "r1").put("action", "click"),
+            normalContext.copy(target = SafetyTarget(ref = "r1", text = "发送", bounds = "[0,0][1,1]")),
+        ) as SafetyDecision.ConfirmationRequired
+
+        assertTrue(send.cardText("c-1").contains("风险档位：II 级 · 有撤回窗口（微信约 2 分钟）"))
+
+        val elsewhere = policy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "r1").put("action", "click"),
+            normalContext.copy(
+                packageName = "com.example.app",
+                target = SafetyTarget(ref = "r1", text = "发送", bounds = "[0,0][1,1]"),
+            ),
+        ) as SafetyDecision.ConfirmationRequired
+
+        assertTrue(elsewhere.cardText("c-1").contains("以该 App 规则为准"))
     }
 
     private fun tierOfClickTarget(word: String): RiskTier {

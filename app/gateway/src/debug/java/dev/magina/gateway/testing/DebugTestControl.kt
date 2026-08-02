@@ -2,6 +2,7 @@ package dev.magina.gateway.testing
 
 import android.content.Context
 import android.os.SystemClock
+import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import org.json.JSONObject
@@ -132,6 +133,7 @@ class DebugTestControl(
     override fun onConfirmationDecision(
         session: TestControlSession,
         decision: TestConfirmationDecision,
+        decidedVia: ApprovalChannel?,
     ) {
         val debug = session as? Session ?: return
         if (debug.decisionState != DecisionState.AWAITING) {
@@ -153,7 +155,12 @@ class DebugTestControl(
                 "timed_out"
             }
         }
-        writeState(debug, state, evidenceFile = "confirmation-${debug.confirmId}.png")
+        writeState(
+            debug,
+            state,
+            evidenceFile = "confirmation-${debug.confirmId}.png",
+            decidedVia = decidedVia,
+        )
     }
 
     @Synchronized
@@ -296,6 +303,7 @@ class DebugTestControl(
         state: String,
         evidenceFile: String? = null,
         errorCode: String? = null,
+        decidedVia: ApprovalChannel? = null,
     ) {
         val json = JSONObject()
             .put("run_id", session.command.runId)
@@ -306,6 +314,9 @@ class DebugTestControl(
             .put("input_length", session.attempt.inputLength)
             .put("input_sha256", session.attempt.inputSha256)
         evidenceFile?.let { json.put("evidence_file", it) }
+        // 决定来自哪条 surface。**只在真有生效决定时才写**：超时那次写成 "overlay" 会凭空
+        // 造出一条"人在卡上点过"的假证据。runner 读不到该字段时记 unknown，不冒充任何一边。
+        decidedVia?.let { json.put("decided_via", it.wireName) }
         session.cardVisible?.let { json.put("card_visible", it) }
         session.captureAttempts?.let { json.put("capture_attempts", it) }
         errorCode?.let { json.put("error_code", it) }

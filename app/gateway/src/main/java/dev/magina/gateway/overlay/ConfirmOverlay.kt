@@ -12,16 +12,23 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.magina.gateway.core.ApprovalChannel
+import dev.magina.gateway.core.ApprovalChannelRecorder
+import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.SafetyFallbacks
 import dev.magina.gateway.testing.TestConfirmationDecision
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 /**
  * 统一安全门内部的确认悬浮窗（不暴露为 MCP 工具，harness §5.3 带内确认）。
- * 危险动作弹网关生成的卡片，人在手机上点头；超时抛 E_CONFIRM_TIMEOUT——大脑随即按
- * [AWAIT_CONFIRM] 协议输出暂停报告走带外兜底，传输层可替换、协议不动。
+ * 危险动作弹网关生成的卡片，人在手机上点头。
+ *
+ * **本类抛出的每一个错误都是 safety 终态**（`E_CONFIRM_TIMEOUT` / `E_PERM_MISSING` /
+ * `E_CHANNEL_DOWN`）：它们全都发生在危险工具**已经在调用中**，大脑必须按站规常规失败，
+ * **不得输出 `[AWAIT_CONFIRM]`**。措辞集中在 [SafetyFallbacks]，由离线用例逐条钉住。
  */
 object ConfirmOverlay {
 
@@ -40,20 +47,34 @@ object ConfirmOverlay {
         actionDesc: String,
         timeoutMs: Long = 60_000,
         onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
-        onDecisionObserved: (TestConfirmationDecision) -> Unit = {},
+        /**
+         * 观察到的真人决定 + 它来自哪条通道（无人决定时通道为 null）。
+         * 通道只用于取证，**不参与任何放行判定**。
+         */
+        onDecisionObserved: (TestConfirmationDecision, ApprovalChannel?) -> Unit = { _, _ -> },
+        /**
+         * 并联的通知栏审批（批次 2）。给了它就同时推一条通知，锁屏上也能点。
+         *
+         * **两条通道共用下面那个 `future`**：`CompletableFuture.complete` 只会成功一次，
+         * 所以先点的那一边赢，后到的一律被丢弃——这就是接缝 2 要的那个 CAS，
+         * 不存在"卡上拒绝、通知上允许"同时生效的状态。
+         */
+        notification: ConfirmNotificationRequest? = null,
     ): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) throw GatewayError(
             ErrorCode.E_CHANNEL_DOWN,
             "统一安全门不能在主线程等待确认",
             channel = "overlay",
-            fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式",
+            fallback = SafetyFallbacks.OVERLAY_CHANNEL_DOWN,
         )
         if (!Settings.canDrawOverlays(context)) throw GatewayError(
             ErrorCode.E_PERM_MISSING, "悬浮窗权限未授予，带内确认不可用",
-            channel = "overlay", fallback = "直接输出 [AWAIT_CONFIRM] 走带外两段式",
+            channel = "overlay", fallback = SafetyFallbacks.OVERLAY_PERMISSION_MISSING,
         )
 
         val future = CompletableFuture<Boolean>()
+        // 两条通道共用同一个 complete；这层只把"生效的那一次"归属到通道上，胜负判定一字未动。
+        val approval = ApprovalChannelRecorder(future::complete)
         val cardShown = CompletableFuture<Unit>()
         // 卡片在屏幕上的真实位置与底色，取证时用来判断截图里到底有没有拍到卡本身。
         // 写在 cardShown.complete 之前、读在 cardShown.get 之后，两侧由 future 建立 happens-before。
@@ -89,7 +110,11 @@ object ConfirmOverlay {
                 code,
                 "确认悬浮窗${operation}失败：${root.javaClass.simpleName}: ${root.message.orEmpty()}",
                 channel = "overlay",
-                fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式",
+                fallback = if (code == ErrorCode.E_PERM_MISSING) {
+                    SafetyFallbacks.OVERLAY_PERMISSION_MISSING
+                } else {
+                    SafetyFallbacks.OVERLAY_CHANNEL_DOWN
+                },
             ).apply { initCause(root) }
         }
 
@@ -163,12 +188,12 @@ object ConfirmOverlay {
                         addView(Button(context).apply {
                             text = "拒绝"
                             isEnabled = false
-                            setOnClickListener { future.complete(false) }
+                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, false) }
                         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                         addView(Button(context).apply {
                             text = "允许本次"
                             isEnabled = false
-                            setOnClickListener { future.complete(true) }
+                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, true) }
                         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                     })
                 }
@@ -269,6 +294,8 @@ object ConfirmOverlay {
         var result: Boolean? = null
         var failure: GatewayError? = null
         var waitingForHuman = false
+        /** 已在裁决点登记的确认编号；收摊时只关自己这一次，不误关别人后开的。 */
+        var notificationOpened: String? = null
         try {
             cardShown.get(2, TimeUnit.SECONDS)
             readiness.beginEvidence()
@@ -300,6 +327,33 @@ object ConfirmOverlay {
             }
             if (!enablePosted) throw IllegalStateException("主线程 Handler 已停止")
             buttonsEnabled.get(2, TimeUnit.SECONDS)
+            // 通知在**卡的按钮已经可点之后**才推：早于它就会出现"锁屏上能批准，而卡还没画完、
+            // 取证也还没就绪"的窗口，等于让审批跑到证据前面去。
+            notification?.let { request ->
+                ConfirmApprovalArbiter.open(request.confirmationId, request.nonce) { allowed ->
+                    approval.decide(ApprovalChannel.NOTIFICATION, allowed)
+                }
+                notificationOpened = request.confirmationId
+                runCatching {
+                    ConfirmNotifier.post(
+                        context = context,
+                        confirmationId = request.confirmationId,
+                        nonce = request.nonce,
+                        tier = request.riskTier,
+                        action = request.action,
+                        target = request.target,
+                        targetPackage = request.targetPackage,
+                        preview = request.preview,
+                        // 通知的存活时长跟着确认窗口走（见 ConfirmNotifier 的 setTimeoutAfter）：
+                        // 「可见」靠不做 ongoing，「持久」靠超时，两件事分开解决。
+                        timeoutMs = timeoutMs,
+                    )
+                }.onFailure { error ->
+                    // 推不出通知不该让整条链失败：悬浮卡仍然在屏幕上，人照样能点。
+                    // 但必须留痕，否则"锁屏批准用不了"会被当成用户没看见。
+                    android.util.Log.w("GatewayApproval", "审批通知推送失败，仅保留悬浮卡：$error")
+                }
+            }
             waitingForHuman = true
             result = future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: java.util.concurrent.TimeoutException) {
@@ -307,7 +361,11 @@ object ConfirmOverlay {
                 GatewayError(
                     ErrorCode.E_CONFIRM_TIMEOUT, "带内确认 ${timeoutMs / 1000}s 无人响应",
                     channel = "overlay",
-                    fallback = "输出 [AWAIT_CONFIRM] 暂停报告，走带外两段式（harness §5.1）",
+                    // 原文引着 harness spec §5.1 却写了与它相反的指令。§5.1 本身没错，
+                    // 它写的是：gateway 只在**尚未调用危险工具**时才可输出 [AWAIT_CONFIRM]，
+                    // 一旦危险工具已返回超时/拒绝/stale/blocked/缺权限，本腿必须常规失败。
+                    // 引用一份说着相反话的 spec，会让错误的指令看起来是被授权的。
+                    fallback = SafetyFallbacks.CONFIRM_TIMEOUT,
                 )
             } else mappedFailure("显示或启用", e)
         } catch (error: java.util.concurrent.ExecutionException) {
@@ -320,6 +378,13 @@ object ConfirmOverlay {
         }
 
         if (failure != null) readiness.fail()
+
+        // 收摊顺序：先关审批窗口再撤通知。反过来的话，通知已经没了、裁决点还开着，
+        // 一条迟到的回执仍能落到这次确认上。
+        notificationOpened?.let { id ->
+            ConfirmApprovalArbiter.close(id)
+            runCatching { ConfirmNotifier.cancel(context) }
+        }
 
         dismissBlocking()?.let { dismissError ->
             failure?.let { dismissError.addSuppressed(it) }
@@ -334,7 +399,7 @@ object ConfirmOverlay {
         }
         observedDecision?.let { decision ->
             try {
-                onDecisionObserved(decision)
+                onDecisionObserved(decision, approval.winner())
             } catch (error: Throwable) {
                 throw if (error is GatewayError) error else mappedFailure("记录确认状态", error)
             }

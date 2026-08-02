@@ -636,21 +636,48 @@ teardown 的成功判据复用零 token 只读预检，不另立一套——它�
 function Get-P0TeardownVerdict {
     param(
         [Parameter(Mandatory)][int]$ExitCode,
-        [Parameter(Mandatory)][AllowEmptyString()][string]$Stdout
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Stdout,
+        # 本腿 marker 的归一形式。给了它才能区分"我们的残留"与"别人的字"。
+        [AllowEmptyString()][string]$ExpectedNormalized = ''
     )
     $detail = ([string]$Stdout).Trim()
     if ($ExitCode -eq 0) { return [pscustomobject]@{ verdict = 'clean'; detail = '' } }
     if ($ExitCode -eq 2) {
         $empty = $null
+        $leftovers = @()
         if ($detail) {
             try {
                 $payload = $detail | ConvertFrom-Json
                 $property = $payload.PSObject.Properties['empty']
                 if ($null -ne $property) { $empty = [bool]$property.Value }
+                $leftoverProperty = $payload.PSObject.Properties['leftovers']
+                if ($null -ne $leftoverProperty -and $null -ne $leftoverProperty.Value) {
+                    $leftovers = @($leftoverProperty.Value | ForEach-Object { [string]$_ })
+                }
             }
             catch { $empty = $null }
         }
-        if ($empty -eq $false) { return [pscustomobject]@{ verdict = 'dirty'; detail = $detail } }
+        if ($empty -eq $false) {
+            # **候选区有字 ≠ 输入框里是我们的残留。** 2026-08-02 实锤：一条联通流量提示浮层
+            # 压在输入栏上，读出「联通 今日已用：739.1 KB…」，输入框其实是空的，整轮被判 failed。
+            # 与「键盘顶起布局后量到的是键盘」同族——**固定几何 + 只看"这块地方有没有字"，
+            # 分不清那字是谁的**。
+            #
+            # 判据改成看**本腿 marker 在不在**：
+            # - 在 → dirty，真残留（严格性一分未松）；
+            # - 不在 → **unverified，不是 clean**。我们没有证据说框里是空的（浮层可能正压着
+            #   marker），只是没有证据说它脏。倒向 clean 会把真残留放过去。
+            $normalizedLeftovers = ($leftovers -join ' ')
+            $hasOurMarker = $ExpectedNormalized -and
+                (Normalize-P0MarkerText $normalizedLeftovers).Contains($ExpectedNormalized)
+            if ($hasOurMarker -or -not $ExpectedNormalized) {
+                return [pscustomobject]@{ verdict = 'dirty'; detail = $detail }
+            }
+            return [pscustomobject]@{
+                verdict = 'unverified'
+                detail = "候选区有文字但不含本腿 marker（多半是系统浮层压在输入栏上）：$detail"
+            }
+        }
         return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
     }
     return [pscustomobject]@{ verdict = 'unverified'; detail = $detail }
@@ -672,6 +699,7 @@ function Invoke-P0LegTeardown {
         [Parameter(Mandatory)]$Session,
         [Parameter(Mandatory)][int]$TypedLength,
         [AllowEmptyString()][string]$PrecheckPath = '',
+        [AllowEmptyString()][string]$ExpectedNormalized = '',
         [int]$ExtraDeleteKeys = 8,
         [int]$MaxDeleteKeys = 64,
         [int]$MaxBackPresses = 2,
@@ -760,7 +788,8 @@ function Invoke-P0LegTeardown {
             $check = Invoke-P0ExternalText -FilePath $PrecheckPath `
                 -Arguments @('-ConfigPath', $Session.ConfigPath, '-NotReadyRetries', '5', '-NotReadyRetryDelayMs', '1500') `
                 -Operation '腿末收尾核对' -AllowFailure -TimeoutSec 60
-            $resolved = Get-P0TeardownVerdict -ExitCode $check.ExitCode -Stdout ([string]$check.Stdout)
+            $resolved = Get-P0TeardownVerdict -ExitCode $check.ExitCode -Stdout ([string]$check.Stdout) `
+                -ExpectedNormalized $ExpectedNormalized
             $verdict = $resolved.verdict
             $detail = $resolved.detail
         }
@@ -1038,6 +1067,30 @@ function Save-P0AuditIncrement {
     Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
         -Arguments @('-s',$Session.Serial,'exec-out','tail','-n',"+$firstLine",[string]$Cursor.Path) `
         -Destination $Destination -Operation '拉取本腿 gateway 审计增量'
+
+    # **跨零点**：设备审计按日期分文件。2026-08-02 实锤——Stale 腿 23:59:44 起、00:00:28 止，
+    # 那一行落进了第二天的文件，而游标钉着头一天的，于是"新增审计行数"读成 0、判本腿失败。
+    # 安全语义完全正常，纯粹是证据采集缺了一块。
+    #
+    # 补法：腿末重新问一次设备日期，跨天了就把新那一天**从头**接到增量末尾。
+    # 不改游标语义，也不猜行数——新的一天从第 1 行起全是本腿之后产生的。
+    $dayProbe = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','date','+%Y%m%d') -Operation '复核设备审计日期' -AllowFailure
+    $today = $dayProbe.Stdout.Trim()
+    if ($dayProbe.ExitCode -ne 0 -or $today -notmatch '^\d{8}$' -or $today -ceq [string]$Cursor.Day) { return }
+
+    $rolled = "/sdcard/Android/data/$script:P0PackageName/files/audit/$today.jsonl"
+    $tail = Join-Path ([IO.Path]::GetTempPath()) ("p0-audit-rollover-" + [guid]::NewGuid().ToString('N') + '.jsonl')
+    try {
+        Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
+            -Arguments @('-s',$Session.Serial,'exec-out','tail','-n','+1',$rolled) `
+            -Destination $tail -Operation '拉取跨零点后的 gateway 审计增量'
+        $rolledText = Get-Content -LiteralPath $tail -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($rolledText)) {
+            Add-Content -LiteralPath $Destination -Value $rolledText -Encoding utf8 -NoNewline
+        }
+    }
+    finally { Remove-Item -LiteralPath $tail -Force -ErrorAction SilentlyContinue }
 }
 
 function Clear-P0DebugArtifacts {

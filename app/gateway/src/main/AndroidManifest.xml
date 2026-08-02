@@ -28,6 +28,22 @@
             </intent-filter>
         </activity>
 
+        <!--
+            通知栏审批的回执落点（批次 2）。
+            exported=false 是安全要求，不是习惯：只有本进程发出的显式广播能到这里。
+            配合 PendingIntent 的 FLAG_IMMUTABLE 与一次性 nonce，大脑没有任何路径替真人点头。
+
+            **刻意没有声明 USE_FULL_SCREEN_INTENT**（B 道决定二）：FSI 的作用正是把整页免解锁
+            糊到锁屏上，而锁屏那一层已经用 VISIBILITY_PRIVATE 把明文挡在外面，两者直接冲突。
+        -->
+        <receiver
+            android:name=".overlay.ConfirmDecisionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="dev.magina.gateway.APPROVAL_DECISION" />
+            </intent-filter>
+        </receiver>
+
         <!-- 前台服务：承载嵌入式 MCP server -->
         <service
             android:name=".GatewayService"

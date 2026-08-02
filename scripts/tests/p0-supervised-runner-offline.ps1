@@ -130,9 +130,11 @@ function New-Fixture {
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
+        'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
-        'teardown_not_foreground', 'teardown_foreground_stuck'
+        'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
+        'decided_via_notification'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -199,6 +201,11 @@ function Remove-P0PrivateTemporaryFile {
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
+    # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\p0-marker.ps1')
     foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md')) {
         Copy-Item -LiteralPath (Join-Path $SourceTaskTemplateDir $template) `
             -Destination (Join-Path $repo "scripts\tasks\$template")
@@ -437,10 +444,19 @@ rem post-teardown re-check: keyevent.log existing means teardown has already run
 rem NOTE: keep `exit /b` at this nesting level. Wrapping these in an outer `if exist (...)`
 rem block swallows the exit code (cmd reports 0), which silently turns the assertion green.
 if not exist "%P0_FAKE_STATE%\keyevent.log" goto :beforeteardown
-findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
-  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["P0LEFTOVER@100,2600,900,2700"]}
+rem teardown_dirty = 真残留：leftovers 必须是**本腿自己的 marker**，否则判据只会看到"别人的字"。
+findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && goto :teardowndirty
+rem teardown_overlay = 系统浮层压在输入栏上：有字，但不是我们的。
+findstr /x /c:"teardown_overlay" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["UNICOM-TRAFFIC-TIP@100,2713,900,2765"]}
   exit /b 2
 )
+goto :notteardowndirty
+:teardowndirty
+for /f "usebackq delims=" %%M in ("%P0_FAKE_STATE%\markers.log") do set LASTMARKER=%%M
+call echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["%%LASTMARKER%%@100,2600,900,2700"]}
+exit /b 2
+:notteardowndirty
 findstr /x /c:"teardown_probe_not_ready" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   echo {"ok":false,"empty":true,"probe_ready":false,"reason":"ocr-jitter"}
   exit /b 2
@@ -481,7 +497,7 @@ if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: 
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
 Set-Content -LiteralPath (Join-Path $state 'task-file.log') -Value $TaskFile -Encoding utf8
 $taskText = Get-Content -LiteralPath $TaskFile -Raw -Encoding utf8
-$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY)-[A-F0-9]{12}')
+$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY)-[3479AHKMPTXY]{12}')
 if (-not $markerMatch.Success) { throw 'dynamic marker missing from task' }
 $marker = $markerMatch.Value
 $markerBytes = [Text.Encoding]::UTF8.GetBytes($marker)
@@ -519,6 +535,9 @@ $confirm = [ordered]@{
     input_length=$marker.Length; input_sha256=$confirmHash
     card_visible=($scenario -ne 'card_not_captured'); capture_attempts=1
 }
+# 通知栏那条通道点下的决定。app 侧只在真有生效决定时才写这个字段，
+# 所以默认场景**故意不写**——它就是"旧 APK / 没人点通知"的对照组。
+if ($scenario -eq 'decided_via_notification') { $confirm.decided_via = 'notification' }
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
@@ -634,11 +653,37 @@ if ($code -eq 'OK') {
         } else {
             @(100,1900,980,2050)
         }
-        $findData = @{
-            matches=@(@{
-                ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
-                bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
+        # OCR 对同一条气泡回两个重叠框（bounds 差 3px，其中一个带空格）是 2026-08-02 真机实测的
+        # 形态；两条归一后都等于期望 marker。find_ocr_extra_text 则相反：混进一条别的文本。
+        # 重叠框：整体偏移 3px。**每一项都要自己的括号**——PowerShell 里逗号比 `+` 结合得更紧，
+        # `@($a[0]+3, $a[1]+3)` 会被解析成 `$a[0] + (3, $a[1]) + 3`，于是对 Object[] 做加法、
+        # 报 op_Addition 失败。这个坑与判据无关，纯粹是语法，但它把用例挂了三轮。
+        $nudged = @(
+            ([int]$matchBounds[0] + 3), ([int]$matchBounds[1] + 3),
+            ([int]$matchBounds[2] + 3), ([int]$matchBounds[3] + 3)
+        )
+        $extraMatches = @()
+        if ($scenario -eq 'find_ocr_split_bubble') {
+            $spaced = $findEvidenceText.Insert([Math]::Min(12, $findEvidenceText.Length), ' ')
+            $extraMatches = @(@{
+                ref='e2';text=$spaced;normalized=$spaced;role=$matchRole;flags=$matchFlags
+                bounds=$nudged;source='ocr'
             })
+        }
+        if ($scenario -eq 'find_ocr_extra_text') {
+            $extraMatches = @(@{
+                ref='e2';text='OTHER-MESSAGE';normalized='OTHER-MESSAGE';role=$matchRole;flags=$matchFlags
+                bounds=$nudged;source='ocr'
+            })
+        }
+        # 在哈希表字面量里对数组做 `+` 会解析成 op_Addition 失败，先拼好再塞进去。
+        $allMatches = @(@{
+            ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
+            bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
+        })
+        foreach ($extra in $extraMatches) { $allMatches += $extra }
+        $findData = @{
+            matches=$allMatches
             scrolls=0
             screen_width=1080
             screen_height=2400
@@ -1241,6 +1286,30 @@ try {
             'manifest 未如实记录截图没拍到确认卡。'
     }
 
+    Test-Case '决定来自哪条 surface 如实进 manifest，缺字段记 unknown 不冒充悬浮卡' {
+        # 批次 2 判据 1 要的是"通知上点得到、并且真的放行了"。没有这个字段时，那句话
+        # 只能由真人自报——本仓已经吃过一次"判据全部来自自报"的亏。
+        $viaNotification = New-Fixture decided_via_notification
+        $result = Invoke-FixtureRunner $viaNotification @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "通知通道决定不该让腿失败：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $viaNotification.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].confirmation_channel -ceq 'notification') `
+            'manifest 未如实记录决定来自通知栏。'
+
+        # 对照组：app 不报该字段时必须是 unknown。默认成 overlay 会让"通知从没被点过"
+        # 在 manifest 里读起来像验过了。
+        $plain = New-Fixture happy
+        $plainResult = Invoke-FixtureRunner $plain @('Allow')
+        Assert-True ($plainResult.ExitCode -eq 0) "对照组不该失败：`n$($plainResult.Text)"
+        $plainManifest = Get-ChildItem -LiteralPath (Join-Path $plain.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $plainJson = Get-Content -LiteralPath $plainManifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($plainJson.legs[0].confirmation_channel -ceq 'unknown') `
+            '缺 decided_via 时 manifest 必须记 unknown。'
+    }
+
     Test-Case '候选区残留文字在开跑前零付费拦下' {
         $fixture = New-Fixture probe_region_dirty
         $result = Invoke-FixtureRunner $fixture @('Allow')
@@ -1693,12 +1762,493 @@ try {
         Assert-NotMatches $checkSource 'dispatch'
     }
 
+    Test-Case '带外 OCR：marker 被切成多个词也要拼回来' {
+        # 实测 OCR 把 P0ALLOW-1D97824FD778 切成 POALLOW- / 1 / D97824FD778 三个词，
+        # 还带 O→0 误识。拿单个词去 contains 必然漏判，所以必须先按行拼词、再走归一。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        $normalize = { param($t) [regex]::Replace("$t".ToUpperInvariant(), '[^A-Z0-9]', '').Replace('O', '0') }
+
+        $words = ConvertFrom-P0OcrWords -Text @'
+POALLOW-|72|817|207|32
+1|287|817|11|32
+D97824FD778|310|817|273|32
+PODENY-DCA2222F6441|72|2117|472|32
+'@
+        Assert-True ($words.Count -eq 4) "应解析出 4 个词，实际 $($words.Count)"
+        $lines = Join-P0OcrLines -Words $words
+        Assert-True ($lines.Count -eq 2) "应拼成 2 行，实际 $($lines.Count)"
+        Assert-True ($lines[0].Text -ceq 'POALLOW-1D97824FD778') "拼行结果不符：$($lines[0].Text)"
+
+        # 消息区（y<2000）有 Allow 的 marker；输入框带（y>=2000）有 Deny 的。
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0ALLOW-1D97824FD778' `
+            -BandTop 0 -BandBottom 2000 -Normalize $normalize) -ceq 'present') '拼行后应能命中被切开的 marker。'
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 2000 -BandBottom 3000 -Normalize $normalize) -ceq 'present') '输入框带应命中 Deny marker。'
+        # 带里有字但不是这个 marker → absent；带里一个字都没有 → unreadable，两者不能混。
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 0 -BandBottom 2000 -Normalize $normalize) -ceq 'absent') '带里有字但无该 marker 应为 absent。'
+        Assert-True ((Get-P0OcrMarkerPresence -Lines $lines -Marker 'P0DENY-DCA2222F6441' `
+            -BandTop 3000 -BandBottom 4000 -Normalize $normalize) -ceq 'unreadable') '带里没字应为 unreadable，不是 absent。'
+
+        # 解析不出来的行丢弃，不让它污染判定，也不让整次判定失败。
+        Assert-True ((ConvertFrom-P0OcrWords -Text "坏行`nA|1|2|3").Count -eq 0) '格式不对的行应被丢弃。'
+        Assert-True ((ConvertFrom-P0OcrWords -Text '').Count -eq 0) '空输入应回空列表。'
+
+        # 行归并阈值：相邻两行不得被串成一行，否则会拼出并不存在的 marker。
+        $twoRows = ConvertFrom-P0OcrWords -Text "P0DENY-|10|100|100|32`nDCA2222F6441|10|400|200|32"
+        Assert-True ((Join-P0OcrLines -Words $twoRows).Count -eq 2) '相隔很远的两行不得被并成一行。'
+    }
+
+    Test-Case '带外结论三态：消息区没找到永远不算"没发出去"' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+
+        # 强反证：Deny 腿声称拦下了，消息区却读到了 marker。压过一切，直接判发出去了。
+        foreach ($inputBox in @('present', 'absent', 'unreadable')) {
+            $sent = Get-P0DenyOobVerdict -InputBox $inputBox -MessageArea 'present'
+            Assert-True ($sent.Verdict -ceq 'sent_detected') "消息区命中 marker 必须判 sent_detected（输入框=$inputBox）。"
+        }
+
+        # 唯一的强正证据：marker 原封不动留在输入框（微信发送后会清空输入栏）。
+        $ok = Get-P0DenyOobVerdict -InputBox 'present' -MessageArea 'absent'
+        Assert-True ($ok.Verdict -ceq 'not_sent_confirmed') '输入框仍有 marker 应判 not_sent_confirmed。'
+        # 措辞只说验到的那一条，不得写成"已确认未发送"——消息区那条负证据仍未被视觉证实。
+        Assert-True ($ok.Postcondition -ceq 'independent_ocr_marker_still_in_input_box') "postcondition 措辞夸大：$($ok.Postcondition)"
+
+        # **本用例的核心**：消息区 absent 不是"没发出去"的证据（列表可能滚上去了）。
+        foreach ($messageArea in @('absent', 'unreadable')) {
+            $weak = Get-P0DenyOobVerdict -InputBox 'absent' -MessageArea $messageArea
+            Assert-True ($weak.Verdict -ceq 'inconclusive') "输入框没 marker 时不得凭消息区 $messageArea 判定未发送。"
+            # 判不了就退回原样的措辞，不许因为"跑过一次带外验证"把结论写得更强。
+            Assert-True ($weak.Postcondition -ceq 'gateway_reported_blocked_no_independent_check') `
+                "判不了时 postcondition 必须退回原样：$($weak.Postcondition)"
+        }
+        $blind = Get-P0DenyOobVerdict -InputBox 'unreadable' -MessageArea 'unreadable'
+        Assert-True ($blind.Verdict -ceq 'inconclusive') 'OCR 全读不到必须 inconclusive，不得倒向任何一边。'
+
+        $verdicts = @('sent_detected', 'not_sent_confirmed', 'inconclusive')
+        Assert-True (@($verdicts | Select-Object -Unique).Count -eq 3) '三态必须互不相同。'
+    }
+
+    Test-Case '跨零点时审计增量要把新那一天接上' {
+        # 设备审计按日期分文件。2026-08-02 实锤：Stale 腿 23:59:44 起、00:00:28 止，
+        # 那一行落进第二天的文件，而游标钉着头一天的 → "新增审计行数"读成 0、判本腿失败。
+        # 安全语义完全正常，纯粹是证据采集缺了一块。
+        $source = Get-Content -LiteralPath $SourceProvisioner -Raw
+        $start = $source.IndexOf('function Save-P0AuditIncrement')
+        $body = $source.Substring($start, [Math]::Min(2500, $source.Length - $start))
+        # 腿末必须再问一次设备日期，并在跨天时把新那一天从第 1 行起接上。
+        Assert-Contains $body '复核设备审计日期'
+        Assert-Contains $body "'+1'"
+        Assert-Contains $body '$Cursor.Day'
+        # 只在真跨天时才动，避免把同一天的行重复接一遍。
+        Assert-Contains $body '-ceq [string]$Cursor.Day) { return }'
+    }
+
+    Test-Case 'dispatch 已记过台账时不再补 aborted 行' {
+        # 2026-08-02 实锤：dispatch 自己落了 fail 行，runner 又补一行 aborted，同一腿两行；
+        # 而且补的那行归因写 confirm-timeout，真因却是卡出现之前的 type_text E_STALE_REF。
+        # 补台账的本意是"人花了时间却零留痕"，dispatch 留了痕就没这个前提。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $start = $source.IndexOf('function Write-P0AbortedLegLedgerRow')
+        $body = $source.Substring($start, [Math]::Min(1600, $source.Length - $start))
+        Assert-Contains $body '-AllowMissing'
+        Assert-True ($body.IndexOf('-AllowMissing') -lt $body.IndexOf('Add-P0LedgerRow')) `
+            '必须先查有没有既有行，再决定补不补。'
+
+        # -AllowMissing 只给"补记前先看看"用；判定路径不带它，缺行仍是硬失败。
+        $judge = $source.Substring($source.IndexOf('function Get-P0LedgerRow'), 900)
+        Assert-Contains $judge "throw '缺少 dispatch ledger。'"
+        Assert-Contains $judge '行数不是 1'
+    }
+
+    Test-Case '派单被提前掐掉时台账必须留痕，且三类归因分得开' {
+        # 2026-08-01 批次 2 验收：一次误点拒绝 + 两次确认超时，三轮跑测在台账上**零留痕**——
+        # runner 检出决定不符即 kill dispatch，dispatch 来不及写自己那行。
+        # 消耗了真人时间却完全不可见，而台账存在的全部意义就是让烧掉的东西可见。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1')
+
+        # 三类必须分得开：它们要采取的行动完全不同。
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'denied') -ceq 'safety-denied') `
+            '本腿期望允许而真人点了拒绝 → safety-denied。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'denied' -Actual 'allowed') -ceq 'decision-mismatch') `
+            'Deny 腿被批准是最严重的一种，必须单独归因。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual '') -ceq 'confirm-timeout') `
+            '没等到任何决定 → confirm-timeout。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'timed_out') -ceq 'confirm-timeout') `
+            '设备侧报 timed_out 同样归 confirm-timeout。'
+        # 决定与预期一致时不该有 fail_reason——这条路径不写台账行，但函数本身不能乱归因。
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'denied' -Actual 'denied') -ceq '') 'Deny 腿如愿被拒不算失败。'
+        Assert-True ((Get-P0AbortedLegFailReason -Expected 'allowed' -Actual 'allowed') -ceq '') '如愿被允许不算失败。'
+        $reasons = @('safety-denied', 'decision-mismatch', 'confirm-timeout')
+        Assert-True (@($reasons | Select-Object -Unique).Count -eq 3) '三类归因必须互不相同。'
+
+        # 表头只有一份：两处各写一遍必然漂移，而台账列的语义漂移正是归因失效的开始。
+        $dispatchSource = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1') -Raw
+        Assert-NotMatches $dispatchSource "time,slug,leg,brain,model"
+        Assert-Contains $dispatchSource 'Add-P0LedgerRow'
+
+        # 真写一行看看：成本列**留空而不是填 0**——token 确实烧了，只是没机会汇报，填 0 是假数据。
+        $ledger = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-ledger-" + [guid]::NewGuid().ToString('N') + '.csv')
+        try {
+            Add-P0LedgerRow -LedgerPath $ledger -Slug 'p0-safety-deny-x' -Leg 1 -Brain 'claude' -Model '' `
+                -Result 'aborted' -Note 'runner 提前终止 | expected=denied observed=allowed' -FailReason 'decision-mismatch'
+            $rows = @(Import-Csv -LiteralPath $ledger)
+            Assert-True ($rows.Count -eq 1) '应恰好写入一行。'
+            Assert-True ($rows[0].result -ceq 'aborted') "result 应为 aborted，实际 $($rows[0].result)"
+            Assert-True ($rows[0].fail_reason -ceq 'decision-mismatch') 'fail_reason 未落盘。'
+            Assert-True ($rows[0].cost_usd -ceq '') '成本未知时必须留空，不得填 0 冒充已知。'
+            Assert-True ($rows[0].out_tok -ceq '') 'token 未知时必须留空。'
+            Assert-Contains $rows[0].note 'observed=allowed'
+        }
+        finally { Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'marker 字符集躲开 OCR 易混字符，且判据不看框数只看内容' {
+        # 2026-08-02 真机：5 次 Allow 尝试只有 1 次走完，两个原因都出在"判据把实现细节当语义"。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1')
+
+        # ③ 字符集：十六进制把 0/O、C/0、B/8、D/0、E/F 全塞进一个集合，而 marker 每腿要被
+        # OCR 读两遍。修字符集不损失任何严格性；放宽 fail-closed 那一侧才是拿安全换通过率。
+        $forbidden = @('0', 'O', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'L', 'J', 'Q', 'S', 'U', 'V', 'N', 'R', 'Z',
+            '1', '2', '5', '6', '8')
+        foreach ($bad in $forbidden) {
+            Assert-True (-not $script:P0MarkerAlphabet.Contains($bad)) "marker 字符集不得含易混字符 $bad。"
+        }
+        Assert-True ($script:P0MarkerAlphabet.Length -ge 10) 'marker 字符集太小会削弱唯一性。'
+
+        $suffixes = 1..200 | ForEach-Object { New-P0MarkerSuffix }
+        foreach ($suffix in $suffixes) {
+            Assert-True ($suffix -cmatch "^[$script:P0MarkerAlphabet]{12}$") "marker 后缀越界：$suffix"
+        }
+        Assert-True (@($suffixes | Select-Object -Unique).Count -ge 195) 'marker 后缀重复过多，随机性有问题。'
+
+        # 归一后仍必须能区分：两侧归一（runner 大写+O→0、网关小写+o→0）都不折叠这些字符。
+        $normalized = @($script:P0MarkerAlphabet.ToCharArray() | ForEach-Object { Normalize-P0MarkerText "$_" })
+        Assert-True (@($normalized | Select-Object -Unique).Count -eq $script:P0MarkerAlphabet.Length) `
+            'marker 字符集里存在归一后互相塌缩的字符。'
+    }
+
+    Test-Case 'Allow 判据：同一条气泡被 OCR 切成两个框仍应通过' {
+        # 真机实锤：OCR 对同一条气泡回了两个重叠框（bounds 差 3px，文本 `POALLOW-0681 BCD5A91B`
+        # 与 `POALLOW-0681BCD5A91B`），旧判据 `Count -eq 1` 当场短路，文本比对根本没跑到——
+        # 而消息**真的发出去了**。要判的是"有没有别的东西混进来"，框数是 OCR 的实现细节。
+        $fixture = New-Fixture find_ocr_split_bubble
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "同一 marker 被切成两个框不该否决本腿：`n$($result.Text)"
+        Assert-Contains $result.Text '语义判定通过'
+    }
+
+    Test-Case 'Allow 判据：混进别的文本仍必须判失败' {
+        # 严格性不能因为放开框数而丢：任何一个框归一后不等于期望 marker，整条判据就不成立。
+        $fixture = New-Fixture find_ocr_extra_text
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '命中里混进别的文本必须判失败。'
+    }
+
+    Test-Case '任何危险路径的 fallback 都不得指示 [AWAIT_CONFIRM]' {
+        # 2026-08-02 一口气查出**五处** fallback 写着"输出 [AWAIT_CONFIRM]"，而站规 §4 把
+        # E_CONFIRM_TIMEOUT / E_PERM_MISSING / E_CHANNEL_DOWN 等逐个点名列为终态、明令不得输出它。
+        # 不依赖措辞的机械理由更硬：dispatch.ps1 -Confirm 对 gateway 暂停件的终态码检查里，
+        # 这些码全在**拒绝恢复**的名单上——旧措辞指的是一条保证走不通的路。
+        #
+        # 这条断言是给第 6 处准备的：它迟早会长出来，除非有判据看着。
+        $allowed = @()   # 白名单：确有例外时在这里显式列出并写明理由。当前为空。
+        $offenders = [Collections.Generic.List[string]]::new()
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'app\gateway\src') `
+                -Filter *.kt -Recurse -File | Where-Object { $_.FullName -notmatch '\\test' })) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            # **先剥注释再匹配**：源码文本断言分不清代码与注释，而这几个文件的注释里正解释着
+            # "为什么不这么写"。不剥的话断言会被自己的解释性文字触发（本轮已被咬过一次）。
+            $code = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
+            $code = [regex]::Replace($code, '(?m)//.*$', '')
+            foreach ($m in [regex]::Matches($code, 'fallback\s*=\s*"([^"]*)"')) {
+                if ($m.Groups[1].Value -match 'AWAIT_CONFIRM' -and $file.Name -notin $allowed) {
+                    $offenders.Add("$($file.Name)：$($m.Groups[1].Value)")
+                }
+            }
+        }
+        Assert-True ($offenders.Count -eq 0) ("以下 fallback 在教大脑违反站规（应报「结果：失败」）：`n  " +
+            ($offenders -join "`n  "))
+
+        # 措辞必须放在判据看得见的地方，而不是内联进抛错处——那正是它错了这么久没被发现的原因。
+        $fallbacks = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\core\SafetyFallbacks.kt'
+        ) -Raw
+        Assert-Contains $fallbacks '结果：失败'
+        Assert-Contains $fallbacks '不得输出 [AWAIT_CONFIRM]'
+
+        # harness spec §5.1 本身没写错，是代码引着它写了相反的话。它若哪天改了，这条会提醒。
+        $harness = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'docs\specs\2026-07-17-执行harness-design.md'
+        ) -Raw
+        Assert-Contains $harness '尚未调用危险工具'
+    }
+
+    Test-Case '终态判据认反引号，且判不了绝不记成 success' {
+        # 2026-08-02：执行器把整段报告包成 `结果：成功…`，runner 判整腿死，而 dispatch 对
+        # **同一段文字**记 ledger success——两个组件结论相反。
+        # 查证结果：模式本来就是两处共用的（不是各写一份），真正的洞是 dispatch 的兜底默认 success。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1')
+
+        foreach ($wrapped in @('`结果：成功`', '**结果：成功**', '  `结果：成功` ', '结果：成功')) {
+            Assert-True ($wrapped -match (Get-P0FinalVerdictPattern '成功')) "应认出终态：$wrapped"
+        }
+        Assert-True ('`[AWAIT_CONFIRM]`' -match $script:P0AwaitConfirmPattern) '暂停标记也要容忍反引号。'
+        # 不能矫枉过正：没有"结果："二字的文本仍不该被当成终态。
+        Assert-True (-not ('大概是成功了吧' -match (Get-P0FinalVerdictPattern '成功'))) '不得把闲聊认成终态。'
+
+        # **兜底绝不能是 success。** 模式可以继续补，但"判不了"永远补不完。
+        $dispatchSource = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1') -Raw
+        $code = [regex]::Replace($dispatchSource, '(?m)#.*$', '')
+        Assert-NotMatches $code "else \{ \`$verdict = 'success'"
+        Assert-Contains $code "'unparsed'"
+        Assert-True ((Get-FailReason -Verdict 'unparsed') -ceq 'report-unparsed') '判不了也要有归因，不能空着。'
+        # unparsed 不在 success/paused 里 → 退出码非零。
+        Assert-Contains $code "@('success', 'paused')"
+    }
+
+    Test-Case '系统浮层压住输入栏时不得把整轮判失败' {
+        # 这是 2026-08-02 真机 status=failed 的原样复现：候选区有字、但不是本腿 marker。
+        # 判据层面已有纯函数用例，这条验的是端到端——报的就是"整轮被判失败"。
+        $fixture = New-Fixture teardown_overlay
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "系统浮层不该把整轮判失败：`n$($result.Text)"
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'unverified') `
+            "别人的字应记 unverified，实际 $($manifestJson.legs[0].teardown.verdict)"
+        Assert-True ($manifestJson.cleanup.ok -eq $true) '不该因此计入 cleanup 失败。'
+    }
+
+    Test-Case '候选区有别人的字不算残留，但也不算干净' {
+        # 2026-08-02 实锤：一条联通流量提示浮层压在输入栏上，读出
+        # 「联通 今日已用：739.1 KB…」，输入框其实是空的，整轮被判 failed。
+        # 与「键盘顶起布局后量到的是键盘」同族：固定几何 + 只看"这块地方有没有字"，
+        # 分不清那字是谁的。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1')
+        . $SourceProvisioner
+
+        $marker = 'P0STALE-AHKMPTXY3479'
+        $expected = Normalize-P0MarkerText $marker
+
+        # 真残留：leftovers 里含本腿 marker → 仍然 dirty，严格性一分未松。
+        $dirty = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout ('{"ok":false,"empty":false,"leftovers":["' + $marker + '@100,2600,900,2700"]}')
+        Assert-True ($dirty.verdict -ceq 'dirty') '含本腿 marker 必须判 dirty。'
+
+        # 系统浮层：有字但不是我们的 → unverified，**不是 clean**（浮层可能正压着 marker）。
+        $overlay = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout '{"ok":false,"empty":false,"leftovers":["联通 今日已用：739.1 KB@100,2713,900,2765"]}'
+        Assert-True ($overlay.verdict -ceq 'unverified') '别人的字不该判 dirty。'
+        Assert-True ($overlay.verdict -cne 'clean') '也绝不能判 clean——没有证据说框里是空的。'
+        Assert-Contains $overlay.detail '系统浮层'
+
+        # OCR 把 P0 读成 PO 时仍要认出是自己的残留（归一走同一口径）。
+        $jittered = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout ('{"ok":false,"empty":false,"leftovers":["' + ($marker -replace '^P0', 'PO') + '@1,2,3,4"]}')
+        Assert-True ($jittered.verdict -ceq 'dirty') 'O/0 抖动下仍应认出本腿残留。'
+
+        # 没给 marker 时退回旧行为（有字即 dirty），不能因为少个参数就变宽松。
+        $noMarker = Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":false,"leftovers":["x@1,2,3,4"]}'
+        Assert-True ($noMarker.verdict -ceq 'dirty') '拿不到 marker 时必须保守判 dirty。'
+    }
+
+    Test-Case '审批通知状态与差集必须进 manifest' {
+        # 连续两轮 dump 落了盘、解析结果却没进 manifest，现场只能手工 grep——
+        # 「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        Assert-Contains $source 'approval_notification = $('
+        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -gt 0) `
+            'runner 必须在等待决定的窗口里抓一次通知状态。'
+        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -lt
+            $source.IndexOf('approval_notification = $(')) '先抓取、后写进 manifest。'
+
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        $dump = @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000000
+    category=call
+    mVisibility=0
+  NotificationRecord(pkg=com.sf.express id=12 channel=delivery)
+    flags=0x00000000
+    mVisibility=0
+'@
+        $records = Get-P0NotificationRecords -DumpText $dump
+        Assert-True ($records.Count -eq 2) "应解析出两条通知，实际 $($records.Count)"
+        Assert-True ($records[0].ChannelId -ceq 'gateway-approval') '通道名解析错误。'
+        Assert-True ($records[0].Ongoing -eq $false) 'flags=0 应判非 ongoing。'
+
+        # 差集要指出 category 这处差异——那正是本轮唯一改动的变量。
+        $diff = Get-P0NotificationDiff -Records $records -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway'
+        Assert-Contains ($diff -join '；') 'Category'
+        # 一致的字段不该出现在差集里，否则信号会被淹没。
+        Assert-NotMatches ($diff -join '；') 'Visibility'
+        Assert-True (@(Get-P0NotificationDiff -Records @() -ChannelId 'x' -OwnPackage 'y').Count -eq 0) `
+            '没有对照组时差集应为空。'
+    }
+
+    Test-Case '审批通知不设 CATEGORY_CALL' {
+        # 这不是通话。Android 14+ 要求通话类通知用 CallStyle，非 CallStyle 的 CATEGORY_CALL
+        # 属不合规形态，系统有权降级处理——而它正是我们与那条正常显示的通知最显眼的差异之一。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        Assert-True ($notifier -notmatch '(?m)^\s*\.setCategory\(') '不得用语义不符的 category 换排序权重。'
+    }
+
+    Test-Case '审批通知靠超时维持存在，而不是靠 ongoing' {
+        # 「可见」与「持久」是两件事。上一轮把它们混在一个 setOngoing 里解决 → 上了锁屏黑名单；
+        # 去掉之后锁屏能显示了（flags=0 实测），但通知随卡出现随即消失——ongoing 顺带给的
+        # NO_CLEAR 粘性也没了。所以持久改用 setTimeoutAfter，跟着确认窗口走。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        Assert-True ($notifier -match '(?m)^\s*\.setTimeoutAfter\(') '必须用 setTimeoutAfter 维持存在。'
+        # 超时必须由确认窗口推导，不能写死——两者一旦脱钩，改了 -ConfirmationTimeoutSec 就会
+        # 出现"人还能点、通知已经没了"。
+        Assert-Contains $notifier 'timeoutMs + TIMEOUT_SLACK_MS'
+        Assert-True ($notifier -notmatch '(?m)^\s*\.setOngoing\(') '不得为了持久把 ongoing 加回来。'
+
+        $overlay = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmOverlay.kt'
+        ) -Raw
+        Assert-Contains $overlay 'timeoutMs = timeoutMs'
+    }
+
+    Test-Case '审批通知不得是 ongoing，且状态要能被读出来' {
+        # 2026-08-01 批次 2 验收：锁屏上根本看不到审批通知，两次 timed_out。
+        # 最强候选是 setOngoing(true)——锁屏通知列表历来过滤 ongoing 通知，
+        # 同机旁证是本包那条常驻前台服务通知同样不上锁屏。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        # 只匹配**调用**，不匹配注释——注释里正解释着为什么不调它。
+        Assert-NotMatches $notifier '(?m)^\s*\.setOngoing\('
+        # 划走不是决定：给"划走"接一个回执等于给它安一个决定的语义。
+        Assert-NotMatches $notifier '(?m)^\s*\.setDeleteIntent\('
+
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        # FLAG_ONGOING_EVENT = 0x2。下一轮不必再猜：dump 里直接读得到。
+        $ongoing = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000062
+    mVisibility=0
+'@
+        Assert-True ($ongoing.Found) '应认出审批通道那条记录。'
+        Assert-True ($ongoing.Ongoing -eq $true) 'flags 含 0x2 时应判 ongoing。'
+        Assert-True ($ongoing.Visibility -eq 0) 'visibility 应被读出。'
+
+        $notOngoing = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000060
+'@
+        Assert-True ($notOngoing.Ongoing -eq $false) 'flags 不含 0x2 时应判非 ongoing。'
+        Assert-True ($null -eq $notOngoing.Visibility) '读不到的字段必须回 null，不许猜。'
+
+        # 只认审批通道那一段：同一份 dump 里还有前台服务那条常驻通知（它就是 ongoing 的），
+        # 混起来读出来的 flags 正好会得出最容易误导的结论。
+        $otherChannel = Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText @'
+  NotificationRecord(pkg=dev.magina.gateway id=1 channel=gateway)
+    flags=0x00000062
+'@
+        Assert-True (-not $otherChannel.Found) '不得把前台服务那条通知当成审批通知。'
+        Assert-True (-not (Get-P0NotificationState -ChannelId 'gateway-approval' -DumpText '').Found) '空 dump 应判未找到。'
+    }
+
+    Test-Case '带外验证必须排在 teardown 之前（先清框就是先毁证）' {
+        # teardown 会清空输入框，而"marker 原封不动留在框里"是这条验证唯一的强证据。
+        # 顺序颠倒的后果是带外验证永远读不到正证据、永远 inconclusive——**而且看起来像正常运行**。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $semantics = $source.IndexOf('Assert-P0LegSemantics -Leg')
+        $oob = $source.IndexOf('Invoke-P0DenyOutOfBandCheck -Session')
+        $teardown = $source.IndexOf('Invoke-P0LegTeardown -Session')
+        Assert-True ($semantics -gt 0 -and $oob -gt 0 -and $teardown -gt 0) 'runner 里找不到判定/带外验证/teardown 三处调用。'
+        Assert-True ($semantics -lt $oob) '带外验证必须排在本腿判定之后。'
+        Assert-True ($oob -lt $teardown) '带外验证必须排在 teardown 之前，否则先清框就是先毁证。'
+    }
+
+    Test-Case 'Deny 腿：带外验证截屏被尝试，读不出时如实退回原结论' {
+        # **本套件刻意不依赖本机有没有装 OCR 语言包**：装了才绿的用例会让安全网变成机器的函数。
+        # 所以这里验的是"截屏真的被尝试了"+"读不出来时的降级形态"，OCR 本身由纯函数用例覆盖。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -eq 0) "带外验证判不了不该否决本腿：`n$($result.Text)"
+
+        $adbLog = Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw
+        Assert-Contains $adbLog 'exec-out screencap -p'
+
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        $oob = $manifestJson.legs[0].deny_out_of_band
+        Assert-True ($null -ne $oob) 'Deny 腿 manifest 缺少 deny_out_of_band。'
+        Assert-True ($oob.captured -eq $false) '假设备回空截图，captured 应为 false。'
+        Assert-True ($oob.verdict -ceq 'inconclusive') '读不出来必须 inconclusive，不得倒向任何一边。'
+        # 判不了就退回原样的措辞——不许因为"跑过一次带外验证"把结论写得更强。
+        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'gateway_reported_blocked_no_independent_check') `
+            "判不了时 send_postcondition 必须退回原样：$($manifestJson.legs[0].send_postcondition)"
+        Assert-Contains $result.Text '带外验证判不了'
+    }
+
+    Test-Case 'Allow/Stale 两腿不做带外验证' {
+        # 带外验证只对 Deny 腿有意义（它是唯一四条判据全部自报的腿）。
+        # Allow 腿有 ui_find 那条独立正证据；给它加截屏只会平白多一次设备往返。
+        $fixture = New-Fixture happy
+        $null = Invoke-FixtureRunner $fixture @('Allow')
+        $adbLog = Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw
+        Assert-NotMatches $adbLog 'screencap'
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($null -eq $manifestJson.legs[0].deny_out_of_band) 'Allow 腿不该有 deny_out_of_band。'
+        Assert-True ($manifestJson.legs[0].send_postcondition -ceq 'single_match') 'Allow 腿判据不该被批次 3 改动。'
+    }
+
+    Test-Case '带外验证不经执行器、不进 trace' {
+        # 它的全部价值就是"不来自被测组件"。一旦经执行器走，就退化成又一条自报证据。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        $start = $source.IndexOf('function Invoke-P0DenyOutOfBandCheck')
+        $end = $source.IndexOf("`nfunction ", $start + 10)
+        $body = $source.Substring($start, $end - $start)
+        Assert-NotMatches $body 'dispatch|DispatchPath|mcp__'
+        # 截屏只走 adb exec-out screencap；不得混进任何 UI 注入。
+        Assert-Contains $body "'exec-out', 'screencap', '-p'"
+        Assert-NotMatches $body '(?i)input\s+(tap|text|keyevent)'
+    }
+
+    Test-Case '带外 OCR helper 以 UTF-8 BOM 落盘且能被 5.1 解析' {
+        # 5.1 没有 BOM 时按 ANSI 读，中文注释乱码成解析错误；而 pwsh 7 侧的 AST 检查
+        # 看不出来（它按 UTF-8 读一切正常）。2026-08-02 实锤过一次"语法可解析、一执行就整片报错"。
+        $helper = Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-ocr.ps1'
+        Assert-True (Test-Path -LiteralPath $helper -PathType Leaf) "缺少带外 OCR helper：$helper"
+        $bytes = [IO.File]::ReadAllBytes($helper)
+        Assert-True ($bytes.Length -gt 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) `
+            'p0-oob-ocr.ps1 必须以 UTF-8 BOM 落盘，否则 Windows PowerShell 5.1 按 ANSI 读会解析失败。'
+
+        # 真拿 5.1 解析一遍：BOM 断言只挡住已知的那一种坏法，这一条挡住其余的。
+        $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $ps51 -PathType Leaf) {
+            $probe = & $ps51 -NoProfile -ExecutionPolicy Bypass -Command @"
+`$errors = `$null
+[void][System.Management.Automation.Language.Parser]::ParseFile('$helper', [ref]`$null, [ref]`$errors)
+if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
+"@
+            Assert-True (($probe -join '') -match 'OK') "5.1 解析 helper 失败：$probe"
+        }
+    }
+
     Test-Case '新增 PowerShell 脚本 AST 可解析' {
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),

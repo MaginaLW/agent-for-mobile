@@ -8,6 +8,7 @@ import dev.magina.gateway.core.Audit
 import dev.magina.gateway.core.InputCommitEvidenceStore
 import dev.magina.gateway.core.PreparedTargetEvidenceStore
 import dev.magina.gateway.core.RetryGuard
+import dev.magina.gateway.core.StaleReconfirmGuard
 import dev.magina.gateway.core.SkillPack
 import dev.magina.gateway.core.TokenStore
 import dev.magina.gateway.core.UiMutationCoordinator
@@ -29,6 +30,13 @@ object Gateway {
     lateinit var testControl: TestControl
         private set
     val retryGuard = RetryGuard()
+
+    /**
+     * 「批准 → `E_STALE_REF` → 再批准」的次数闸门。**当前站规下走不到**，是纵深防御——
+     * 详见 [StaleReconfirmGuard] 的类注释，别以为它在工作。
+     * 仍是进程级的：真有重试时每次都是一次**全新**的 `callInternal`，计数放在调用内就永远是 1。
+     */
+    val staleReconfirmGuard = StaleReconfirmGuard()
     val inputCommitEvidence = InputCommitEvidenceStore()
     val preparedTargetEvidence = PreparedTargetEvidenceStore()
     val uiMutationCoordinator = UiMutationCoordinator()

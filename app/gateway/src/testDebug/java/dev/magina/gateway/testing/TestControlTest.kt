@@ -2,6 +2,7 @@ package dev.magina.gateway.testing
 
 // debug-only test-control contract tests.
 
+import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import org.junit.Assert.assertEquals
@@ -50,7 +51,7 @@ class TestControlTest {
         var homeCalls = 0
 
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1, 2, 3), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         control.afterAllowed(session, attempt, performHome = { homeCalls++; true }) {
             TestForeground(known = true, packageName = "launcher")
         }
@@ -68,6 +69,39 @@ class TestControlTest {
     }
 
     /**
+     * 批次 2 判据 1 靠它才是机械证据：状态文件必须说出决定来自哪条 surface，
+     * 而**没人点**的那种情况一个字都不许写——凭空写个 overlay 等于伪造"人在卡上点过"。
+     */
+    @Test
+    fun `decision channel is written only when someone actually decided`() {
+        writeControl(leg = "allow", nonce = "nonce-channel-0001")
+        val control = debugControl()
+
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.NOTIFICATION)
+
+        assertTrue(File(temp.root, DebugTestControl.STATE_FILE_NAME).readText()
+            .contains("\"decided_via\":\"notification\""))
+    }
+
+    @Test
+    fun `timed out confirmation writes no decision channel at all`() {
+        writeControl(leg = "allow", nonce = "nonce-channel-0002")
+        val control = debugControl()
+
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+        control.onConfirmationDecision(session, TestConfirmationDecision.TIMED_OUT, null)
+
+        val state = File(temp.root, DebugTestControl.STATE_FILE_NAME).readText()
+        assertTrue(state.contains("\"state\":\"timed_out\""))
+        assertFalse(state.contains("decided_via"))
+    }
+
+    /**
      * Deny 腿必须能走到「弹卡 + 存证」这一步——**这正是它要测的东西**：卡出来了、真人点了拒绝。
      * 白名单漏了 deny 的表现极具迷惑性：press_key 回 E_BLOCKED，而 E_BLOCKED 恰好是本腿的
      * 预期错误码，执行器会照常报告"符合预期"，只有 runner 独立读 confirmation 字段才拦得住
@@ -80,7 +114,7 @@ class TestControlTest {
         var homeCalls = 0
 
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(4, 5), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.DENIED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.DENIED, ApprovalChannel.OVERLAY)
 
         assertTrue(session.armed)
         assertEquals(attempt.confirmationId, session.confirmId)
@@ -112,7 +146,7 @@ class TestControlTest {
         writeControl(leg = "allow", nonce = "nonce-id-swap-0001")
         val control = debugControl()
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         val swapped = attempt.copy(confirmationId = "000000000000")
 
         expectError(ErrorCode.E_BLOCKED) {
@@ -129,7 +163,7 @@ class TestControlTest {
         var homeCalls = 0
         val control = debugControl(sleep = {})
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(7), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
 
         control.afterAllowed(session, attempt, performHome = { homeCalls++; true }) {
             foregroundReads++
@@ -160,7 +194,7 @@ class TestControlTest {
             writeControl(leg = "stale", nonce = "nonce-decision-000$index")
             val control = debugControl()
             val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-            decision?.let { control.onConfirmationDecision(session, it) }
+            decision?.let { control.onConfirmationDecision(session, it, ApprovalChannel.OVERLAY) }
             var homeCalls = 0
 
             expectError(ErrorCode.E_BLOCKED) {
@@ -177,9 +211,9 @@ class TestControlTest {
         writeControl(leg = "stale", nonce = "nonce-repeat-0001")
         val control = debugControl()
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         expectError(ErrorCode.E_BLOCKED) {
-            control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+            control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         }
         var homeCalls = 0
 
@@ -370,7 +404,7 @@ class TestControlTest {
         )
         val control = debugControl(clock = { currentTime })
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         currentTime = now + 11
         var homeCalls = 0
 
@@ -393,7 +427,7 @@ class TestControlTest {
             sleep = { monotonic += it },
         )
         val session = control.onConfirmationShown(attempt) { TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
 
         expectError(ErrorCode.E_CHANNEL_DOWN) {
             control.afterAllowed(session, attempt, { homeCalls++; true }) {
@@ -426,7 +460,7 @@ class TestControlTest {
         var home = false
         val release = NoopTestControl()
         val session = release.onConfirmationShown(attempt) { captured = true; TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1) }
-        release.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        release.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         release.afterAllowed(session, attempt, { home = true; true }) {
             TestForeground(true, "launcher")
         }

@@ -4,11 +4,17 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.Level
 import dev.magina.gateway.core.SafetyContext
+import dev.magina.gateway.core.ConfirmApprovalArbiter
+import dev.magina.gateway.core.RiskTier
+import dev.magina.gateway.core.SafetyDecision
+import dev.magina.gateway.core.StaleReconfirmGuard
+import dev.magina.gateway.overlay.ConfirmNotificationRequest
 import dev.magina.gateway.core.SafetyGate
 import dev.magina.gateway.core.SafetyPolicy
 import dev.magina.gateway.core.SafetyTarget
@@ -336,6 +342,36 @@ object ToolRegistry {
         var contextReads: Int = 0
         var testSession: TestControlSession = InactiveTestControlSession
         var testAttempt: TestConfirmationAttempt? = null
+
+        /**
+         * 限次守卫的计数键，以及推通知要用的两项内容，都在**第一次读上下文时**定下来。
+         *
+         * 必须取自初始上下文：确认后复核那一次的上下文正是"已经变了"的那份，
+         * 拿它算键会让每次重试落到不同的键上，限次直接形同虚设。
+         */
+        var staleKey: String = ""
+        var targetLabel: String = ""
+        var inputPreview: String? = null
+
+        fun captureApprovalScope(context: SafetyContext, riskTier: RiskTier?) {
+            if (staleKey.isNotEmpty()) return
+            targetLabel = context.target?.preparedTargetEvidence?.label.orEmpty()
+            inputPreview = context.target?.inputCommitEvidence?.preview
+            staleKey = StaleReconfirmGuard.key(
+                toolName = toolName,
+                riskTier = riskTier ?: RiskTier.IRREVERSIBLE,
+                targetLabel = targetLabel,
+                contentKey = StaleReconfirmGuard.contentKeyOf(toolName, context),
+            )
+        }
+    }
+
+    /** 锁屏那一行里的动作短语；不含任何输入内容。 */
+    private fun confirmActionPhrase(decision: SafetyDecision.ConfirmationRequired): String = when {
+        decision.toolName == "press_key" && decision.action.equals("enter", ignoreCase = true) -> "发送消息"
+        decision.toolName == "press_key" -> "按键 ${decision.action}"
+        decision.action.isNotBlank() -> "${decision.action} 危险目标"
+        else -> decision.toolName
     }
 
     /**
@@ -350,6 +386,22 @@ object ToolRegistry {
             sensitiveTargets = Gateway.skills.sensitiveTargets,
         ),
         confirmer = { decision ->
+            // 纵深防御，**当前站规下走不到**：站规 §4「安全失败就是终态」要求大脑在第一次
+            // stale 就停下报告失败、不得重试同一危险动作，所以计数器连 1 都到不了
+            // （2026-08-02 用户重新拍板：维持站规，不开有界重试口子）。留着是因为上限本身没错，
+            // 将来若真有路径能重试，上限仍该是 2。详见 StaleReconfirmGuard 的类注释。
+            if (Gateway.staleReconfirmGuard.isExhausted(call.staleKey)) {
+                Gateway.staleReconfirmGuard.clear(call.staleKey)
+                call.safetyNote += ";reconfirm=exhausted"
+                throw GatewayError(
+                    ErrorCode.E_CONFIRM_REQUIRED,
+                    StaleReconfirmGuard.EXHAUSTED_MESSAGE,
+                    channel = "safety",
+                    // 原来这里写的是"输出 [AWAIT_CONFIRM] 暂停报告"——与站规正面矛盾，
+                    // 等于代码反过来教大脑违规。
+                    fallback = StaleReconfirmGuard.EXHAUSTED_FALLBACK,
+                )
+            }
             call.safetyNote = "risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested"
             val attempt = TestConfirmationAttempt(
                 confirmationId = ConfirmationIdGenerator.next(),
@@ -360,6 +412,9 @@ object ToolRegistry {
                 inputSha256 = decision.inputSha256,
             )
             call.testAttempt = attempt
+            // 决定来自哪条通道。审计里也记一份：状态文件是 debug 专有的，审计三腿都在，
+            // 两处独立记录同一件事——只有一处时它坏了没人看得出来。
+            var decidedVia: ApprovalChannel? = null
             try {
                 ConfirmOverlay.ask(
                     context = Gateway.appContext,
@@ -369,11 +424,22 @@ object ToolRegistry {
                             captureConfirmCardEvidence(cardTarget)
                         }
                     },
-                    onDecisionObserved = { observed ->
-                        Gateway.testControl.onConfirmationDecision(call.testSession, observed)
+                    onDecisionObserved = { observed, channel ->
+                        decidedVia = channel
+                        Gateway.testControl.onConfirmationDecision(call.testSession, observed, channel)
                     },
+                    notification = ConfirmNotificationRequest(
+                        confirmationId = attempt.confirmationId,
+                        nonce = ConfirmApprovalArbiter.newNonce(),
+                        riskTier = decision.riskTier,
+                        action = confirmActionPhrase(decision),
+                        target = call.targetLabel.ifBlank { decision.initialPackage },
+                        targetPackage = decision.initialPackage,
+                        preview = call.inputPreview,
+                    ),
                 ).also { confirmed ->
                     call.safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
+                    decidedVia?.let { call.safetyNote += ";decided_via=${it.wireName}" }
                 }
             } catch (error: Throwable) {
                 call.safetyNote += ";confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}"
@@ -382,7 +448,12 @@ object ToolRegistry {
         },
         contextProvider = { frozenArgs ->
             call.contextReads += 1
-            safetyContext(call.toolName, frozenArgs).also {
+            safetyContext(call.toolName, frozenArgs).also { resolved ->
+                if (call.contextReads == 1) {
+                    // 档位此刻还没算出来（policy.assess 在这之后），按同一条 fail-safe 规则先按 I 级
+                    // 定键：键只用于把"同一个语义动作的多次重试"串起来，档位在重试之间不会变。
+                    call.captureApprovalScope(resolved, null)
+                }
                 if (call.contextReads > 1) call.safetyNote += ";context=rechecked"
             }
         },
@@ -412,11 +483,20 @@ object ToolRegistry {
             )
         },
         afterExecutionSuccess = { executedTool, executedContext ->
+            // 这一串重试有结果了，计数清零，别拖累下一个语义动作。
+            if (call.staleKey.isNotEmpty()) Gateway.staleReconfirmGuard.clear(call.staleKey)
             if (
                 executedTool == "press_key" &&
                 executedContext.target?.preparedTargetEvidence != null
             ) {
                 Gateway.preparedTargetEvidence.clear()
+            }
+        },
+        onStaleAfterApproval = { _, _ ->
+            // 只有"真人批准过、随后复核判 stale"才走到这里；门前阻断、被拒、超时都不算。
+            if (call.staleKey.isNotEmpty()) {
+                Gateway.staleReconfirmGuard.recordStaleAfterApproval(call.staleKey)
+                call.safetyNote += ";reconfirm=${Gateway.staleReconfirmGuard.reconfirmCount(call.staleKey)}"
             }
         },
     )

@@ -1,6 +1,7 @@
 package dev.magina.gateway.testing
 
 import android.content.Context
+import dev.magina.gateway.core.ApprovalChannel
 import java.util.UUID
 
 /** 危险确认的只读测试观察上下文；不携带、也不能设置真人决定。 */
@@ -64,9 +65,14 @@ interface TestControl {
         capture: () -> TestConfirmationCapture,
     ): TestControlSession
 
+    /**
+     * [decidedVia] 是**生效**决定的来源通道（批次 2 起有悬浮卡与通知栏两条）；无人决定
+     * （超时）时为 null。只落进取证状态文件，不参与任何放行判定。
+     */
     fun onConfirmationDecision(
         session: TestControlSession,
         decision: TestConfirmationDecision,
+        decidedVia: ApprovalChannel?,
     )
 
     fun afterAllowed(
@@ -87,6 +93,7 @@ open class NoopTestControl : TestControl {
     override fun onConfirmationDecision(
         session: TestControlSession,
         decision: TestConfirmationDecision,
+        decidedVia: ApprovalChannel?,
     ) = Unit
 
     override fun afterAllowed(

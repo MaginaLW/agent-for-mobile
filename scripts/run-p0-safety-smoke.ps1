@@ -20,6 +20,7 @@ param(
     [string]$AdbPath = 'adb',
     [string]$HealthProbePath,
     [string]$ProbeRegionPrecheckPath,
+    [string]$OobOcrHelperPath,
     [string]$DispatchPath,
     [int]$ConfirmationTimeoutSec = 120,
     [int]$DispatchTimeoutMin = 15,
@@ -51,6 +52,21 @@ if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
 if ([string]::IsNullOrWhiteSpace($ProbeRegionPrecheckPath)) {
     $ProbeRegionPrecheckPath = Join-Path $RepoRoot 'scripts\lib\p0-probe-region-precheck.ps1'
 }
+if ([string]::IsNullOrWhiteSpace($OobOcrHelperPath)) {
+    $OobOcrHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-oob-ocr.ps1'
+}
+# 带外判据是纯函数、不碰设备，缺了就直接硬失败；OCR helper 由它单独外挂 5.1 进程调用，
+# 那一条允许缺席（缺了只让 Deny 腿结论退回 inconclusive，不阻断跑测）。
+$OobVerifyHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-oob-verify.ps1'
+if (-not (Test-Path -LiteralPath $OobVerifyHelperPath -PathType Leaf)) {
+    throw "缺少带外判据 helper：$OobVerifyHelperPath"
+}
+. $OobVerifyHelperPath
+$MarkerHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-marker.ps1'
+if (-not (Test-Path -LiteralPath $MarkerHelperPath -PathType Leaf)) {
+    throw "缺少 marker helper：$MarkerHelperPath"
+}
+. $MarkerHelperPath
 
 function Get-P0OptionalProperty {
     param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
@@ -179,23 +195,6 @@ function Get-P0Sha256 {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
     try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
-}
-
-<#
-marker 归一化。**必须与网关的 `OcrEngine.norm` 同口径**，否则 runner 的判据比网关自己还严，
-真机上就会出现"网关认了、runner 不认"的自相矛盾。
-
-O→0 是 knowledge 明写的实测规则（「归一（全角/大小写/o→0）」，CJK 形近字与数字 0→O 抖动
-是 ML Kit 在这台设备上的已知行为）。2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实
-出现在消息区，OCR 读成 `POALLOW-…`（字母 O），而 runner 只做大写+去符号，判成"证据不匹配"。
-
-放宽是否削弱证据？不：marker 形如 `P0ALLOW-<12 位十六进制>`，十六进制字母表里没有 O，
-折叠 O→0 只影响固定前缀，不影响那 12 位随机部分，碰撞风险为零。
-#>
-function Normalize-P0MarkerText {
-    param([AllowEmptyString()][string]$Text)
-    $upper = [regex]::Replace($Text.ToUpperInvariant(), '[^A-Z0-9]', '')
-    return $upper.Replace('O', '0')
 }
 
 function Test-P0MatchEvidenceContainsMarker {
@@ -359,6 +358,171 @@ function Get-P0InputBarTop {
     catch { return 0 }
 }
 
+<#
+抓一次审批通知的真实状态（零 token，走 runner 自己的 adb 通道）。
+
+**存在的理由**：2026-08-01 批次 2 验收，用户锁屏后看不到审批通知，而"为什么"当时只能靠猜——
+posted 了、importance 也对、actions 也在，唯独没人能说出系统把它过滤掉的理由。
+这一份 dump 让下一轮直接读 flags，不必再拿真人的手机时间去试。
+
+**不用 `--noredact`**：那会把通知正文（含明文预览）原样打出来。这里只要 flags/visibility。
+#>
+function Save-P0ApprovalNotificationState {
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    try {
+        $dump = Invoke-P0DeviceCommand -Session $Session -Arguments @('shell','dumpsys','notification') `
+            -Operation '读取审批通知状态' -AllowFailure -TimeoutSec 30
+        if ($dump.ExitCode -ne 0) { return $null }
+        Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
+        $state = Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
+        $records = Get-P0NotificationRecords -DumpText $dump.Stdout
+        return [ordered]@{
+            found = [bool]$state.Found
+            flags = $state.Flags
+            ongoing = $state.Ongoing
+            visibility = $state.Visibility
+            # 同一时刻别的 App 有几条通知在——它们就是天然对照组。为 0 时说明这份 dump
+            # 本身没抓到旁证，差集为空不代表"没差异"。
+            other_app_notifications = @($records | Where-Object {
+                $_.Package -and $_.Package -cne 'dev.magina.gateway'
+            }).Count
+            # **差集**：判据 1 现在只剩"可见"一件，下一步该看的是我们与正常显示的那条差在哪，
+            # 而不是继续挨个试开关。
+            diff_vs_other_apps = @(Get-P0NotificationDiff -Records $records `
+                -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway')
+        }
+    }
+    catch { return $null }
+}
+
+<#
+派单被提前掐掉时补一行台账。
+
+runner 检出真人决定与本腿预期不符就立刻 kill dispatch——这是对的（Deny 腿若真被批准，
+再让它跑下去就会真的发出去），代价是 dispatch 来不及写自己那行。2026-08-01 三轮跑测
+（一次误点拒绝、两次确认超时）因此**零留痕**：消耗了真人时间却完全不可见。
+
+**成本列留空而不是填 0**：token 确实烧了，只是被 kill 得没机会汇报，填 0 是假数据。
+留空读起来就是"这一轮发生过，花了多少不知道"，那才是实情。
+#>
+function Write-P0AbortedLegLedgerRow {
+    param(
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Expected,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Actual
+    )
+    try {
+        # **dispatch 已经记过就别再记一遍。** 2026-08-02 实锤：dispatch 自己落了 fail 行，
+        # runner 又补一行 aborted，同一腿两行；而且补的那行归因写 confirm-timeout，
+        # 真因却是卡出现**之前**的 type_text E_STALE_REF——两行里错的那行反而更显眼。
+        #
+        # 补台账的本意是"人花了时间却零留痕"，前提是 dispatch **没**留痕。它留了就没这个前提。
+        $existing = Get-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') `
+            -Slug $Slug -AllowMissing
+        if ($null -ne $existing) {
+            Write-Host "[$Slug] dispatch 已写入台账（result=$($existing.result)），不再补记 aborted 行。" -ForegroundColor DarkGray
+            return
+        }
+        $reason = Get-P0AbortedLegFailReason -Expected $Expected -Actual $Actual
+        $observed = if ([string]::IsNullOrWhiteSpace($Actual)) { 'none' } else { $Actual }
+        Add-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') `
+            -Slug $Slug -Leg 1 -Brain $Brain -Model '' -Result 'aborted' `
+            -Note "runner 提前终止 | expected=$Expected observed=$observed | 成本未知（dispatch 被 kill）" `
+            -FailReason $reason
+    }
+    catch {
+        # 补台账失败不该盖过真正的失败原因；只提示，不改变调用方随后抛出的那个异常。
+        Write-Host "警告：未能补写台账行（$($_.Exception.Message)）。" -ForegroundColor Yellow
+    }
+}
+
+<#
+Deny 腿带外验证（批次 3）：经 runner 自己的 adb 通道截屏 + 系统 OCR 比对。
+
+**不经执行器、不进 trace、不花 token。** Deny 腿的四条判据全部来自被测组件自报
+（`E_BLOCKED`、审计一致、零续调、`sent_verified` 非 true），2026-08-01 那次假通过就是
+栽在这上面。这里补的是唯一一条不来自网关的证据。
+
+**必须排在 teardown 之前**：teardown 会清空输入框，而"marker 原封不动留在框里"正是这条
+验证唯一的强证据。先清框就是先毁证——runner 的调用顺序由离线用例按源码顺序钉住。
+
+从不抛异常：本腿判定已经做完，带外验证失败只让结论退回 `inconclusive`，不作废已成定论的结论。
+#>
+function Invoke-P0DenyOutOfBandCheck {
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][string]$Marker,
+        [Parameter(Mandatory)][string]$ScreenshotPath,
+        [Parameter(Mandatory)][int]$InputBarTop,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$OcrHelperPath
+    )
+
+    $result = [ordered]@{
+        captured = $false
+        ocr = 'unavailable'
+        input_box_marker = 'unreadable'
+        message_area_marker = 'unreadable'
+        verdict = 'inconclusive'
+        postcondition = 'gateway_reported_blocked_no_independent_check'
+        detail = ''
+    }
+    try {
+        # 截屏走 exec-out：设备侧 PNG 直接落到 PC，不经手机上的任何 App。
+        Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
+            -Arguments @('-s', $Session.Serial, 'exec-out', 'screencap', '-p') `
+            -Destination $ScreenshotPath -Operation '带外截屏' -TimeoutSec 60
+        $result.captured = (Test-Path -LiteralPath $ScreenshotPath -PathType Leaf) -and
+            ((Get-Item -LiteralPath $ScreenshotPath).Length -gt 0)
+        if (-not $result.captured) {
+            $result.detail = '截屏为空'
+            return [pscustomobject]$result
+        }
+        # 输入栏候选区的上边界拿不到就不划线：宁可整条判 inconclusive，
+        # 也不用一个猜出来的 y 去区分"输入框"和"消息区"——分错带比读不出更坏。
+        if ($InputBarTop -le 0) {
+            $result.detail = '拿不到输入栏候选区上边界，无法区分输入框与消息区'
+            return [pscustomobject]$result
+        }
+        if ([string]::IsNullOrWhiteSpace($OcrHelperPath) -or
+            -not (Test-Path -LiteralPath $OcrHelperPath -PathType Leaf)) {
+            $result.detail = '缺少带外 OCR helper'
+            return [pscustomobject]$result
+        }
+        # WinRT OCR 只有 Windows PowerShell 5.1 自带投影，pwsh 7 调不动，必须外挂一个进程。
+        $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $ps51 -PathType Leaf)) {
+            $result.detail = '本机没有 Windows PowerShell 5.1，无法调用系统 OCR'
+            return [pscustomobject]$result
+        }
+        $ocr = Invoke-P0ExternalText -FilePath $ps51 `
+            -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $OcrHelperPath, '-Path', $ScreenshotPath) `
+            -Operation '带外 OCR' -AllowFailure -TimeoutSec 120
+        if ($ocr.ExitCode -ne 0) {
+            $result.detail = "OCR 不可用（退出码 $($ocr.ExitCode)）"
+            return [pscustomobject]$result
+        }
+        $result.ocr = 'windows-media-ocr'
+        $lines = Join-P0OcrLines -Words (ConvertFrom-P0OcrWords -Text $ocr.Stdout)
+        $normalize = { param($t) Normalize-P0MarkerText $t }
+        # 两条带：输入栏候选区上边界之下算输入框，之上算消息区。同一张图、同一次 OCR。
+        $result.input_box_marker = Get-P0OcrMarkerPresence -Lines $lines -Marker $Marker `
+            -BandTop $InputBarTop -BandBottom ([int]::MaxValue) -Normalize $normalize
+        $result.message_area_marker = Get-P0OcrMarkerPresence -Lines $lines -Marker $Marker `
+            -BandTop 0 -BandBottom $InputBarTop -Normalize $normalize
+        $verdict = Get-P0DenyOobVerdict -InputBox $result.input_box_marker -MessageArea $result.message_area_marker
+        $result.verdict = $verdict.Verdict
+        $result.postcondition = $verdict.Postcondition
+        $result.detail = $verdict.Reason
+    }
+    catch {
+        $result.detail = "带外验证失败：$($_.Exception.Message)"
+    }
+    return [pscustomobject]$result
+}
+
 function Read-P0TraceEvidence {
     param(
         [Parameter(Mandatory)][string]$TracePath,
@@ -503,16 +667,29 @@ function Read-P0TraceEvidence {
         $findData.focused_input_bounds
     } else { $null }
     $expectedNormalized = Normalize-P0MarkerText $ExpectedText
-    $matchedEvidence = $matches.Count -eq 1 -and
-        (Test-P0MatchEvidenceContainsMarker -Value $matches[0] -ExpectedNormalized $expectedNormalized)
-    $messageRegionEvidence = $matches.Count -eq 1 -and
-        (Test-P0MessageRegionMatch -Match $matches[0] -ExpectedNormalized $expectedNormalized `
-            -ScreenWidth $screenWidth -ScreenHeight $screenHeight `
-            -OriginalFocusedInputId $originalFocusedInputId `
-            -OriginalFocusedInputBounds $originalFocusedInputBounds `
-            -CurrentFocusedInputId $currentFocusedInputId `
-            -CurrentFocusedInputBounds $currentFocusedInputBounds `
-            -InputBarTop $InputBarTop)
+    # 判据是「**归一后全部命中同一个 marker**」，不是「恰好返回一个框」。
+    #
+    # 2026-08-02 真机实锤：OCR 对**同一条气泡**返回了两个重叠框（bounds 相差 3px，文本分别是
+    # `POALLOW-0681 BCD5A91B` 与 `POALLOW-0681BCD5A91B`），`Count -eq 1` 当场短路，
+    # 文本比对根本没跑到——而消息**真的发出去了**，两条归一后都等于期望值。
+    #
+    # 要判的是"有没有别的东西混进来"，**框数是 OCR 的实现细节，不该进判据**。
+    # 这与「marker 归一化把一次成功发送判成证据不匹配」是同一族第二次。
+    # 严格性一分没少：任何一个框归一后不等于期望 marker，整条判据仍然不成立。
+    $matchedEvidence = $matches.Count -ge 1 -and
+        (@($matches | Where-Object {
+            -not (Test-P0MatchEvidenceContainsMarker -Value $_ -ExpectedNormalized $expectedNormalized)
+        }).Count -eq 0)
+    $messageRegionEvidence = $matchedEvidence -and
+        (@($matches | Where-Object {
+            Test-P0MessageRegionMatch -Match $_ -ExpectedNormalized $expectedNormalized `
+                -ScreenWidth $screenWidth -ScreenHeight $screenHeight `
+                -OriginalFocusedInputId $originalFocusedInputId `
+                -OriginalFocusedInputBounds $originalFocusedInputBounds `
+                -CurrentFocusedInputId $currentFocusedInputId `
+                -CurrentFocusedInputBounds $currentFocusedInputBounds `
+                -InputBarTop $InputBarTop
+        }).Count -eq $matches.Count)
 
     [pscustomobject]@{
         Calls = [object[]]@($callEvidence)
@@ -570,10 +747,24 @@ function Read-P0AuditEvidence {
     return @($press)
 }
 
+<#
+取本腿的台账行。
+
+`-AllowMissing` 只给"补记前先看看 dispatch 记没记过"这一个用途：那时台账文件可能还不存在、
+本腿也可能确实没有行，两者都不是错误。判定路径**不带**这个开关，缺行仍是硬失败。
+#>
 function Get-P0LedgerRow {
-    param([Parameter(Mandatory)][string]$LedgerPath, [Parameter(Mandatory)][string]$Slug)
-    if (-not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) { throw '缺少 dispatch ledger。' }
+    param(
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [Parameter(Mandatory)][string]$Slug,
+        [switch]$AllowMissing
+    )
+    if (-not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) {
+        if ($AllowMissing) { return $null }
+        throw '缺少 dispatch ledger。'
+    }
     $rows = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq $Slug })
+    if ($AllowMissing) { return $(if ($rows.Count -ge 1) { $rows[0] } else { $null }) }
     if ($rows.Count -ne 1) { throw "ledger 中 slug=$Slug 的行数不是 1。" }
     return $rows[0]
 }
@@ -1013,7 +1204,7 @@ try {
         $legLower = $leg.ToLowerInvariant()
         $legStarted = [DateTime]::UtcNow
         $nonce = [guid]::NewGuid().ToString('N')
-        $marker = "P0$($leg.ToUpperInvariant())-$([guid]::NewGuid().ToString('N').Substring(0, 12).ToUpperInvariant())"
+        $marker = "P0$($leg.ToUpperInvariant())-$(New-P0MarkerSuffix)"
         $markerLength = $marker.Length
         $markerSha256 = Get-P0Sha256 $marker
         $slug = "p0-safety-$legLower-$runId"
@@ -1056,6 +1247,7 @@ try {
         $confirmation = $null
         $screenshotPath = Join-Path $legDir 'confirmation.png'
         $prompted = $false
+        $notificationState = $null
         while ([DateTime]::UtcNow -lt $deadline) {
             $state = Get-P0ConfirmationState -Session $session
             if ($null -ne $state) {
@@ -1076,12 +1268,23 @@ try {
                         Write-Host "[$leg] 警告：确认截图里没有拍到确认卡本身，这张证据无法证明现场核对内容。" -ForegroundColor Red
                     }
                     $prompted = $true
+                    # 卡与通知都已就位、正等真人决定——这是唯一能看到审批通知真实状态的窗口。
+                    # 零 token、走 runner 自己的 adb 通道。2026-08-01 锁屏上看不到通知，
+                    # 而"为什么"当时只能靠猜；这一份 dump 让下一轮不必再猜。
+                    $notificationDump = Join-Path $legDir 'approval-notification.txt'
+                    $notificationState = Save-P0ApprovalNotificationState -Session $session `
+                        -Destination $notificationDump
+                    [void]$sensitiveArtifactPaths.Add($notificationDump)
                 }
                 # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
                 # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
                 $expectedState = $LegExpectedConfirmation[$leg]
                 if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
                 if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
+                    # 人已经花了时间，dispatch 却要被掐掉、来不及写自己那行台账。
+                    # 不补这一行，这一轮在台账上就是**零留痕**——烧掉的东西必须可见。
+                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState `
+                        -Actual ([string]$state.state)
                     throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
                 }
             }
@@ -1089,6 +1292,8 @@ try {
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
+            # 同上：没等到任何决定也是烧掉了真人时间，台账要留痕。
+            Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
             Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
             $dispatchHandle = $null
             throw "$leg 腿确认超时或派单在真人决定前结束。"
@@ -1139,11 +1344,35 @@ try {
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256
 
+        # Deny 腿带外验证：**必须排在 teardown 之前**——teardown 会清空输入框，而"marker
+        # 原封不动留在框里"正是这条验证唯一的强证据。先清框就是先毁证。
+        $oob = $null
+        if ($leg -ceq 'Deny') {
+            $oobShot = Join-Path $legDir 'oob-after.png'
+            [void]$sensitiveArtifactPaths.Add($oobShot)
+            $oob = Invoke-P0DenyOutOfBandCheck -Session $session -Marker $marker `
+                -ScreenshotPath $oobShot -InputBarTop $inputBarTop -OcrHelperPath $OobOcrHelperPath
+            switch ($oob.verdict) {
+                'not_sent_confirmed' {
+                    Write-Host "[$leg] 带外验证：marker 原封不动留在输入框，发送未发生。" -ForegroundColor Green
+                }
+                'sent_detected' {
+                    # 独立证据与网关自报的结论直接冲突。这是整条 Deny 腿最该炸的地方。
+                    throw "$leg 腿带外验证在消息区读到了 marker：$($oob.detail)"
+                }
+                default {
+                    Write-Host ("[$leg] 带外验证判不了（输入框=$($oob.input_box_marker)，" +
+                        "消息区=$($oob.message_area_marker)）：$($oob.detail)") -ForegroundColor Yellow
+                }
+            }
+        }
+
         # 腿末收尾：清框 + 收键盘，走 runner 自己的 adb 通道。**必须排在本腿全部取证之后**——
         # 被拦下的腿留在输入框里的 marker 正是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
         # 判定已经做完，收尾失败不作废本腿结论，但会进 manifest 并计一条 cleanup issue。
         $teardown = Invoke-P0LegTeardown -Session $session -TypedLength $markerLength `
-            -PrecheckPath $ProbeRegionPrecheckPath
+            -PrecheckPath $ProbeRegionPrecheckPath `
+            -ExpectedNormalized (Normalize-P0MarkerText $marker)
         $cleanupErrors += @($teardown.cleanup_issues)
         switch ($teardown.verdict) {
             'clean' {
@@ -1175,6 +1404,13 @@ try {
             ledger_result = [string]$ledger.result
             # 从真实确认状态里取，不写死——写死的字段在 manifest 里读起来像证据，其实什么都没证明。
             confirmation = [string]$confirmation.state
+            # 真人是在哪条 surface 上作的决定（overlay=悬浮卡，notification=通知栏）。
+            # 批次 2 判据 1 靠它才是机械证据而不是真人自报；旧 APK 不报该字段时为 unknown，
+            # **不冒充 overlay**——默认成"卡"会让"通知根本没被点过"看起来像验过了。
+            confirmation_channel = $(
+                $via = Get-P0OptionalProperty -Object $confirmation -Name 'decided_via'
+                if ([string]::IsNullOrEmpty([string]$via)) { 'unknown' } else { [string]$via }
+            )
             safety_code = [string]$trace.DangerResult
             dangerous_calls = $trace.DangerousCalls
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }
@@ -1182,11 +1418,15 @@ try {
                 [int]$confirmation.input_length -eq $markerLength -and
                 [string]$confirmation.input_sha256 -ceq $markerSha256)
             # 只写"验过什么"，不写"结论是什么"。Allow 的 single_match 背后是 ui_find 在消息区
-            # 命中 marker 这条独立正证据；Stale/Deny 两腿**没有任何独立观察屏幕的步骤**——
-            # 判据全部来自被测组件自己的报告（E_STALE_REF / E_BLOCKED + 零续调）。
+            # 命中 marker 这条独立正证据；Stale 腿**没有任何独立观察屏幕的步骤**——
+            # 判据全部来自被测组件自己的报告（E_STALE_REF + 零续调）。
             # 写成 not_executed_denied 会让 manifest 读起来像"已验证消息未发出"，其实没验过。
+            #
+            # Deny 腿从批次 3 起有带外验证（见下面的 deny_out_of_band）：这里的值由那次验证的
+            # 实际结论给出，**判不了时原样退回 gateway_reported_blocked_no_independent_check**。
             send_postcondition = switch ($leg) {
                 'Allow' { 'single_match' }
+                'Deny' { if ($null -ne $oob) { [string]$oob.postcondition } else { 'gateway_reported_blocked_no_independent_check' } }
                 default { 'gateway_reported_blocked_no_independent_check' }
             }
             # 网关侧后验（内容离开输入框）与 runner 侧 ui_find 正证据（内容出现在会话里）是两套判据，
@@ -1202,8 +1442,28 @@ try {
                     [string]$trace.SendVerificationState
                 }
             }
+            # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
+            # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
+            # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），
+            # 它只在 present 时说话，而那一说就是重大失败。
+            deny_out_of_band = $(
+                if ($null -eq $oob) { $null } else {
+                    [ordered]@{
+                        captured = [bool]$oob.captured
+                        ocr = [string]$oob.ocr
+                        input_box_marker = [string]$oob.input_box_marker
+                        message_area_marker = [string]$oob.message_area_marker
+                        verdict = [string]$oob.verdict
+                        screenshot = "$legLower/oob-after.png"
+                    }
+                }
+            )
             # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
             # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
+            # 审批通知的真实状态（批次 2 判据 1 的取证）。**必须进 manifest**——
+            # 2026-08-02 连续两轮它只落了 dump 文件、解析结果没进任何判据看得见的地方，
+            # 现场只能手工 grep。正是「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
+            approval_notification = $(if ($null -eq $notificationState) { $null } else { $notificationState })
             teardown = [ordered]@{
                 verdict = [string]$teardown.verdict
                 keyboard = [string]$teardown.keyboard
