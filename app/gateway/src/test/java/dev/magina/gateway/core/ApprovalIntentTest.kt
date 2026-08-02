@@ -222,32 +222,72 @@ class ApprovalIntentTest {
     // —— 三个时钟（spec §2.4） ——
 
     @Test
-    fun `default clocks fit inside the short lived evidence ttl`() {
+    fun `the five minutes the user decided is the foreground wait budget`() {
+        // 用户拍的是"批准之后最多隔多久回到微信还算数"——那对应的是**等前台预算**，
+        // 不是只有意图有效期。这条断言就是防止那个决定被改在错误的旋钮上。
         val clocks = IntentApprovalClocks()
 
+        assertEquals(300_000L, clocks.foregroundWaitBudgetMs)
         assertEquals(90_000L, clocks.decisionTimeoutMs)
-        assertEquals(30_000L, clocks.foregroundWaitBudgetMs)
-        // 上限引用证据 TTL 本身，不抄一个 120_000——别人改 TTL 时这条断言要跟着动。
+        // 意图必须盖住整段等待，且不再等于证据 TTL（选项 C 之后耦合理由已消失）。
+        assertTrue(clocks.intentTtlMs >= clocks.foregroundWaitBudgetMs)
         assertEquals(InputCommitEvidenceStore.DEFAULT_TTL_MS, clocks.evidenceTtlMs)
-        assertTrue(clocks.decisionTimeoutMs + clocks.foregroundWaitBudgetMs <= clocks.evidenceTtlMs)
     }
 
     @Test
-    fun `clocks that outlive the evidence are rejected at construction`() {
-        // 写成断言而不是注释：越界时人批准之后证据必然过期，链重建不起来，
-        // 而失败会长得像一个莫名其妙的 stale。
-        val error = runCatching { IntentApprovalClocks(decisionTimeoutMs = 100_000, foregroundWaitBudgetMs = 30_000) }
-            .exceptionOrNull()
+    fun `an intent that expires before the wait ends is rejected at construction`() {
+        // 这正是"决定悄悄落空"的形态：人在预算内回来了，意图却先过期，
+        // 现场看到的是一条与今天长得一模一样的 E_STALE_REF。
+        val error = runCatching {
+            IntentApprovalClocks(foregroundWaitBudgetMs = 300_000, intentTtlMs = 120_000)
+        }.exceptionOrNull()
 
         assertTrue(error is IllegalArgumentException)
-        assertTrue(error!!.message!!.contains("短时证据"))
+        assertTrue(error!!.message!!.contains("等于白做"))
+    }
+
+    @Test
+    fun `a wait longer than the evidence ttl demands a rebuild channel`() {
+        // 没有重建通道时，5 分钟预算必然以 E_VERIFY_FAIL 收场——数字写得再大也兑现不了。
+        // 宁可在构造期炸，不要在真机上炸。**断言挂在装配层**：那里能看见通道到底装没装
+        // （`!= null`），而时钟只能拿一个可以写错的布尔当依据。
+        val error = runCatching {
+            IntentApproval(intentIdFactory = { "i" }, awaitForeground = { _, _ -> true })
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error!!.message!!.contains("证据重建通道"))
+
+        // 装了通道就自洽；预算落回证据 TTL 之内时不装也自洽。
+        IntentApproval(
+            intentIdFactory = { "i" },
+            awaitForeground = { _, _ -> true },
+            rebuildEvidence = { EvidenceRebuild.Unverified("stub") },
+        )
+        IntentApproval(
+            intentIdFactory = { "i" },
+            awaitForeground = { _, _ -> true },
+            clocks = IntentApprovalClocks(foregroundWaitBudgetMs = 30_000),
+        )
+    }
+
+    @Test
+    fun `test scaffolding may shorten the wait but never lengthen it`() {
+        val clocks = IntentApprovalClocks()
+
+        assertEquals(20_000L, clocks.withShorterForegroundWait(20_000).foregroundWaitBudgetMs)
+        // 延长会让"人走开多久还算数"被调用方悄悄改掉，而那是用户拍板的行为。
+        assertTrue(
+            runCatching { clocks.withShorterForegroundWait(600_000) }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
     }
 
     @Test
     fun `only the retractable tier gets a wait budget`() {
         val clocks = IntentApprovalClocks()
 
-        assertEquals(30_000L, clocks.foregroundWaitBudgetFor(RiskTier.RETRACTABLE))
+        assertEquals(IntentApprovalClocks.DEFAULT_FOREGROUND_WAIT_BUDGET_MS, clocks.foregroundWaitBudgetFor(RiskTier.RETRACTABLE))
         // I 级批准与执行仍然紧挨着：页面等不起，而"批准了一笔转账、几分钟后才发生"本身也不好。
         assertEquals(0L, clocks.foregroundWaitBudgetFor(RiskTier.IRREVERSIBLE))
     }

@@ -198,10 +198,24 @@ class IntentApproval(
      *
      * **重建的是证据，不是批准**：它不新开意图、不重置一次性，也不延长任何时钟。
      */
-    val rebuildEvidence: (ApprovalIntent) -> EvidenceRebuild = {
-        EvidenceRebuild.Unverified("未装配证据重建通道")
-    },
-)
+    val rebuildEvidence: ((ApprovalIntent) -> EvidenceRebuild)? = null,
+) {
+    init {
+        // **让"5 分钟"这个决定不会悄悄落空的那条断言**，放在这里而不是放在时钟里：
+        // 这里能看见通道到底装没装（`!= null`），而时钟只能拿一个**可以写错的布尔**当依据。
+        // 判据要挂在能被机械验证的东西上。
+        require(
+            clocks.foregroundWaitBudgetMs <= clocks.evidenceTtlMs || rebuildEvidence != null,
+        ) {
+            "等前台预算 ${clocks.foregroundWaitBudgetMs}ms 超过短时证据 TTL ${clocks.evidenceTtlMs}ms，" +
+                "却没有装配证据重建通道：人回来时证据必然已经过期，这组数兑现不了"
+        }
+    }
+
+    /** 没装配就是"重建不了"，**绝不因为没实现而放行**。 */
+    fun rebuild(intent: ApprovalIntent): EvidenceRebuild =
+        rebuildEvidence?.invoke(intent) ?: EvidenceRebuild.Unverified("未装配证据重建通道")
+}
 
 /**
  * 三个时钟（spec §2.4，用户 2026-08-02 拍定值）。
@@ -217,6 +231,7 @@ class IntentApproval(
 data class IntentApprovalClocks(
     val decisionTimeoutMs: Long = DEFAULT_DECISION_TIMEOUT_MS,
     val foregroundWaitBudgetMs: Long = DEFAULT_FOREGROUND_WAIT_BUDGET_MS,
+    val intentTtlMs: Long = DEFAULT_INTENT_TTL_MS,
     val evidenceTtlMs: Long = minOf(
         InputCommitEvidenceStore.DEFAULT_TTL_MS,
         PreparedTargetEvidenceStore.DEFAULT_TTL_MS,
@@ -225,14 +240,13 @@ data class IntentApprovalClocks(
     init {
         require(decisionTimeoutMs > 0) { "decisionTimeoutMs 必须大于 0" }
         require(foregroundWaitBudgetMs >= 0) { "foregroundWaitBudgetMs 不能为负" }
-        require(decisionTimeoutMs + foregroundWaitBudgetMs <= evidenceTtlMs) {
-            "决定期 ${decisionTimeoutMs}ms + 等前台 ${foregroundWaitBudgetMs}ms 超过了短时证据 " +
-                "TTL ${evidenceTtlMs}ms：人批准之后证据必然过期，链重建不起来"
+        // 意图必须活到等待结束：否则人在预算内回来了，意图却已经先过期——
+        // 而现场看到的是一条"照常 E_STALE_REF"的腿，与今天长得一模一样，**最难发现**。
+        require(intentTtlMs >= foregroundWaitBudgetMs) {
+            "意图有效期 ${intentTtlMs}ms 短于等前台预算 ${foregroundWaitBudgetMs}ms：" +
+                "人在预算内回来了意图却先过期，等前台这件事等于白做"
         }
     }
-
-    /** 意图自身的有效期：不超过证据 TTL，否则意图还"活着"而证据已经没了。 */
-    val intentTtlMs: Long get() = evidenceTtlMs
 
     /**
      * 按档位取"批准后等前台恢复"的预算（spec §2.2 + §6 题四）。
@@ -249,9 +263,39 @@ data class IntentApprovalClocks(
         RiskTier.RETRACTABLE -> foregroundWaitBudgetMs
     }
 
+    /**
+     * 缩短等前台预算的副本。**只许缩短，不许延长**——延长会让"人走开多久还算数"这件事
+     * 被调用方悄悄改掉，而那是用户拍板的行为；缩短只会更早终态，方向上是 fail-closed 的。
+     *
+     * 存在的理由是监督式跑测的 Stale 腿：它按定义**不会**把目标 App 切回来，用满 5 分钟预算
+     * 只是让人在手机旁干等（见 runbook §3.3）。
+     */
+    fun withShorterForegroundWait(budgetMs: Long): IntentApprovalClocks {
+        require(budgetMs in 0..foregroundWaitBudgetMs) {
+            "只许缩短等前台预算：当前 ${foregroundWaitBudgetMs}ms，给的是 ${budgetMs}ms"
+        }
+        return copy(foregroundWaitBudgetMs = budgetMs)
+    }
+
     companion object {
         /** 60 → 90s：人机延迟不再是安全事件之后，可以给人更宽的响应时间。 */
         const val DEFAULT_DECISION_TIMEOUT_MS = 90_000L
-        const val DEFAULT_FOREGROUND_WAIT_BUDGET_MS = 30_000L
+
+        /**
+         * **用户 2026-08-02 拍板的那 5 分钟就是这个数**（题五）：批准之后最多隔多久回到目标 App
+         * 还算数。原话是"足够覆盖『批准了、顺手处理别的事、回来』这个真实场景，而 5 分钟内
+         * 基本还记得自己批的是什么"。
+         *
+         * **它超过短时证据 TTL（120s）是有意的**，正因如此必须装配证据重建通道——
+         * 上面那条构造断言把这层依赖钉死，改这个数时躲不开它。
+         */
+        const val DEFAULT_FOREGROUND_WAIT_BUDGET_MS = 300_000L
+
+        /**
+         * 意图有效期。要盖住"等前台"整段，再留一点重建与重新感知的余量。
+         * **它不再等于证据 TTL**：选项 C 落地后证据可以重建，两者的耦合理由已经没了
+         * （spec §6.1 拍板记录）。
+         */
+        const val DEFAULT_INTENT_TTL_MS = 360_000L
     }
 }

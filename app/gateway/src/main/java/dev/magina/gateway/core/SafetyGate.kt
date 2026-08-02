@@ -483,7 +483,7 @@ class SafetyGate(
             // （自增 generation 参与哈希）。切走再回来必然换身份 → 旧证据取不出来。
             // **不是判据太严，是证据本身不在了**——所以正解是重建证据，不是放宽判据。
             if (intent.contentSha256 != null && currentContext.target?.inputCommitEvidence == null) {
-                when (val rebuild = approval.rebuildEvidence(intent)) {
+                when (val rebuild = approval.rebuild(intent)) {
                     is EvidenceRebuild.Mismatch ->
                         stale("重建输入证据与已批准的意图不符：${rebuild.reason}")
                     // **判不了单独一个错误码**：通道故障与"内容被换掉"必须在台账上分得开。

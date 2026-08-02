@@ -178,7 +178,7 @@ Allow 与 Stale 两腿都执行相同步骤：
 | 腿 | 预期 `safety_code` | 挡住/放行它的**理由**（判据换了，这一列跟着换） |
 |---|---|---|
 | **Allow** | `OK`，照常发送 | 语义三项（包 / 目标会话 / 内容 sha256）都没变；焦点身份与几何**允许变**，不再参与比较 |
-| **Stale** | `E_STALE_REF`（**但慢约 30s，且原因换了**） | **不是**"包变"，是**④等前台恢复超时**：debug hook 切到桌面后没人把微信切回来，30s 预算耗尽即终态。离线由 `SafetyGateIntentPathTest.foreground wait timeout is terminal and never executes` 钉住 |
+| **Stale** | `E_STALE_REF`（**原因换了；用测试专用短预算，不是 5 分钟**） | **不是**"包变"，是**④等前台恢复超时**：debug hook 切到桌面后没人把微信切回来，预算耗尽即终态。离线由 `SafetyGateIntentPathTest.foreground wait timeout is terminal and never executes` 钉住 |
 | **Deny** | `E_BLOCKED` | 拒绝发生在意图创建**之前**，这条路径一个字没变 |
 | **新腿**（批准后切走再回来） | **预期通过**（选项 C 落地后）：动作在回到微信后完成 | 靠**批准后重建证据**：切走再回来必然换 IME 身份、旧输入证据取不出来，于是执行前重读输入框、与**卡上给人看过的那份 sha256** 比对，一致才继续。三态见下 |
 
@@ -203,7 +203,12 @@ Enter 前那次 OCR 读回的噪声串，于是"读回来的和读回来的一�
 
 **其余现场注意**：
 
-1. **Stale 腿会多花约 30 秒**（等前台预算）。这是预期，不是卡死；`-DispatchTimeoutMin` 不必调。
+1. **Stale 腿不会让人干等 5 分钟。** 生产预算是用户拍板的 **5 分钟**（"批准之后最多隔多久
+   回到微信还算数"），但 Stale 腿按定义**永远不会**把微信切回来，用满预算只是让人在手机旁
+   空等。所以监督式跑测经 debug 测试控制给这条腿一个**短预算**（`withShorterForegroundWait`）。
+   **该接口只许缩短、不许延长**——延长会让用户拍板的那个行为被测试脚手架悄悄改掉；缩短只会
+   更早终态，方向上是 fail-closed 的，离线用例钉住了这条不对称。
+   **现场看到 Stale 腿几十秒内就终态，是对的；看到它等满 5 分钟，说明短预算没生效，报回来。**
 2. **三腿判据本身一条没松**：`confirmation` / `dangerous_calls` / `input_evidence_matched` /
    `card_visible` / teardown / Deny 带外验证全部照旧核对。
 3. **"仍然挡住了"不等于"什么都没变"**——Stale 腿这次是被另一条判据挡住的。核对时请对着

@@ -76,6 +76,7 @@ class SafetyGateIntentPathTest {
                 awaitForeground = awaitForeground,
                 store = store,
                 clock = clock,
+                clocks = IntentApprovalClocks(foregroundWaitBudgetMs = 30_000),
                 rebuildEvidence = rebuild@{ intent ->
                     rebuildCalls += 1
                     val supplied = rebuildEvidence ?: return@rebuild EvidenceRebuild.Unverified("未装配")
@@ -179,7 +180,7 @@ class SafetyGateIntentPathTest {
         val harness = Harness(
             contexts = mutableListOf(context(), context()),
             clock = { now },
-            awaitForeground = { _, _ -> now += 200_000; true },
+            awaitForeground = { _, _ -> now += 400_000; true },
         )
 
         val result = harness.press(args)
@@ -347,7 +348,7 @@ class SafetyGateIntentPathTest {
         val harness = Harness(
             contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
             clock = { now },
-            awaitForeground = { _, _ -> now += 200_000; true },
+            awaitForeground = { _, _ -> now += 400_000; true },
             rebuildEvidence = { EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length) },
         )
 
