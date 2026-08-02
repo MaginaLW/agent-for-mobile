@@ -104,6 +104,47 @@ Allow 与 Stale 两腿都执行相同步骤：
 
 输入长度、SHA-256、focused-input ID 与 bounds，以及确认卡/只读状态是否绑定同一 confirm ID，都由 runner 机械验证；用户无需对照或计算。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
 
+### 3.2 批次 2 · 通知栏审批验收单（2026-08-02 收窄后）
+
+批次 2 的目标从「锁屏上点一下」**收窄为「屏幕亮着但人没盯着」**：通知带 Allow/Deny 按钮可用、
+用户不在网关/微信界面里也点得到、点了能真的把决定送进网关。收窄的理由与被移出的两条见
+[通知栏审批布局 spec](../specs/2026-08-01-通知栏审批布局-design.md) §5.4，一句话是：
+**锁屏审批与 D1「身份必须归属到活动 APPLICATION 窗口」结构性冲突，压根走不到弹通知那一步**。
+
+审批通知与确认卡是**并联**的，同一次确认两条通道都在，先点的赢。所以这两条判据不需要额外
+步骤，只是**换一个地方点**。
+
+| 判据 | 挂在哪条腿 | 用户怎么做 | 预期（manifest） |
+|---|---|---|---|
+| **1a · 可达且送达** | **Stale** | runner 提示后**切到别的 App**（浏览器/设置皆可，**不要锁屏**），在通知里点「允许本次」 | 该腿照常通过：`safety_code=E_STALE_REF`，且 `confirmation_channel=notification` |
+| **1b · 能真的放行** | **Allow** | 微信留在前台，人别盯着屏幕；等 heads-up 浮窗弹出来，**直接在浮窗上点**「允许本次」 | 该腿照常通过（全套 Allow 判据），且 `confirmation_channel=notification` |
+| **2 · 无 FSI 依赖** | 三腿 | 无 | APK 未声明该权限、通知 `fullscreenIntent=null`、三腿都到位 |
+| **3 · 连续两次 stale 后停下** | — | 无 | **永远记「未触达」**（决定四已作废，见 spec §5.3）——那是如实的 |
+
+`confirmation_channel` 是**机械证据**，来自 app 私有状态文件里的 `decided_via`，runner 只读转记：
+`notification` = 决定确实从通知那条通道进来的；`overlay` = 人其实点的是悬浮卡，**这一条判据就
+是未触达，如实记，不算通过**；`unknown` = 装的是不带该字段的旧 APK。
+
+**四条防误判，现场按这个判，别临场发挥：**
+
+1. **不要为了"看看锁屏上有没有"去锁屏。** 锁屏后目标 App 不再是活动应用窗口，危险动作在
+   `SafetyGate.requireKnownForeground` 就被 `E_BLOCKED` 挡住——**早于 `policy.assess`，所以卡和
+   通知都不会出现**。看不到通知**不是通知的缺陷**，是硬门按设计工作。这条已移出批次 2，不验。
+2. **1a 那腿人在别的 App 里点了允许，动作照样不会执行**，这是**预期**：确认前后前台包不一致，
+   硬门判 `E_STALE_REF`——与 Stale 腿本来要证明的是同一件事。1a 要证的只是「决定送到了网关」，
+   证据就是 `confirmation_channel=notification`。**不要因此重跑，也不要记成缺陷。**
+3. **1b 请在 heads-up 浮窗上点，不要下拉通知栏。** 通知栏展开时它自己获焦，App 窗口既非
+   active 也非 focused，而确认后复核只容忍约 320ms 的窗口沉降（`FOREGROUND_SETTLE_ATTEMPTS`
+   5×80ms）——**预计会以 `E_BLOCKED`（前台 APPLICATION 身份未知）结束**。
+   **这一条是推断，尚未实测**：同一机制 2026-07-26 在悬浮卡上实锤过（可获焦的 overlay 抢走焦点
+   → 前台被判 unknown，所以卡才必须 `FLAG_NOT_FOCUSABLE`），通知栏是同一类窗口。
+   万一 heads-up 已经消失、只能下拉着点，**照点不误，然后对着 manifest 的 `safety_code` 定案**：
+   `E_BLOCKED` 说明推断成立，如实记下「批次 2 的兑现窗口 = heads-up 的存活时长」；`OK`/`E_STALE_REF`
+   说明推断错了，那是好消息，同样如实记。**两种结果都不许改判据、不许重跑凑绿。**
+4. **通知没弹出来 ≠ 通知功能坏了。** runner 在卡与通知都就位、正等真人决定的那个窗口里会抓一份
+   `dumpsys notification` 进 manifest 的 `approval_notification`（`found`/`flags`/`ongoing`/
+   `visibility`/与同机其它 App 通知的差集）。先看这份 dump 再下结论。
+
 ## 4. 真实业务路径与 ADB 边界
 
 输入与发送只走：
@@ -126,7 +167,8 @@ ADB 仅用于设备发现、安装与权限、进程/服务、IME、端口转发
 本地证据写入 gitignored `docs/runs/evidence/<run_id>/`。`run-manifest.json` 至少记录：
 
 - `run_id`、executor、请求腿、整组状态、开始/结束时间；
-- 每腿 leg、唯一 slug、dispatch 退出码、ledger 结果、确认选择、safety code、危险工具调用次数；
+- 每腿 leg、唯一 slug、dispatch 退出码、ledger 结果、确认选择、**决定来自哪条 surface**
+  （`confirmation_channel`：overlay / notification / unknown）、safety code、危险工具调用次数；
 - 输入长度与 SHA-256、输入证据是否匹配；不复制输入明文；
 - 本腿 trace/audit 相对路径、确认卡 PNG 相对路径与 SHA-256、发送后置条件；
 - cleanup 是否成功及问题列表。

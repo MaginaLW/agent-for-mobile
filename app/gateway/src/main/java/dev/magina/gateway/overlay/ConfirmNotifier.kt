@@ -21,7 +21,11 @@ import dev.magina.gateway.core.RiskTier
  * - **独立的 `IMPORTANCE_HIGH` 通道**，与前台服务那条 `IMPORTANCE_LOW` 分开：混在一起时
  *   用户嫌吵关掉整个通道，会连审批一起关掉而不自知。
  * - **`setAuthenticationRequired` 保持默认 false**：见 [allowAction] 上的说明，
- *   那是用户的明示选择，不是漏设的默认值。
+ *   那是用户的明示选择，不是漏设的默认值；**当前尚无实际后果**（锁屏审批走不通）。
+ *
+ * **本类的实际适用面（2026-08-02 收窄）**：批次 2 现在验的是「屏幕亮着但人没盯着」——
+ * heads-up 浮窗或下拉通知栏里点得到、点了能真的把决定送进网关。**锁屏那一面已移出**：
+ * 锁屏下危险动作在前台身份这道门就结束了，这条通知根本不会被 post（spec §5.4）。
  */
 object ConfirmNotifier {
 
@@ -141,9 +145,17 @@ object ConfirmNotifier {
      *
      * 换来的是批次 2 的收益完整兑现：任何危险动作都是锁屏上一次点击。
      *
+     * **但它当前一次都没被行使过，也就没有实际后果**（2026-08-02，spec §5.4/§5.5）：锁屏后目标
+     * App 不再是活动应用窗口，危险动作在 `SafetyGate.requireKnownForeground` 就以 `E_BLOCKED`
+     * 结束——**早于 `policy.assess`，所以卡和通知都不会出现**。免不免解锁根本没有机会体现。
+     * 写清这一点是因为本仓反复栽在同一族坑里：**尚未生效的说法留在原地会被当成真相**，
+     * 下一个人读到上面那段会以为免解锁已经在跑了。
+     *
      * **重开条件**（任一命中就重新走 B 道）：手机曾离开用户控制（丢失、借出、被他人长时间持有），
      * 或出现一次真实的误批准。届时最小改动就是在这里按 `riskTier` 给 I 级挂上
      * `setAuthenticationRequired(true)`——接口就在手边，改动量很小，所以现在选宽松没有把路堵死。
+     * **另加一条**：一旦锁屏审批本身被重新打通（语义意图那篇 spec 落地），这个选择**当场变成
+     * 承重的**，应当在同一轮里重新确认一次，而不是沿用一个从未被行使过的决定。
      */
     private fun allowAction(context: Context, confirmationId: String, nonce: String): Notification.Action =
         Notification.Action.Builder(
