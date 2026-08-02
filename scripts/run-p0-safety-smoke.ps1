@@ -367,35 +367,91 @@ posted 了、importance 也对、actions 也在，唯独没人能说出系统把
 
 **不用 `--noredact`**：那会把通知正文（含明文预览）原样打出来。这里只要 flags/visibility。
 #>
+<#
+抓一份审批通知的真实状态。
+
+**2026-08-02 修：这份可观测性此前是坏的，而且坏得会把人引向相反的结论。**
+批次 2 三腿的 dump 里**一条审批通知都没有**（只有 autogroup 摘要与前台服务），而同一批腿的
+`decided_via` 全是 `notification`——通知明明存在且被用了。原因是结构性的：触发点是状态文件
+写到 `evidence_ready`，而那一刻在 app 侧**严格早于**通知被 post（`ConfirmOverlay` 先取证、
+按钮可点之后才推通知）。于是这里必然抓早一步。而 runbook 当时正写着"先看这份 dump 再下结论"，
+照做会得出"通知没发出来"的**错误结论**——比没有这份取证更危险。
+
+两处一起修：
+1. **有界重试到通知真的出现**（`attempts`/`waited_ms` 一并返回，和候选区预检那两道重试同一套
+   路数：下次不必再猜是抓早了还是真没有）。
+2. **永远返回对象，绝不返回裸 $null**。原来 `catch { return $null }` 会把"dumpsys 没跑成"、
+   "解析炸了"、"抓到了但没有这条通知"三种完全不同的情况压成同一个 null，manifest 里读起来
+   都是"没这个字段"。现在用 `status` 分开：ok / absent_in_dump / parse_failed / dump_failed。
+#>
 function Save-P0ApprovalNotificationState {
     param(
         [Parameter(Mandatory)]$Session,
-        [Parameter(Mandatory)][string]$Destination
+        [Parameter(Mandatory)][string]$Destination,
+        [int]$Attempts = 6,
+        [int]$IntervalMs = 700
     )
-    try {
+    $started = [DateTime]::UtcNow
+    $result = [ordered]@{
+        status = 'dump_failed'
+        found = $false
+        flags = $null
+        ongoing = $null
+        visibility = $null
+        other_app_notifications = 0
+        diff_vs_other_apps = @()
+        attempts = 0
+        waited_ms = 0
+        detail = ''
+    }
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $result.attempts = $attempt
+        $result.waited_ms = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
         $dump = Invoke-P0DeviceCommand -Session $Session -Arguments @('shell','dumpsys','notification') `
             -Operation '读取审批通知状态' -AllowFailure -TimeoutSec 30
-        if ($dump.ExitCode -ne 0) { return $null }
-        Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
-        $state = Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
-        $records = Get-P0NotificationRecords -DumpText $dump.Stdout
-        return [ordered]@{
-            found = [bool]$state.Found
-            flags = $state.Flags
-            ongoing = $state.Ongoing
-            visibility = $state.Visibility
-            # 同一时刻别的 App 有几条通知在——它们就是天然对照组。为 0 时说明这份 dump
-            # 本身没抓到旁证，差集为空不代表"没差异"。
-            other_app_notifications = @($records | Where-Object {
-                $_.Package -and $_.Package -cne 'dev.magina.gateway'
-            }).Count
-            # **差集**：判据 1 现在只剩"可见"一件，下一步该看的是我们与正常显示的那条差在哪，
-            # 而不是继续挨个试开关。
-            diff_vs_other_apps = @(Get-P0NotificationDiff -Records $records `
-                -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway')
+        if ($dump.ExitCode -ne 0) {
+            $result.detail = "dumpsys 退出码 $($dump.ExitCode)"
+            Start-Sleep -Milliseconds $IntervalMs
+            continue
         }
+        Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
+        $state = $null
+        $records = @()
+        try {
+            $state = Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
+            $records = @(Get-P0NotificationRecords -DumpText $dump.Stdout)
+        }
+        catch {
+            # 解析坏了重试也不会变好，直接如实退出——把原因带出去，别再吞掉。
+            $result.status = 'parse_failed'
+            $result.detail = "解析 dumpsys 失败：$($_.Exception.Message)"
+            return $result
+        }
+        $result.found = [bool]$state.Found
+        $result.flags = $state.Flags
+        $result.ongoing = $state.Ongoing
+        $result.visibility = $state.Visibility
+        # 同一时刻别的 App 有几条通知在——它们就是天然对照组。为 0 时说明这份 dump
+        # 本身没抓到旁证，差集为空不代表"没差异"。
+        $result.other_app_notifications = @($records | Where-Object {
+            $_.Package -and $_.Package -cne 'dev.magina.gateway'
+        }).Count
+        # **差集**：判据 1 现在只剩"可见"一件，下一步该看的是我们与正常显示的那条差在哪，
+        # 而不是继续挨个试开关。
+        $result.diff_vs_other_apps = @(Get-P0NotificationDiff -Records $records `
+            -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway')
+        $result.waited_ms = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+        if ($state.Found) {
+            $result.status = 'ok'
+            $result.detail = ''
+            return $result
+        }
+        $result.status = 'absent_in_dump'
+        $result.detail = "第 $attempt 次抓取时 dump 里没有 gateway-approval 通道的通知记录"
+        if ($attempt -lt $Attempts) { Start-Sleep -Milliseconds $IntervalMs }
     }
-    catch { return $null }
+    $result.waited_ms = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+    return $result
 }
 
 <#
@@ -1218,6 +1274,14 @@ try {
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }
             verdict = 'running'
         }
+        # **每腿开头就清掉上一腿的取证句柄**：失败路径要用它们写失败记录，而这一腿若在
+        # 拿到自己的确认状态之前就挂了（比如预检拦下），沿用上一腿的值等于给这一腿编造证据。
+        $confirmation = $null
+        $notificationState = $null
+        $legTeardownDone = $false
+        # 最后一次**看到**的确认状态。腿在"决定与预期不符"时会抛在 $confirmation 赋值之前，
+        # 于是失败记录里连"人到底点了什么"都没有——而那正是真人时间花在哪儿的唯一凭据。
+        $lastConfirmationState = $null
         $taskFile = Join-Path ([IO.Path]::GetTempPath()) "p0-supervised-task-$nonce.md"
         $temporaryTaskFiles.Add($taskFile)
         Write-P0DynamicTask -Leg $leg -Marker $marker -Path $taskFile -TemplateDir $TaskTemplateDir
@@ -1251,6 +1315,7 @@ try {
         while ([DateTime]::UtcNow -lt $deadline) {
             $state = Get-P0ConfirmationState -Session $session
             if ($null -ne $state) {
+                $lastConfirmationState = $state
                 if ([string]$state.run_id -cne $runId) { throw "$leg 腿确认状态 run_id 不匹配。" }
                 if ([string]$state.tool -cne 'press_key') { throw "$leg 腿确认状态工具不匹配。" }
                 # evidence_file 只在证据就绪后才出现在状态文件里（app 侧 evidenceFile?.let），
@@ -1275,6 +1340,24 @@ try {
                     $notificationState = Save-P0ApprovalNotificationState -Session $session `
                         -Destination $notificationDump
                     [void]$sensitiveArtifactPaths.Add($notificationDump)
+                    # 这份取证空着也没人吭声，正是「判据看不见的东西就会烂掉」——现在它当场说话。
+                    switch ([string]$notificationState.status) {
+                        'ok' {
+                            Write-Host ("[$leg] 审批通知已在通知栏就位（第 $($notificationState.attempts) 次抓到，" +
+                                "等了 $($notificationState.waited_ms)ms）。") -ForegroundColor DarkGray
+                        }
+                        'absent_in_dump' {
+                            Write-Host ("[$leg] 警告：抓了 $($notificationState.attempts) 次 dumpsys（共 " +
+                                "$($notificationState.waited_ms)ms），里面始终没有审批通知记录。" +
+                                '这既可能是通知真没推出来，也可能是取证仍抓早了——' +
+                                '**不要单凭这一条断定"通知没发出来"**，回头对着 confirmation_channel 一起看。') `
+                                -ForegroundColor Yellow
+                        }
+                        default {
+                            Write-Host ("[$leg] 警告：审批通知取证不可用（$($notificationState.status)）：" +
+                                "$($notificationState.detail)") -ForegroundColor Yellow
+                        }
+                    }
                 }
                 # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
                 # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
@@ -1373,6 +1456,7 @@ try {
         $teardown = Invoke-P0LegTeardown -Session $session -TypedLength $markerLength `
             -PrecheckPath $ProbeRegionPrecheckPath `
             -ExpectedNormalized (Normalize-P0MarkerText $marker)
+        $legTeardownDone = $true
         $cleanupErrors += @($teardown.cleanup_issues)
         switch ($teardown.verdict) {
             'clean' {
@@ -1392,6 +1476,20 @@ try {
             default {
                 Write-Host ("[$leg] 腿末收尾结果无法核对（键盘 $($teardown.keyboard)）：$($teardown.detail)" +
                     '——请在开下一腿前自己看一眼输入框。') -ForegroundColor Yellow
+            }
+        }
+
+        # 取证与决定互相矛盾时当场说出来：决定明明从通知通道进来，取证却说通知栏里没有这条通知
+        # ——**坏的是取证，不是通知**。不写这一句，下一个人会照着 runbook 得出相反的结论。
+        if ($null -ne $notificationState) {
+            $decidedViaNotification = $null -ne $confirmation -and
+                [string](Get-P0OptionalProperty -Object $confirmation -Name 'decided_via') -ceq 'notification'
+            $notificationState['contradicts_decided_via'] =
+                ([string]$notificationState.status -cne 'ok' -and $decidedViaNotification)
+            if ($notificationState['contradicts_decided_via']) {
+                Write-Host ("[$leg] 警告：真人的决定确实是从通知通道进来的（decided_via=notification），" +
+                    "而审批通知取证 status=$($notificationState.status)。**坏的是这份取证，不是通知**——" +
+                    '不要据此判定通知没显示。') -ForegroundColor Yellow
             }
         }
 
@@ -1463,7 +1561,16 @@ try {
             # 审批通知的真实状态（批次 2 判据 1 的取证）。**必须进 manifest**——
             # 2026-08-02 连续两轮它只落了 dump 文件、解析结果没进任何判据看得见的地方，
             # 现场只能手工 grep。正是「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
-            approval_notification = $(if ($null -eq $notificationState) { $null } else { $notificationState })
+            #
+            # 第三轮（08-02 批次 2 验收）暴露出更坏的一面：字段写进去了，值却是 null——
+            # 因为原实现把"没跑成/解析炸了/抓到但没有这条通知"三种情况一律压成 $null。
+            # 现在恒为对象且带 status，**并当场记下它与 decided_via 是否互相矛盾**：
+            # 决定明明从通知进来、取证却说没有通知，那是取证坏了，不是通知坏了。
+            approval_notification = $(
+                if ($null -eq $notificationState) {
+                    [ordered]@{ status = 'not_captured'; detail = '本腿没有走到取证窗口' }
+                } else { $notificationState }
+            )
             teardown = [ordered]@{
                 verdict = [string]$teardown.verdict
                 keyboard = [string]$teardown.keyboard
@@ -1522,6 +1629,81 @@ catch {
         $activeLegRecord['finished_at'] = [DateTime]::UtcNow.ToString('o')
         $activeLegRecord['verdict'] = 'failed'
         $activeLegRecord['failure'] = $_.Exception.Message
+        # 失败腿也有真人决定与取证——2026-08-02 那条 E_CHANNEL_DOWN 的腿，审计里
+        # `decided_via=notification` 明明在，manifest 却什么都没记。**证据链是好的，
+        # 坏的是"腿终止时不落盘"**，于是那一次真人的时间在 manifest 上等于没花。
+        # 取**最后看到的**那份状态，而不是只取判定用的 $confirmation：腿在"决定与预期不符"
+        # 时（真人点错、或 Deny 腿被批准）抛得比赋值早，只认 $confirmation 就等于把这一次
+        # 真人决定记成"没发生过"。
+        # `Get-P0OptionalProperty` 的 -Object 是 Mandatory，传 $null 会**在绑定阶段就抛**——
+        # 而这里是 catch 块，抛出去会把原始失败原因整个盖掉。
+        $observedConfirmation = if ($null -ne $confirmation) { $confirmation } else { $lastConfirmationState }
+        $activeLegRecord['confirmation'] = $(
+            if ($null -eq $observedConfirmation) { '' }
+            else { [string](Get-P0OptionalProperty -Object $observedConfirmation -Name 'state') }
+        )
+        $activeLegRecord['confirmation_channel'] = $(
+            $via = if ($null -eq $observedConfirmation) { $null }
+                else { Get-P0OptionalProperty -Object $observedConfirmation -Name 'decided_via' }
+            if ([string]::IsNullOrEmpty([string]$via)) { 'unknown' } else { [string]$via }
+        )
+        $activeLegRecord['approval_notification'] = $(
+            if ($null -eq $notificationState) {
+                [ordered]@{ status = 'not_captured'; detail = '本腿没有走到取证窗口' }
+            } else { $notificationState }
+        )
+        # **失败路径也要收尾**：被拦下的腿按定义把 marker 留在输入框里，不清就是把下一轮
+        # 顶在预检上——2026-08-02 实际多花了用户一次往返。顺序照旧「先取证再清框」：
+        # 先经 runner 自己的 adb 通道把当前屏幕拍下来（零 token、不经执行器），再清。
+        if ($null -ne $session -and -not $legTeardownDone) {
+            $failureScreen = Join-Path (Join-Path $evidenceRoot $activeLegRecord.leg) 'failure-screen.png'
+            # **留屏这件事本身要记，成不成都记**：只在成功时写字段，等于"没截到"与"没试过"
+            # 长成同一个样子——本轮 approval_notification 正是栽在这个形态上。
+            $failureScreenRecord = [ordered]@{
+                captured = $false
+                file = "$($activeLegRecord.leg)/failure-screen.png"
+                detail = ''
+            }
+            try {
+                Invoke-P0ExternalToFile -FilePath $session.AdbPath `
+                    -Arguments @('-s', $session.Serial, 'exec-out', 'screencap', '-p') `
+                    -Destination $failureScreen -Operation '失败腿留屏' -TimeoutSec 60
+                $failureScreenRecord.captured = (Test-Path -LiteralPath $failureScreen -PathType Leaf) -and
+                    (Get-Item -LiteralPath $failureScreen).Length -gt 0
+                if ($failureScreenRecord.captured) { [void]$sensitiveArtifactPaths.Add($failureScreen) }
+                else { $failureScreenRecord.detail = '截屏为空' }
+            }
+            catch {
+                $failureScreenRecord.detail = "截屏失败：$($_.Exception.Message)"
+                $cleanupErrors += '失败腿留屏失败'
+            }
+            $activeLegRecord['failure_screen'] = $failureScreenRecord
+            try {
+                $failTeardown = Invoke-P0LegTeardown -Session $session -TypedLength $markerLength `
+                    -PrecheckPath $ProbeRegionPrecheckPath `
+                    -ExpectedNormalized (Normalize-P0MarkerText $marker)
+                $legTeardownDone = $true
+                $activeLegRecord['teardown'] = [ordered]@{
+                    verdict = [string]$failTeardown.verdict
+                    keyboard = [string]$failTeardown.keyboard
+                    delete_keys = [int]$failTeardown.delete_keys
+                    issues = @($failTeardown.issues)
+                    # 失败路径上的收尾**不计 cleanup issue**：本腿已经判失败了，再把收尾问题
+                    # 并进去只会让失败原因更难读。它进 manifest，屏幕上也会说一句。
+                    on_failure_path = $true
+                }
+                if ([string]$failTeardown.verdict -ceq 'clean') {
+                    Write-Host '失败腿已顺手清空输入框，下一轮不会被预检挡住。' -ForegroundColor DarkGray
+                } else {
+                    Write-Host ("失败腿的输入框没能清干净（$($failTeardown.verdict)）：$($failTeardown.detail)" +
+                        '——下一轮开跑前请在手机上清一次。') -ForegroundColor Yellow
+                }
+            }
+            catch {
+                Write-Host "失败腿收尾未执行：$($_.Exception.Message)——下一轮开跑前请在手机上清一次输入框。" `
+                    -ForegroundColor Yellow
+            }
+        }
         $failedScreenshot = Join-Path (Join-Path $evidenceRoot $activeLegRecord.leg) 'confirmation.png'
         if (Test-Path -LiteralPath $failedScreenshot -PathType Leaf) {
             $activeLegRecord['screenshot'] = [ordered]@{

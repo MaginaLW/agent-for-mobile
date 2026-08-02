@@ -141,9 +141,22 @@ Allow 与 Stale 两腿都执行相同步骤：
    万一 heads-up 已经消失、只能下拉着点，**照点不误，然后对着 manifest 的 `safety_code` 定案**：
    `E_BLOCKED` 说明推断成立，如实记下「批次 2 的兑现窗口 = heads-up 的存活时长」；`OK`/`E_STALE_REF`
    说明推断错了，那是好消息，同样如实记。**两种结果都不许改判据、不许重跑凑绿。**
-4. **通知没弹出来 ≠ 通知功能坏了。** runner 在卡与通知都就位、正等真人决定的那个窗口里会抓一份
-   `dumpsys notification` 进 manifest 的 `approval_notification`（`found`/`flags`/`ongoing`/
-   `visibility`/与同机其它 App 通知的差集）。先看这份 dump 再下结论。
+4. **这份通知取证本身会说谎，先看它的 `status` 再看内容。** runner 在等真人决定的窗口里抓
+   `dumpsys notification`，解析结果进 manifest 的 `approval_notification`。
+   2026-08-02 首轮它**三腿全部抓空**（dump 里一条审批通知都没有），而同一批腿的
+   `confirmation_channel` 全是 `notification`——**通知明明存在且被点了**。原因是结构性的：
+   触发点在卡的取证完成时，而通知是在按钮可点之后才推的，必然抓早一步。已改成有界重试。
+   现在按 `status` 读：
+
+   | `status` | 含义 | 怎么办 |
+   |---|---|---|
+   | `ok` | 抓到了本通道的通知记录 | 正常，可以看 flags/visibility/差集 |
+   | `absent_in_dump` | 抓到了 dumpsys，但里面没有这条通知 | **不能单独据此判定"通知没发出来"**；对着 `confirmation_channel` 一起看 |
+   | `parse_failed` / `dump_failed` | 取证本身没跑成 | 取证坏了，与通知无关 |
+   | `not_captured` | 本腿没走到取证窗口 | 同上 |
+
+   **`contradicts_decided_via=true` 是明确信号：坏的是取证，不是通知**（决定确实从通知进来了）。
+   runner 当场会用黄字说同样的话。
 
 ## 4. 真实业务路径与 ADB 边界
 
@@ -172,6 +185,13 @@ ADB 仅用于设备发现、安装与权限、进程/服务、IME、端口转发
 - 输入长度与 SHA-256、输入证据是否匹配；不复制输入明文；
 - 本腿 trace/audit 相对路径、确认卡 PNG 相对路径与 SHA-256、发送后置条件；
 - cleanup 是否成功及问题列表。
+
+**失败的腿同样落盘**（2026-08-02 补）：腿在"真人决定与预期不符"时会被立刻掐掉，此前那一整轮
+在 manifest 上等于没发生过——而真人的时间已经花掉了。现在失败腿也记 `confirmation`（取**最后
+看到**的那份状态，不是只取判定用的那份）、`confirmation_channel`、`approval_notification`，
+并**照样跑腿末 teardown**：被拦下的腿按定义把 marker 留在输入框，不清就是把下一轮顶在预检上
+（2026-08-02 实际多花了用户一次往返）。顺序仍是**先取证后清框**：先经 runner 自己的 adb 通道
+截一张 `failure-screen.png`（`failure_screen.captured` 如实记成没成），再清。
 
 runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和单腿记录；检查没有 `.pause.md`、没有 `-Confirm`、没有第二次危险调用。确认状态从 app 私有文件只读获取，截图经 `run-as` 拉取并校验 PNG；token、Authorization 和私密配置不得进入 stdout、stderr、manifest、trace 或跑测 Markdown。
 

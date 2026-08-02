@@ -134,7 +134,7 @@ function New-Fixture {
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
-        'decided_via_notification'
+        'decided_via_notification', 'notification_absent', 'notification_dump_fail'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -265,6 +265,16 @@ function Remove-P0PrivateTemporaryFile {
     #    （`... input keyevent 4`）变成 `4>>`，那一条**根本不会进日志**——于是"按了 BACK"
     #    被读成"没按 BACK"，断言看起来铁证如山，其实是日志说了谎。一律把重定向写在前面：
     #    `>"file" echo 2` / `>>"adb.log" echo %*`。
+    #
+    # 5. **`exit /b N` 在嵌套括号块里不传播退出码**（本机 cmd 实测：块内 `(exit /b 3)` →
+    #    进程退出码 0）。要让假 adb 报错，得 `goto :label` 跳出所有块、在文件末尾再 `exit /b N`。
+    #    这坑与第 2 条同族：**括号块里的东西不按你写的意思执行**。
+    #
+    # `dumpsys notification` 那一段两条约束（2026-08-02 一次同时踩到 1 与 2）：
+    # - `NotificationRecord(` 的圆括号必须写成 `^(` `^)`，裸括号会当场闭合 if 块；
+    # - 那一段的说明只能写在这里。**我在块里写了两行中文 rem，于是整个 shell 块又碎了一次**
+    #   ——症状是 `exit /b 3` 不生效、场景分支形同虚设，而错误信息里只有一堆乱码命令名。
+    #   第 1 条早就写在上面，这次照样犯了：**新增 .cmd 行一律只用 ASCII。**
     $fakeAdb = Join-Path $bin 'fake-adb.cmd'
     @'
 @echo off
@@ -389,6 +399,18 @@ if "%1"=="shell" (
     echo Bound services: dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
     exit /b 0
   )
+  rem approval notification dump: see the PowerShell comment above this here-string
+  if "%2 %3"=="dumpsys notification" (
+    if "%SCEN%"=="notification_dump_fail" goto :dumpsysnotifail
+    echo   NotificationRecord^(0x1: pkg=android user=0 id=0 tag=null channel=null^)
+    echo     flags=0x400 mVisibility=0
+    echo   NotificationRecord^(0x2: pkg=com.other user=0 id=7 tag=null channel=chat^)
+    echo     flags=0x10 mVisibility=0
+    if "%SCEN%"=="notification_absent" exit /b 0
+    echo   NotificationRecord^(0x3: pkg=dev.magina.gateway user=0 id=36865 tag=null channel=gateway-approval^)
+    echo     flags=0x0 mVisibility=-1
+    exit /b 0
+  )
   if "%2 %3"=="dumpsys deviceidle" (echo system-excidle,dev.magina.gateway,10000& exit /b 0)
   if "%2 %3 %4 %6"=="run-as dev.magina.gateway cp files/test-control.json" (copy /y "%P0_FAKE_STATE%\staged-control.json" "%P0_FAKE_STATE%\test-control.json" >nul& exit /b 0)
   if "%2 %3 %4"=="run-as dev.magina.gateway rm" (
@@ -411,6 +433,8 @@ if "%1"=="shell" (
   exit /b 0
 )
 exit /b 0
+:dumpsysnotifail
+exit /b 3
 '@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
@@ -537,7 +561,7 @@ $confirm = [ordered]@{
 }
 # 通知栏那条通道点下的决定。app 侧只在真有生效决定时才写这个字段，
 # 所以默认场景**故意不写**——它就是"旧 APK / 没人点通知"的对照组。
-if ($scenario -eq 'decided_via_notification') { $confirm.decided_via = 'notification' }
+if ($scenario -in @('decided_via_notification','notification_absent')) { $confirm.decided_via = 'notification' }
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
@@ -2056,14 +2080,22 @@ PODENY-DCA2222F6441|72|2117|472|32
     }
 
     Test-Case '审批通知状态与差集必须进 manifest' {
-        # 连续两轮 dump 落了盘、解析结果却没进 manifest，现场只能手工 grep——
-        # 「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
-        $source = Get-Content -LiteralPath $SourceRunner -Raw
-        Assert-Contains $source 'approval_notification = $('
-        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -gt 0) `
-            'runner 必须在等待决定的窗口里抓一次通知状态。'
-        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -lt
-            $source.IndexOf('approval_notification = $(')) '先抓取、后写进 manifest。'
+        # **这条用例原来是靠源码文本断言的，于是它一直是绿的，而真机 manifest 里那个字段
+        # 连续三轮是 null。**（源码里确实写着 `approval_notification = $(`，值却来自一个
+        # 会把三种失败压成 $null 的函数。）现在改成跑一遍真的看 manifest 里的值。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "happy 腿不该失败：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.approval_notification.status -ceq 'ok') `
+            "审批通知取证必须进 manifest 且状态为 ok，实际 $($leg.approval_notification.status)"
+        Assert-True ($leg.approval_notification.found -eq $true) 'found 必须如实为 true。'
+        Assert-True ($leg.approval_notification.other_app_notifications -ge 1) `
+            '同机其它 App 的通知条数是天然对照组，必须记下来。'
+        Assert-True ($leg.approval_notification.contradicts_decided_via -eq $false) `
+            '取证正常时不该报矛盾。'
 
         . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
         $dump = @'
@@ -2087,6 +2119,67 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-NotMatches ($diff -join '；') 'Visibility'
         Assert-True (@(Get-P0NotificationDiff -Records @() -ChannelId 'x' -OwnPackage 'y').Count -eq 0) `
             '没有对照组时差集应为空。'
+    }
+
+    Test-Case '通知取证抓空时当场说话，并标出它与 decided_via 的矛盾' {
+        # 2026-08-02 批次 2 验收：三腿的 dump 里一条审批通知都没有，而 decided_via 全是
+        # notification——取证坏了，而 runbook 正教人"先看这份 dump 再下结论"，照做会得出
+        # 相反的结论。**空着不吭声比没有更危险**，所以它必须当场喊，并在 manifest 里留矛盾标记。
+        $fixture = New-Fixture notification_absent
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "取证抓空不该否决本腿：`n$($result.Text)"
+        Assert-Contains $result.Text '始终没有审批通知记录'
+        Assert-Contains $result.Text '坏的是这份取证，不是通知'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.approval_notification.status -ceq 'absent_in_dump') `
+            "抓到 dump 但没有本通道记录应记 absent_in_dump，实际 $($leg.approval_notification.status)"
+        Assert-True ($leg.approval_notification.attempts -ge 2) `
+            '必须有界重试，不能抓一次就下结论——通知是在卡就位之后才推的。'
+        Assert-True ($leg.approval_notification.contradicts_decided_via -eq $true) `
+            '决定从通知进来、取证却说没有通知，这个矛盾必须记进 manifest。'
+    }
+
+    Test-Case 'dumpsys 跑不成与解析不出来必须分得开，且都不返回裸 null' {
+        # 原实现把"没跑成/解析炸了/抓到但没这条通知"一律压成 $null，manifest 里读起来
+        # 全是"没这个字段"——三种完全不同的处境长成同一个样子。
+        $fixture = New-Fixture notification_dump_fail
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "取证不可用不该否决本腿：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.approval_notification.status -ceq 'dump_failed') `
+            "dumpsys 非零退出应记 dump_failed，实际 $($leg.approval_notification.status)"
+        Assert-Contains ([string]$leg.approval_notification.detail) '退出码'
+    }
+
+    Test-Case '失败腿也要落盘取证并顺手清框（不清就是把下一轮顶在预检上）' {
+        # 2026-08-02：一条 E_CHANNEL_DOWN 的 stale 腿，审计里 decided_via=notification 明明在，
+        # manifest 却什么都没记；marker 留在框里，下一轮被预检拦下，多花了用户一次往返。
+        $fixture = New-Fixture deny_but_allowed
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) '真人允许了 Deny 腿必须失败。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.verdict -ceq 'failed') '失败腿的 verdict 必须是 failed。'
+        Assert-True ($leg.confirmation -ceq 'allowed') '失败腿也有真人决定，必须如实落盘。'
+        Assert-True ($null -ne $leg.approval_notification) '失败腿的通知取证同样要进 manifest。'
+        Assert-True ($null -ne $leg.teardown -and $leg.teardown.on_failure_path -eq $true) `
+            '失败路径必须也跑腿末收尾，否则 marker 留在框里顶住下一轮。'
+        # 留屏这件事**成不成都要记**：假 adb 截不出 PNG（captured=false 是这里的正确值），
+        # 但"试过"必须留痕，否则"没截到"与"没试过"长成同一个样子。
+        Assert-True ($null -ne $leg.failure_screen) '失败腿的留屏尝试必须进 manifest。'
+        Assert-True ($leg.failure_screen.captured -eq $false) '假 adb 截不出 PNG，这里就该如实记 false。'
+        # **顺序判据**：先截屏、后清框。先清框就是先毁证，这条与 Deny 腿带外验证同源。
+        $adbLog = Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw
+        $shotAt = $adbLog.IndexOf('exec-out screencap -p')
+        $keyAt = $adbLog.IndexOf('input keyevent 123')
+        Assert-True ($shotAt -ge 0) '失败腿必须尝试过截屏。'
+        Assert-True ($keyAt -ge 0) '失败腿必须跑过清框按键。'
+        Assert-True ($shotAt -lt $keyAt) '截屏必须发生在清框之前。'
     }
 
     Test-Case '审批通知不设 CATEGORY_CALL' {
