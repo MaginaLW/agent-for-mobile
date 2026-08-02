@@ -626,6 +626,14 @@ class SafetyGateTest {
         assertEquals("home", executorKey)
     }
 
+    /**
+     * **这条同时是「锁屏审批」的结构性上界**（2026-08-02 离线判定，见 knowledge
+     * 「锁屏时危险动作走不到确认那一步」）：锁屏后没有 active/focused 的 `TYPE_APPLICATION`
+     * 窗口，`foregroundKnown` 必为 false，于是危险动作在**第一次读上下文**时就被 E_BLOCKED——
+     * 确认卡与审批通知都不会出现。所以"先锁屏、后 post"不是会吃 `E_STALE_REF`，而是根本走不到。
+     *
+     * 注意 `confirmerCalls == 0` 这条断言：它正是"卡从未弹出"的机械证据。
+     */
     @Test
     fun `unknown foreground blocks Level W before confirmation and execution`() {
         assertUnknownForegroundBlocked(Level.W)
