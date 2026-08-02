@@ -27,9 +27,52 @@ class EvidenceRebuildPolicyTest {
         createdAtMs = 1_000,
     )
 
+    private fun judge(
+        intent: ApprovalIntent = intent(),
+        readback: String?,
+        channel: String = "ocr",
+        surfaceLabel: String? = "文件传输助手",
+    ) = EvidenceRebuildPolicy.judge(intent, readback, channel, surfaceLabel)
+
+    // —— 目标会话那一半（2026-08-02 补：它的 TTL 同样是 120s，只重建输入证据等于没重建） ——
+
+    @Test
+    fun `unreadable conversation title is unverified not mismatch`() {
+        // 读不出标题是通道问题；判成 Mismatch 等于诬告用户换了会话。
+        val result = judge(readback = text, surfaceLabel = null)
+
+        assertTrue(result is EvidenceRebuild.Unverified)
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("目标会话标题读不回来"))
+    }
+
+    @Test
+    fun `empty conversation title is unverified`() {
+        val result = judge(readback = text, surfaceLabel = "")
+
+        assertTrue(result is EvidenceRebuild.Unverified)
+    }
+
+    @Test
+    fun `a different conversation is a mismatch named in baseline order`() {
+        val reason = (judge(readback = text, surfaceLabel = "张三") as EvidenceRebuild.Mismatch).reason
+
+        assertTrue(reason, reason.contains("目标会话与已批准的不符"))
+        assertTrue(reason, reason.indexOf("文件传输助手") < reason.indexOf("张三"))
+    }
+
+    @Test
+    fun `conversation is checked before content`() {
+        // 内容对不对，只有在"还在同一个会话"成立之后才有意义。会话都换了还去报内容摘要，
+        // 会把现场引到错误的方向。
+        val reason = (judge(readback = "别的内容", surfaceLabel = "张三") as EvidenceRebuild.Mismatch).reason
+
+        assertTrue(reason, reason.contains("目标会话"))
+        assertTrue(reason, !reason.contains("内容摘要"))
+    }
+
     @Test
     fun `identical readback rebuilds the evidence`() {
-        val result = EvidenceRebuildPolicy.judge(intent(), text, "ocr")
+        val result = judge(readback = text)
 
         assertEquals(EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length), result)
     }
@@ -38,7 +81,7 @@ class EvidenceRebuildPolicyTest {
     fun `unreadable input box is unverified not mismatch`() {
         // 通道故障与"内容被换掉"是两件事。折在一起会让一次 OCR 失败变成对用户的诬告，
         // 而现场只能靠猜到底发生了什么。
-        val result = EvidenceRebuildPolicy.judge(intent(), null, "ocr")
+        val result = judge(readback = null)
 
         assertTrue(result is EvidenceRebuild.Unverified)
         assertTrue((result as EvidenceRebuild.Unverified).reason.contains("读不回来"))
@@ -49,7 +92,7 @@ class EvidenceRebuildPolicyTest {
         // OCR 一个字没出，与"框里真没字"，在这条链上分不开。
         // 判成通过就是换了触发条件的谎报成功——`fromOcrReadback` 那次栽的就是这一下，
         // 而且被自己的用例固化成了预期行为。
-        val result = EvidenceRebuildPolicy.judge(intent(), "", "ocr")
+        val result = judge(readback = "")
 
         assertTrue(result is EvidenceRebuild.Unverified)
         assertTrue((result as EvidenceRebuild.Unverified).reason.contains("为空"))
@@ -57,7 +100,7 @@ class EvidenceRebuildPolicyTest {
 
     @Test
     fun `changed content is a mismatch that names both sides in baseline order`() {
-        val result = EvidenceRebuildPolicy.judge(intent(), "P0ALLOW-XXXXXXXXXX", "ocr")
+        val result = judge(readback = "P0ALLOW-XXXXXXXXXX")
 
         val reason = (result as EvidenceRebuild.Mismatch).reason
         // 基线在前、读回来的在后：方向本身就是判据的一部分。
@@ -72,7 +115,7 @@ class EvidenceRebuildPolicyTest {
         // 它必须失败——基线只能是卡上给人看过的那一份。
         val approved = intent(sha256 = InputCommitEvidence.sha256("卡上给人看过的内容"))
 
-        val result = EvidenceRebuildPolicy.judge(approved, "现在框里的内容", "ocr")
+        val result = judge(intent = approved, readback = "现在框里的内容")
 
         assertTrue(result is EvidenceRebuild.Mismatch)
     }
@@ -81,22 +124,22 @@ class EvidenceRebuildPolicyTest {
     fun `length mismatch is reported even when it cannot happen with a matching digest`() {
         // 摘要相同、长度不同在密码学上不该发生；写这条是因为"两项都比"是判据的定义，
         // 而不是因为它常见——判据的完整性不该靠"不会发生"来维持。
-        val result = EvidenceRebuildPolicy.judge(intent(length = text.length + 1), text, "ocr")
+        val result = judge(intent = intent(length = text.length + 1), readback = text)
 
         assertTrue((result as EvidenceRebuild.Mismatch).reason.contains("长度"))
     }
 
     @Test
     fun `intent without locked content cannot be rebuilt`() {
-        val result = EvidenceRebuildPolicy.judge(intent(sha256 = null, length = null), text, "ocr")
+        val result = judge(intent = intent(sha256 = null, length = null), readback = text)
 
         assertTrue(result is EvidenceRebuild.Unverified)
     }
 
     @Test
     fun `channel is carried into every verdict so the field can tell which link failed`() {
-        val unverified = EvidenceRebuildPolicy.judge(intent(), null, "a11y")
-        val mismatch = EvidenceRebuildPolicy.judge(intent(), "别的内容", "a11y")
+        val unverified = judge(readback = null, channel = "a11y")
+        val mismatch = judge(readback = "别的内容", channel = "a11y")
 
         assertTrue((unverified as EvidenceRebuild.Unverified).reason.contains("a11y"))
         assertTrue((mismatch as EvidenceRebuild.Mismatch).reason.contains("a11y"))

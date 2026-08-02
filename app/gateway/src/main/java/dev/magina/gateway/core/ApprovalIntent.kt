@@ -155,7 +155,33 @@ sealed interface EvidenceRebuild {
  */
 object EvidenceRebuildPolicy {
 
-    fun judge(intent: ApprovalIntent, readback: String?, channel: String): EvidenceRebuild {
+    /**
+     * [surfaceLabel] 是**重新读回来的会话页标题**（宏那条 `isConversationSurface` 的同一个信号）。
+     *
+     * **两处证据都要重建，缺一不可**：目标会话证据与输入证据的 TTL 都是 120s，而用户拍的是
+     * 5 分钟——只重建输入证据的话，回来时会以「执行前没有短时目标会话证据」失败，
+     * 而那条失败与今天长得一模一样，最难发现。
+     *
+     * **先验会话、再验内容**：内容对不对，只有在"还在同一个会话"成立之后才有意义。
+     * 而且这里重建的是「**还在**同一个会话」这件事，**不是「目标是谁」**——后者等于让被测
+     * 组件自己制造它要证明的前提。基线永远来自意图（卡上那份），不来自这次读数。
+     */
+    fun judge(
+        intent: ApprovalIntent,
+        readback: String?,
+        channel: String,
+        surfaceLabel: String?,
+    ): EvidenceRebuild {
+        if (surfaceLabel == null) return EvidenceRebuild.Unverified(
+            "目标会话标题读不回来（channel=$channel）",
+        )
+        if (surfaceLabel.isEmpty()) return EvidenceRebuild.Unverified(
+            "读回的目标会话标题为空，判不了（channel=$channel）",
+        )
+        if (surfaceLabel != intent.targetLabel) return EvidenceRebuild.Mismatch(
+            "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$channel）",
+        )
+
         val expected = intent.contentSha256
             ?: return EvidenceRebuild.Unverified("意图没有锁定内容，无需也无法重建（channel=$channel）")
         if (readback == null) return EvidenceRebuild.Unverified("输入框内容读不回来（channel=$channel）")
