@@ -114,9 +114,13 @@ Allow 与 Stale 两腿都执行相同步骤：
 审批通知与确认卡是**并联**的，同一次确认两条通道都在，先点的赢。所以这两条判据不需要额外
 步骤，只是**换一个地方点**。
 
+> **2026-08-02 首轮验收：收窄后的判据 1 通过**（批次 2 已合 main `f08cda2`）。三腿
+> `confirmation_channel` 全是 `notification`——1a/1b 由机械证据成立，不是真人口述。
+> 下面这张表与四条防误判**保留作为跑法说明**，其中第 3 条的推断已被这一轮部分推翻，见该条。
+
 | 判据 | 挂在哪条腿 | 用户怎么做 | 预期（manifest） |
 |---|---|---|---|
-| **1a · 可达且送达** | **Stale** | runner 提示后**切到别的 App**（浏览器/设置皆可，**不要锁屏**），在通知里点「允许本次」 | 该腿照常通过：`safety_code=E_STALE_REF`，且 `confirmation_channel=notification` |
+| **1a · 可达且送达** | **Stale** | runner 提示后**切到别的 App**（浏览器/设置皆可，**不要锁屏**）；**先真的把那个 App 显示出来，再下拉通知栏**点「允许本次」 | 该腿照常通过：`safety_code=E_STALE_REF`，且 `confirmation_channel=notification` |
 | **1b · 能真的放行** | **Allow** | 微信留在前台，人别盯着屏幕；等 heads-up 浮窗弹出来，**直接在浮窗上点**「允许本次」 | 该腿照常通过（全套 Allow 判据），且 `confirmation_channel=notification` |
 | **2 · 无 FSI 依赖** | 三腿 | 无 | APK 未声明该权限、通知 `fullscreenIntent=null`、三腿都到位 |
 | **3 · 连续两次 stale 后停下** | — | 无 | **永远记「未触达」**（决定四已作废，见 spec §5.3）——那是如实的 |
@@ -133,14 +137,20 @@ Allow 与 Stale 两腿都执行相同步骤：
 2. **1a 那腿人在别的 App 里点了允许，动作照样不会执行**，这是**预期**：确认前后前台包不一致，
    硬门判 `E_STALE_REF`——与 Stale 腿本来要证明的是同一件事。1a 要证的只是「决定送到了网关」，
    证据就是 `confirmation_channel=notification`。**不要因此重跑，也不要记成缺陷。**
-3. **1b 请在 heads-up 浮窗上点，不要下拉通知栏。** 通知栏展开时它自己获焦，App 窗口既非
-   active 也非 focused，而确认后复核只容忍约 320ms 的窗口沉降（`FOREGROUND_SETTLE_ATTEMPTS`
-   5×80ms）——**预计会以 `E_BLOCKED`（前台 APPLICATION 身份未知）结束**。
-   **这一条是推断，尚未实测**：同一机制 2026-07-26 在悬浮卡上实锤过（可获焦的 overlay 抢走焦点
-   → 前台被判 unknown，所以卡才必须 `FLAG_NOT_FOCUSABLE`），通知栏是同一类窗口。
-   万一 heads-up 已经消失、只能下拉着点，**照点不误，然后对着 manifest 的 `safety_code` 定案**：
-   `E_BLOCKED` 说明推断成立，如实记下「批次 2 的兑现窗口 = heads-up 的存活时长」；`OK`/`E_STALE_REF`
-   说明推断错了，那是好消息，同样如实记。**两种结果都不许改判据、不许重跑凑绿。**
+   **但切 App 这一步要真的做完再点**：2026-08-02 首跑就是没做完——人从通知点了允许，网关侧
+   却仍认为前台是微信（`foreground_known=true`/`com.tencent.mm`），debug hook 等不到"已知的
+   非目标 App"，整腿以 `E_CHANNEL_DOWN`(channel=test-control) 结束。**这不是安全门的判定，
+   是测试脚手架的竞态**；明确"先把那个 App 显示出来再下拉"之后第二次即通过。
+3. ~~**1b 请在 heads-up 浮窗上点，不要下拉通知栏。**~~ **推断已被 2026-08-02 首轮推翻，
+   下拉通知栏点也可以。** 原推断是：通知栏展开时自己获焦、App 窗口既非 active 也非 focused，
+   而确认后复核只容忍约 320ms 的窗口沉降（`FOREGROUND_SETTLE_ATTEMPTS` 5×80ms），所以会以
+   `E_BLOCKED`（前台身份未知）收场。旁证当时很硬——同一机制 2026-07-26 在悬浮卡上实锤过
+   （可获焦的 overlay 抢走焦点 → 前台被判 unknown，所以卡才必须 `FLAG_NOT_FOCUSABLE`）。
+   **实测没有出现**：三腿都以各自的预期 `safety_code` 收场，一次 `E_BLOCKED` 都没有，
+   其中 Stale 腿是在别的 App 里下拉通知栏点的。**结论：通知栏窗口与自家可获焦 overlay 不是
+   同一类**，前者不夺走 App 窗口的 active/focused。
+   仍然保留的一句提醒：这条是**单设备单轮**的结论（V2352A/Android 16），别当成跨机型保证；
+   若哪天又撞上 `E_BLOCKED`，先看这里再查代码。
 4. **这份通知取证本身会说谎，先看它的 `status` 再看内容。** runner 在等真人决定的窗口里抓
    `dumpsys notification`，解析结果进 manifest 的 `approval_notification`。
    2026-08-02 首轮它**三腿全部抓空**（dump 里一条审批通知都没有），而同一批腿的
