@@ -132,6 +132,76 @@ posted 了、importance 也对、actions 也在，唯独没人能说出系统把
 
 读不出来一律回 `$null` 字段，不猜。
 #>
+<#
+把 `dumpsys notification` 拆成一条条通知记录，供**差集比较**。
+
+2026-08-02 第三次验收把判据 1 收敛成只剩「可见」一件，并给出了天然对照组：同一时刻
+锁屏上另一条 app 通知正常显示，网关那条就是不在。**下一步该做的是列全两条的属性差异，
+而不是继续挨个试开关**——这个函数就是为此存在的。
+
+字段按"能解析多少算多少"取，取不到就留空：`dumpsys` 的格式随版本变，硬要求某个字段
+只会让整份数据在新系统上一起失效。
+#>
+function Get-P0NotificationRecords {
+    param([Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$DumpText)
+
+    $records = [Collections.Generic.List[object]]::new()
+    if ([string]::IsNullOrWhiteSpace($DumpText)) { return @($records) }
+    # 以 NotificationRecord( 为界切块；最后一块吃到文本末尾。
+    $starts = @([regex]::Matches($DumpText, 'NotificationRecord\(') | ForEach-Object { $_.Index })
+    for ($i = 0; $i -lt $starts.Count; $i++) {
+        $from = $starts[$i]
+        $to = if ($i + 1 -lt $starts.Count) { $starts[$i + 1] } else { $DumpText.Length }
+        $block = $DumpText.Substring($from, $to - $from)
+        function Read-Field([string]$Pattern) {
+            $m = [regex]::Match($block, $Pattern)
+            if ($m.Success) { return $m.Groups[1].Value } else { return '' }
+        }
+        $flagsText = Read-Field 'flags=0x([0-9a-fA-F]+)'
+        $flags = if ($flagsText) { [Convert]::ToInt32($flagsText, 16) } else { $null }
+        $records.Add([pscustomobject]@{
+            Package = Read-Field 'pkg=([A-Za-z0-9_.]+)'
+            Id = Read-Field 'id=(\d+)'
+            ChannelId = Read-Field '(?:channel|mChannelId)=([A-Za-z0-9_.\-]+)'
+            Flags = $flags
+            Ongoing = $(if ($null -eq $flags) { $null } else { ($flags -band 0x2) -ne 0 })
+            Category = Read-Field 'category=([A-Za-z0-9_.]+)'
+            Visibility = Read-Field '(?:mVisibility|visibility)=(-?\d+)'
+            Group = Read-Field '(?:mGroupKey|groupKey)=(\S+)'
+            SortKey = Read-Field 'sortKey=(\S+)'
+        })
+    }
+    return @($records)
+}
+
+<#
+把本包的审批通知与**同一份 dump 里其它 App 的通知**做差集。
+
+只列"两边都解析出来、而且不一样"的字段——一致的字段列出来只会淹没信号。
+#>
+function Get-P0NotificationDiff {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records,
+        [Parameter(Mandatory)][string]$ChannelId,
+        [Parameter(Mandatory)][string]$OwnPackage
+    )
+    $ours = @($Records | Where-Object { $_.ChannelId -ceq $ChannelId }) | Select-Object -First 1
+    $others = @($Records | Where-Object { $_.Package -and $_.Package -cne $OwnPackage })
+    if ($null -eq $ours -or $others.Count -eq 0) { return @() }
+    $diff = [Collections.Generic.List[string]]::new()
+    foreach ($field in @('Category', 'Flags', 'Visibility', 'Group', 'Ongoing')) {
+        $mine = [string]$ours.$field
+        foreach ($other in $others) {
+            $theirs = [string]$other.$field
+            if ([string]::IsNullOrEmpty($mine) -and [string]::IsNullOrEmpty($theirs)) { continue }
+            if ($mine -cne $theirs) {
+                $diff.Add("$field：本包=$($mine -replace '^$','-') / $($other.Package)=$($theirs -replace '^$','-')")
+            }
+        }
+    }
+    return @($diff | Select-Object -Unique)
+}
+
 function Get-P0NotificationState {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$DumpText,

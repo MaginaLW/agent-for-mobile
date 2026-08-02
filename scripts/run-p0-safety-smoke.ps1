@@ -377,7 +377,23 @@ function Save-P0ApprovalNotificationState {
             -Operation '读取审批通知状态' -AllowFailure -TimeoutSec 30
         if ($dump.ExitCode -ne 0) { return $null }
         Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
-        return Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
+        $state = Get-P0NotificationState -DumpText $dump.Stdout -ChannelId 'gateway-approval'
+        $records = Get-P0NotificationRecords -DumpText $dump.Stdout
+        return [ordered]@{
+            found = [bool]$state.Found
+            flags = $state.Flags
+            ongoing = $state.Ongoing
+            visibility = $state.Visibility
+            # 同一时刻别的 App 有几条通知在——它们就是天然对照组。为 0 时说明这份 dump
+            # 本身没抓到旁证，差集为空不代表"没差异"。
+            other_app_notifications = @($records | Where-Object {
+                $_.Package -and $_.Package -cne 'dev.magina.gateway'
+            }).Count
+            # **差集**：判据 1 现在只剩"可见"一件，下一步该看的是我们与正常显示的那条差在哪，
+            # 而不是继续挨个试开关。
+            diff_vs_other_apps = @(Get-P0NotificationDiff -Records $records `
+                -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway')
+        }
     }
     catch { return $null }
 }
@@ -1231,6 +1247,7 @@ try {
         $confirmation = $null
         $screenshotPath = Join-Path $legDir 'confirmation.png'
         $prompted = $false
+        $notificationState = $null
         while ([DateTime]::UtcNow -lt $deadline) {
             $state = Get-P0ConfirmationState -Session $session
             if ($null -ne $state) {
@@ -1354,7 +1371,8 @@ try {
         # 被拦下的腿留在输入框里的 marker 正是"消息没发出去"的正证据（Deny 腿带外验证靠它）。
         # 判定已经做完，收尾失败不作废本腿结论，但会进 manifest 并计一条 cleanup issue。
         $teardown = Invoke-P0LegTeardown -Session $session -TypedLength $markerLength `
-            -PrecheckPath $ProbeRegionPrecheckPath
+            -PrecheckPath $ProbeRegionPrecheckPath `
+            -ExpectedNormalized (Normalize-P0MarkerText $marker)
         $cleanupErrors += @($teardown.cleanup_issues)
         switch ($teardown.verdict) {
             'clean' {
@@ -1435,6 +1453,10 @@ try {
             )
             # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
             # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
+            # 审批通知的真实状态（批次 2 判据 1 的取证）。**必须进 manifest**——
+            # 2026-08-02 连续两轮它只落了 dump 文件、解析结果没进任何判据看得见的地方，
+            # 现场只能手工 grep。正是「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
+            approval_notification = $(if ($null -eq $notificationState) { $null } else { $notificationState })
             teardown = [ordered]@{
                 verdict = [string]$teardown.verdict
                 keyboard = [string]$teardown.keyboard

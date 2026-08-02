@@ -133,7 +133,7 @@ function New-Fixture {
         'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
-        'teardown_not_foreground', 'teardown_foreground_stuck'
+        'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -443,10 +443,19 @@ rem post-teardown re-check: keyevent.log existing means teardown has already run
 rem NOTE: keep `exit /b` at this nesting level. Wrapping these in an outer `if exist (...)`
 rem block swallows the exit code (cmd reports 0), which silently turns the assertion green.
 if not exist "%P0_FAKE_STATE%\keyevent.log" goto :beforeteardown
-findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && (
-  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["P0LEFTOVER@100,2600,900,2700"]}
+rem teardown_dirty = 真残留：leftovers 必须是**本腿自己的 marker**，否则判据只会看到"别人的字"。
+findstr /x /c:"teardown_dirty" "%P0_FAKE_STATE%\scenario.txt" >nul && goto :teardowndirty
+rem teardown_overlay = 系统浮层压在输入栏上：有字，但不是我们的。
+findstr /x /c:"teardown_overlay" "%P0_FAKE_STATE%\scenario.txt" >nul && (
+  echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["UNICOM-TRAFFIC-TIP@100,2713,900,2765"]}
   exit /b 2
 )
+goto :notteardowndirty
+:teardowndirty
+for /f "usebackq delims=" %%M in ("%P0_FAKE_STATE%\markers.log") do set LASTMARKER=%%M
+call echo {"ok":false,"empty":false,"remedy":"qingkong","leftovers":["%%LASTMARKER%%@100,2600,900,2700"]}
+exit /b 2
+:notteardowndirty
 findstr /x /c:"teardown_probe_not_ready" "%P0_FAKE_STATE%\scenario.txt" >nul && (
   echo {"ok":false,"empty":true,"probe_ready":false,"reason":"ocr-jitter"}
   exit /b 2
@@ -1945,6 +1954,120 @@ PODENY-DCA2222F6441|72|2117|472|32
             Join-Path $SourceRepoRoot 'docs\specs\2026-07-17-执行harness-design.md'
         ) -Raw
         Assert-Contains $harness '尚未调用危险工具'
+    }
+
+    Test-Case '终态判据认反引号，且判不了绝不记成 success' {
+        # 2026-08-02：执行器把整段报告包成 `结果：成功…`，runner 判整腿死，而 dispatch 对
+        # **同一段文字**记 ledger success——两个组件结论相反。
+        # 查证结果：模式本来就是两处共用的（不是各写一份），真正的洞是 dispatch 的兜底默认 success。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1')
+
+        foreach ($wrapped in @('`结果：成功`', '**结果：成功**', '  `结果：成功` ', '结果：成功')) {
+            Assert-True ($wrapped -match (Get-P0FinalVerdictPattern '成功')) "应认出终态：$wrapped"
+        }
+        Assert-True ('`[AWAIT_CONFIRM]`' -match $script:P0AwaitConfirmPattern) '暂停标记也要容忍反引号。'
+        # 不能矫枉过正：没有"结果："二字的文本仍不该被当成终态。
+        Assert-True (-not ('大概是成功了吧' -match (Get-P0FinalVerdictPattern '成功'))) '不得把闲聊认成终态。'
+
+        # **兜底绝不能是 success。** 模式可以继续补，但"判不了"永远补不完。
+        $dispatchSource = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1') -Raw
+        $code = [regex]::Replace($dispatchSource, '(?m)#.*$', '')
+        Assert-NotMatches $code "else \{ \`$verdict = 'success'"
+        Assert-Contains $code "'unparsed'"
+        Assert-True ((Get-FailReason -Verdict 'unparsed') -ceq 'report-unparsed') '判不了也要有归因，不能空着。'
+        # unparsed 不在 success/paused 里 → 退出码非零。
+        Assert-Contains $code "@('success', 'paused')"
+    }
+
+    Test-Case '系统浮层压住输入栏时不得把整轮判失败' {
+        # 这是 2026-08-02 真机 status=failed 的原样复现：候选区有字、但不是本腿 marker。
+        # 判据层面已有纯函数用例，这条验的是端到端——报的就是"整轮被判失败"。
+        $fixture = New-Fixture teardown_overlay
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "系统浮层不该把整轮判失败：`n$($result.Text)"
+        $manifestJson = Get-Content -LiteralPath (
+            (Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1).FullName
+        ) -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].teardown.verdict -ceq 'unverified') `
+            "别人的字应记 unverified，实际 $($manifestJson.legs[0].teardown.verdict)"
+        Assert-True ($manifestJson.cleanup.ok -eq $true) '不该因此计入 cleanup 失败。'
+    }
+
+    Test-Case '候选区有别人的字不算残留，但也不算干净' {
+        # 2026-08-02 实锤：一条联通流量提示浮层压在输入栏上，读出
+        # 「联通 今日已用：739.1 KB…」，输入框其实是空的，整轮被判 failed。
+        # 与「键盘顶起布局后量到的是键盘」同族：固定几何 + 只看"这块地方有没有字"，
+        # 分不清那字是谁的。
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1')
+        . $SourceProvisioner
+
+        $marker = 'P0STALE-AHKMPTXY3479'
+        $expected = Normalize-P0MarkerText $marker
+
+        # 真残留：leftovers 里含本腿 marker → 仍然 dirty，严格性一分未松。
+        $dirty = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout ('{"ok":false,"empty":false,"leftovers":["' + $marker + '@100,2600,900,2700"]}')
+        Assert-True ($dirty.verdict -ceq 'dirty') '含本腿 marker 必须判 dirty。'
+
+        # 系统浮层：有字但不是我们的 → unverified，**不是 clean**（浮层可能正压着 marker）。
+        $overlay = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout '{"ok":false,"empty":false,"leftovers":["联通 今日已用：739.1 KB@100,2713,900,2765"]}'
+        Assert-True ($overlay.verdict -ceq 'unverified') '别人的字不该判 dirty。'
+        Assert-True ($overlay.verdict -cne 'clean') '也绝不能判 clean——没有证据说框里是空的。'
+        Assert-Contains $overlay.detail '系统浮层'
+
+        # OCR 把 P0 读成 PO 时仍要认出是自己的残留（归一走同一口径）。
+        $jittered = Get-P0TeardownVerdict -ExitCode 2 -ExpectedNormalized $expected `
+            -Stdout ('{"ok":false,"empty":false,"leftovers":["' + ($marker -replace '^P0', 'PO') + '@1,2,3,4"]}')
+        Assert-True ($jittered.verdict -ceq 'dirty') 'O/0 抖动下仍应认出本腿残留。'
+
+        # 没给 marker 时退回旧行为（有字即 dirty），不能因为少个参数就变宽松。
+        $noMarker = Get-P0TeardownVerdict -ExitCode 2 -Stdout '{"ok":false,"empty":false,"leftovers":["x@1,2,3,4"]}'
+        Assert-True ($noMarker.verdict -ceq 'dirty') '拿不到 marker 时必须保守判 dirty。'
+    }
+
+    Test-Case '审批通知状态与差集必须进 manifest' {
+        # 连续两轮 dump 落了盘、解析结果却没进 manifest，现场只能手工 grep——
+        # 「判据看不见的东西就会烂掉」的形态，而且是自己犯的。
+        $source = Get-Content -LiteralPath $SourceRunner -Raw
+        Assert-Contains $source 'approval_notification = $('
+        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -gt 0) `
+            'runner 必须在等待决定的窗口里抓一次通知状态。'
+        Assert-True ($source.IndexOf('$notificationState = Save-P0ApprovalNotificationState') -lt
+            $source.IndexOf('approval_notification = $(')) '先抓取、后写进 manifest。'
+
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1')
+        $dump = @'
+  NotificationRecord(pkg=dev.magina.gateway id=36865 channel=gateway-approval)
+    flags=0x00000000
+    category=call
+    mVisibility=0
+  NotificationRecord(pkg=com.sf.express id=12 channel=delivery)
+    flags=0x00000000
+    mVisibility=0
+'@
+        $records = Get-P0NotificationRecords -DumpText $dump
+        Assert-True ($records.Count -eq 2) "应解析出两条通知，实际 $($records.Count)"
+        Assert-True ($records[0].ChannelId -ceq 'gateway-approval') '通道名解析错误。'
+        Assert-True ($records[0].Ongoing -eq $false) 'flags=0 应判非 ongoing。'
+
+        # 差集要指出 category 这处差异——那正是本轮唯一改动的变量。
+        $diff = Get-P0NotificationDiff -Records $records -ChannelId 'gateway-approval' -OwnPackage 'dev.magina.gateway'
+        Assert-Contains ($diff -join '；') 'Category'
+        # 一致的字段不该出现在差集里，否则信号会被淹没。
+        Assert-NotMatches ($diff -join '；') 'Visibility'
+        Assert-True (@(Get-P0NotificationDiff -Records @() -ChannelId 'x' -OwnPackage 'y').Count -eq 0) `
+            '没有对照组时差集应为空。'
+    }
+
+    Test-Case '审批通知不设 CATEGORY_CALL' {
+        # 这不是通话。Android 14+ 要求通话类通知用 CallStyle，非 CallStyle 的 CATEGORY_CALL
+        # 属不合规形态，系统有权降级处理——而它正是我们与那条正常显示的通知最显眼的差异之一。
+        $notifier = Get-Content -LiteralPath (
+            Join-Path $SourceRepoRoot 'app\gateway\src\main\java\dev\magina\gateway\overlay\ConfirmNotifier.kt'
+        ) -Raw
+        Assert-True ($notifier -notmatch '(?m)^\s*\.setCategory\(') '不得用语义不符的 category 换排序权重。'
     }
 
     Test-Case '审批通知靠超时维持存在，而不是靠 ongoing' {

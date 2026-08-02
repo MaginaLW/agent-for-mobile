@@ -332,7 +332,11 @@ try {
         if ($final -match $script:P0AwaitConfirmPattern) { $verdict = 'paused' }
         elseif ($final -match (Get-P0FinalVerdictPattern '失败')) { $verdict = 'fail' }
         elseif ($final -match (Get-P0FinalVerdictPattern '成功')) { $verdict = 'success' }
-        else { $verdict = 'success'; $note = '报告未循例' }
+        # **兜底绝不能是 success。** 上面那条注释记的是"模式漏了 markdown 强调"，可真正让
+        # 一次失败被记成成功的是**这一行**：三条都不匹配时旧代码直接判 success。
+        # 2026-08-02 又撞一次（这回是反引号）——runner 判整腿死，dispatch 对同一段文字记 success，
+        # 两个组件结论相反。模式可以继续补，但"判不了"永远补不完；判不了就说判不了。
+        else { $verdict = 'unparsed'; $note = '报告未循例，无法判定成败' }
     }
 
     # 上限/超时截断时，从 trace 捞末条 assistant 文本——任务可能已完成、只是报告被截断（④ 实测教训）

@@ -85,7 +85,16 @@ object ConfirmNotifier {
                     ConfirmNotificationContent.expandedText(tier, target, preview)
                 )
             )
-            .setCategory(Notification.CATEGORY_CALL)
+            // **刻意不设 CATEGORY_CALL。** 2026-08-02 第三次验收：锁屏渲染本身是好的
+            // （同一时刻另一条 app 通知正常显示、zen_mode=0），唯独网关这条不在——
+            // 而 CATEGORY_CALL 是我们与那条通知最显眼的差异之一。
+            //
+            // 它本来也是错的：这不是通话。Android 14+ 要求通话类通知用 `Notification.CallStyle`，
+            // 非 CallStyle 的 CATEGORY_CALL 属于不合规形态，系统有权按自己的规则降级处理。
+            // **用一个语义不符的 category 去换排序权重，迟早在别处咬回来**——现在就咬了。
+            //
+            // 紧急度本来就由通道的 IMPORTANCE_HIGH 提供，去掉它不损失任何我们依赖的东西。
+            // 本轮**只动这一个变量**：autogroup 那条候选留给下一轮的差集数据来判。
             // **刻意不调 setOngoing(true)。** 2026-08-01 批次 2 真机验收：用户锁屏后根本看不到
             // 这条通知，两次 timed_out；系统与厂商的每 App 锁屏开关都是开的、通道 importance=4、
             // 通知确实 posted 且 actions=3 带 publicVersion、fullscreenIntent=null。

@@ -16,11 +16,14 @@
 dispatch 会落到兜底分支**把失败记成 success**（2026-07-31 真机实锤）。
 这里统一容忍：行首空白、markdown 强调（`*`/`_`，任意重数）、以及冒号后的空格。
 #>
-$script:P0AwaitConfirmPattern = '(?m)^[ \t]*[*_]{0,3}\[AWAIT_CONFIRM\]'
+$script:P0AwaitConfirmPattern = '(?m)^[ \t]*[*_`]{0,3}\[AWAIT_CONFIRM\]'
 
 function Get-P0FinalVerdictPattern {
     param([Parameter(Mandatory)][ValidateSet('成功', '失败')][string]$Outcome)
-    return "(?m)^[ \t]*[*_]{0,3}结果[：:][ \t]*$Outcome"
+    # 反引号与 `*`/`_` 同族：模型会把整段报告包成 `` `结果：成功…` ``。
+    # 2026-08-02 真机实锤——runner 判"终态报告不是成功"整腿判死，而 dispatch 对**同一段文字**
+    # 落进兜底记成 success，两个组件对同一文本给出相反结论。
+    return "(?m)^[ \t]*[*_``]{0,3}结果[：:][ \t]*$Outcome"
 }
 
 <#
@@ -115,6 +118,8 @@ function Get-FailReason {
         'preflight-fail' { return 'preflight' }
         'timeout'        { return 'dispatch-timeout' }
         'step-cap'       { return 'step-cap' }
+        # 报告没循例 → 成败判不了。**归因不能空着**，否则台账上它看起来像一次普通失败。
+        'unparsed'       { return 'report-unparsed' }
     }
 
     $lastCode = ''
