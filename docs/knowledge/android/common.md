@@ -9,6 +9,32 @@
 - Android 13+ 普通 app 无法编程开关蓝牙/WiFi（shell 位阶专属，见 [sys-cli.md](sys-cli.md)）。
 - 无障碍 `takeScreenshot`（API 30+）：单发极快 **32–37ms**（vivo V2352A/Android16 实测，远优于 500ms 判据）。连发（~400ms 间隔）触发**软节流**——第二次**不报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`，而是 `takeScreenshot` 延迟到 **~750ms** 后成功返回；冷却 ~2s 后回落常速（Spike S4 实测，未精确二分冷却边界）。**与常见文档所述「硬失败」不同**，OriginOS6 是拖延返回。网关 `E_RATE_LIMITED` 冷却窗口参考 ~800ms（或容忍单次 ~750ms 延迟，不必判失败）。**M1b 补充（2026-07-19）：更紧的连发（<300ms，OCR 融合 snapshot 紧跟点击校验）也会硬报 INTERVAL_TIME_SHORT**——软/硬两种形态都存在；网关内部视觉通道已吸收（等 ~900ms 重试一次），`screen_capture` 工具仍向大脑透出 E_RATE_LIMITED 语义。
 
+## 通知上不上锁屏：`CATEGORY_CALL` 是"申请"不是"授予"（2026-08-02 查阅 + 真机对照）
+
+批次 2「锁屏免解锁批准」连挂三轮的背景知识。**先记结论：一个 category 只是给系统的提示，
+拿不到对应的待遇；待遇由 Style + 权限 + 必备元素共同决定。**
+
+- **`setCategory(CATEGORY_CALL)` 单独使用不会得到通话级待遇。** 官方文档只把
+  「通知栏最高优先级排名 + 系统可转发到其他设备」授予 **`NotificationCompat.CallStyle`**，
+  不是授予 category。裸 category 是排序/策略的输入之一，**不是资格**。
+- **`CallStyle` 有强制按钮，与"批准/拒绝"语义天然冲突。** 来电必须是 Answer/Decline，
+  进行中必须是 Hang up，**系统自动配图标与文案、不支持自定义标签**。所以危险动作审批卡
+  **不能靠改用 CallStyle 来蹭待遇**——那会把"允许/拒绝"显示成"接听/拒接"。
+- **通话类通知的常规配方里带 `setFullScreenIntent()`**；而 Android 14+ 起
+  `USE_FULL_SCREEN_INTENT` 不再自动授予（只给通话/闹钟类应用）。**本项目已明示决定不声明它**
+  （用户 2026-08-01 拍板），所以这条路是主动关掉的——**于是 `category=call` 变成了一个
+  永远兑现不了的申请**。🔵 "裸 category 是否导致锁屏过滤"尚未实测，但它是当前最省事的
+  单变量实验：去掉 category 再跑一次。
+- 🔵 **Android 16 报道称会自动隐藏"已读过"的锁屏通知**，并在"较高风险场景"（未连 Wi-Fi、
+  近期未解锁）隐藏敏感内容。来源是媒体报道非官方文档，**未证实**。但它与本项目的观测形态
+  高度吻合：**用户是在解锁态看到通知、随后才锁屏的**——若"看过即隐藏"成立，我们测的一直是
+  一个被系统认定为已读的通知。**实验设计要区分「锁屏后才 post」与「post 后再锁屏」两种路径。**
+
+**方法论（这条比结论值钱）**：判定"是不是本机/本 ROM 的问题"，最快的办法是**在同一时刻的同一
+块锁屏上找一个正常显示的对照通知**。2026-08-02 实测：探针报我们的通知 `PRESENT` 的同一秒，
+锁屏截图上另一条 app 通知正常显示、`zen_mode=0` 已 adb 核过——**一次截图就排掉了"设备锁屏
+渲染坏了""被免打扰吞了"两整类假设**，剩下的差异必然在两条通知的属性差集里。
+
 ## AccessibilityService 窗口身份（vivo/Android 16，2026-07-22）
 
 - `TYPE_APPLICATION_OVERLAY` 也会产生 `TYPE_WINDOW_STATE_CHANGED`；事件携带的 package/class（实测 class 为 `FrameLayout`）只描述事件窗口，不能直接当作当前前台身份。必须用 `event.windowId` 归属到 windows 列表中的 active `TYPE_APPLICATION`，没有 active 时才保守后备到 focused `TYPE_APPLICATION`；已知 overlay、IME 或 inactive 窗口事件直接忽略。
