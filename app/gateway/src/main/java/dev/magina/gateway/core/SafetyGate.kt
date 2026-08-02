@@ -56,6 +56,32 @@ enum class RiskTier {
     RETRACTABLE,
 }
 
+/**
+ * 按下 Enter 前那条**证据链是否自洽**：三处证据的身份（含来源）逐字段一致，且几何证据与来源
+ * 一致地存在或缺失——不允许 blank == blank 平凡通过。
+ *
+ * 从 `SafetyPolicy.assess` 里原样抽出来（一字未改），因为**语义意图路径在执行前要再验一次**：
+ * 那条路径不再比对"与批准那一瞬逐字节相同"，于是"这一刻的链是不是自洽"就从一次性检查
+ * 变成了两处都要用的判据。**两处共用同一个实现**——判据一旦有两份，迟早只改一份。
+ */
+object EnterChainPolicy {
+    fun isValid(context: SafetyContext): Boolean {
+        val target = context.target
+        val input = target?.inputCommitEvidence
+        val prepared = target?.preparedTargetEvidence
+        val identity = target?.focusIdentity
+        return identity != null &&
+            input != null && input.identity == identity &&
+            prepared != null && prepared.label.isNotBlank() &&
+            prepared.packageName == context.packageName &&
+            prepared.identity == identity &&
+            prepared.bounds == target.focusedInputBounds &&
+            FocusIdentity.boundsConsistent(identity.source, target.focusedInputBounds) &&
+            // IME-only 降级链失去了 a11y 焦点身份与几何，OCR 读回是仅剩的落框机械证据。
+            (identity.source != IdentitySource.IME_ONLY || input.readbackVerified)
+    }
+}
+
 sealed interface SafetyDecision {
     data object Allowed : SafetyDecision
 
@@ -113,22 +139,7 @@ class SafetyPolicy(
         val enterPressed = toolName == "press_key" &&
             args.optString("key").equals("enter", ignoreCase = true)
         if (enterPressed) {
-            val target = context.target
-            val input = target?.inputCommitEvidence
-            val prepared = target?.preparedTargetEvidence
-            val identity = target?.focusIdentity
-            // 两种身份模式共用同一条硬要求：三处证据的身份（含来源）必须逐字段一致，
-            // 且几何证据与来源一致地存在或缺失——不允许 blank == blank 平凡通过。
-            val chainValid = identity != null &&
-                input != null && input.identity == identity &&
-                prepared != null && prepared.label.isNotBlank() &&
-                prepared.packageName == context.packageName &&
-                prepared.identity == identity &&
-                prepared.bounds == target.focusedInputBounds &&
-                FocusIdentity.boundsConsistent(identity.source, target.focusedInputBounds) &&
-                // IME-only 降级链失去了 a11y 焦点身份与几何，OCR 读回是仅剩的落框机械证据。
-                (identity.source != IdentitySource.IME_ONLY || input.readbackVerified)
-            if (!chainValid) return SafetyDecision.Blocked(
+            if (!EnterChainPolicy.isValid(context)) return SafetyDecision.Blocked(
                 ErrorCode.E_BLOCKED,
                 "当前焦点输入框没有匹配的短时输入与目标会话证据，拒绝按下 Enter",
             )
@@ -345,6 +356,15 @@ class SafetyGate(
      * 要么本来就得到了"停下"的指示，不该占用重弹次数。
      */
     private val onStaleAfterApproval: (String, SafetyContext) -> Unit = { _, _ -> },
+    /**
+     * 语义意图审批（spec `2026-08-02-语义意图审批`）。**给了才走那条路径，默认 null =
+     * 今天的行为一字不变。**
+     *
+     * 之所以做成开关而不是直接切过去：它改的是"批准之后拿什么去比"，属于安全姿态变更，
+     * **必须经真机验收批次才能生效**。开关关着时这段代码只被离线用例执行到——那是有意的，
+     * 而不是"写了没用"：判据先立，切换是另一件事、另一次验收。
+     */
+    private val intentApproval: IntentApproval? = null,
 ) {
     fun <T> execute(
         toolName: String,
@@ -374,14 +394,19 @@ class SafetyGate(
                 try {
                     if (SafetyPolicy.fingerprint(args) != initialArgsFingerprint) stale("确认后工具参数已变化")
                     afterConfirmationAllowed(toolName, deepCopy(frozenArgs), initialContext)
-                    val currentContext = try {
-                        contextProvider(deepCopy(frozenArgs))
-                    } catch (error: Throwable) {
-                        stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
+                    val approval = intentApproval
+                    if (approval != null) {
+                        resolveViaIntent(toolName, level, frozenArgs, decision, initialContext, approval)
+                    } else {
+                        val currentContext = try {
+                            contextProvider(deepCopy(frozenArgs))
+                        } catch (error: Throwable) {
+                            stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
+                        }
+                        requireKnownForeground(toolName, level, currentContext)
+                        validateContext(toolName, frozenArgs, initialContext, currentContext)
+                        currentContext
                     }
-                    requireKnownForeground(toolName, level, currentContext)
-                    validateContext(toolName, frozenArgs, initialContext, currentContext)
-                    currentContext
                 } catch (error: GatewayError) {
                     if (error.code == ErrorCode.E_STALE_REF) {
                         runCatching { onStaleAfterApproval(toolName, initialContext) }
@@ -405,6 +430,76 @@ class SafetyGate(
         }
         afterExecutionSuccess(toolName, validatedContext)
         return result
+    }
+
+    /**
+     * 语义意图路径（spec §2.2 第④～⑥步）。顺序是本方法的全部内容，改顺序等于改安全姿态：
+     *
+     * 1. 用**批准那一刻**的证据造意图（人核对过的那三项：档位 / 目标会话 / 内容摘要）。
+     * 2. II 级按预算**有界等待**前台恢复到目标包；I 级预算为 0，等于不等。
+     *    这段等待发生在**一次工具调用内部**，不是大脑重试——站规「安全失败即终态」一字未动。
+     * 3. **重新感知**，重新要求前台已知。
+     * 4. 意图匹配（[IntentMatchPolicy]）+ Enter 证据链自洽（[EnterChainPolicy]）**都要过**。
+     * 5. **执行前**消费掉意图：执行成功与否都不再有第二次机会。
+     */
+    private fun resolveViaIntent(
+        toolName: String,
+        level: Level,
+        frozenArgs: JSONObject,
+        decision: SafetyDecision.ConfirmationRequired,
+        initialContext: SafetyContext,
+        approval: IntentApproval,
+    ): SafetyContext {
+        val prepared = initialContext.target?.preparedTargetEvidence
+            ?: stale("确认前没有短时目标会话证据，无法构成语义意图")
+        val input = initialContext.target?.inputCommitEvidence
+        val intent = ApprovalIntent(
+            intentId = approval.intentIdFactory(),
+            riskTier = decision.riskTier,
+            actionKind = decision.action.ifBlank { toolName },
+            targetPackage = initialContext.packageName,
+            targetLabel = prepared.label,
+            contentSha256 = input?.sha256,
+            contentLength = input?.length,
+            createdAtMs = approval.clock(),
+        )
+        approval.store.open(intent)
+        try {
+            val waitBudget = approval.clocks.foregroundWaitBudgetFor(decision.riskTier)
+            if (waitBudget > 0 && !approval.awaitForeground(intent.targetPackage, waitBudget)) {
+                stale("批准后等前台恢复到 ${intent.targetPackage} 超时（预算 ${waitBudget}ms）")
+            }
+            val currentContext = try {
+                contextProvider(deepCopy(frozenArgs))
+            } catch (error: Throwable) {
+                stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
+            }
+            requireKnownForeground(toolName, level, currentContext)
+            when (val match = IntentMatchPolicy.matches(
+                intent = intent,
+                context = currentContext,
+                nowMs = approval.clock(),
+                intentTtlMs = approval.clocks.intentTtlMs,
+            )) {
+                is IntentMatch.Mismatch -> stale("执行前与已批准的意图不符：${match.reason}")
+                IntentMatch.Matched -> Unit
+            }
+            val enterPressed = toolName == "press_key" &&
+                frozenArgs.optString("key").equals("enter", ignoreCase = true)
+            if (enterPressed && !EnterChainPolicy.isValid(currentContext)) throw GatewayError(
+                ErrorCode.E_BLOCKED,
+                "执行前焦点输入证据链不自洽，拒绝按下 Enter",
+                channel = "safety",
+                fallback = "按站规收尾，不要换路重试同一危险动作",
+            )
+            // **消费必须在执行之前**：执行失败后重来一定拿不到旧意图，只能重新走一次人的批准。
+            approval.store.consume(intent.intentId)
+                ?: stale("已批准的意图不再可用（被另一次确认顶掉或已消费）")
+            return currentContext
+        } finally {
+            // 上面任何一步抛出时，意图不得留在保管处等着下一次调用捡走。
+            approval.store.discard(intent.intentId)
+        }
     }
 
     private fun requireKnownForeground(
