@@ -165,7 +165,33 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 | 3 | `3cb9133` | `claude/serene-faraday-42d1fb` | **待验收**（并入下方合并跑） | Deny 腿带外验证自动化 |
 | **2+3 合并跑** | **`33b9eac`** | `claude/serene-faraday-42d1fb` | 批次 3 **✅ 通过** · 批次 2 **❌ 未达成** | 08-02 00:11 |
-| **2（收窄后）** | **`075e698`** | `claude/serene-faraday-42d1fb` | **就绪待用户手机时间** | 判据 1 挂已有腿，不加真机成本 |
+| **2（收窄后）** | **`075e698`** | `claude/serene-faraday-42d1fb` | **✅ 通过并已合 main `f08cda2`** | 08-02 22:02 |
+
+**批次 2 通过（收窄后四条判据全部有结论）+ 批次 3 随之合入 main。** 主会话独立核 manifest：
+**allow / stale / deny 三腿 `confirmation_channel` 全是 `notification`**——1a、1b 由**机器证据**确认，
+不是用户口述，这正是该字段存在的意义。allow `safety_code=OK` 消息真的发出去了；stale
+`E_STALE_REF`（切到别的 App 后的预期终态）；deny `E_BLOCKED` + `deny_out_of_band`
+`not_sent_confirmed`（**批次 3 第三次回归无退化**）。判据 2 复验通过；判据 3 按拍板永久未触达。
+**runbook 那条「下拉通知栏预计 `E_BLOCKED`」的预判本轮未被检验**（该路径没走），
+仍是未实测——**不许记成"预判被证伪"**。
+
+**「Deny 腿四条判据全部来自被测组件自报」这条从 07-31 挂到今天，随批次 3 合入正式清掉。**
+
+**本轮两条回流（均已派 A 道）：**
+
+1. **`approval_notification` 这份可观测性是坏的，而且会把人引向相反结论——比缺失更危险。**
+   本轮三腿 runner 抓的 `approval-notification.txt` **全部不含审批通知记录**（只有 autogroup
+   摘要 id=0 与前台服务 id=1），而同一批腿的 `decided_via` 全是 `notification`——**通知明明存在
+   且被用了，这份 dump 却显示"没有"**。而 runbook §3.2 防误判第 4 条恰恰写着"先看这份 dump
+   再下结论"，**照做会得出"通知没发出来"的错误结论**。最可能是抓取点早于通知 post。
+   另：**解析字段仍未进 manifest（只有 .txt），这是第三轮如此**。
+2. **首跑 stale 腿以 `E_CHANNEL_DOWN`(channel=test-control) 终止**：用户按验收单切了 App，
+   网关侧仍认为前台是微信（`foreground_known=true`/`app=com.tencent.mm`）。是 debug hook 的
+   前台预期与新手动流程之间的**竞态**；第二次跑（明确要求"先真的切到设置/浏览器看到界面
+   再下拉"）即通过。**C 道的敏锐观察**：那条失败腿的审计 note 里**已经有**
+   `confirmation=requested;confirmation=allowed;decided_via=notification`——**1a 要证的事实在
+   失败腿里就已成立**，只是腿提前终止、manifest 没写成。**附带成本**：失败腿未跑 teardown，
+   marker 留在输入框，下一轮被预检拦下（预检判得对），**多花用户一次往返**。
 
 **收窄后的批次 2（`075e698`，主会话独立复核 `check.ps1` 五项全绿、离线 runner 82）：**
 
