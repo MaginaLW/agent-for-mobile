@@ -126,6 +126,58 @@ class IntentApprovalStore {
 }
 
 /**
+ * 批准之后重建输入证据的结论（spec §2.4 选项 C）。
+ *
+ * **三态，"判不了"有自己的名字**——这是发送后验 `sent/not_sent/unverified` 的同一课：
+ * 把"读不出来"折进"不匹配"，会让一条**通道故障**长得像一条**内容被换掉**；折进"通过"更糟。
+ * 三态都不放行（fail-closed），但**失败原因必须分得开**，否则现场只能靠猜。
+ */
+sealed interface EvidenceRebuild {
+    /** 重新读回来的内容与**卡上给人看过的那份**逐位相同。 */
+    data class Rebuilt(val sha256: String, val length: Int) : EvidenceRebuild
+
+    /** 读到了，但与已批准的意图不符——内容在人批准之后被改过。 */
+    data class Mismatch(val reason: String) : EvidenceRebuild
+
+    /** 读不回来（OCR 一个字没出、通道不可用、未装配）。**不是"不匹配"，也绝不是"通过"。** */
+    data class Unverified(val reason: String) : EvidenceRebuild
+}
+
+/**
+ * 重建证据的纯判据。
+ *
+ * **基线是 [ApprovalIntent.contentSha256]——卡上给人看过的那一份**，不是任何一次读回来的串。
+ * 这条不是风格问题：发送后验踩过一次假阳性，基线取了 Enter 前那次 OCR 读回的噪声串，
+ * 于是"读回来的和读回来的一样"平凡成立。**读回来的东西永远只能当被检验方。**
+ *
+ * 锚点也只认语义（内容摘要 + 长度），**不认 IME 会话身份**——身份每次 `onStartInput` 必变，
+ * 拿它当锚点等于永远重建失败。
+ */
+object EvidenceRebuildPolicy {
+
+    fun judge(intent: ApprovalIntent, readback: String?, channel: String): EvidenceRebuild {
+        val expected = intent.contentSha256
+            ?: return EvidenceRebuild.Unverified("意图没有锁定内容，无需也无法重建（channel=$channel）")
+        if (readback == null) return EvidenceRebuild.Unverified("输入框内容读不回来（channel=$channel）")
+        // 空串是**读不出来**，不是"框被清空了"：OCR 一个字没出与框里真没字，在这条链上
+        // 分不开。把它判成 Mismatch 会诬告"内容被换了"，判成通过则是换了触发条件的谎报成功
+        // ——`fromOcrReadback` 那次就是后者，而且被自己的用例固化成了预期行为。
+        if (readback.isEmpty()) return EvidenceRebuild.Unverified("读回内容为空，判不了（channel=$channel）")
+
+        val actual = InputCommitEvidence.sha256(readback)
+        if (actual != expected) return EvidenceRebuild.Mismatch(
+            "内容摘要与已批准的不符：${expected.take(12)} → ${actual.take(12)}（channel=$channel）",
+        )
+        if (intent.contentLength != null && readback.length != intent.contentLength) {
+            return EvidenceRebuild.Mismatch(
+                "内容长度与已批准的不符：${intent.contentLength} → ${readback.length}（channel=$channel）",
+            )
+        }
+        return EvidenceRebuild.Rebuilt(sha256 = actual, length = readback.length)
+    }
+}
+
+/**
  * 语义意图路径的装配（[SafetyGate] 的可选构造参数）。
  *
  * [awaitForeground] 没有默认实现，**必须由调用方显式给**：它是"批准后等前台恢复"那段有界等待，
@@ -137,6 +189,18 @@ class IntentApproval(
     val clocks: IntentApprovalClocks = IntentApprovalClocks(),
     val store: IntentApprovalStore = IntentApprovalStore(),
     val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * 批准之后**重建**输入证据（选项 C）：重读输入框、与意图比对，成功则把证据按**当前**身份
+     * 重新落进证据仓，返回 [EvidenceRebuild]。
+     *
+     * **默认是 fail-closed 的 [EvidenceRebuild.Unverified]**：没装配就等于重建不了，
+     * 绝不因为"没实现"而放行。
+     *
+     * **重建的是证据，不是批准**：它不新开意图、不重置一次性，也不延长任何时钟。
+     */
+    val rebuildEvidence: (ApprovalIntent) -> EvidenceRebuild = {
+        EvidenceRebuild.Unverified("未装配证据重建通道")
+    },
 )
 
 /**

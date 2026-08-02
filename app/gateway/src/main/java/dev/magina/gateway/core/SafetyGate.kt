@@ -469,12 +469,42 @@ class SafetyGate(
             if (waitBudget > 0 && !approval.awaitForeground(intent.targetPackage, waitBudget)) {
                 stale("批准后等前台恢复到 ${intent.targetPackage} 超时（预算 ${waitBudget}ms）")
             }
-            val currentContext = try {
+            var currentContext = try {
                 contextProvider(deepCopy(frozenArgs))
             } catch (error: Throwable) {
                 stale("确认后无法重新获取目标上下文：${error.message.orEmpty()}")
             }
             requireKnownForeground(toolName, level, currentContext)
+
+            // 证据重建（spec §2.4 选项 C）**只在证据真的没了时才做**，是恢复步骤而不是例行步骤：
+            // 人慢但没离开输入会话时证据还在，这条路径一步都不走，行为与不开这功能时相同。
+            //
+            // 为什么会"没了"：输入证据按焦点身份取，而 IME 会话 id 每次 onStartInput 重新生成
+            // （自增 generation 参与哈希）。切走再回来必然换身份 → 旧证据取不出来。
+            // **不是判据太严，是证据本身不在了**——所以正解是重建证据，不是放宽判据。
+            if (intent.contentSha256 != null && currentContext.target?.inputCommitEvidence == null) {
+                when (val rebuild = approval.rebuildEvidence(intent)) {
+                    is EvidenceRebuild.Mismatch ->
+                        stale("重建输入证据与已批准的意图不符：${rebuild.reason}")
+                    // **判不了单独一个错误码**：通道故障与"内容被换掉"必须在台账上分得开。
+                    // 两者都不放行，但把它们记成同一个，下一轮就只能靠猜。
+                    is EvidenceRebuild.Unverified -> throw GatewayError(
+                        ErrorCode.E_VERIFY_FAIL,
+                        "批准后重建输入证据判不了，拒绝执行：${rebuild.reason}",
+                        channel = "safety",
+                        fallback = "按站规收尾，不要换路重试同一危险动作",
+                    )
+                    is EvidenceRebuild.Rebuilt -> Unit
+                }
+                // 重建后必须**重新感知**：要比对的是重建之后那份上下文，不是重建之前那份。
+                currentContext = try {
+                    contextProvider(deepCopy(frozenArgs))
+                } catch (error: Throwable) {
+                    stale("重建证据后无法重新获取目标上下文：${error.message.orEmpty()}")
+                }
+                requireKnownForeground(toolName, level, currentContext)
+            }
+
             when (val match = IntentMatchPolicy.matches(
                 intent = intent,
                 context = currentContext,

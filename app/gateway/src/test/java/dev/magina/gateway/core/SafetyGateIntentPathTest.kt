@@ -58,9 +58,11 @@ class SafetyGateIntentPathTest {
         val contexts: MutableList<SafetyContext>,
         awaitForeground: (String, Long) -> Boolean = { _, _ -> true },
         clock: () -> Long = { 1_000 },
+        rebuildEvidence: ((ApprovalIntent) -> EvidenceRebuild)? = null,
     ) {
         var executorCalls = 0
         var confirmerCalls = 0
+        var rebuildCalls = 0
         val store = IntentApprovalStore()
         private var reads = 0
 
@@ -74,6 +76,11 @@ class SafetyGateIntentPathTest {
                 awaitForeground = awaitForeground,
                 store = store,
                 clock = clock,
+                rebuildEvidence = rebuild@{ intent ->
+                    rebuildCalls += 1
+                    val supplied = rebuildEvidence ?: return@rebuild EvidenceRebuild.Unverified("未装配")
+                    supplied(intent)
+                },
             ),
         )
 
@@ -219,6 +226,135 @@ class SafetyGateIntentPathTest {
 
         assertEquals("I 级不进等待", 0, waits)
         assertEquals(1, harness.executorCalls)
+    }
+
+    // —— 选项 C：批准后重建证据（走开再回来那条腿的全部依据） ——
+
+    /** 切走再回来之后的现场：身份换了，旧输入证据按身份取不出来，于是这一项为 null。 */
+    private fun afterReentry() = context().let { base ->
+        val newIdentity = FocusIdentity(IdentitySource.A11Y, nodeId.replace("chat_input", "reentry"), imeSessionId)
+        base.copy(
+            target = base.target!!.copy(
+                focusIdentity = newIdentity,
+                inputCommitEvidence = null,
+                preparedTargetEvidence = base.target!!.preparedTargetEvidence!!.copy(identity = newIdentity),
+            ),
+        )
+    }
+
+    /** 重建成功之后的现场：证据按**当前**身份重新落进证据仓。 */
+    private fun afterRebuild() = afterReentry().let { base ->
+        val identity = base.target!!.focusIdentity!!
+        base.copy(
+            target = base.target!!.copy(
+                inputCommitEvidence = InputCommitEvidence(
+                    commitId = 2,
+                    preview = text,
+                    length = text.length,
+                    sha256 = InputCommitEvidence.sha256(text),
+                    identity = identity,
+                    readbackVerified = true,
+                    committedAtMs = 1_000,
+                    expiresAtMs = 121_000,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `rebuild is skipped entirely when the evidence survived`() {
+        // 人慢但没离开输入会话：证据还在，重建一步都不该走——它是恢复步骤，不是例行步骤。
+        val harness = Harness(contexts = mutableListOf(context(), context()))
+
+        harness.press(args)
+
+        assertEquals(0, harness.rebuildCalls)
+        assertEquals(1, harness.executorCalls)
+    }
+
+    @Test
+    fun `rebuilt evidence lets the re-entry leg through`() {
+        // 这一条就是"批准后切走再回来"能成立的全部依据。
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
+            rebuildEvidence = { EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length) },
+        )
+
+        val result = harness.press(args)
+
+        assertEquals("sent", result.getOrNull())
+        assertEquals(1, harness.rebuildCalls)
+        assertEquals(1, harness.executorCalls)
+    }
+
+    @Test
+    fun `rebuild mismatch is terminal and never executes`() {
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterReentry()),
+            rebuildEvidence = { EvidenceRebuild.Mismatch("内容摘要与已批准的不符：aaa → bbb") },
+        )
+
+        val result = harness.press(args)
+
+        assertTerminal(result, ErrorCode.E_STALE_REF, "重建输入证据与已批准的意图不符")
+        assertEquals(0, harness.executorCalls)
+    }
+
+    @Test
+    fun `rebuild unverified gets its own error code and never executes`() {
+        // 判不了 ≠ 不匹配：两者都不放行，但台账上必须分得开，否则下一轮只能靠猜。
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterReentry()),
+            rebuildEvidence = { EvidenceRebuild.Unverified("读回内容为空，判不了（channel=ocr）") },
+        )
+
+        val result = harness.press(args)
+
+        assertTerminal(result, ErrorCode.E_VERIFY_FAIL, "判不了")
+        assertEquals(0, harness.executorCalls)
+    }
+
+    @Test
+    fun `unwired rebuild fails closed instead of passing`() {
+        // 没装配重建通道 = 重建不了。绝不因为"没实现"而放行。
+        val harness = Harness(contexts = mutableListOf(context(), afterReentry(), afterReentry()))
+
+        val result = harness.press(args)
+
+        assertTerminal(result, ErrorCode.E_VERIFY_FAIL, "判不了")
+        assertEquals(0, harness.executorCalls)
+    }
+
+    @Test
+    fun `rebuild does not resurrect the approval`() {
+        // 重建的是**证据**，不是**批准**：一次性、消费在执行之前这两条不许被绕开。
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
+            rebuildEvidence = { EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length) },
+        )
+
+        harness.press(args)
+
+        assertTrue("执行后不得留下可用意图", !harness.store.isPending)
+        // 第二次调用必须重新走人的确认；这里直接验"意图没被重建续命"。
+        assertEquals(1, harness.confirmerCalls)
+    }
+
+    @Test
+    fun `rebuild cannot rescue an expired intent`() {
+        // 重建证据不延长任何时钟：意图过期就是过期。
+        var now = 1_000L
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
+            clock = { now },
+            awaitForeground = { _, _ -> now += 200_000; true },
+            rebuildEvidence = { EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length) },
+        )
+
+        val result = harness.press(args)
+
+        assertTerminal(result, ErrorCode.E_STALE_REF, "意图已过期")
+        assertEquals(0, harness.executorCalls)
     }
 
     @Test
