@@ -12,6 +12,8 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.magina.gateway.core.ApprovalChannel
+import dev.magina.gateway.core.ApprovalChannelRecorder
 import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
@@ -45,7 +47,11 @@ object ConfirmOverlay {
         actionDesc: String,
         timeoutMs: Long = 60_000,
         onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
-        onDecisionObserved: (TestConfirmationDecision) -> Unit = {},
+        /**
+         * 观察到的真人决定 + 它来自哪条通道（无人决定时通道为 null）。
+         * 通道只用于取证，**不参与任何放行判定**。
+         */
+        onDecisionObserved: (TestConfirmationDecision, ApprovalChannel?) -> Unit = { _, _ -> },
         /**
          * 并联的通知栏审批（批次 2）。给了它就同时推一条通知，锁屏上也能点。
          *
@@ -67,6 +73,8 @@ object ConfirmOverlay {
         )
 
         val future = CompletableFuture<Boolean>()
+        // 两条通道共用同一个 complete；这层只把"生效的那一次"归属到通道上，胜负判定一字未动。
+        val approval = ApprovalChannelRecorder(future::complete)
         val cardShown = CompletableFuture<Unit>()
         // 卡片在屏幕上的真实位置与底色，取证时用来判断截图里到底有没有拍到卡本身。
         // 写在 cardShown.complete 之前、读在 cardShown.get 之后，两侧由 future 建立 happens-before。
@@ -180,12 +188,12 @@ object ConfirmOverlay {
                         addView(Button(context).apply {
                             text = "拒绝"
                             isEnabled = false
-                            setOnClickListener { future.complete(false) }
+                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, false) }
                         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                         addView(Button(context).apply {
                             text = "允许本次"
                             isEnabled = false
-                            setOnClickListener { future.complete(true) }
+                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, true) }
                         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                     })
                 }
@@ -322,7 +330,9 @@ object ConfirmOverlay {
             // 通知在**卡的按钮已经可点之后**才推：早于它就会出现"锁屏上能批准，而卡还没画完、
             // 取证也还没就绪"的窗口，等于让审批跑到证据前面去。
             notification?.let { request ->
-                ConfirmApprovalArbiter.open(request.confirmationId, request.nonce, future::complete)
+                ConfirmApprovalArbiter.open(request.confirmationId, request.nonce) { allowed ->
+                    approval.decide(ApprovalChannel.NOTIFICATION, allowed)
+                }
                 notificationOpened = request.confirmationId
                 runCatching {
                     ConfirmNotifier.post(
@@ -389,7 +399,7 @@ object ConfirmOverlay {
         }
         observedDecision?.let { decision ->
             try {
-                onDecisionObserved(decision)
+                onDecisionObserved(decision, approval.winner())
             } catch (error: Throwable) {
                 throw if (error is GatewayError) error else mappedFailure("记录确认状态", error)
             }

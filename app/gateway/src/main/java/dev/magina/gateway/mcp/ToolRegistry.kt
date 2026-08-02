@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
@@ -411,6 +412,9 @@ object ToolRegistry {
                 inputSha256 = decision.inputSha256,
             )
             call.testAttempt = attempt
+            // 决定来自哪条通道。审计里也记一份：状态文件是 debug 专有的，审计三腿都在，
+            // 两处独立记录同一件事——只有一处时它坏了没人看得出来。
+            var decidedVia: ApprovalChannel? = null
             try {
                 ConfirmOverlay.ask(
                     context = Gateway.appContext,
@@ -420,8 +424,9 @@ object ToolRegistry {
                             captureConfirmCardEvidence(cardTarget)
                         }
                     },
-                    onDecisionObserved = { observed ->
-                        Gateway.testControl.onConfirmationDecision(call.testSession, observed)
+                    onDecisionObserved = { observed, channel ->
+                        decidedVia = channel
+                        Gateway.testControl.onConfirmationDecision(call.testSession, observed, channel)
                     },
                     notification = ConfirmNotificationRequest(
                         confirmationId = attempt.confirmationId,
@@ -434,6 +439,7 @@ object ToolRegistry {
                     ),
                 ).also { confirmed ->
                     call.safetyNote += ";confirmation=${if (confirmed) "allowed" else "denied"}"
+                    decidedVia?.let { call.safetyNote += ";decided_via=${it.wireName}" }
                 }
             } catch (error: Throwable) {
                 call.safetyNote += ";confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}"

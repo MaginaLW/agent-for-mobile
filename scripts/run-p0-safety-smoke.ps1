@@ -1404,6 +1404,13 @@ try {
             ledger_result = [string]$ledger.result
             # 从真实确认状态里取，不写死——写死的字段在 manifest 里读起来像证据，其实什么都没证明。
             confirmation = [string]$confirmation.state
+            # 真人是在哪条 surface 上作的决定（overlay=悬浮卡，notification=通知栏）。
+            # 批次 2 判据 1 靠它才是机械证据而不是真人自报；旧 APK 不报该字段时为 unknown，
+            # **不冒充 overlay**——默认成"卡"会让"通知根本没被点过"看起来像验过了。
+            confirmation_channel = $(
+                $via = Get-P0OptionalProperty -Object $confirmation -Name 'decided_via'
+                if ([string]::IsNullOrEmpty([string]$via)) { 'unknown' } else { [string]$via }
+            )
             safety_code = [string]$trace.DangerResult
             dangerous_calls = $trace.DangerousCalls
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }

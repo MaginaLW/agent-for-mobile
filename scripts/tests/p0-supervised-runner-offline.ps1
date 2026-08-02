@@ -133,7 +133,8 @@ function New-Fixture {
         'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
-        'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay'
+        'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
+        'decided_via_notification'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -534,6 +535,9 @@ $confirm = [ordered]@{
     input_length=$marker.Length; input_sha256=$confirmHash
     card_visible=($scenario -ne 'card_not_captured'); capture_attempts=1
 }
+# 通知栏那条通道点下的决定。app 侧只在真有生效决定时才写这个字段，
+# 所以默认场景**故意不写**——它就是"旧 APK / 没人点通知"的对照组。
+if ($scenario -eq 'decided_via_notification') { $confirm.decided_via = 'notification' }
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
@@ -1280,6 +1284,30 @@ try {
         $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         Assert-True ($manifestJson.legs[0].screenshot.card_visible -eq $false) `
             'manifest 未如实记录截图没拍到确认卡。'
+    }
+
+    Test-Case '决定来自哪条 surface 如实进 manifest，缺字段记 unknown 不冒充悬浮卡' {
+        # 批次 2 判据 1 要的是"通知上点得到、并且真的放行了"。没有这个字段时，那句话
+        # 只能由真人自报——本仓已经吃过一次"判据全部来自自报"的亏。
+        $viaNotification = New-Fixture decided_via_notification
+        $result = Invoke-FixtureRunner $viaNotification @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "通知通道决定不该让腿失败：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $viaNotification.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($manifestJson.legs[0].confirmation_channel -ceq 'notification') `
+            'manifest 未如实记录决定来自通知栏。'
+
+        # 对照组：app 不报该字段时必须是 unknown。默认成 overlay 会让"通知从没被点过"
+        # 在 manifest 里读起来像验过了。
+        $plain = New-Fixture happy
+        $plainResult = Invoke-FixtureRunner $plain @('Allow')
+        Assert-True ($plainResult.ExitCode -eq 0) "对照组不该失败：`n$($plainResult.Text)"
+        $plainManifest = Get-ChildItem -LiteralPath (Join-Path $plain.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $plainJson = Get-Content -LiteralPath $plainManifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($plainJson.legs[0].confirmation_channel -ceq 'unknown') `
+            '缺 decided_via 时 manifest 必须记 unknown。'
     }
 
     Test-Case '候选区残留文字在开跑前零付费拦下' {

@@ -1,5 +1,6 @@
 package dev.magina.gateway.testing
 
+import dev.magina.gateway.core.ApprovalChannel
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -23,7 +24,7 @@ class ReleaseTestControlTest {
             captured = true
             TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
         }
-        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED)
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
         control.afterAllowed(session, attempt, { home = true; true }) {
             TestForeground(known = true, packageName = "launcher")
         }
