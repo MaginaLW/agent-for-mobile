@@ -5,6 +5,7 @@ import android.os.SystemClock
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.IntentApprovalClocks
 import org.json.JSONObject
 import java.io.File
 import java.math.BigDecimal
@@ -32,6 +33,13 @@ class DebugTestControl(
         private const val NONCE_FILE_NAME = "test-control-consumed-nonces"
         private const val MAX_FUTURE_MS = 5 * 60_000L
         private const val WECHAT_PACKAGE = "com.tencent.mm"
+
+        /**
+         * Stale 腿的等前台预算。20s 足够看清"它确实在等、也确实等不到"，
+         * 又不至于让人在手机旁干等五分钟。**现场看到它几十秒内终态是对的；
+         * 等满 5 分钟说明这条短预算没生效，要报回来。**
+         */
+        const val STALE_LEG_FOREGROUND_WAIT_MS = 20_000L
         private val TOKEN_PATTERN = Regex("[A-Za-z0-9._-]{8,128}")
     }
 
@@ -208,6 +216,28 @@ class DebugTestControl(
             "监督式上下文切换后前台未成为已知非目标 App（${trace.describe(monotonicClock() - started)}）",
             channel = "test-control",
             retryable = false,
+        )
+    }
+
+    /**
+     * Stale 腿把等前台预算缩到 [STALE_LEG_FOREGROUND_WAIT_MS]（spec §9.4）。
+     *
+     * 这条腿按定义把微信切走**并且不切回来**，所以生产那 5 分钟预算必然用满——现场只会看到
+     * 一个人在手机旁干等五分钟，等来的还是同一个 `E_STALE_REF`。缩短只让它更早终态，
+     * 方向上仍是 fail-closed。
+     *
+     * **只许缩短**：值走 [IntentApprovalClocks.withShorterForegroundWait]，它会对延长直接抛；
+     * 装配侧还会再夹一次 `coerceAtMost`。两道都在，是因为"测试脚手架把用户拍板的行为悄悄改宽"
+     * 这件事一旦发生，现场看到的是一条**通过**的腿。
+     */
+    override fun intentClocks(
+        session: TestControlSession,
+        defaults: IntentApprovalClocks,
+    ): IntentApprovalClocks {
+        val debug = session as? Session ?: return defaults
+        if (!debug.command.staleAfterAllow) return defaults
+        return defaults.withShorterForegroundWait(
+            STALE_LEG_FOREGROUND_WAIT_MS.coerceAtMost(defaults.foregroundWaitBudgetMs),
         )
     }
 

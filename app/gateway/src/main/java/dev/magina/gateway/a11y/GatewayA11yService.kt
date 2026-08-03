@@ -507,6 +507,30 @@ class GatewayA11yService : AccessibilityService() {
         }
     }
 
+    /**
+     * 执行前重读会话页标题带上**到底写着什么**（spec §9.2 / §9.6）。
+     *
+     * 只读，不做任何"是不是目标会话"的判断——那条判据在 `EvidenceRebuildPolicy` 里，
+     * 把它塞进读取器就会让判据变成平凡真（"读回来的和读回来的一样"，发送后验踩过）。
+     *
+     * 走 [forceFreshVision] 而不是 [snapshot]：要的是**此刻**的屏幕，缓存的识别结果
+     * 恰好是"人走开之前那一份"，拿它来校验等于什么都没校验。
+     *
+     * 返回 null 有三种可能（读不到 / 标题带没有可信文字 / 感知抛错），调用方一律按
+     * "判不了"处理，不许推断成"还在原会话"。
+     */
+    internal fun readSurfaceTitle(): SurfaceElement? {
+        val raw = runCatching { forceFreshVision("interactive", maxElements = 400) }.getOrNull()
+            ?: return null
+        val metrics = resources.displayMetrics
+        val elements = ConversationSurfacePolicy.decodeElements(raw, metrics.heightPixels)
+        return ConversationSurfacePolicy.toolbarTitle(
+            elements = elements,
+            screenWidth = metrics.widthPixels,
+            screenHeight = metrics.heightPixels,
+        )
+    }
+
     /** debug 受控阶段点击：fresh proof → resolve（可含慢 OCR）→ 最终状态闸门 → 立即 perform。 */
     @Synchronized
     internal fun performFreshVisionClick(

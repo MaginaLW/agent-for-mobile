@@ -5,6 +5,7 @@ package dev.magina.gateway.testing
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.IntentApprovalClocks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -512,6 +513,63 @@ class TestControlTest {
         assertFalse(session.armed)
         assertFalse(captured)
         assertFalse(home)
+    }
+
+    // —— 等前台预算的按腿缩短（spec §9.4）：只许缩短，不许延长 ——
+
+    @Test
+    fun `stale leg shortens the foreground wait so nobody stands there for five minutes`() {
+        writeControl(leg = "stale", nonce = "nonce-stale-clock1")
+        val control = debugControl()
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+
+        val clocks = control.intentClocks(session, IntentApprovalClocks())
+
+        assertEquals(DebugTestControl.STALE_LEG_FOREGROUND_WAIT_MS, clocks.foregroundWaitBudgetMs)
+        // 缩短的只是等前台那一项：决定期与意图有效期是用户拍板的数，测试脚手架不许碰。
+        assertEquals(IntentApprovalClocks().decisionTimeoutMs, clocks.decisionTimeoutMs)
+        assertEquals(IntentApprovalClocks().intentTtlMs, clocks.intentTtlMs)
+    }
+
+    @Test
+    fun `allow leg keeps the production budget the user decided on`() {
+        writeControl(leg = "allow", nonce = "nonce-allow-clock1")
+        val control = debugControl()
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+
+        assertEquals(
+            IntentApprovalClocks().foregroundWaitBudgetMs,
+            control.intentClocks(session, IntentApprovalClocks()).foregroundWaitBudgetMs,
+        )
+    }
+
+    @Test
+    fun `an unarmed session never touches the clocks`() {
+        val defaults = IntentApprovalClocks()
+
+        assertEquals(defaults, debugControl().intentClocks(InactiveTestControlSession, defaults))
+    }
+
+    @Test
+    fun `the shortening path cannot be turned into a lengthening one`() {
+        // 这条不对称是判据本身：延长会让用户拍板的"5 分钟"被测试脚手架悄悄改宽，
+        // 而现场看到的会是一条**通过**的腿。
+        val tight = IntentApprovalClocks(foregroundWaitBudgetMs = 5_000)
+        writeControl(leg = "stale", nonce = "nonce-stale-clock2")
+        val control = debugControl()
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+
+        assertEquals(5_000L, control.intentClocks(session, tight).foregroundWaitBudgetMs)
+        assertTrue(
+            runCatching { tight.withShorterForegroundWait(600_000) }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
     }
 
     private fun debugControl(

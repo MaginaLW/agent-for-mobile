@@ -196,6 +196,71 @@ class EvidenceRebuildPolicyTest {
         assertTrue(result is EvidenceRebuild.Mismatch)
     }
 
+    // —— 会话标题同样要两档比对（装配时才暴露：微信这条链上标题也只有 OCR 一条腿） ——
+
+    private fun judgeTitleOcr(surfaceLabel: String?) = EvidenceRebuildPolicy.judge(
+        intent = intent(),
+        readback = text,
+        channel = EvidenceRebuildPolicy.CHANNEL_A11Y,
+        surfaceLabel = surfaceLabel,
+        normalize = norm,
+        surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR,
+    )
+
+    @Test
+    fun `ocr title with tail noise still counts as the approved conversation`() {
+        // 2026-07-24 真机实锤：标题被识别成「文件传输助手8」，置信度完全正常。
+        // 拿逐位相等去要求它，台账上会写「会话在人批准之后被换过」——那是对用户的诬告。
+        val result = judgeTitleOcr("文件传输助手8")
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Rebuilt)
+    }
+
+    @Test
+    fun `ocr title read as only part of the approved label is unverified not mismatch`() {
+        val result = judgeTitleOcr("文件传输")
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("像漏识"))
+    }
+
+    @Test
+    fun `ocr title that shares nothing with the approved label is a mismatch`() {
+        // 互不包含才是"能确证是另一个会话"的正证据——这条是 backlog §8 否决选项 B 的理由所在：
+        // 包名一致而标题不校验，等于可能把已批准的内容发进另一个会话。
+        val result = judgeTitleOcr("微信")
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Mismatch)
+        assertTrue((result as EvidenceRebuild.Mismatch).reason.contains("文件传输助手"))
+    }
+
+    @Test
+    fun `title and content channels are judged independently`() {
+        // 标题多半来自屏幕识别，而输入框在 a11y 可读的 App 上能拿到精确文本。混成一个通道
+        // 会二选一地出错：按 a11y 比 OCR 读回是诬告，按 OCR 比 a11y 读回是白白放宽。
+        val looseTitleStrictContent = EvidenceRebuildPolicy.judge(
+            intent = intent(),
+            readback = text.replace("A", ""),
+            channel = EvidenceRebuildPolicy.CHANNEL_A11Y,
+            surfaceLabel = "文件传输助手8",
+            normalize = norm,
+            surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR,
+        )
+        // 标题这一关按 OCR 过了，内容这一关仍按 a11y 的逐位相等判——所以是 Mismatch 而不是 Rebuilt。
+        assertTrue(looseTitleStrictContent.toString(), looseTitleStrictContent is EvidenceRebuild.Mismatch)
+        assertTrue(
+            (looseTitleStrictContent as EvidenceRebuild.Mismatch).reason.contains("内容摘要"),
+        )
+    }
+
+    @Test
+    fun `surface channel defaults to the content channel`() {
+        // 不传 surfaceChannel 时行为与题六之前一致，既有调用方不受影响。
+        val result = judge(readback = text, surfaceLabel = "文件传输助手8")
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Mismatch)
+    }
+
     @Test
     fun `approved plaintext never appears in the intent toString`() {
         // data class 默认 toString 会把每个字段打出来，而它会被异常与日志顺手带走。

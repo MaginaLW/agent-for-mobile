@@ -89,6 +89,58 @@ class InputCommitEvidenceTest {
         assertTrue(store.record("已读回", degraded, readbackVerified = true).readbackVerified)
     }
 
+    // —— 批准后重建（spec §2.4 选项 C）：归一明文与按当前身份落回 ——
+
+    @Test
+    fun `record keeps the normalized plaintext in memory for later ocr comparison`() {
+        // 只有 preview 的话，**超过 64 字的内容即使一个字没改也必然判不匹配**——
+        // 发送后验正是栽在同一个坑里，而 18 字的测试 marker 恰好绕过它。
+        val long = "这是一条足够长的消息".repeat(10)
+
+        val evidence = store.record(long, strict, readbackVerified = true)
+
+        assertEquals(TextNorm.ocr(long), evidence.normalizedText)
+        assertTrue("归一明文必须是全文，不是被 preview 截断的那份", evidence.normalizedText.length > 64)
+    }
+
+    @Test
+    fun `evidence toString redacts both preview and normalized plaintext`() {
+        val rendered = store.record("不该出现在日志里的内容", strict, readbackVerified = true).toString()
+
+        assertFalse(rendered, rendered.contains("不该出现在日志里"))
+        assertTrue(rendered, rendered.contains("字符>"))
+    }
+
+    @Test
+    fun `rebindApproved re-issues the approved content under the current identity`() {
+        val approved = store.record("已批准的内容", strict, readbackVerified = true)
+        // 切走再回来：IME 会话 id 每次 onStartInput 重新生成，旧身份取不出证据了。
+        val newIdentity = FocusIdentity(IdentitySource.IME_ONLY, null, "ime|89abcdef0123456789abcdef")
+        assertNull(store.current(newIdentity))
+
+        now += 400
+        val rebuilt = store.rebindApproved(
+            sha256 = approved.sha256,
+            length = approved.length,
+            preview = approved.preview,
+            normalizedText = approved.normalizedText,
+            identity = newIdentity,
+        )
+
+        // 内容事实一律来自已批准的那份，只有身份与新鲜度换掉了。
+        assertEquals(approved.sha256, rebuilt.sha256)
+        assertEquals(approved.length, rebuilt.length)
+        assertEquals(approved.preview, rebuilt.preview)
+        assertEquals(approved.normalizedText, rebuilt.normalizedText)
+        assertEquals(newIdentity, rebuilt.identity)
+        assertTrue(rebuilt.readbackVerified)
+        assertEquals(now + 500L, rebuilt.expiresAtMs)
+        assertTrue(approved.commitId != rebuilt.commitId)
+        assertEquals(rebuilt, store.current(newIdentity))
+        // 旧身份再也取不到——重建换的是身份，不是"两份证据同时有效"。
+        assertNull(store.current(strict))
+    }
+
     @Test
     fun `new commit invalidates previous commit even when text is identical`() {
         val first = store.record("相同文本", strict, readbackVerified = true)

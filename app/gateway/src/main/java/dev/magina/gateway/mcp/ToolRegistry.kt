@@ -5,6 +5,12 @@ import android.os.SystemClock
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ApprovalChannel
+import dev.magina.gateway.core.ApprovalIntent
+import dev.magina.gateway.core.EvidenceRebuild
+import dev.magina.gateway.core.EvidenceRebuildPolicy
+import dev.magina.gateway.core.FocusIdentity
+import dev.magina.gateway.core.IntentApproval
+import dev.magina.gateway.core.IntentApprovalClocks
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
@@ -27,6 +33,7 @@ import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
 import dev.magina.gateway.overlay.ConfirmCardTarget
 import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
+import dev.magina.gateway.ocr.OcrEngine
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
@@ -366,6 +373,128 @@ object ToolRegistry {
         }
     }
 
+    /**
+     * 生产那组时钟（用户 2026-08-02 题五拍板的 5 分钟就在里面）。**构造在这里做一次**，
+     * 是为了让 `IntentApprovalClocks` 的构造断言与 `IntentApproval` 的"预算超过证据 TTL
+     * 就必须装配重建通道"那条断言在**装配路径上**被执行到，而不是只在用例里。
+     */
+    private val intentClocks = IntentApprovalClocks()
+
+    /** 等前台恢复的轮询间隔（spec §9.1 要求 ≤200ms）。 */
+    private const val FOREGROUND_POLL_INTERVAL_MS = 200L
+
+    /**
+     * 语义意图审批的装配（spec §9.1 四处）。**这就是那个开关**：不传 `intentApproval`
+     * 就是 2026-08-02 之前的行为。
+     */
+    private fun newIntentApproval(call: CallScope): IntentApproval = IntentApproval(
+        intentIdFactory = { ConfirmationIdGenerator.next() },
+        awaitForeground = { targetPackage, budgetMs ->
+            // 只许缩短，不许延长——延长会让用户拍板的"5 分钟"被测试脚手架悄悄改掉。
+            // `withShorterForegroundWait` 已经拦一道，这里再夹一道：这条不对称一旦破了，
+            // 现场看到的是一条**通过**的腿，而不是一条失败的腿。
+            val budget = Gateway.testControl
+                .intentClocks(call.testSession, intentClocks)
+                .foregroundWaitBudgetMs
+                .coerceAtMost(budgetMs)
+            awaitForegroundPackage(targetPackage, budget)
+        },
+        clocks = intentClocks,
+        rebuildEvidence = ::rebuildApprovedEvidence,
+    )
+
+    /**
+     * 批准之后有界等待前台恢复到目标包。
+     *
+     * 这段等待发生在**一次工具调用内部**，不是大脑重试——站规「安全失败即终态」一字未动。
+     * 拿不到 a11y、读不出前台都不算"到了"，用完预算返回 false（fail-closed）。
+     */
+    private fun awaitForegroundPackage(targetPackage: String, budgetMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + budgetMs
+        while (true) {
+            val ctx = GatewayA11yService.instance?.let { runCatching { it.ctx(Gateway.caps()) }.getOrNull() }
+            if (
+                ctx != null && ctx.optBoolean("foreground_known", false) &&
+                ctx.optString("app") == targetPackage
+            ) return true
+            val remaining = deadline - SystemClock.elapsedRealtime()
+            if (remaining <= 0) return false
+            Thread.sleep(minOf(FOREGROUND_POLL_INTERVAL_MS, remaining))
+        }
+    }
+
+    /**
+     * 批准之后重建两处短时证据（spec §9.2）。
+     *
+     * **装配方只负责"读"与"读到之后按当前身份重新落证据"，判定一律走
+     * [EvidenceRebuildPolicy.judge]**——判据在这里另写一份，就是本仓付过多次学费的那一族。
+     *
+     * 两处证据都要重建：目标会话证据与输入证据的 TTL 都是 120s，而预算是 5 分钟；
+     * 只重建输入证据的话，回来时会以「执行前没有短时目标会话证据」失败，
+     * 而那条失败与今天长得一模一样，最难发现。
+     */
+    private fun rebuildApprovedEvidence(intent: ApprovalIntent): EvidenceRebuild {
+        val a11y = GatewayA11yService.instance
+            ?: return EvidenceRebuild.Unverified("a11y 未开启，证据重建通道不可用")
+        val title = a11y.readSurfaceTitle()
+        val focused = UiTools.focusedInputSnapshot(a11y)
+        val identity = focused.identity
+            ?: return EvidenceRebuild.Unverified("重建时拿不到焦点输入身份，无法把证据落回")
+        // 内容通道：a11y 能读到精确文本就按精确文本比；微信这条链读不到，退 OCR 输入栏读回。
+        val a11yText = focused.readableText
+        val contentChannel = if (a11yText != null) {
+            EvidenceRebuildPolicy.CHANNEL_A11Y
+        } else {
+            EvidenceRebuildPolicy.CHANNEL_OCR
+        }
+        val readback = a11yText ?: runCatching {
+            a11y.ocrReadInputBarRegion(focused.bounds).text
+        }.getOrNull()
+        // 标题通道：`fused` 一律按 OCR 算——它的文字有可能来自识别侧，按 a11y 的逐位相等去要求
+        // 它会诬告；反过来只是把这一项比得松一点，而"是不是同一个会话"还有包名与内容两道。
+        val surfaceChannel = if (title?.source == "a11y") {
+            EvidenceRebuildPolicy.CHANNEL_A11Y
+        } else {
+            EvidenceRebuildPolicy.CHANNEL_OCR
+        }
+        val verdict = EvidenceRebuildPolicy.judge(
+            intent = intent,
+            readback = readback,
+            channel = contentChannel,
+            surfaceLabel = title?.let { it.text.ifBlank { it.description } },
+            normalize = OcrEngine::norm,
+            surfaceChannel = surfaceChannel,
+        )
+        if (verdict !is EvidenceRebuild.Rebuilt) return verdict
+
+        val sha256 = intent.contentSha256
+            ?: return EvidenceRebuild.Unverified("意图没有锁定内容，无从落回输入证据")
+        val bounds = focused.bounds?.let(::boundsString)
+        if (!FocusIdentity.boundsConsistent(identity.source, bounds)) {
+            return EvidenceRebuild.Unverified(
+                "重建时几何与身份来源不一致（${identity.describe()}），拒绝落证据",
+            )
+        }
+        return runCatching {
+            Gateway.preparedTargetEvidence.record(
+                label = intent.targetLabel,
+                packageName = intent.targetPackage,
+                identity = identity,
+                bounds = bounds,
+            )
+            Gateway.inputCommitEvidence.rebindApproved(
+                sha256 = sha256,
+                length = intent.contentLength ?: verdict.length,
+                preview = intent.contentPreview.orEmpty(),
+                normalizedText = intent.contentNormalized.orEmpty(),
+                identity = identity,
+            )
+            verdict
+        }.getOrElse { error ->
+            EvidenceRebuild.Unverified("重建判过了但证据落不回去：${error.message.orEmpty()}")
+        }
+    }
+
     /** 锁屏那一行里的动作短语；不含任何输入内容。 */
     private fun confirmActionPhrase(decision: SafetyDecision.ConfirmationRequired): String = when {
         decision.toolName == "press_key" && decision.action.equals("enter", ignoreCase = true) -> "发送消息"
@@ -419,6 +548,9 @@ object ToolRegistry {
                 ConfirmOverlay.ask(
                     context = Gateway.appContext,
                     actionDesc = decision.cardText(attempt.confirmationId),
+                    // 卡的默认 60s **比决定预算还短，本来就自相矛盾**（spec §9.1 第 2 行）。
+                    // 通知的存活时长跟着它走（ConfirmNotifier 加 15s slack = 105s）。
+                    timeoutMs = intentClocks.decisionTimeoutMs,
                     onShownBeforeButtonsEnabled = { cardTarget ->
                         call.testSession = Gateway.testControl.onConfirmationShown(attempt) {
                             captureConfirmCardEvidence(cardTarget)
@@ -502,6 +634,10 @@ object ToolRegistry {
                 call.safetyNote += ";reconfirm=${Gateway.staleReconfirmGuard.reconfirmCount(call.staleKey)}"
             }
         },
+        // 语义意图审批（spec `2026-08-02-语义意图审批`）。**批次 4 打开的就是这一行**：
+        // 传了它，"批准之后拿什么去比"就从「与批准那一瞬逐字节相同」换成「同一时刻的语义相等
+        // + 证据自洽」，既有三腿也一并改走新判据。这是安全姿态变更，由真机验收批次收口。
+        intentApproval = newIntentApproval(call),
     )
 
     /**

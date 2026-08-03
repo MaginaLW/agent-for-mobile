@@ -30,12 +30,20 @@ data class ApprovalIntent(
      * 因为 data class 的默认 toString 会把每个字段打出来，而它会被异常与日志顺手带走。
      */
     val contentNormalized: String? = null,
+    /**
+     * 卡上给人看过的那段有界预览。**只为重建时把证据按当前身份重新落回证据仓**——
+     * 证据里的 `preview` 参与 [InputCommitEvidence.matchesReadableText]，缺了它，
+     * 重建出来的证据在 a11y 可读的 App 上会当场判不一致。不参与任何放行判定，
+     * 同样不落盘、不进信封。
+     */
+    val contentPreview: String? = null,
     val createdAtMs: Long,
 ) {
     override fun toString(): String =
         "ApprovalIntent(intentId=$intentId, tier=$riskTier, action=$actionKind, " +
             "pkg=$targetPackage, label=$targetLabel, len=$contentLength, " +
-            "sha=${contentSha256?.take(12)}, normalized=<${contentNormalized?.length ?: 0}字符>)"
+            "sha=${contentSha256?.take(12)}, normalized=<${contentNormalized?.length ?: 0}字符>, " +
+            "preview=<${contentPreview?.length ?: 0}字符>)"
 }
 
 /** 意图与"执行这一刻"的匹配结论。失败一律带上**逐条点名**的原因。 */
@@ -197,22 +205,48 @@ object EvidenceRebuildPolicy {
      */
     const val OCR_MISSING_TOLERANCE_RATIO = 0.4
 
+    /**
+     * [surfaceChannel] 默认跟随 [channel]，但两处证据**可以来自不同通道**：会话标题多半是
+     * 屏幕文字识别，而输入框在 a11y 可读的 App 上能拿到精确文本。混成一个会二选一地出错——
+     * 按 a11y 比 OCR 读回等于诬告，按 OCR 比 a11y 读回等于白白放宽。所以显式分开。
+     */
     fun judge(
         intent: ApprovalIntent,
         readback: String?,
         channel: String,
         surfaceLabel: String?,
         normalize: (String) -> String = { it },
+        surfaceChannel: String = channel,
     ): EvidenceRebuild {
         if (surfaceLabel == null) return EvidenceRebuild.Unverified(
-            "目标会话标题读不回来（channel=$channel）",
+            "目标会话标题读不回来（channel=$surfaceChannel）",
         )
         if (surfaceLabel.isEmpty()) return EvidenceRebuild.Unverified(
-            "读回的目标会话标题为空，判不了（channel=$channel）",
+            "读回的目标会话标题为空，判不了（channel=$surfaceChannel）",
         )
-        if (surfaceLabel != intent.targetLabel) return EvidenceRebuild.Mismatch(
-            "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$channel）",
-        )
+        if (surfaceChannel == CHANNEL_A11Y) {
+            // a11y 读到的是精确文本，逐位相等**可以满足**，就仍按最强的判据比。
+            if (surfaceLabel != intent.targetLabel) return EvidenceRebuild.Mismatch(
+                "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$surfaceChannel）",
+            )
+        } else {
+            // —— OCR 通道：标题同样从来不逐位相同（2026-07-24 真机实锤把标题识别成
+            // 「文件传输助手8」），拿相等去要求它是同一个诬告，形状与内容那处一模一样。
+            // 与识别侧共用 LabelMatchPolicy 那一条规则，不在这里另写一份。
+            when (LabelMatchPolicy.verdict(expected = intent.targetLabel, got = surfaceLabel)) {
+                LabelMatchPolicy.Verdict.MATCH -> Unit
+                // 读回是已批准标签的一部分 = 漏识的形态。与"真换了会话"在 OCR-only 链上
+                // 分不开，而分不开的两种处境不许长成同一个名字。
+                LabelMatchPolicy.Verdict.PARTIAL -> return EvidenceRebuild.Unverified(
+                    "标题只读回「$surfaceLabel」，是已批准会话「${intent.targetLabel}」的一部分" +
+                        "——像漏识，读不准不敢放行；这不是「换了会话」（channel=$surfaceChannel）",
+                )
+                // 互不包含：能确证是另一个标题，这才是正证据。
+                LabelMatchPolicy.Verdict.DIFFERENT -> return EvidenceRebuild.Mismatch(
+                    "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$surfaceChannel）",
+                )
+            }
+        }
 
         val expected = intent.contentSha256
             ?: return EvidenceRebuild.Unverified("意图没有锁定内容，无需也无法重建（channel=$channel）")

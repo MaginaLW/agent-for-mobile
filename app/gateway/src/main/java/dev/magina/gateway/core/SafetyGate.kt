@@ -461,6 +461,11 @@ class SafetyGate(
             targetLabel = prepared.label,
             contentSha256 = input?.sha256,
             contentLength = input?.length,
+            // OCR 通道拿它做归一包含比对（sha256 不可逆，做不了包含）。**不传就等于
+            // 微信这条 OCR-only 链上重建永远是 Unverified**——收益在唯一的目标 App 上
+            // 一次都兑现不了，而失败形态与"通道坏了"长得一模一样，最难发现。
+            contentNormalized = input?.normalizedText,
+            contentPreview = input?.preview,
             createdAtMs = approval.clock(),
         )
         approval.store.open(intent)

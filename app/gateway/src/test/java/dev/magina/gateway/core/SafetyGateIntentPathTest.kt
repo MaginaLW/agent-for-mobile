@@ -40,6 +40,7 @@ class SafetyGateIntentPathTest {
                 readbackVerified = true,
                 committedAtMs = 1_000,
                 expiresAtMs = 121_000,
+                normalizedText = TextNorm.ocr(text),
             ),
             preparedTargetEvidence = PreparedTargetEvidence(
                 preparedId = 1,
@@ -286,6 +287,29 @@ class SafetyGateIntentPathTest {
         assertEquals("sent", result.getOrNull())
         assertEquals(1, harness.rebuildCalls)
         assertEquals(1, harness.executorCalls)
+    }
+
+    @Test
+    fun `the intent carries what the ocr channel needs to compare against`() {
+        // **装配时才暴露的缺口**：意图里只有 sha256 与 length，而 sha256 不可逆做不了包含比对。
+        // 不把归一明文与预览带上，微信这条 OCR-only 链上重建**永远**是 Unverified——
+        // 收益在唯一的目标 App 上一次都兑现不了，而失败形态与"通道坏了"长得一模一样。
+        var seen: ApprovalIntent? = null
+        val harness = Harness(
+            contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
+            rebuildEvidence = { intent ->
+                seen = intent
+                EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length)
+            },
+        )
+
+        harness.press(args)
+
+        val intent = seen ?: fail("重建通道没拿到意图") as Nothing
+        assertEquals(TextNorm.ocr(text), intent.contentNormalized)
+        assertEquals(text, intent.contentPreview)
+        assertEquals(InputCommitEvidence.sha256(text), intent.contentSha256)
+        assertEquals(text.length, intent.contentLength)
     }
 
     @Test

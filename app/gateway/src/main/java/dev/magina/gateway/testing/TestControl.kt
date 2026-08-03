@@ -2,6 +2,7 @@ package dev.magina.gateway.testing
 
 import android.content.Context
 import dev.magina.gateway.core.ApprovalChannel
+import dev.magina.gateway.core.IntentApprovalClocks
 import java.util.UUID
 
 /** 危险确认的只读测试观察上下文；不携带、也不能设置真人决定。 */
@@ -86,6 +87,20 @@ interface TestControl {
         performHome: () -> Boolean,
         foreground: () -> TestForeground,
     )
+
+    /**
+     * 监督式跑测按腿调整语义意图的三个时钟（spec §9.4）。**默认原样返回**——release 与
+     * 未武装的会话拿到的永远是生产那组数。
+     *
+     * 存在的理由只有一个：Stale 腿按定义**永不把目标 App 切回来**，用满 5 分钟预算只是
+     * 让人在手机旁干等。所以这条只许**缩短**等前台预算
+     * （由 [dev.magina.gateway.core.IntentApprovalClocks.withShorterForegroundWait] 强制），
+     * 而装配侧还会再夹一次 `coerceAtMost`：延长会让用户拍板的行为被测试脚手架悄悄改掉。
+     */
+    fun intentClocks(
+        session: TestControlSession,
+        defaults: IntentApprovalClocks,
+    ): IntentApprovalClocks = defaults
 }
 
 /** release 装配与 JVM 契约测试共享的恒 no-op 实现。 */
