@@ -17,32 +17,19 @@ internal data class P0MacroForeground(
     val packageName: String,
 )
 
-internal data class P0MacroRect(
-    val left: Int,
-    val top: Int,
-    val right: Int,
-    val bottom: Int,
-) {
-    val centerX: Int get() = left + (right - left) / 2
-    val centerY: Int get() = top + (bottom - top) / 2
-    val width: Int get() = right - left
-    val height: Int get() = bottom - top
+/**
+ * 版面元素与标题识别这三个类型**已下沉到 `src/main`**（[SurfaceRect] / [SurfaceElement] /
+ * [SurfaceStage]，见 [ConversationSurfacePolicy]）：语义意图那条链要在 `SafetyGate.execute`
+ * 内部重读会话标题，而那一刻大脑不在场调不了宏，生产代码必须能自己调到同一份判据
+ * （spec §9.6 / backlog §8）。
+ *
+ * 这里只留别名——**宏与生产用的是同一个类型、同一条判据，不是"两份长得一样"**。
+ */
+internal typealias P0MacroRect = SurfaceRect
 
-    fun contains(x: Int, y: Int): Boolean = x in left..right && y in top..bottom
-}
+internal typealias P0MacroElement = SurfaceElement
 
-internal data class P0MacroElement(
-    val ref: String,
-    val role: String,
-    val text: String,
-    val description: String,
-    val bounds: P0MacroRect,
-    val source: String = "a11y",
-    val confidence: Double? = null,
-    val stage: P0ElementStage = P0ElementStage.CONTENT,
-)
-
-internal enum class P0ElementStage { TOOLBAR, SEARCH, CONTENT, BOTTOM_INPUT }
+internal typealias P0ElementStage = SurfaceStage
 
 internal data class P0MacroSnapshot(
     val screenWidth: Int,
@@ -868,41 +855,29 @@ internal class P0WeChatPrepareMacro(
         }
     }
 
-    private fun isConversationSurface(snapshot: P0MacroSnapshot): Boolean {
-        val w = snapshot.screenWidth
-        val h = snapshot.screenHeight
-        if (w <= 0 || h <= 0) return false
-        return conversationTitle(snapshot) != null
-    }
-
     /**
-     * 仅用于"是否在会话页"识别，从不作为点击目标（唯一调用方 [isConversationSurface]）；
-     * 因此和 [hasTopTitle] 同理使用识别专用的 [MIN_RECOGNITION_OCR_CONFIDENCE]。
-     * 真正的点击目标（[findTargetConversation]）独立走 [MIN_ACTION_OCR_CONFIDENCE]，不受此影响。
+     * "是不是停在文件传输助手会话页"。**判据本身已下沉到 [ConversationSurfacePolicy]**，
+     * 生产侧执行前重读标题调的就是这一份（spec §9.6 / backlog §8：下沉，不另写读取器）。
+     * 这里只负责把写死的目标标签喂进去。
      */
-    private fun conversationTitle(snapshot: P0MacroSnapshot): P0MacroElement? {
-        val w = snapshot.screenWidth
-        val h = snapshot.screenHeight
-        if (w <= 0 || h <= 0) return null
-        return snapshot.elements.firstOrNull { element ->
-            isTargetLabelLoosely(element) && trustedForRecognition(element, snapshot) &&
-                element.stage == P0ElementStage.TOOLBAR &&
-                validBounds(element.bounds, w, h) &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.3).toInt()..(w * 0.7).toInt() &&
-                validBounds(element.bounds, w, h)
-        }
-    }
+    private fun isConversationSurface(snapshot: P0MacroSnapshot): Boolean =
+        conversationTitle(snapshot) != null
+
+    private fun conversationTitle(snapshot: P0MacroSnapshot): P0MacroElement? =
+        ConversationSurfacePolicy.conversationTitle(
+            elements = snapshot.elements,
+            screenWidth = snapshot.screenWidth,
+            screenHeight = snapshot.screenHeight,
+            expectedLabel = P0_FILE_TRANSFER_ASSISTANT,
+        )
 
     /** 仅用于页面识别，不用于任何点击目标；置信度门槛见 [MIN_RECOGNITION_OCR_CONFIDENCE]。 */
     private fun trustedForRecognition(element: P0MacroElement, snapshot: P0MacroSnapshot): Boolean =
-        when (element.source) {
-            "a11y" -> true
-            "ocr", "fused" -> element.confidence?.let {
-                it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
-            } == true
-            else -> false
-        } && validBounds(element.bounds, snapshot.screenWidth, snapshot.screenHeight)
+        ConversationSurfacePolicy.trustedForRecognition(
+            element = element,
+            screenWidth = snapshot.screenWidth,
+            screenHeight = snapshot.screenHeight,
+        )
 
     private fun hasTopTitle(snapshot: P0MacroSnapshot, title: String): Boolean {
         val w = snapshot.screenWidth
@@ -944,15 +919,8 @@ internal class P0WeChatPrepareMacro(
         normalized(element.text) == P0_FILE_TRANSFER_ASSISTANT ||
             normalized(element.description) == P0_FILE_TRANSFER_ASSISTANT
 
-    /**
-     * 纯识别用途的宽松标签匹配：只要求包含目标文本。2026-07-24 真机实锤：OCR 把标题识别成
-     * "文件传输助手8"（尾随多识别出一个字符，confidence 完全正常，不是置信度问题），严格
-     * 相等在这类场景下永远漏判。唯一调用方 [conversationTitle] 只用于"这是不是会话页"的
-     * 识别判断，从不是点击目标——点击目标的严格匹配（[isTargetLabel]）不受影响。
-     */
-    private fun isTargetLabelLoosely(element: P0MacroElement): Boolean =
-        normalized(element.text).contains(P0_FILE_TRANSFER_ASSISTANT) ||
-            normalized(element.description).contains(P0_FILE_TRANSFER_ASSISTANT)
+    // 宽松标签匹配（识别用，不是点击目标）已随 conversationTitle 一起下沉到
+    // ConversationSurfacePolicy / LabelMatchPolicy——执行前重建证据时比的是同一条规则。
 
     private fun findInput(snapshot: P0MacroSnapshot): P0MacroElement? =
         snapshot.elements

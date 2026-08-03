@@ -3,6 +3,7 @@ package dev.magina.gateway.tools
 import android.os.SystemClock
 import android.graphics.Rect
 import dev.magina.gateway.Gateway
+import dev.magina.gateway.a11y.ConversationSurfacePolicy
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.a11y.FreshValidatedRef
 import dev.magina.gateway.a11y.P0FocusProbe
@@ -263,7 +264,6 @@ private class AndroidP0WeChatPrepareAdapter(
 
     private fun decodeSnapshot(raw: JSONObject): P0MacroSnapshot {
         val metrics = service.resources.displayMetrics
-        val elements = raw.getJSONArray("elements")
         val revision = raw.getLong("revision")
         val captureRevision = raw.optLong("capture_revision", Long.MIN_VALUE)
         if (captureRevision != revision) throw GatewayError(
@@ -282,52 +282,13 @@ private class AndroidP0WeChatPrepareAdapter(
             blockingOverlay = raw.optBoolean("blocking_overlay", true),
             imeVisible = raw.optBoolean("ime_visible", false),
             systemBottomInset = raw.optInt("system_bottom_inset", 0),
-            elements = buildList {
-                for (index in 0 until elements.length()) {
-                    val item = elements.getJSONObject(index)
-                    val bounds = item.optJSONArray("bounds") ?: continue
-                    if (bounds.length() != 4) continue
-                    add(
-                        P0MacroElement(
-                            ref = item.optString("ref"),
-                            role = item.optString("role"),
-                            text = item.optString("text"),
-                            description = item.optString("desc"),
-                            source = item.optString("source"),
-                            confidence = item.takeIf { it.has("confidence") }
-                                ?.optDouble("confidence")
-                                ?.takeIf { it.isFinite() },
-                            bounds = P0MacroRect(
-                                bounds.getInt(0),
-                                bounds.getInt(1),
-                                bounds.getInt(2),
-                                bounds.getInt(3),
-                            ),
-                            stage = stageOf(
-                                role = item.optString("role"),
-                                text = item.optString("text") + item.optString("desc"),
-                                centerY = (bounds.getInt(1) + bounds.getInt(3)) / 2,
-                                screenHeight = metrics.heightPixels,
-                            ),
-                        )
-                    )
-                }
-            },
+            // 解码与 stage 划分已下沉到 ConversationSurfacePolicy：生产侧执行前重读标题解的是
+            // 同一个 JSON，两边各解一遍迟早分叉，而标题判据正好挂在 stage 上（spec §9.6）。
+            elements = ConversationSurfacePolicy.decodeElements(raw, metrics.heightPixels),
         )
     }
 
     fun decodeForRecorder(raw: JSONObject): P0MacroSnapshot = decodeSnapshot(raw)
-
-    private fun stageOf(role: String, text: String, centerY: Int, screenHeight: Int): P0ElementStage {
-        val normalized = text.replace(Regex("[\\s：:]+"), "")
-        return when {
-            (role == "input" && centerY <= screenHeight * 0.30) ||
-                normalized == "搜索" || normalized == "取消" -> P0ElementStage.SEARCH
-            centerY in (screenHeight * 0.02).toInt()..(screenHeight * 0.12).toInt() -> P0ElementStage.TOOLBAR
-            centerY >= screenHeight * 0.75 -> P0ElementStage.BOTTOM_INPUT
-            else -> P0ElementStage.CONTENT
-        }
-    }
 
     override fun enterFixedFileTransferQuery(): Boolean {
         val fresh = forceFreshVision()

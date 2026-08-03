@@ -11,6 +11,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.TextNorm
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
@@ -171,17 +172,10 @@ object OcrEngine {
     /**
      * 匹配归一（仅用于比对，不改动展示原文）：去空白、全角→半角、小写化、o→0
      * （Spike S3 实锤：ML Kit 中文模型把数字 0 识成字母 O）。
+     *
+     * **实现已下沉到 [TextNorm.ocr]**（逐字符规则一条没改）：本类 import 了 `android.graphics`
+     * 与 ML Kit，JVM 离线用例加载不了它——于是全仓最常被依赖的这条字符规则此前**一条用例都没有**，
+     * 而 `core` 那边的语义意图链又需要同一条归一。搬下去之后两处共用一份，并第一次有了离线用例。
      */
-    fun norm(s: String): String {
-        val sb = StringBuilder(s.length)
-        for (raw in s) {
-            var c = raw
-            if (c in '！'..'～') c -= 0xFEE0
-            if (c == '　' || c.isWhitespace()) continue
-            c = c.lowercaseChar()
-            if (c == 'o') c = '0'
-            sb.append(c)
-        }
-        return sb.toString()
-    }
+    fun norm(s: String): String = TextNorm.ocr(s)
 }
