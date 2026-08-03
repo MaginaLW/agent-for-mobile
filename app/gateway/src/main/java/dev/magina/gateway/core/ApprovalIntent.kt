@@ -21,8 +21,22 @@ data class ApprovalIntent(
     /** 内容锁死：有输入内容的动作必须给；没有内容的动作（如点击）为 null。 */
     val contentSha256: String? = null,
     val contentLength: Int? = null,
+    /**
+     * **已批准内容的归一明文**（用户 2026-08-02 题六拍板：留在内存里比对，理由是
+     * "卡上本来就已经把全文展示给你看过了"）。
+     *
+     * OCR 通道拿它做归一包含比对——`sha256` 不可逆，做不了包含。
+     * **进程内存、不落盘、不进日志/审计/信封/trace**；[toString] 已脱敏，
+     * 因为 data class 的默认 toString 会把每个字段打出来，而它会被异常与日志顺手带走。
+     */
+    val contentNormalized: String? = null,
     val createdAtMs: Long,
-)
+) {
+    override fun toString(): String =
+        "ApprovalIntent(intentId=$intentId, tier=$riskTier, action=$actionKind, " +
+            "pkg=$targetPackage, label=$targetLabel, len=$contentLength, " +
+            "sha=${contentSha256?.take(12)}, normalized=<${contentNormalized?.length ?: 0}字符>)"
+}
 
 /** 意图与"执行这一刻"的匹配结论。失败一律带上**逐条点名**的原因。 */
 sealed interface IntentMatch {
@@ -166,11 +180,29 @@ object EvidenceRebuildPolicy {
      * 而且这里重建的是「**还在**同一个会话」这件事，**不是「目标是谁」**——后者等于让被测
      * 组件自己制造它要证明的前提。基线永远来自意图（卡上那份），不来自这次读数。
      */
+    /** a11y 能读到精确文本；OCR 只能读到"大致"文本。两条通道的比对方式必须不同。 */
+    const val CHANNEL_A11Y = "a11y"
+    const val CHANNEL_OCR = "ocr"
+
+    /**
+     * OCR 噪声容差（**多出来的**字符数）。OCR 会把一个字识成两个、带进相邻标点，
+     * 但**不会凭空造出成串的字**；而"批了『你好』、框里变成『你好 另外再说一句』"这类
+     * 真增量远超几个字符。取 4 是"噪声够用、真增量挡得住"之间的线。
+     */
+    const val OCR_EXTRA_TOLERANCE = 4
+
+    /**
+     * OCR 漏识容差（**少掉的**比例）。本仓实测「低对比度短文本漏识近四成」，
+     * 所以读回比批准的短得多**不能**当成"内容被改过"的证据——那多半是没读全。
+     */
+    const val OCR_MISSING_TOLERANCE_RATIO = 0.4
+
     fun judge(
         intent: ApprovalIntent,
         readback: String?,
         channel: String,
         surfaceLabel: String?,
+        normalize: (String) -> String = { it },
     ): EvidenceRebuild {
         if (surfaceLabel == null) return EvidenceRebuild.Unverified(
             "目标会话标题读不回来（channel=$channel）",
@@ -190,16 +222,50 @@ object EvidenceRebuildPolicy {
         // ——`fromOcrReadback` 那次就是后者，而且被自己的用例固化成了预期行为。
         if (readback.isEmpty()) return EvidenceRebuild.Unverified("读回内容为空，判不了（channel=$channel）")
 
-        val actual = InputCommitEvidence.sha256(readback)
-        if (actual != expected) return EvidenceRebuild.Mismatch(
-            "内容摘要与已批准的不符：${expected.take(12)} → ${actual.take(12)}（channel=$channel）",
-        )
-        if (intent.contentLength != null && readback.length != intent.contentLength) {
-            return EvidenceRebuild.Mismatch(
-                "内容长度与已批准的不符：${intent.contentLength} → ${readback.length}（channel=$channel）",
+        // —— a11y 通道：读到的是精确文本，逐位相等是**可以满足**的，也就还是最强的判据 ——
+        if (channel == CHANNEL_A11Y) {
+            val actual = InputCommitEvidence.sha256(readback)
+            if (actual != expected) return EvidenceRebuild.Mismatch(
+                "内容摘要与已批准的不符：${expected.take(12)} → ${actual.take(12)}（channel=$channel）",
             )
+            if (intent.contentLength != null && readback.length != intent.contentLength) {
+                return EvidenceRebuild.Mismatch(
+                    "内容长度与已批准的不符：${intent.contentLength} → ${readback.length}（channel=$channel）",
+                )
+            }
+            return EvidenceRebuild.Rebuilt(sha256 = actual, length = readback.length)
         }
-        return EvidenceRebuild.Rebuilt(sha256 = actual, length = readback.length)
+
+        // —— OCR 通道：读回从来不逐位相同，**拿 sha256 相等去要求它就是在诬告用户** ——
+        // 判据换成归一后包含（与 `UiTools.ocrReadbackWithRetry` 同一套，归一函数也由调用方
+        // 传进来复用 `OcrEngine.norm`，不另写一份）。
+        val approved = intent.contentNormalized
+            ?: return EvidenceRebuild.Unverified(
+                "意图未携带可比对的归一明文，OCR 通道无法重建（channel=$channel）",
+            )
+        val got = normalize(readback)
+        val extra = got.length - approved.length
+        if (got.contains(approved)) {
+            // **`contains` 比 `equals` 弱，弱的方向恰恰是"发得比批准的多"**：批了「你好」、
+            // 框里是「你好 另外再说一句」也包含得住，而微信发的是整框内容。所以包含之外
+            // 还要一道长度守卫。
+            if (extra > OCR_EXTRA_TOLERANCE) return EvidenceRebuild.Mismatch(
+                "框里比已批准的多出 $extra 个字符（容差 $OCR_EXTRA_TOLERANCE），" +
+                    "远超 OCR 噪声——按内容已被改过处理（channel=$channel）",
+            )
+            return EvidenceRebuild.Rebuilt(sha256 = expected, length = intent.contentLength ?: approved.length)
+        }
+        // 不包含**不等于"内容被改过"**：OCR 在中间漏掉一个字，包含就不成立。
+        // 漏识与真被改过在 OCR-only 链上**物理不可分**，而分不开的两种处境不许长成同一个名字。
+        // 只有"明显更长"才是能确证不同的正证据。
+        if (extra > OCR_EXTRA_TOLERANCE) return EvidenceRebuild.Mismatch(
+            "框里内容与已批准的不同且多出 $extra 个字符，超出 OCR 噪声范围（channel=$channel）",
+        )
+        return EvidenceRebuild.Unverified(
+            "OCR 读回与已批准内容归一后不匹配，差异落在漏识容差内（读回 ${got.length} 字 / " +
+                "批准 ${approved.length} 字，漏识容差 ${(OCR_MISSING_TOLERANCE_RATIO * 100).toInt()}%）" +
+                "——读不准，不敢放行；这不是「内容被改过」（channel=$channel）",
+        )
     }
 }
 

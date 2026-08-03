@@ -13,9 +13,13 @@ class EvidenceRebuildPolicyTest {
 
     private val text = "P0ALLOW-3479AHKMPT"
 
+    /** 只做大小写与空白归一，语义与 `OcrEngine.norm` 的相关部分一致；生产由调用方传真的那个。 */
+    private val norm: (String) -> String = { raw -> raw.filterNot { it.isWhitespace() }.lowercase() }
+
     private fun intent(
         sha256: String? = InputCommitEvidence.sha256(text),
         length: Int? = text.length,
+        normalized: String? = text.lowercase(),
     ) = ApprovalIntent(
         intentId = "intent-1",
         riskTier = RiskTier.RETRACTABLE,
@@ -24,15 +28,19 @@ class EvidenceRebuildPolicyTest {
         targetLabel = "文件传输助手",
         contentSha256 = sha256,
         contentLength = length,
+        contentNormalized = normalized,
         createdAtMs = 1_000,
     )
 
     private fun judge(
         intent: ApprovalIntent = intent(),
         readback: String?,
-        channel: String = "ocr",
+        channel: String = EvidenceRebuildPolicy.CHANNEL_A11Y,
         surfaceLabel: String? = "文件传输助手",
-    ) = EvidenceRebuildPolicy.judge(intent, readback, channel, surfaceLabel)
+    ) = EvidenceRebuildPolicy.judge(intent, readback, channel, surfaceLabel, norm)
+
+    private fun judgeOcr(readback: String?, intent: ApprovalIntent = intent()) =
+        EvidenceRebuildPolicy.judge(intent, readback, EvidenceRebuildPolicy.CHANNEL_OCR, "文件传输助手", norm)
 
     // —— 目标会话那一半（2026-08-02 补：它的 TTL 同样是 120s，只重建输入证据等于没重建） ——
 
@@ -143,5 +151,57 @@ class EvidenceRebuildPolicyTest {
 
         assertTrue((unverified as EvidenceRebuild.Unverified).reason.contains("a11y"))
         assertTrue((mismatch as EvidenceRebuild.Mismatch).reason.contains("a11y"))
+    }
+
+    // —— OCR 通道：判据必须与通道的物理特性相称（题六拍板后新增） ——
+
+    @Test
+    fun `ocr readback that differs only in case and spacing still rebuilds`() {
+        // 这就是缺口本身：OCR 读回从来不逐位相同，拿 sha256 相等去要求它就是在诬告用户。
+        val result = judgeOcr("p0allow - 3479AHKMPT".uppercase())
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Rebuilt)
+    }
+
+    @Test
+    fun `ocr readback with extra content beyond noise is a mismatch`() {
+        // contains 比 equals 弱，而弱的方向正好是"发得比批准的多"：微信发的是整框内容。
+        val result = judgeOcr("$text 另外再说一句话")
+
+        assertTrue((result as EvidenceRebuild.Mismatch).reason.contains("多出"))
+    }
+
+    @Test
+    fun `ocr readback missing a character is unverified not mismatch`() {
+        // 漏识与真被改过在 OCR-only 链上物理不可分，而分不开的两种处境不许长成同一个名字。
+        // "我读不准，不敢放行" ≠ "我确认你改过"。
+        val result = judgeOcr(text.replace("A", ""))
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("读不准"))
+    }
+
+    @Test
+    fun `ocr channel without normalized plaintext cannot rebuild`() {
+        val result = judgeOcr(text, intent = intent(normalized = null))
+
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("归一明文"))
+    }
+
+    @Test
+    fun `a11y channel still demands exact equality`() {
+        // a11y 读到的是精确文本，逐位相等**可以满足**，也就还是最强的判据——不该跟着放宽。
+        val result = judge(readback = text.replace("A", ""), channel = EvidenceRebuildPolicy.CHANNEL_A11Y)
+
+        assertTrue(result is EvidenceRebuild.Mismatch)
+    }
+
+    @Test
+    fun `approved plaintext never appears in the intent toString`() {
+        // data class 默认 toString 会把每个字段打出来，而它会被异常与日志顺手带走。
+        val rendered = intent(normalized = "这是一条不该出现在日志里的消息").toString()
+
+        assertTrue(rendered, !rendered.contains("不该出现在日志里"))
+        assertTrue(rendered, rendered.contains("字符>"))
     }
 }
