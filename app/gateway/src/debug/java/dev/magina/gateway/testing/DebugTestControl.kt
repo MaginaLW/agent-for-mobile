@@ -235,7 +235,10 @@ class DebugTestControl(
         defaults: IntentApprovalClocks,
     ): IntentApprovalClocks {
         val debug = session as? Session ?: return defaults
-        if (!debug.command.staleAfterAllow) return defaults
+        // **判据是腿名，不是 `staleAfterAllow`**：reentry 腿同样"批准后切走"，但它要在外面
+        // 待够时间再回来。按 `staleAfterAllow` 缩短的话，reentry 会拿到 20s 预算、
+        // 在人还没回来时就超时——**而那条失败长得就像"重建功能不行"**，方向正好反了。
+        if (debug.command.leg != "stale") return defaults
         return defaults.withShorterForegroundWait(
             STALE_LEG_FOREGROUND_WAIT_MS.coerceAtMost(defaults.foregroundWaitBudgetMs),
         )
@@ -301,8 +304,14 @@ class DebugTestControl(
         // 执行器按任务卡看到 E_BLOCKED 会认为这一腿符合预期——拦住误判的是 runner 独立读
         // 私有文件里的 confirmation 字段（没有真人决定即判失败）。这正好实锤了
         // 「Deny 腿不能只信 E_BLOCKED」不是理论顾虑：同一个错误码可以来自完全无关的原因。
-        if (command.leg !in setOf("allow", "stale", "deny")) throw blocked("debug 测试腿不在白名单")
-        if (command.staleAfterAllow != (command.leg == "stale")) {
+        if (command.leg !in setOf("allow", "stale", "deny", "reentry")) {
+            throw blocked("debug 测试腿不在白名单")
+        }
+        // `stale_after_allow` 说的是"批准后由 debug hook 切走"，**stale 与 reentry 都要切走**
+        // ——两条腿的区别在切走之后：stale 永不回来，reentry 由 runner 经自己的 adb 通道
+        // 在外面待够时间后把微信拉回来。所以这条不变量按"切不切走"写，不按腿名一一对应。
+        val switchesAway = command.leg in setOf("stale", "reentry")
+        if (command.staleAfterAllow != switchesAway) {
             throw blocked("debug stale_after_allow 与测试腿不匹配")
         }
         val current = clock()

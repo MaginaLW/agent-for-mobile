@@ -292,6 +292,38 @@ class ApprovalIntentTest {
         assertEquals(0L, clocks.foregroundWaitBudgetFor(RiskTier.IRREVERSIBLE))
     }
 
+    // —— 等待自己说话（新腿要证明的正是"在外面待过"） ——
+
+    @Test
+    fun `the wait describes how many times it looked and how long it took`() {
+        // 只回 true/false 的等待，在台账上把"待了 90 秒再回来"和"根本没等就成了"记成同一件事
+        // ——判据看不见它要判的东西。runner 按这串做机械断言（reads>1、waited_ms 落区间）。
+        val reached = ForegroundWaitTrace(
+            reached = true, reads = 47, waitedMs = 91_300, lastPackage = "com.tencent.mm",
+        )
+
+        assertEquals("reads=47,waited_ms=91300,result=reached,last=com.tencent.mm", reached.describe())
+    }
+
+    @Test
+    fun `a timed out wait says what it kept seeing instead`() {
+        // 2026-08-02 debug hook 那次前台超时只知道"没等到"，不知道它一直看见的是什么，
+        // 于是下一轮又得烧一次真机。
+        val timeout = ForegroundWaitTrace(
+            reached = false, reads = 100, waitedMs = 20_000, lastPackage = "com.android.launcher",
+        )
+
+        assertEquals("reads=100,waited_ms=20000,result=timeout,last=com.android.launcher", timeout.describe())
+    }
+
+    @Test
+    fun `an unreadable foreground is a dash rather than an empty field`() {
+        // 空字段在台账里读起来像"数据丢了"；显式写成 - 才分得清"读不出来"。
+        val blind = ForegroundWaitTrace(reached = false, reads = 1, waitedMs = 0, lastPackage = "")
+
+        assertTrue(blind.describe(), blind.describe().endsWith(",last=-"))
+    }
+
     private companion object {
         val SHA_A = "aa".repeat(32)
         val SHA_B = "bb".repeat(32)

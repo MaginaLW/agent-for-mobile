@@ -9,6 +9,7 @@ import dev.magina.gateway.core.ApprovalIntent
 import dev.magina.gateway.core.EvidenceRebuild
 import dev.magina.gateway.core.EvidenceRebuildPolicy
 import dev.magina.gateway.core.FocusIdentity
+import dev.magina.gateway.core.ForegroundWaitTrace
 import dev.magina.gateway.core.IntentApproval
 import dev.magina.gateway.core.IntentApprovalClocks
 import dev.magina.gateway.core.Envelope
@@ -397,7 +398,11 @@ object ToolRegistry {
                 .intentClocks(call.testSession, intentClocks)
                 .foregroundWaitBudgetMs
                 .coerceAtMost(budgetMs)
-            awaitForegroundPackage(targetPackage, budget)
+            val trace = awaitForegroundPackage(targetPackage, budget)
+            // **这段等待必须自己说话**：只回 true/false 的话，"人在外面待了 90 秒再回来"
+            // 与"根本没等就成了"在台账上完全分不开，而前者正是新腿要证明的东西。
+            call.safetyNote += ";foreground_wait=${trace.describe()}"
+            trace.reached
         },
         clocks = intentClocks,
         rebuildEvidence = ::rebuildApprovedEvidence,
@@ -409,16 +414,23 @@ object ToolRegistry {
      * 这段等待发生在**一次工具调用内部**，不是大脑重试——站规「安全失败即终态」一字未动。
      * 拿不到 a11y、读不出前台都不算"到了"，用完预算返回 false（fail-closed）。
      */
-    private fun awaitForegroundPackage(targetPackage: String, budgetMs: Long): Boolean {
-        val deadline = SystemClock.elapsedRealtime() + budgetMs
+    private fun awaitForegroundPackage(targetPackage: String, budgetMs: Long): ForegroundWaitTrace {
+        val started = SystemClock.elapsedRealtime()
+        val deadline = started + budgetMs
+        var reads = 0
+        var last = ""
         while (true) {
             val ctx = GatewayA11yService.instance?.let { runCatching { it.ctx(Gateway.caps()) }.getOrNull() }
+            reads += 1
+            if (ctx != null) last = ctx.optString("app")
             if (
                 ctx != null && ctx.optBoolean("foreground_known", false) &&
                 ctx.optString("app") == targetPackage
-            ) return true
+            ) return ForegroundWaitTrace(true, reads, SystemClock.elapsedRealtime() - started, last)
             val remaining = deadline - SystemClock.elapsedRealtime()
-            if (remaining <= 0) return false
+            if (remaining <= 0) {
+                return ForegroundWaitTrace(false, reads, SystemClock.elapsedRealtime() - started, last)
+            }
             Thread.sleep(minOf(FOREGROUND_POLL_INTERVAL_MS, remaining))
         }
     }

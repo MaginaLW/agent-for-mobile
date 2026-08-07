@@ -548,6 +548,55 @@ class TestControlTest {
     }
 
     @Test
+    fun `the reentry leg keeps the full budget because it has to come back`() {
+        // **这条是 stale 腿那道短预算最容易连累到的地方**：reentry 同样"批准后切走"
+        // （stale_after_allow=true），但它要在外面待够 60~90 秒再回来。按 staleAfterAllow
+        // 缩短的话它会在人回来之前就超时，**而那条失败长得就像"重建功能不行"**——方向正好反了。
+        writeControl(leg = "reentry", nonce = "nonce-reentry-clock")
+        val control = debugControl()
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+
+        assertEquals(
+            IntentApprovalClocks().foregroundWaitBudgetMs,
+            control.intentClocks(session, IntentApprovalClocks()).foregroundWaitBudgetMs,
+        )
+    }
+
+    @Test
+    fun `the reentry leg is on the whitelist and does switch away after allow`() {
+        // deny 腿 2026-07-31 漏在白名单外，真机上表现为 press_key 直接回 E_BLOCKED、
+        // **确认卡根本不弹**，而 E_BLOCKED 恰好是那条腿的预期错误码。新腿别再栽一次。
+        writeControl(leg = "reentry", nonce = "nonce-reentry-white")
+        val control = debugControl()
+
+        val session = control.onConfirmationShown(attempt) {
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+
+        assertTrue(session.armed)
+    }
+
+    @Test
+    fun `reentry with stale_after_allow false is rejected`() {
+        // 不变量按"切不切走"写，不按腿名一一对应；写错的一侧同样要挡。
+        File(temp.root, DebugTestControl.CONTROL_FILE_NAME).writeText(
+            commandJson(leg = "reentry", nonce = "nonce-reentry-bad").replace(
+                "\"stale_after_allow\":true",
+                "\"stale_after_allow\":false",
+            ),
+        )
+        val control = debugControl()
+
+        expectError(ErrorCode.E_BLOCKED) {
+            control.onConfirmationShown(attempt) {
+                TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+            }
+        }
+    }
+
+    @Test
     fun `an unarmed session never touches the clocks`() {
         val defaults = IntentApprovalClocks()
 
@@ -622,7 +671,7 @@ class TestControlTest {
         "tool":"$tool",
         "action":"enter",
         "initial_package":"$initialPackage",
-        "stale_after_allow":${leg == "stale"}
+        "stale_after_allow":${leg == "stale" || leg == "reentry"}
     }""".trimIndent()
 
     private fun assertStateContains(state: String, confirmId: String?) {

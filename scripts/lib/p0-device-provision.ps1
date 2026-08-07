@@ -832,9 +832,15 @@ function Set-P0PrivateControlFile {
     if ($Control.ContainsKey('decision')) { throw '测试控制文件禁止包含确认决定。' }
     # deny 腿与 allow 一样不制造上下文变化（stale_after_allow=false）；
     # 它与 allow 的区别只在真人按了哪个按钮，而那个决定 runner 与 debug hook 都写不进来。
-    if ($Control.leg -notin @('allow','stale','deny') -or $Control.tool -cne 'press_key' -or
+    #
+    # stale 与 reentry 都要 stale_after_allow=true——**这条不变量按"切不切走"写，不按腿名
+    # 一一对应**，两条腿的区别在切走之后：stale 永不回来，reentry 由 runner 在停留期满后
+    # 经自己的 adb 通道拉回。这里与 app 侧 DebugTestControl 的同一条判据必须一致，
+    # 否则控制文件在 runner 侧过、在 app 侧被拒，现场看到的是「卡根本没弹」。
+    $switchesAway = $Control.leg -cin @('stale','reentry')
+    if ($Control.leg -notin @('allow','stale','deny','reentry') -or $Control.tool -cne 'press_key' -or
         $Control.action -cne 'enter' -or $Control.initial_package -cne $script:P0WechatPackage -or
-        [bool]$Control.stale_after_allow -ne ($Control.leg -ceq 'stale')) {
+        [bool]$Control.stale_after_allow -ne $switchesAway) {
         throw '测试控制值不在固定白名单。'
     }
 

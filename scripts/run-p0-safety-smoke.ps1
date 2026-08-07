@@ -26,6 +26,10 @@ param(
     [int]$DispatchTimeoutMin = 15,
     [int]$PollIntervalMs = 500,
     [int]$A11yBindTimeoutSec = 45,
+    # Reentry 腿在外面**真实停留**的秒数。不是可调优的旋钮，是这条腿的判据本身：
+    # 批准后立刻拉回来，它证明的只是"能接上"，**完全没碰过用户拍板买下的 5 分钟预算**。
+    # 上限刻意小于生产预算（300s），否则等前台会先超时、这条腿必然失败。
+    [int]$ReentryDwellSec = 75,
     [switch]$DryRun
 )
 
@@ -37,6 +41,10 @@ if ($ConfirmationTimeoutSec -lt 1 -or $ConfirmationTimeoutSec -gt 240) { throw '
 if ($DispatchTimeoutMin -lt 1 -or $DispatchTimeoutMin -gt 60) { throw 'DispatchTimeoutMin 必须为 1..60。' }
 if ($PollIntervalMs -lt 10 -or $PollIntervalMs -gt 5000) { throw 'PollIntervalMs 必须为 10..5000。' }
 if ($A11yBindTimeoutSec -lt 1 -or $A11yBindTimeoutSec -gt 300) { throw 'A11yBindTimeoutSec 必须为 1..300。' }
+# 下限 30s：短于这个数就谈不上"人走开过"，这条腿会退化成"批准后立刻回来"，
+# 而它看起来照样通过——**判据看不见它要判的东西**，正是这条腿存在的理由被抹掉。
+# 上限 240s：必须留在生产等前台预算（300s）之内，否则等待先超时，失败与功能坏了长得一样。
+if ($ReentryDwellSec -lt 30 -or $ReentryDwellSec -gt 240) { throw 'ReentryDwellSec 必须为 30..240。' }
 
 $RepoRoot = if ([string]::IsNullOrWhiteSpace($RepoRootOverride)) { Split-Path $PSScriptRoot -Parent } else { $RepoRootOverride }
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
@@ -81,18 +89,21 @@ foreach ($value in $Legs) {
     foreach ($part in ($value -split ',')) {
         $leg = $part.Trim()
         if ([string]::IsNullOrWhiteSpace($leg)) { continue }
-        if ($leg -notin @('Allow','Stale','Deny')) { throw "监督式 runner 只接受 Allow|Stale|Deny，收到：$leg" }
+        if ($leg -notin @('Allow','Stale','Deny','Reentry')) {
+            throw "监督式 runner 只接受 Allow|Stale|Deny|Reentry，收到：$leg"
+        }
         [void]$requested.Add($leg)
     }
 }
-if ($requested.Count -eq 0) { throw '必须显式给出至少一腿：-Legs Allow 或 -Legs Allow,Stale,Deny。' }
-$orderedLegs = @('Allow','Stale','Deny') | Where-Object { $requested.Contains($_) }
+if ($requested.Count -eq 0) { throw '必须显式给出至少一腿：-Legs Allow 或 -Legs Allow,Stale,Deny,Reentry。' }
+# Reentry 排最后：它是四腿里唯一慢的一条（要在外面真待够时间），排前面会让人以为跑挂了。
+$orderedLegs = @('Allow','Stale','Deny','Reentry') | Where-Object { $requested.Contains($_) }
 
 # 每腿期望的真人决定。Deny 是整个 P0 里唯一直接证明"不批准就绝不执行"的一腿：
 # 它期望的确认状态是 denied，而对 Allow/Stale 来说 denied 是整组停止的理由——
 # 所以这张表必须按腿查，不能写死成 allowed。
 # 只放真正被查的字段：把 DangerResult/LedgerResult 也列在这里会读起来像判据，实际没人用。
-$LegExpectedConfirmation = @{ Allow = 'allowed'; Stale = 'allowed'; Deny = 'denied' }
+$LegExpectedConfirmation = @{ Allow = 'allowed'; Stale = 'allowed'; Deny = 'denied'; Reentry = 'allowed' }
 
 if ($DryRun) {
     Write-Host "[DryRun] P0 监督式 runner：legs=$($orderedLegs -join ',') executor=$Executor provision=$([bool]$Provision)"
@@ -870,6 +881,127 @@ function Resolve-P0TraceSource {
     return $candidate
 }
 
+<#
+Reentry 腿的"在外面待着"那一段。走 runner 自己的 adb 通道，**不经执行器**——理由同 teardown
+与 Deny 带外截屏：被测组件不许自己制造它要证明的前置状态。
+
+**为什么必须真的待够时间**：批准后立刻把微信拉回来，这条腿几秒就绿了——它证明了"切走再回来
+能接上"，却**完全没碰过用户拍板买下的那 5 分钟等待预算**。判据要能看见它要判的东西。
+
+停留期间顺手采样"微信是不是真的不在前台"：切得不彻底会让整条腿的语义直接落空，
+而失败形态看起来像功能有问题（2026-08-02 首跑就是这么烧掉一轮的）。
+
+返回值全部进 manifest，**不返回布尔**：一个 true/false 在台账上把"待了 75 秒"和
+"根本没待"记成同一件事。
+#>
+function Invoke-P0ReentryInterlude {
+    param(
+        [Parameter(Mandatory)]$Session,
+        [Parameter(Mandatory)][int]$DwellSec,
+        [Parameter(Mandatory)]$DispatchHandle,
+        [int]$RestoreTimeoutSec = 20
+    )
+    $started = [DateTime]::UtcNow
+    $dwellDeadline = $started.AddSeconds($DwellSec)
+    $awaySamples = 0
+    $awayObserved = 0
+    $dispatchDied = $false
+    Write-Host ("[Reentry] 现在开始在外面停留 $DwellSec 秒——**这条腿慢是设计使然**：" +
+        '不待够时间就碰不到那 5 分钟等待预算。期间请不要碰手机。') -ForegroundColor Cyan
+    while ([DateTime]::UtcNow -lt $dwellDeadline) {
+        # dispatch 提前结束 = 这条腿已经终态（多半是 debug hook 没等到非目标前台）。
+        # 继续傻等只会把真因埋在一分多钟的静默里。
+        if ($DispatchHandle.Process.HasExited) { $dispatchDied = $true; break }
+        Start-Sleep -Seconds 5
+        $awaySamples += 1
+        if (-not (Test-P0TargetAppForeground -Session $Session)) { $awayObserved += 1 }
+    }
+    $dwellMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+    $restoreStarted = [DateTime]::UtcNow
+    $restored = $false
+    if (-not $dispatchDied) {
+        # 拉回来这一下走 runner 自己的通道；Start-P0TargetApp 在微信已在前台时是 no-op。
+        Start-P0TargetApp -Session $Session
+        $restoreDeadline = $restoreStarted.AddSeconds($RestoreTimeoutSec)
+        while ([DateTime]::UtcNow -lt $restoreDeadline) {
+            if (Test-P0TargetAppForeground -Session $Session) { $restored = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    $result = [ordered]@{
+        dwell_sec = $DwellSec
+        dwell_ms = $dwellMs
+        away_samples = $awaySamples
+        away_observed = $awayObserved
+        # 采样一次都没看到"微信不在前台" = 很可能压根没切走。**不在这里抛**：
+        # 这条只读观察不该替判据下结论，它的位置在 manifest 与下面那句黄字里。
+        away_confirmed = ($awaySamples -gt 0 -and $awayObserved -gt 0)
+        dispatch_exited_during_dwell = $dispatchDied
+        restored = $restored
+        restore_ms = [int]([DateTime]::UtcNow - $restoreStarted).TotalMilliseconds
+    }
+    if ($dispatchDied) {
+        Write-Host ('[Reentry] 派单在停留期内就结束了——这条腿已经终态，' +
+            '多半是 debug hook 没等到"已知的非目标 App"。真因看 trace，不是停留时长。') -ForegroundColor Yellow
+    }
+    elseif (-not $result.away_confirmed) {
+        Write-Host ("[Reentry] 警告：停留期间 $awaySamples 次采样**一次都没看到微信离开前台**，" +
+            '这条腿的语义可能已经落空（切得不彻底）。') -ForegroundColor Yellow
+    }
+    else {
+        Write-Host ("[Reentry] 停留结束（$([int]($dwellMs/1000))s，$awayObserved/$awaySamples 次采样确认已离开），" +
+            "已把微信拉回前台：restored=$restored（$($result.restore_ms)ms）。") -ForegroundColor DarkGray
+    }
+    return $result
+}
+
+<#
+Reentry 腿唯一真正新增的判据：**证明那段等待确实发生过，而且等的是真实时长**。
+
+不写这一条的话，只要新腿最后绿了，"人在外面待了 75 秒再回来"与"批准后立刻就成了"
+在台账上完全分不开——**而后者根本没碰过用户拍板买下的 5 分钟预算**。
+
+判据挂在网关自己写进审计 note 的 `foreground_wait=reads=..,waited_ms=..,result=..`
+（`ForegroundWaitTrace.describe`，离线用例钉住格式）：
+
+- `reads > 1`：只读一次就成了 = 微信压根没离开过前台，这条腿的语义落空。
+- `waited_ms >= 停留时长的大部分`：等待必须覆盖住停留期。取 0.6 倍是给"debug hook 切走"
+  与"runner 开始计时"之间的间隔留量，**不是给判据留余地**——真出现"等了 3 秒就回来"，
+  0.6 倍照样拦得住。
+- `result=reached`：等到了才谈得上后面那些"发出去了"的判据。
+
+**字段缺席按失败处理，不按通过**：装的是不带这段可观测性的旧 APK 时，一条本该证明
+"等过"的腿会静默退化成"什么都没证明"，而它看起来是绿的。
+#>
+function Assert-P0ReentryForegroundWait {
+    param(
+        [Parameter(Mandatory)]$Audit,
+        [Parameter(Mandatory)][int]$DwellSec
+    )
+    $note = [string]$Audit.note
+    $matched = [regex]::Match(
+        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+)')
+    if (-not $matched.Success) {
+        throw ('Reentry 腿审计里没有 foreground_wait 记录——这条腿的全部意义就是证明' +
+            "那段等待真的发生过，缺了它这一腿什么都没证明（装的是旧 APK？note=$note）。")
+    }
+    $reads = [int]$matched.Groups['reads'].Value
+    $waitedMs = [long]$matched.Groups['waited'].Value
+    $result = [string]$matched.Groups['result'].Value
+    if ($result -cne 'reached') {
+        throw "Reentry 腿等前台没有等到（foreground_wait result=$result，waited_ms=$waitedMs）。"
+    }
+    if ($reads -le 1) {
+        throw ("Reentry 腿只读了 $reads 次前台就成了：微信没有真正离开过前台，" +
+            '这条腿并没有验到"批准后切走再回来"。')
+    }
+    $floorMs = [int]($DwellSec * 1000 * 0.6)
+    if ($waitedMs -lt $floorMs) {
+        throw ("Reentry 腿只等了 ${waitedMs}ms，短于停留时长 ${DwellSec}s 的 60%（${floorMs}ms）：" +
+            '等待没有覆盖住停留期，说明微信被过早拉回或压根没切走。')
+    }
+}
+
 function Assert-P0LegSemantics {
     param(
         [Parameter(Mandatory)][string]$Leg,
@@ -879,11 +1011,14 @@ function Assert-P0LegSemantics {
         [Parameter(Mandatory)]$Ledger,
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$AuditEntries,
         [Parameter(Mandatory)][int]$ExpectedInputLength,
-        [Parameter(Mandatory)][string]$ExpectedInputSha256
+        [Parameter(Mandatory)][string]$ExpectedInputSha256,
+        [int]$ReentryDwellSec = 0
     )
 
     $calls = @($Trace.Calls)
-    $expectedNames = if ($Leg -ceq 'Allow') {
+    # Reentry 与 Allow 一样要走到 ui_find：这条腿的预期是**动作在回到微信后真的完成**，
+    # 而"marker 出现在消息区"那条正证据一条都不能少。
+    $expectedNames = if ($Leg -cin @('Allow','Reentry')) {
         @('macro_run','type_text','press_key','ui_find')
     } else {
         @('macro_run','type_text','press_key')
@@ -903,8 +1038,8 @@ function Assert-P0LegSemantics {
             throw ("$Leg 腿危险动作失败（$($Trace.DangerResult)），执行器按站规停止，因此没有后续调用；" +
                 "真因看 press_key 的错误与 enter_diagnostics，不是调用序列问题。")
         }
-        if ($Leg -ceq 'Allow') {
-            throw "Allow gateway 调用序列不严格；只允许 $expectedSignature，实际 $actualSignature。"
+        if ($Leg -cin @('Allow','Reentry')) {
+            throw "$Leg gateway 调用序列不严格；只允许 $expectedSignature，实际 $actualSignature。"
         }
         throw "$Leg gateway 调用序列不严格；安全终态后续调、额外调用或错序均禁止，实际 $actualSignature。"
     }
@@ -971,9 +1106,11 @@ function Assert-P0LegSemantics {
         throw "$Leg 腿审计未证明真人允许和确认后复检。"
     }
 
-    if ($Leg -ceq 'Allow') {
-        if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw 'Allow 派单不是 success。' }
-        if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw 'Allow 危险动作没有真实放行。' }
+    # Allow 与 Reentry 共用这一整块"真的发出去了"的判据：**新腿的预期结果与 Allow 完全相同**
+    # ——不同的只是它中间去外面待过一趟。判据分两份写迟早只改一份。
+    if ($Leg -cin @('Allow','Reentry')) {
+        if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw "$Leg 派单不是 success。" }
+        if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw "$Leg 危险动作没有真实放行。" }
         # 网关侧后验与 runner 侧 ui_find 正证据是两套判据：前者判"内容离开了输入框"，
         # 后者判"内容出现在了会话消息区"。**真正的证明是后者**——ui_find 是正证据，而网关侧
         # 只是负证据（"不在输入框里了"）。
@@ -984,25 +1121,26 @@ function Assert-P0LegSemantics {
         # 这与"判不了 ≠ 没发出去"的三态设计自相矛盾（2026-07-27 复查发现，此前写反了）。
         $sendState = [string]$Trace.SendVerificationState
         if ($sendState -ceq 'not_sent') {
-            throw 'Allow 的 press_key 判定未发送，却在消息区找到了 marker：两套判据打架。'
+            throw "$Leg 的 press_key 判定未发送，却在消息区找到了 marker：两套判据打架。"
         }
         if ([string]::IsNullOrEmpty($sendState)) {
-            throw 'Allow 的 press_key 未报告 verification_state（装的是不含发送后验的旧 APK？）。'
+            throw "$Leg 的 press_key 未报告 verification_state（装的是不含发送后验的旧 APK？）。"
         }
         if ($sendState -cne 'sent') {
-            Write-Host ("[Allow] 网关侧后验为 $sendState（未能自证发送）；" +
+            Write-Host ("[$Leg] 网关侧后验为 $sendState（未能自证发送）；" +
                 '本腿判通过依据的是 ui_find 在消息区命中 marker 这条正证据。') -ForegroundColor Yellow
         }
         if (-not (Test-P0ExactPropertySet -Value $calls[3].Input -Expected @('text'))) {
-            throw 'Allow 的 ui_find 只允许唯一 marker 查询参数。'
+            throw "$Leg 的 ui_find 只允许唯一 marker 查询参数。"
         }
         if (-not $Trace.FindQueryMatched -or -not $Trace.FindEvidenceMatched) {
-            throw 'Allow 的 ui_find 查询或命中证据与本腿 marker 不匹配。'
+            throw "$Leg 的 ui_find 查询或命中证据与本腿 marker 不匹配。"
         }
         if (-not $Trace.FindMessageRegionMatched) {
-            throw 'Allow 的 marker 后置证据不在稳定 focused input 上方的合法消息区。'
+            throw "$Leg 的 marker 后置证据不在稳定 focused input 上方的合法消息区。"
         }
-        if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw 'Allow 终态报告不是成功。' }
+        if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw "$Leg 终态报告不是成功。" }
+        if ($Leg -ceq 'Reentry') { Assert-P0ReentryForegroundWait -Audit $audit -DwellSec $ReentryDwellSec }
     }
     elseif ($Leg -ceq 'Deny') {
         # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据，判据只认拒绝路径：
@@ -1278,6 +1416,7 @@ try {
         # 拿到自己的确认状态之前就挂了（比如预检拦下），沿用上一腿的值等于给这一腿编造证据。
         $confirmation = $null
         $notificationState = $null
+        $reentry = $null
         $legTeardownDone = $false
         # 最后一次**看到**的确认状态。腿在"决定与预期不符"时会抛在 $confirmation 赋值之前，
         # 于是失败记录里连"人到底点了什么"都没有——而那正是真人时间花在哪儿的唯一凭据。
@@ -1297,7 +1436,9 @@ try {
             tool = 'press_key'
             action = 'enter'
             initial_package = 'com.tencent.mm'
-            stale_after_allow = ($leg -ceq 'Stale')
+            # stale 与 reentry 都要"批准后由 debug hook 切走"；区别在切走之后——
+            # stale 永不回来，reentry 由 runner 经自己的 adb 通道在停留期满后把微信拉回来。
+            stale_after_allow = ($leg -cin @('Stale','Reentry'))
         }
         Set-P0PrivateControlFile -Session $session -Control $control
 
@@ -1383,6 +1524,13 @@ try {
         }
         if (-not (Test-Path -LiteralPath $screenshotPath -PathType Leaf)) { throw "$leg 腿缺少确认截图证据。" }
 
+        # Reentry 腿：批准已经拿到，debug hook 此刻正把微信切走，网关在等前台恢复。
+        # 现在由 runner 在外面待够时间，再经自己的 adb 通道把微信拉回来。
+        if ($leg -ceq 'Reentry') {
+            $reentry = Invoke-P0ReentryInterlude -Session $session -DwellSec $ReentryDwellSec `
+                -DispatchHandle $dispatchHandle
+        }
+
         $dispatchDeadline = $dispatchHandle.StartedUtc.AddMinutes($DispatchTimeoutMin)
         while (-not $dispatchHandle.Process.HasExited -and [DateTime]::UtcNow -lt $dispatchDeadline) {
             Start-Sleep -Milliseconds ([Math]::Min(200, $PollIntervalMs))
@@ -1425,7 +1573,8 @@ try {
         $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
-            -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256
+            -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256 `
+            -ReentryDwellSec $ReentryDwellSec
 
         # Deny 腿带外验证：**必须排在 teardown 之前**——teardown 会清空输入框，而"marker
         # 原封不动留在框里"正是这条验证唯一的强证据。先清框就是先毁证。
@@ -1524,6 +1673,8 @@ try {
             # 实际结论给出，**判不了时原样退回 gateway_reported_blocked_no_independent_check**。
             send_postcondition = switch ($leg) {
                 'Allow' { 'single_match' }
+                # Reentry 与 Allow 同样有 ui_find 在消息区命中 marker 这条独立正证据。
+                'Reentry' { 'single_match' }
                 'Deny' { if ($null -ne $oob) { [string]$oob.postcondition } else { 'gateway_reported_blocked_no_independent_check' } }
                 default { 'gateway_reported_blocked_no_independent_check' }
             }
@@ -1540,6 +1691,10 @@ try {
                     [string]$trace.SendVerificationState
                 }
             }
+            # Reentry 腿"在外面待着"那一段的实测值（批次 4）。**这一栏是这条腿的核心证据**：
+            # 没有它，"待了 75 秒再回来"与"批准后立刻就成了"在台账上分不开，而后者根本没碰过
+            # 用户拍板买下的 5 分钟预算。away_observed=0 时这条腿的语义很可能已经落空。
+            reentry = $(if ($null -eq $reentry) { $null } else { $reentry })
             # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
             # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
             # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），

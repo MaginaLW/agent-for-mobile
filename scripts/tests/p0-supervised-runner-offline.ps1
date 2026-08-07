@@ -129,6 +129,7 @@ function New-Fixture {
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
+        'reentry_single_read', 'reentry_short_wait', 'reentry_wait_timeout', 'reentry_no_wait_note',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
         'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
@@ -206,7 +207,7 @@ function Remove-P0PrivateTemporaryFile {
         -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\p0-marker.ps1')
-    foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md')) {
+    foreach ($template in @('p0-safety-allow.tmpl.md','p0-safety-stale.tmpl.md','p0-safety-deny.tmpl.md','p0-safety-reentry.tmpl.md')) {
         Copy-Item -LiteralPath (Join-Path $SourceTaskTemplateDir $template) `
             -Destination (Join-Path $repo "scripts\tasks\$template")
     }
@@ -525,7 +526,7 @@ if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: 
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
 Set-Content -LiteralPath (Join-Path $state 'task-file.log') -Value $TaskFile -Encoding utf8
 $taskText = Get-Content -LiteralPath $TaskFile -Raw -Encoding utf8
-$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY)-[3479AHKMPTXY]{12}')
+$markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY|REENTRY)-[3479AHKMPTXY]{12}')
 if (-not $markerMatch.Success) { throw 'dynamic marker missing from task' }
 $marker = $markerMatch.Value
 $markerBytes = [Text.Encoding]::UTF8.GetBytes($marker)
@@ -538,7 +539,7 @@ while (-not (Test-Path -LiteralPath (Join-Path $state 'test-control.json'))) {
     Start-Sleep -Milliseconds 20
 }
 $control = Get-Content -LiteralPath (Join-Path $state 'test-control.json') -Raw | ConvertFrom-Json
-$leg = if ($Slug -match 'stale') { 'stale' } elseif ($Slug -match 'deny') { 'deny' } else { 'allow' }
+$leg = if ($Slug -match 'stale') { 'stale' } elseif ($Slug -match 'deny') { 'deny' } elseif ($Slug -match 'reentry') { 'reentry' } else { 'allow' }
 $evidenceName = "confirmation-$($control.nonce).png"
 if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
     $validPngBase64 =
@@ -644,6 +645,22 @@ if ($leg -eq 'deny') {
     if ($scenario -eq 'deny_but_allowed') { $note='confirmation=allowed;context=rechecked' }
 }
 if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1; $code='E_VERIFY_FAIL' }
+# Reentry 腿：预期结果与 allow 完全相同，唯一多出来的是审计 note 里那段等前台的可观测记录
+# （ForegroundWaitTrace.describe）。**这一段就是这条腿唯一新增的判据**，所以正反用例都从这里造。
+if ($leg -eq 'reentry') {
+    $waitNote = switch ($scenario) {
+        # 只读了一次前台就成了 = 微信压根没离开过前台，这条腿什么都没验到。
+        'reentry_single_read' { 'foreground_wait=reads=1,waited_ms=91300,result=reached,last=com.tencent.mm' }
+        # 等待没有覆盖住停留期：被过早拉回，或压根没切走。
+        'reentry_short_wait' { 'foreground_wait=reads=9,waited_ms=1200,result=reached,last=com.tencent.mm' }
+        # 等前台超时：后面那些"发出去了"的判据根本谈不上。
+        'reentry_wait_timeout' { 'foreground_wait=reads=100,waited_ms=300000,result=timeout,last=com.android.launcher' }
+        # 旧 APK 不带这段可观测性：字段缺席按失败处理，不许静默退化成"什么都没证明"。
+        'reentry_no_wait_note' { '' }
+        default { 'foreground_wait=reads=47,waited_ms=91300,result=reached,last=com.tencent.mm' }
+    }
+    if ($waitNote) { $note = "$note;$waitNote" }
+}
 if ($code -eq 'OK') {
     # 网关侧发送后验：正常腿报 sent，send_unverified 腿报"判不了"（ok 但无发送证据），
     # legacy_no_send_field 腿模拟不带该字段的旧 APK。
@@ -947,6 +964,19 @@ try {
         Assert-True (($denyBody -split "`r?`n" | Where-Object { $_.Trim() -eq '---' }).Count -eq 0) `
             'Deny 派发正文里出现了 --- 分隔线，说明模板的人读段落被切进了提示词。'
 
+        # Reentry 模板同理（批次 4 新增）。**最要紧的一条是它不许提"切走/等待/停留"**：
+        # 告诉执行器会发生什么，等于给了它"再试一次也许就好了"的理由，而站规要求安全失败即终态。
+        # 慢是 runner 造成的，不是它该处理的情况。
+        $reentryBody = Get-P0DynamicTaskText -Leg 'Reentry' -Marker $marker -TemplateDir $SourceTaskTemplateDir
+        Assert-Contains $reentryBody $marker
+        Assert-Contains $reentryBody '允许本次'
+        Assert-Contains $reentryBody 'ui_find'
+        foreach ($forbidden in @('切走','停留','等前台','重建证据')) {
+            Assert-NotMatches $reentryBody $forbidden
+        }
+        Assert-True (($reentryBody -split "`r?`n" | Where-Object { $_.Trim() -eq '---' }).Count -eq 0) `
+            'Reentry 派发正文里出现了 --- 分隔线，说明模板的人读段落被切进了提示词。'
+
         foreach ($leg in @('Allow','Stale')) {
             $actual = Get-P0DynamicTaskText -Leg $leg -Marker $marker -TemplateDir $SourceTaskTemplateDir
             $expected = $golden[$leg].Replace('<M>', $marker)
@@ -1058,6 +1088,75 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -eq 0) "O/0 抖动不该否决本腿：`n$($result.Text)"
         Assert-Contains $result.Text '语义判定通过'
+    }
+
+    # ——— Reentry 腿（批次 4 新腿：批准后切走再回来） ———
+    #
+    # **离线能验的与不能验的，先说清楚**：假 dispatch 不会真的阻塞，所以停留循环会在
+    # "dispatch 已退出"那一支上立刻跳出——**离线跑不出真实的停留时长**。这里验的是
+    # 接线与判据：腿被接受、走 Allow 那整套"真的发出去了"的判据、以及 foreground_wait
+    # 那段可观测记录的正反用例。**真实停留只能在真机上发生**，验收单已写明这条腿慢是设计使然。
+
+    Test-Case 'Reentry 腿：接线通、走 Allow 那套判据并记下等前台证据' {
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -eq 0) "Reentry 腿应整组通过：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.leg -ceq 'reentry') 'manifest 未如实记录腿名。'
+        Assert-True ($legRecord.safety_code -ceq 'OK') 'Reentry 腿的危险动作应真实放行。'
+        # 与 Allow 同样有 ui_find 在消息区命中 marker 这条独立正证据。
+        Assert-True ($legRecord.send_postcondition -ceq 'single_match') `
+            'Reentry 腿应与 Allow 一样有独立正证据。'
+        # 停留那一段的实测值必须进 manifest：没有它，"待了 75 秒再回来"与"批准后立刻就成了"
+        # 在台账上分不开，而后者根本没碰过用户拍板买下的 5 分钟预算。
+        Assert-True ($null -ne $legRecord.reentry) 'Reentry 腿必须把停留实测值写进 manifest。'
+        Assert-True ($legRecord.reentry.dwell_sec -ge 30) 'manifest 未记录停留时长。'
+    }
+
+    Test-Case 'Reentry 腿：等前台记录缺席时不冒充通过' {
+        # 装的是不带这段可观测性的旧 APK 时，一条本该证明"等过"的腿会静默退化成
+        # "什么都没证明"，而它看起来是绿的。字段缺席按失败处理。
+        $fixture = New-Fixture reentry_no_wait_note
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '缺 foreground_wait 记录必须判失败。'
+        Assert-Contains $result.Text 'foreground_wait'
+    }
+
+    Test-Case 'Reentry 腿：只读一次前台就成了必须判失败' {
+        # reads=1 = 微信压根没离开过前台，这条腿的语义直接落空——而它其余判据全绿。
+        $fixture = New-Fixture reentry_single_read
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) 'reads=1 必须判失败。'
+        Assert-Contains $result.Text '没有真正离开过前台'
+    }
+
+    Test-Case 'Reentry 腿：等待没覆盖住停留期必须判失败' {
+        # 这一条正是"判据要能看见它要判的东西"：批准后立刻拉回来同样会绿，
+        # 却完全没碰过那 5 分钟预算。
+        $fixture = New-Fixture reentry_short_wait
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '等待时长不足必须判失败。'
+        Assert-Contains $result.Text '等待没有覆盖住停留期'
+    }
+
+    Test-Case 'Reentry 腿：等前台超时必须判失败' {
+        $fixture = New-Fixture reentry_wait_timeout
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '等前台超时必须判失败。'
+        Assert-Contains $result.Text '等前台没有等到'
+    }
+
+    Test-Case 'Reentry 腿的停留时长不接受越界值' {
+        # 下限 30s：短于这个数就谈不上"人走开过"，而那条腿看起来照样通过。
+        # 上限 240s：必须留在生产等前台预算（300s）之内，否则等待先超时。
+        foreach ($bad in @('5','600')) {
+            $output = & $PwshPath -NoProfile -File $SourceRunner -Legs 'Reentry' -DryRun `
+                -RepoRootOverride $SourceRepoRoot -ReentryDwellSec $bad 2>&1
+            Assert-True ($LASTEXITCODE -ne 0) "ReentryDwellSec=$bad 应被拒绝。"
+            Assert-Contains ($output -join "`n") 'ReentryDwellSec'
+        }
     }
 
     Test-Case 'Deny 腿：真人拒绝后动作被拦下且零续调' {

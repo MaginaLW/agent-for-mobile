@@ -14,7 +14,7 @@ $P0TaskMarkerPlaceholder = '<RUNNER_GENERATED_MARKER>'
 
 function Get-P0DynamicTaskText {
     param(
-        [Parameter(Mandatory)][ValidateSet('Allow','Stale','Deny')][string]$Leg,
+        [Parameter(Mandatory)][ValidateSet('Allow','Stale','Deny','Reentry')][string]$Leg,
         [Parameter(Mandatory)][string]$Marker,
         [Parameter(Mandatory)][string]$TemplateDir
     )
@@ -38,7 +38,7 @@ function Get-P0DynamicTaskText {
 
 function Write-P0DynamicTask {
     param(
-        [Parameter(Mandatory)][ValidateSet('Allow','Stale','Deny')][string]$Leg,
+        [Parameter(Mandatory)][ValidateSet('Allow','Stale','Deny','Reentry')][string]$Leg,
         [Parameter(Mandatory)][string]$Marker,
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$TemplateDir

@@ -304,6 +304,28 @@ object EvidenceRebuildPolicy {
 }
 
 /**
+ * "批准后等前台恢复"那段等待的可观测记录。
+ *
+ * **为什么等待必须自己说话**：新腿要证明的正是"人走开一段时间再回来还算数"，而一个只回
+ * true/false 的等待，**在台账上与"根本没等就成了"完全分不开**——判据看不见它要判的东西。
+ * 2026-08-02 debug hook 那次前台超时也是同一课：只知道它失败了，不知道它看见了什么。
+ *
+ * 纯数据 + 纯格式化，离线可测；[describe] 的输出进审计 note，runner 按它做机械断言。
+ */
+data class ForegroundWaitTrace(
+    val reached: Boolean,
+    /** 读了几次前台。**新腿至少要 >1**：只读一次就成了，说明它压根没在外面待过。 */
+    val reads: Int,
+    val waitedMs: Long,
+    /** 最后一次读到的前台包名；读不出来为空串。只进诊断，不参与判定。 */
+    val lastPackage: String,
+) {
+    fun describe(): String =
+        "reads=$reads,waited_ms=$waitedMs,result=${if (reached) "reached" else "timeout"}" +
+            ",last=${lastPackage.ifBlank { "-" }}"
+}
+
+/**
  * 语义意图路径的装配（[SafetyGate] 的可选构造参数）。
  *
  * [awaitForeground] 没有默认实现，**必须由调用方显式给**：它是"批准后等前台恢复"那段有界等待，
