@@ -16,6 +16,7 @@
 | 找深链（所有 app + 系统，含 🔵 候选区） | [apps/deeplinks.md](apps/deeplinks.md) |
 | 算成本账 / 额度容量 | [brain/cost.md](brain/cost.md) |
 | 大脑侧链路（headless/挂载/两段式） | [brain/harness.md](brain/harness.md) |
+| **要让一次工具调用阻塞很久**（等人、等前台、长动作） | [brain/harness.md](brain/harness.md) §MCP 传输层能让一次工具调用开多久——**本机上限 ≈300s，且默认 60s 就砍** |
 | 涉及 iOS / 苹果 | [ios/README.md](ios/README.md)（非目标边界，勿重复调研） |
 
 ## 目录结构与归档规则

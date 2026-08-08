@@ -1130,6 +1130,31 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Reentry')
         Assert-True ($result.ExitCode -ne 0) 'reads=1 必须判失败。'
         Assert-Contains $result.Text '没有真正离开过前台'
+
+        # **最需要证据的恰恰是失败那次。** 2026-08-08 真机上新腿死在这条判据上，
+        # 停留与等待的数字一个都没进 manifest，只能从 console 与审计 note 里手工捞。
+        # 证据落盘不该依赖腿走到终点：判据之前先落证据。
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.verdict -ceq 'failed') '失败腿的 verdict 必须是 failed。'
+        Assert-True ($null -ne $legRecord.reentry) '失败腿也必须留下停留实测值。'
+        Assert-True ($legRecord.reentry.dwell_sec -ge 30) '失败腿的停留时长丢了。'
+        Assert-True ($legRecord.foreground_wait.reported -eq $true) '失败腿也必须留下等前台记录。'
+        Assert-True ($legRecord.foreground_wait.reads -eq 1) `
+            "等前台记录必须如实落盘，实际 reads=$($legRecord.foreground_wait.reads)"
+    }
+
+    Test-Case 'Reentry 腿：等前台记录缺席时 manifest 如实记 reported=false' {
+        # "没报告"本身是要落进 manifest 的事实；写成 null 会在台账上长得像"数据丢了"。
+        $fixture = New-Fixture reentry_no_wait_note
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '缺 foreground_wait 记录必须判失败。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.foreground_wait.reported -eq $false) `
+            'manifest 必须如实记下"网关没报告这段等待"，而不是留空。'
     }
 
     Test-Case 'Reentry 腿：等待没覆盖住停留期必须判失败' {

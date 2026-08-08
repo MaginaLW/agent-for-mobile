@@ -973,21 +973,42 @@ Reentry 腿唯一真正新增的判据：**证明那段等待确实发生过，�
 **字段缺席按失败处理，不按通过**：装的是不带这段可观测性的旧 APK 时，一条本该证明
 "等过"的腿会静默退化成"什么都没证明"，而它看起来是绿的。
 #>
+function Get-P0ForegroundWaitRecord {
+    <#
+    从审计 note 里把那段等待解出来。**解析只有这一份**——判据与 manifest 落盘共用它，
+    分两份写迟早只改一份。
+
+    读不出来时返回 `reported=$false` 而不是 $null：**"没报告"本身是要落进 manifest 的事实**，
+    返回裸 null 会让它在台账上长成"数据丢了"。
+    #>
+    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    $matched = [regex]::Match(
+        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),last=(?<last>\S*)')
+    if (-not $matched.Success) {
+        return [ordered]@{ reported = $false; detail = '审计 note 里没有 foreground_wait 记录' }
+    }
+    return [ordered]@{
+        reported = $true
+        reads = [int]$matched.Groups['reads'].Value
+        waited_ms = [long]$matched.Groups['waited'].Value
+        result = [string]$matched.Groups['result'].Value
+        last_package = [string]$matched.Groups['last'].Value
+    }
+}
+
 function Assert-P0ReentryForegroundWait {
     param(
-        [Parameter(Mandatory)]$Audit,
+        [Parameter(Mandatory)][AllowNull()]$Wait,
         [Parameter(Mandatory)][int]$DwellSec
     )
-    $note = [string]$Audit.note
-    $matched = [regex]::Match(
-        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+)')
-    if (-not $matched.Success) {
+    if (-not $Wait -or -not $Wait.reported) {
         throw ('Reentry 腿审计里没有 foreground_wait 记录——这条腿的全部意义就是证明' +
-            "那段等待真的发生过，缺了它这一腿什么都没证明（装的是旧 APK？note=$note）。")
+            '那段等待真的发生过，缺了它这一腿什么都没证明（装的是旧 APK？）。')
     }
-    $reads = [int]$matched.Groups['reads'].Value
-    $waitedMs = [long]$matched.Groups['waited'].Value
-    $result = [string]$matched.Groups['result'].Value
+    $reads = [int]$Wait.reads
+    $waitedMs = [long]$Wait.waited_ms
+    $result = [string]$Wait.result
     if ($result -cne 'reached') {
         throw "Reentry 腿等前台没有等到（foreground_wait result=$result，waited_ms=$waitedMs）。"
     }
@@ -1140,7 +1161,9 @@ function Assert-P0LegSemantics {
             throw "$Leg 的 marker 后置证据不在稳定 focused input 上方的合法消息区。"
         }
         if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw "$Leg 终态报告不是成功。" }
-        if ($Leg -ceq 'Reentry') { Assert-P0ReentryForegroundWait -Audit $audit -DwellSec $ReentryDwellSec }
+        if ($Leg -ceq 'Reentry') {
+            Assert-P0ReentryForegroundWait -Wait (Get-P0ForegroundWaitRecord -Audit $audit) -DwellSec $ReentryDwellSec
+        }
     }
     elseif ($Leg -ceq 'Deny') {
         # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据，判据只认拒绝路径：
@@ -1417,6 +1440,7 @@ try {
         $confirmation = $null
         $notificationState = $null
         $reentry = $null
+        $foregroundWait = $null
         $legTeardownDone = $false
         # 最后一次**看到**的确认状态。腿在"决定与预期不符"时会抛在 $confirmation 赋值之前，
         # 于是失败记录里连"人到底点了什么"都没有——而那正是真人时间花在哪儿的唯一凭据。
@@ -1529,6 +1553,11 @@ try {
         if ($leg -ceq 'Reentry') {
             $reentry = Invoke-P0ReentryInterlude -Session $session -DwellSec $ReentryDwellSec `
                 -DispatchHandle $dispatchHandle
+            # **当场落进腿记录，不等腿走到终点**：最需要证据的那次恰恰是失败那次，
+            # 而"腿终止时不落盘"会让那一次在 manifest 上等于什么都没发生
+            # （2026-08-02 那条 E_CHANNEL_DOWN 的腿已经付过一次学费，08-08 新腿又付了一次：
+            # 停留与等待的数字只能从 console 和审计 note 里手工捞）。
+            $activeLegRecord['reentry'] = $reentry
         }
 
         $dispatchDeadline = $dispatchHandle.StartedUtc.AddMinutes($DispatchTimeoutMin)
@@ -1571,6 +1600,10 @@ try {
         $trace = Read-P0TraceEvidence -TracePath $traceEvidencePath -ExpectedText $marker `
             -InputBarTop $inputBarTop
         $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
+        # 同上：**判据之前先落证据**。批次 4 新腿正是死在下面那句 Assert 上，于是等前台那段
+        # 数字一个都没进 manifest——而它恰恰是那一腿唯一有价值的产出。
+        $foregroundWait = Get-P0ForegroundWaitRecord -Audit $(if ($audit.Count -gt 0) { $audit[0] } else { $null })
+        $activeLegRecord['foreground_wait'] = $foregroundWait
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256 `
@@ -1695,6 +1728,9 @@ try {
             # 没有它，"待了 75 秒再回来"与"批准后立刻就成了"在台账上分不开，而后者根本没碰过
             # 用户拍板买下的 5 分钟预算。away_observed=0 时这条腿的语义很可能已经落空。
             reentry = $(if ($null -eq $reentry) { $null } else { $reentry })
+            # 等前台那段同样进 manifest（成功腿也要）：它是新腿唯一新增的机械证据，
+            # 只活在审计 note 里等于每次都要有人去捞。
+            foreground_wait = $foregroundWait
             # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
             # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
             # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），
