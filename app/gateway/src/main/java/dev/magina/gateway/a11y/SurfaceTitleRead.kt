@@ -65,7 +65,21 @@ internal data class SurfaceTitleAttempt(
     /** `snapshot()` 自己写的降级说明（融合失败原因）。**可能含任意异常文本，不进 note。** */
     val note: String,
     val title: SurfaceElement?,
-)
+    /**
+     * 标题带里的全部候选，逐个带"为什么"。**含界面文本，只进错误信息，不进审计 note。**
+     * 存在的理由见 [ConversationSurfacePolicy.titleBandCandidates]。
+     */
+    val candidates: List<SurfaceCandidate> = emptyList(),
+) {
+    /**
+     * 带内**因为不属于前台应用窗口**而被挡掉的候选数——也就是"状态栏挤进标题带了吗"。
+     *
+     * 这是个纯数字，所以它能进审计 note。2026-08-09 第四跑那一帧上它会是 6：
+     * **一眼就能看出问题不在识别质量，而在带里混进了别的窗口。**
+     */
+    val systemWindowRejects: Int
+        get() = candidates.count { it.rejectedBy == SurfaceCandidate.REJECT_WINDOW }
+}
 
 /**
  * 标题读取的完整记录：**每一次尝试都留痕**。
@@ -94,6 +108,12 @@ internal data class SurfaceTitleRead(
         append(",trail=").append(attempts.joinToString("+") { it.outcome.wireName })
         append(",fg=").append(attempts.joinToString("+") { it.fgElements.toString() })
         append(",band=").append(attempts.joinToString("+") { it.bandElements.toString() })
+        // "带里混进了几个别的窗口的元素"。纯数字，可以进 note；而它正是第四跑那一帧
+        // 唯一需要看的数——**问题不在识别质量，在带里站着状态栏**。
+        append(",sysrej=").append(attempts.joinToString("+") { it.systemWindowRejects.toString() })
+        // 最后被选中的那个来自哪条通道。它决定后面按 a11y 严格比还是按 OCR 宽松比，
+        // 而这两档在现场读起来完全不同，不落盘就只能猜。
+        append(",picked=").append(title?.source?.ifBlank { "-" } ?: "-")
     }
 
     /**
@@ -118,7 +138,21 @@ internal data class SurfaceTitleRead(
         }
         val trend = if (sameAll) "${attempts.size} 次尝试结论相同，不是时机问题" else "各次结论不同，像时机问题"
         val note = last.note.takeIf { it.isNotBlank() }?.let { "；快照自报：$it" }.orEmpty()
-        return "$head（$trend，共等 ${waitedMs}ms）$note"
+        return "$head（$trend，共等 ${waitedMs}ms）$note${candidateDump()}"
+    }
+
+    /**
+     * 标题带候选清单。**这是把"推断"变成"观测"的那一段**：2026-08-09 第四跑现场只知道
+     * 读成了 `7.70KB/s`，"标题带把状态栏圈进去了"当时只是推断，而 `uiautomator dump`
+     * 看不见状态栏（它只抓前台应用窗口）——**跨窗口的东西只有网关自己看得见**。
+     */
+    fun candidateDump(): String {
+        val candidates = attempts.lastOrNull()?.candidates.orEmpty()
+        if (candidates.isEmpty()) return ""
+        return candidates.joinToString(
+            prefix = "｜标题带候选 ${candidates.size} 个：",
+            separator = "；",
+        ) { it.describe() }
     }
 }
 
@@ -182,20 +216,20 @@ internal object SurfaceTitleReadPolicy {
             note = "",
             title = null,
         )
+        val frame = SurfaceFrame.of(raw, screenWidth, screenHeight)
         val elements = ConversationSurfacePolicy.decodeElements(raw, screenHeight)
-        val title = ConversationSurfacePolicy.toolbarTitle(elements, screenWidth, screenHeight)
-        val band = elements.filter {
-            it.stage == SurfaceStage.TOOLBAR &&
-                ConversationSurfacePolicy.inTitleBand(it, screenWidth, screenHeight)
-        }
+        val title = ConversationSurfacePolicy.toolbarTitle(elements, frame)
+        val candidates = ConversationSurfacePolicy.titleBandCandidates(elements, frame)
         val fusion = raw.optString("fusion")
-        val rejected = band.filterNot {
-            ConversationSurfacePolicy.trustedForRecognition(it, screenWidth, screenHeight)
-        }
+        val rejectedConfidence = elements
+            .filter { it.stage == SurfaceStage.TOOLBAR && ConversationSurfacePolicy.inTitleBand(it, frame) }
+            .filterNot { ConversationSurfacePolicy.trustedForRecognition(it, frame) }
+            .mapNotNull { it.confidence }
+            .maxOrNull()
         val outcome = when {
             title != null -> SurfaceTitleOutcome.RESOLVED
-            band.isEmpty() && fusion != FUSION_OCR -> SurfaceTitleOutcome.NO_OCR
-            band.isEmpty() -> SurfaceTitleOutcome.NO_CANDIDATE
+            candidates.isEmpty() && fusion != FUSION_OCR -> SurfaceTitleOutcome.NO_OCR
+            candidates.isEmpty() -> SurfaceTitleOutcome.NO_CANDIDATE
             else -> SurfaceTitleOutcome.ALL_REJECTED
         }
         return SurfaceTitleAttempt(
@@ -203,10 +237,11 @@ internal object SurfaceTitleReadPolicy {
             elapsedMs = elapsedMs,
             fusion = fusion,
             fgElements = raw.optInt("fg_elements", -1),
-            bandElements = band.size,
-            bestRejectedConfidence = rejected.mapNotNull { it.confidence }.maxOrNull(),
+            bandElements = candidates.size,
+            bestRejectedConfidence = rejectedConfidence,
             note = raw.optString("note"),
             title = title,
+            candidates = candidates,
         )
     }
 

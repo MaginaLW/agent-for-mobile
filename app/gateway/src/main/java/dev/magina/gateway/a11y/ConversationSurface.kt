@@ -45,7 +45,74 @@ internal data class SurfaceElement(
     val source: String = "a11y",
     val confidence: Double? = null,
     val stage: SurfaceStage = SurfaceStage.CONTENT,
+    /**
+     * 这个元素来自哪个 a11y 窗口；纯 OCR 元素没有窗口（它是屏幕像素，不是节点）。
+     *
+     * **2026-08-09 第四跑逼出来的**：a11y 是**跨窗口**的，而状态栏是它自己的窗口。
+     * 网关因此把状态栏那个每秒都在跳的实时网速 `7.70KB/s` 当成了会话标题，
+     * 并据此告诉用户"你换了会话"——**而用户全程没动过**。
+     */
+    val windowId: Int? = null,
+    /** 是否来自**前台应用窗口**。缺省 false = fail-closed（缺字段的旧快照不冒充可信）。 */
+    val foregroundWindow: Boolean = false,
 )
+
+/**
+ * 一帧屏幕的几何上下文。
+ *
+ * 单独成型而不是散着传 `screenWidth`/`screenHeight`/`systemTopInset` 三个 Int：
+ * 三个同类型参数并排传，**写反了编译器一声不吭**；而且新增一项时所有调用点都得记得跟上，
+ * 这正是本册那条"判据要挂在能被机械验证的东西上，不挂需要有人记得填对的字段"。
+ * 现在它由 [of] 从快照 JSON 一次解出来，调用方无从填错。
+ */
+internal data class SurfaceFrame(
+    val screenWidth: Int,
+    val screenHeight: Int,
+    /**
+     * 顶部系统装饰（状态栏/刘海区）的下沿，物理像素。**标题带一律从它之下开始。**
+     *
+     * 走真实窗口几何而不是"按屏幕比例猜一个状态栏高度"：盲点安全区那次已经付过这个学费
+     * （按 0.84h~0.94h 写死，在这台机器上整整偏高 130px）。
+     */
+    val systemTopInset: Int,
+) {
+    companion object {
+        fun of(raw: JSONObject, screenWidth: Int, screenHeight: Int): SurfaceFrame = SurfaceFrame(
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            systemTopInset = raw.optInt("system_top_inset", 0),
+        )
+    }
+}
+
+/** 标题带里的一个候选，以及**它为什么没被选中**。 */
+internal data class SurfaceCandidate(
+    val text: String,
+    val bounds: SurfaceRect,
+    val source: String,
+    val windowId: Int?,
+    val foregroundWindow: Boolean,
+    /** null = 全部门槛都过了（也就是可选中的那一类）。 */
+    val rejectedBy: String?,
+) {
+    /** 给人看的一行。**含文本，所以只进错误信息，不进审计 note 那条分号串。** */
+    fun describe(): String = buildString {
+        append('「').append(text).append('」')
+        append(" bounds=").append(bounds.left).append(',').append(bounds.top)
+        append('-').append(bounds.right).append(',').append(bounds.bottom)
+        append(" source=").append(source)
+        append(" win=").append(windowId ?: "-")
+        append(if (foregroundWindow) "(前台应用)" else "(非前台应用)")
+        append(" → ").append(rejectedBy ?: "可选中")
+    }
+
+    companion object {
+        const val REJECT_WINDOW = "不属于前台应用窗口"
+        const val REJECT_CONFIDENCE = "识别置信度不够"
+        const val REJECT_BOUNDS = "几何非法"
+        const val REJECT_EMPTY = "归一后没有可读文字"
+    }
+}
 
 internal object ConversationSurfacePolicy {
 
@@ -64,25 +131,61 @@ internal object ConversationSurfacePolicy {
         }
     }
 
-    fun validBounds(bounds: SurfaceRect, screenWidth: Int, screenHeight: Int): Boolean =
-        bounds.left >= 0 && bounds.top >= 0 && bounds.right <= screenWidth &&
-            bounds.bottom <= screenHeight && bounds.width > 0 && bounds.height > 0
+    const val SOURCE_A11Y = "a11y"
+    const val SOURCE_OCR = "ocr"
+    const val SOURCE_FUSED = "fused"
+
+    fun validBounds(bounds: SurfaceRect, frame: SurfaceFrame): Boolean =
+        bounds.left >= 0 && bounds.top >= 0 && bounds.right <= frame.screenWidth &&
+            bounds.bottom <= frame.screenHeight && bounds.width > 0 && bounds.height > 0
 
     /**
      * 仅用于页面识别，**不用于任何点击目标**；门槛是识别级的 [MIN_RECOGNITION_OCR_CONFIDENCE]。
      * 点击目标独立走 [MIN_ACTION_OCR_CONFIDENCE]，不受这里影响。
+     *
+     * 除置信度外还有一道**窗口归属**：有节点的元素（a11y / fused）必须来自前台应用窗口。
+     * 理由见 [SurfaceElement.windowId]——a11y 跨窗口，状态栏是它自己的窗口，
+     * 而状态栏上常驻着每秒都在跳的实时网速。纯 OCR 元素没有窗口信息，只能靠几何
+     * （[inTitleBand] 的状态栏下沿那一刀），这是这两条门槛各自的能力边界。
      */
-    fun trustedForRecognition(
-        element: SurfaceElement,
-        screenWidth: Int,
-        screenHeight: Int,
-    ): Boolean = when (element.source) {
-        "a11y" -> true
-        "ocr", "fused" -> element.confidence?.let {
-            it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
-        } == true
-        else -> false
-    } && validBounds(element.bounds, screenWidth, screenHeight)
+    fun trustedForRecognition(element: SurfaceElement, frame: SurfaceFrame): Boolean =
+        rejectionOf(element, frame) == null
+
+    /** 与 [trustedForRecognition] 同一套规则，但说得出**是哪一条**挡的（取证用）。 */
+    fun rejectionOf(element: SurfaceElement, frame: SurfaceFrame): String? = when {
+        !validBounds(element.bounds, frame) -> SurfaceCandidate.REJECT_BOUNDS
+        element.source != SOURCE_OCR && !element.foregroundWindow -> SurfaceCandidate.REJECT_WINDOW
+        element.source == SOURCE_A11Y -> null
+        element.source == SOURCE_OCR || element.source == SOURCE_FUSED ->
+            if (element.confidence?.let { it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE } == true) {
+                null
+            } else {
+                SurfaceCandidate.REJECT_CONFIDENCE
+            }
+        else -> SurfaceCandidate.REJECT_BOUNDS
+    }
+
+    /**
+     * 标题带里的**全部**候选，逐个带上"为什么"。
+     *
+     * 存在的理由是 2026-08-09 第四跑：现场只知道"读成了 `7.70KB/s`"，
+     * "标题带把状态栏圈进去了"是**推断**——而 C 道的 `uiautomator dump` 只看得见前台应用窗口，
+     * 坐实不了（它没把"我的工具看不见"报成"那东西不存在"，这是对的）。
+     * **跨窗口的东西只有网关自己看得见，所以只能由网关把它打出来。**
+     */
+    fun titleBandCandidates(elements: List<SurfaceElement>, frame: SurfaceFrame): List<SurfaceCandidate> =
+        elements.filter { it.stage == SurfaceStage.TOOLBAR && inTitleBand(it, frame) }
+            .map { element ->
+                SurfaceCandidate(
+                    text = element.text.ifBlank { element.description },
+                    bounds = element.bounds,
+                    source = element.source,
+                    windowId = element.windowId,
+                    foregroundWindow = element.foregroundWindow,
+                    rejectedBy = rejectionOf(element, frame)
+                        ?: SurfaceCandidate.REJECT_EMPTY.takeIf { labelTextOf(element).isEmpty() },
+                )
+            }
 
     /**
      * 标题带里那个可信的文字元素——**不看它写的是什么**。
@@ -91,16 +194,12 @@ internal object ConversationSurfacePolicy {
      * 再由判据去和已批准的标签比。把比对塞进读取器里，判据就变成了平凡真
      * （"读回来的和读回来的一样"——发送后验踩过这个坑）。
      */
-    fun toolbarTitle(
-        elements: List<SurfaceElement>,
-        screenWidth: Int,
-        screenHeight: Int,
-    ): SurfaceElement? {
-        if (screenWidth <= 0 || screenHeight <= 0) return null
+    fun toolbarTitle(elements: List<SurfaceElement>, frame: SurfaceFrame): SurfaceElement? {
+        if (frame.screenWidth <= 0 || frame.screenHeight <= 0) return null
         return elements.firstOrNull { element ->
             element.stage == SurfaceStage.TOOLBAR &&
-                trustedForRecognition(element, screenWidth, screenHeight) &&
-                inTitleBand(element, screenWidth, screenHeight) &&
+                trustedForRecognition(element, frame) &&
+                inTitleBand(element, frame) &&
                 labelTextOf(element).isNotEmpty()
         }
     }
@@ -115,25 +214,23 @@ internal object ConversationSurfacePolicy {
      */
     fun conversationTitle(
         elements: List<SurfaceElement>,
-        screenWidth: Int,
-        screenHeight: Int,
+        frame: SurfaceFrame,
         expectedLabel: String,
     ): SurfaceElement? {
-        if (screenWidth <= 0 || screenHeight <= 0) return null
+        if (frame.screenWidth <= 0 || frame.screenHeight <= 0) return null
         return elements.firstOrNull { element ->
             looselyLabeled(element, expectedLabel) &&
-                trustedForRecognition(element, screenWidth, screenHeight) &&
+                trustedForRecognition(element, frame) &&
                 element.stage == SurfaceStage.TOOLBAR &&
-                inTitleBand(element, screenWidth, screenHeight)
+                inTitleBand(element, frame)
         }
     }
 
     fun isConversationSurface(
         elements: List<SurfaceElement>,
-        screenWidth: Int,
-        screenHeight: Int,
+        frame: SurfaceFrame,
         expectedLabel: String,
-    ): Boolean = conversationTitle(elements, screenWidth, screenHeight, expectedLabel) != null
+    ): Boolean = conversationTitle(elements, frame, expectedLabel) != null
 
     /** 元素上"能当标题读"的那段字：text 优先，空则退 description。 */
     fun labelTextOf(element: SurfaceElement): String =
@@ -168,6 +265,10 @@ internal object ConversationSurfacePolicy {
                         description = description,
                         bounds = rect,
                         source = item.optString("source"),
+                        windowId = if (item.has("window_id")) item.optInt("window_id") else null,
+                        // 缺字段 → false → 有节点的元素一律不可信。**方向是 fail-closed**：
+                        // 旧快照不冒充"来自前台应用窗口"。
+                        foregroundWindow = item.optBoolean("fg_window", false),
                         confidence = item.takeIf { it.has("confidence") }
                             ?.optDouble("confidence")
                             ?.takeIf { it.isFinite() },
@@ -188,21 +289,23 @@ internal object ConversationSurfacePolicy {
             LabelMatchPolicy.matches(expectedLabel, element.description)
 
     /**
-     * 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%。宏原值，一个数没动。
+     * 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%，**且整体在状态栏下沿之下**。
+     *
+     * 前两条是宏原值，一个数没动；第三条是 2026-08-09 新加的：2% 在 2800px 上是 y=56，
+     * 而状态栏文字中心大约就落在 y≈55——**这条带的上沿一直压在状态栏边上**，
+     * 只是此前碰巧没被选中。用真实窗口几何划线（[SurfaceFrame.systemTopInset]），
+     * 不按屏幕比例猜一个状态栏高度：盲点安全区那次按比例写死，在这台机器上偏了 130px。
      *
      * 不是 private：[SurfaceTitleReadPolicy] 在读不到标题时要报"标题带里到底有几个元素"，
      * 而那个数必须按**这一条**几何算——另写一份就等于报的不是同一件事。
      */
-    fun inTitleBand(
-        element: SurfaceElement,
-        screenWidth: Int,
-        screenHeight: Int,
-    ): Boolean =
-        validBounds(element.bounds, screenWidth, screenHeight) &&
+    fun inTitleBand(element: SurfaceElement, frame: SurfaceFrame): Boolean =
+        validBounds(element.bounds, frame) &&
+            element.bounds.top >= frame.systemTopInset &&
             element.bounds.centerY in
-            (screenHeight * 0.02).toInt()..(screenHeight * 0.12).toInt() &&
+            (frame.screenHeight * 0.02).toInt()..(frame.screenHeight * 0.12).toInt() &&
             element.bounds.centerX in
-            (screenWidth * 0.3).toInt()..(screenWidth * 0.7).toInt()
+            (frame.screenWidth * 0.3).toInt()..(frame.screenWidth * 0.7).toInt()
 
     /** `stageOf` 里那条分隔符规则（与标签归一不同，刻意保持原样）。 */
     private val STAGE_SEPARATORS = Regex("[\\s：:]+")

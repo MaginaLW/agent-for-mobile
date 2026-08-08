@@ -700,8 +700,8 @@ if ($leg -eq 'reentry') {
     $noteTitle = switch ($scenario) {
         'reentry_no_title_read' { '' }
         # 重试第 3 次才读到：**各次结论不同 = 时机问题**，正是有界重试要救的那种。
-        'reentry_title_retried' { 'title_read=attempts=3,waited_ms=1480,result=resolved,resolved_at=3,trail=no_ocr+no_ocr+resolved,fg=0+0+0,band=0+0+1' }
-        default { 'title_read=attempts=1,waited_ms=210,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1' }
+        'reentry_title_retried' { 'title_read=attempts=3,waited_ms=1480,result=resolved,resolved_at=3,trail=no_ocr+no_ocr+resolved,fg=0+0+0,band=0+0+1,sysrej=0+0+0,picked=ocr' }
+        default { 'title_read=attempts=1,waited_ms=210,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1,sysrej=0,picked=ocr' }
     }
     $noteBeat = switch ($scenario) {
         'reentry_no_heartbeat' { '' }
@@ -1348,6 +1348,14 @@ try {
         Assert-True ($legRecord.title_read.resolved_at -eq 3) '第几次读到的没落盘。'
         Assert-True ($legRecord.title_read.trail -ceq 'no_ocr+no_ocr+resolved') `
             "逐次痕迹没落盘：$($legRecord.title_read.trail)"
+        # 2026-08-09 第四跑加的两栏。**加字段把 band= 从串尾变成了串中的**——
+        # 这正是 harness.md 那张表第 4 行的形态，所以这里连"新字段没把旧字段吞掉"一起钉。
+        Assert-True ($legRecord.title_read.system_window_rejects -ceq '0+0+0') `
+            "带内被别的窗口占掉几个候选没落盘：$($legRecord.title_read.system_window_rejects)"
+        Assert-True ($legRecord.title_read.picked_source -ceq 'ocr') `
+            "选中的通道没落盘：$($legRecord.title_read.picked_source)"
+        Assert-True ($legRecord.title_read.band_elements -ceq '0+0+1') `
+            "band 被后面新增的字段吞了：$($legRecord.title_read.band_elements)"
     }
 
     Test-Case 'Reentry 腿：没有 title_read 记录时不冒充通过' {

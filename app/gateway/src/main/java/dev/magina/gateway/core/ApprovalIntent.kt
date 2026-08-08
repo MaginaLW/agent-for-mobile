@@ -224,10 +224,26 @@ object EvidenceRebuildPolicy {
         if (surfaceLabel.isEmpty()) return EvidenceRebuild.Unverified(
             "读回的目标会话标题为空，判不了（channel=$surfaceChannel）",
         )
+        // —— 标题这一处**只产出"过"或"判不了"，永远不产出 Mismatch** ——
+        //
+        // 2026-08-09 第四跑：用户全程没换过会话，网关却把状态栏上每秒都在跳的实时网速
+        // 读成了标题，然后告诉他「目标会话与已批准的不符：文件传输助手 → 7.70KB/s」。
+        // **这正是我们在内容那一处立过规矩、却漏在标题这一处的同一种伤害。**
+        //
+        // 判别式是「我能不能证明这是读错了」，而标题通道**结构上给不出正证据**：
+        // 标题带里可能同时站着多个候选、可能混进别的窗口、OCR 还会漏识多识。
+        // 读回来的串与已批准标签毫无关系时，**更可能是我读错了，而不是他换了会话**——
+        // 两者在这条通道上分不开，而分不开的两种处境不许长成同一个名字，更不许挑那个
+        // 指责用户的名字。`Mismatch` 要留给能确证的场合，内容那一处（sha256 / 超容差）才是。
+        //
+        // 这一改**不放行任何原本被拦下的东西**：两态都不放行，变的只是错误码与那句话
+        // （`E_STALE_REF`「你换了会话」→ `E_VERIFY_FAIL`「我没敢认」）。
         if (surfaceChannel == CHANNEL_A11Y) {
             // a11y 读到的是精确文本，逐位相等**可以满足**，就仍按最强的判据比。
-            if (surfaceLabel != intent.targetLabel) return EvidenceRebuild.Mismatch(
-                "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$surfaceChannel）",
+            if (surfaceLabel != intent.targetLabel) return EvidenceRebuild.Unverified(
+                "标题读回「$surfaceLabel」，与已批准会话「${intent.targetLabel}」对不上——" +
+                    "标题带里可能站着别的东西，读不准不敢放行；**这不等于你换了会话**" +
+                    "（channel=$surfaceChannel）",
             )
         } else {
             // —— OCR 通道：标题同样从来不逐位相同（2026-07-24 真机实锤把标题识别成
@@ -235,15 +251,15 @@ object EvidenceRebuildPolicy {
             // 与识别侧共用 LabelMatchPolicy 那一条规则，不在这里另写一份。
             when (LabelMatchPolicy.verdict(expected = intent.targetLabel, got = surfaceLabel)) {
                 LabelMatchPolicy.Verdict.MATCH -> Unit
-                // 读回是已批准标签的一部分 = 漏识的形态。与"真换了会话"在 OCR-only 链上
-                // 分不开，而分不开的两种处境不许长成同一个名字。
+                // 读回是已批准标签的一部分 = 漏识的形态。
                 LabelMatchPolicy.Verdict.PARTIAL -> return EvidenceRebuild.Unverified(
                     "标题只读回「$surfaceLabel」，是已批准会话「${intent.targetLabel}」的一部分" +
                         "——像漏识，读不准不敢放行；这不是「换了会话」（channel=$surfaceChannel）",
                 )
-                // 互不包含：能确证是另一个标题，这才是正证据。
-                LabelMatchPolicy.Verdict.DIFFERENT -> return EvidenceRebuild.Mismatch(
-                    "目标会话与已批准的不符：${intent.targetLabel} → $surfaceLabel（channel=$surfaceChannel）",
+                LabelMatchPolicy.Verdict.DIFFERENT -> return EvidenceRebuild.Unverified(
+                    "标题读回「$surfaceLabel」，与已批准会话「${intent.targetLabel}」毫无关系——" +
+                        "带里混进别的东西比「人换了会话」更可能，读不准不敢放行；" +
+                        "**这不等于你换了会话**（channel=$surfaceChannel）",
                 )
             }
         }

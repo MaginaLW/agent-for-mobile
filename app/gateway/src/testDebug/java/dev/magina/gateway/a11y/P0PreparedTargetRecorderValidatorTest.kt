@@ -39,6 +39,8 @@ class P0PreparedTargetRecorderValidatorTest {
                 source = "ocr",
                 confidence = 0.99,
                 stage = P0ElementStage.TOOLBAR,
+                windowId = 7,
+                foregroundWindow = true,
             ),
         ),
     )

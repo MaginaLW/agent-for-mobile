@@ -282,6 +282,7 @@ private class AndroidP0WeChatPrepareAdapter(
             blockingOverlay = raw.optBoolean("blocking_overlay", true),
             imeVisible = raw.optBoolean("ime_visible", false),
             systemBottomInset = raw.optInt("system_bottom_inset", 0),
+            systemTopInset = raw.optInt("system_top_inset", 0),
             // 解码与 stage 划分已下沉到 ConversationSurfacePolicy：生产侧执行前重读标题解的是
             // 同一个 JSON，两边各解一遍迟早分叉，而标题判据正好挂在 stage 上（spec §9.6）。
             elements = ConversationSurfacePolicy.decodeElements(raw, metrics.heightPixels),

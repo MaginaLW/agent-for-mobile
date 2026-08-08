@@ -379,7 +379,7 @@ class GatewayA11yService : AccessibilityService() {
         var count = 0
         var truncated = false
 
-        fun visit(node: AccessibilityNodeInfo, depth: Int, inFgWin: Boolean) {
+        fun visit(node: AccessibilityNodeInfo, depth: Int, inFgWin: Boolean, winId: Int) {
             if (depth > 60 || truncated) return
             val text = node.text?.toString().orEmpty()
             val desc = node.contentDescription?.toString().orEmpty()
@@ -405,16 +405,25 @@ class GatewayA11yService : AccessibilityService() {
                     .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
                     .put("flags", flagsOf(node))
                     .put("source", "a11y")
+                    // 窗口归属跟着元素走。**a11y 是跨窗口的**，而状态栏是它自己的窗口——
+                    // 不带这一条，下游就分不出"会话标题"与"状态栏上每秒跳一次的实时网速"
+                    //（2026-08-09 第四跑：后者被当成标题，并据此告诉用户"你换了会话"）。
+                    .put("window_id", winId)
+                    .put("fg_window", inFgWin)
                 jsonByRef[ref] = json
                 elements.put(json)
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, depth + 1, inFgWin) }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { visit(it, depth + 1, inFgWin, winId) }
+            }
         }
 
         // 遍历全部交互窗口（含弹窗/对话框），跳过 IME 窗口
         val ws = exposedWindows()
-        for (w in ws) w.root?.let { visit(it, 0, w.id == fgWinId) }
-        if (count == 0) rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { visit(it, 0, true) }
+        for (w in ws) w.root?.let { visit(it, 0, w.id == fgWinId, w.id) }
+        if (count == 0) {
+            rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { visit(it, 0, true, fgWinId) }
+        }
 
         // ---- L5 OCR 融合：前台 app 树空/稀疏时自动触发（spec §5.4/§9）----
         // 骨架规则：OCR 行中心落在最小且大小同量级的 a11y 元素内 → 无语义则挂载(fused)、有语义视为重复丢弃；
@@ -491,6 +500,7 @@ class GatewayA11yService : AccessibilityService() {
             .put("blocking_overlay", hasBlockingOverlay(ws, fgWinId))
             .put("ime_visible", windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD })
             .put("system_bottom_inset", systemBottomInset())
+            .put("system_top_inset", systemTopInset())
             .put("elements", elements)
         fusionNote?.let { out.put("note", it) }
         return out
@@ -786,6 +796,32 @@ class GatewayA11yService : AccessibilityService() {
             .map { Rect().also(it::getBoundsInScreen) }
             .filter { it.bottom == h && it.width() >= (w * 0.8).toInt() }
             .map { h - it.top }
+            .filter { it in 0..(h * 0.20).toInt() }
+            .maxOrNull() ?: 0
+    }
+
+    /**
+     * 顶部系统装饰（状态栏/刘海区）的下沿，物理像素。与 [systemBottomInset] 同一套写法，
+     * 只是换成贴着屏幕**上**边的那些非应用、非输入法窗口。
+     *
+     * 存在的理由是 2026-08-09 第四跑：标题带的上沿（2% ≈ y=56）一直压在状态栏边上，
+     * 而这台 vivo 的状态栏常驻实时网速——**一个每秒都在变的字符串就坐在标题带里**。
+     * 走真实窗口几何而不是按比例猜状态栏高度：按比例写死那次（盲点安全区）偏了 130px。
+     *
+     * 取不到就返回 0，此时标题带退回原来的纯比例判定——**不比改之前更松**。
+     */
+    private fun systemTopInset(): Int {
+        val metrics = resources.displayMetrics
+        val w = metrics.widthPixels
+        val h = metrics.heightPixels
+        return windows.asSequence()
+            .filter {
+                it.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
+            }
+            .map { Rect().also(it::getBoundsInScreen) }
+            .filter { it.top == 0 && it.width() >= (w * 0.8).toInt() }
+            .map { it.bottom }
             .filter { it in 0..(h * 0.20).toInt() }
             .maxOrNull() ?: 0
     }

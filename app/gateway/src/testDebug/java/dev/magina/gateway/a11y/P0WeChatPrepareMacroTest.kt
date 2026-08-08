@@ -1132,6 +1132,10 @@ class P0WeChatPrepareMacroTest {
         bounds = P0MacroRect(centerX - 50, centerY - 25, centerX + 50, centerY + 25),
         source = source,
         confidence = confidence,
+        // 宏的用例造的都是**微信自己窗口里**的元素。2026-08-09 起有节点的元素要过一道
+        // 窗口归属（状态栏是另一个窗口，见 `SurfaceElement.windowId`），所以这里显式说清。
+        windowId = 7,
+        foregroundWindow = true,
         stage = when {
             (role == "input" && centerY < 600) || text in setOf("搜索", "取消") -> P0ElementStage.SEARCH
             centerY <= 240 -> P0ElementStage.TOOLBAR

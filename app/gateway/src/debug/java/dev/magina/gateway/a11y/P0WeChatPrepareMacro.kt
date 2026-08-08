@@ -44,7 +44,13 @@ internal data class P0MacroSnapshot(
     val blockingOverlay: Boolean = false,
     val imeVisible: Boolean = false,
     val systemBottomInset: Int = 0,
-)
+    /** 顶部系统装饰（状态栏）的下沿；标题带一律从它之下开始（2026-08-09 第四跑）。 */
+    val systemTopInset: Int = 0,
+) {
+    /** 几何上下文一次成型，宏与生产共用同一份判据时不必各自拼三个 Int（拼反了没人会红）。 */
+    val frame: SurfaceFrame
+        get() = SurfaceFrame(screenWidth, screenHeight, systemTopInset)
+}
 
 internal data class P0MacroFocus(
     /** 微信树空时，聚焦后 findFocus(FOCUS_INPUT) 仍必须给出真实节点。 */
@@ -866,18 +872,13 @@ internal class P0WeChatPrepareMacro(
     private fun conversationTitle(snapshot: P0MacroSnapshot): P0MacroElement? =
         ConversationSurfacePolicy.conversationTitle(
             elements = snapshot.elements,
-            screenWidth = snapshot.screenWidth,
-            screenHeight = snapshot.screenHeight,
+            frame = snapshot.frame,
             expectedLabel = P0_FILE_TRANSFER_ASSISTANT,
         )
 
     /** 仅用于页面识别，不用于任何点击目标；置信度门槛见 [MIN_RECOGNITION_OCR_CONFIDENCE]。 */
     private fun trustedForRecognition(element: P0MacroElement, snapshot: P0MacroSnapshot): Boolean =
-        ConversationSurfacePolicy.trustedForRecognition(
-            element = element,
-            screenWidth = snapshot.screenWidth,
-            screenHeight = snapshot.screenHeight,
-        )
+        ConversationSurfacePolicy.trustedForRecognition(element = element, frame = snapshot.frame)
 
     private fun hasTopTitle(snapshot: P0MacroSnapshot, title: String): Boolean {
         val w = snapshot.screenWidth

@@ -120,8 +120,7 @@ class SurfaceTitleReadPolicyTest {
         // 读取侧不许另写一份选取规则：这里选出来的必须就是 toolbarTitle 选出来的那一个。
         val viaPolicy = ConversationSurfacePolicy.toolbarTitle(
             ConversationSurfacePolicy.decodeElements(raw, screenHeight),
-            screenWidth,
-            screenHeight,
+            SurfaceFrame.of(raw, screenWidth, screenHeight),
         )
         assertEquals(viaPolicy, attempt.title)
     }
@@ -181,7 +180,7 @@ class SurfaceTitleReadPolicyTest {
         )
         assertEquals(
             "attempts=2,waited_ms=1420,result=resolved,resolved_at=2," +
-                "trail=no_ocr+resolved,fg=0+0,band=0+1",
+                "trail=no_ocr+resolved,fg=0+0,band=0+1,sysrej=0+0,picked=ocr",
             read.describe(),
         )
     }

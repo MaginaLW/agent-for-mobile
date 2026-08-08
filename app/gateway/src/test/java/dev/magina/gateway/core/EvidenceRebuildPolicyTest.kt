@@ -37,7 +37,8 @@ class EvidenceRebuildPolicyTest {
         readback: String?,
         channel: String = EvidenceRebuildPolicy.CHANNEL_A11Y,
         surfaceLabel: String? = "文件传输助手",
-    ) = EvidenceRebuildPolicy.judge(intent, readback, channel, surfaceLabel, norm)
+        surfaceChannel: String = channel,
+    ) = EvidenceRebuildPolicy.judge(intent, readback, channel, surfaceLabel, norm, surfaceChannel)
 
     private fun judgeOcr(readback: String?, intent: ApprovalIntent = intent()) =
         EvidenceRebuildPolicy.judge(intent, readback, EvidenceRebuildPolicy.CHANNEL_OCR, "文件传输助手", norm)
@@ -61,20 +62,46 @@ class EvidenceRebuildPolicyTest {
     }
 
     @Test
-    fun `a different conversation is a mismatch named in baseline order`() {
-        val reason = (judge(readback = text, surfaceLabel = "张三") as EvidenceRebuild.Mismatch).reason
+    fun `a title we cannot relate to the approved label is unverified, never an accusation`() {
+        // **2026-08-09 第四跑：这条用例此前钉的是相反的行为。**
+        // 用户全程没换过会话，网关把状态栏上每秒都在跳的实时网速读成了标题，
+        // 于是告诉他「目标会话与已批准的不符：文件传输助手 → 7.70KB/s」。
+        //
+        // 判别式是「我能不能证明这是读错了」。标题通道**结构上给不出正证据**：带里可能
+        // 同时站着多个候选、可能混进别的窗口、OCR 还会漏识多识。读回与已批准标签毫无关系时，
+        // **更可能是我读错了，而不是他换了会话**——两者在这条通道上分不开，
+        // 而分不开的两种处境不许长成同一个名字，更不许挑那个指责用户的名字。
+        val result = judge(readback = text, surfaceLabel = "7.70KB/s")
 
-        assertTrue(reason, reason.contains("目标会话与已批准的不符"))
-        assertTrue(reason, reason.indexOf("文件传输助手") < reason.indexOf("张三"))
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
+        val reason = (result as EvidenceRebuild.Unverified).reason
+        assertTrue(reason, reason.contains("7.70KB/s"))
+        assertTrue(reason, reason.contains("文件传输助手"))
+        // 那句话里**不许出现"你换了会话"这个断言**。
+        assertTrue(reason, reason.contains("不等于你换了会话"))
+    }
+
+    @Test
+    fun `the surface check never produces a mismatch on either channel`() {
+        // 这一条比上面那条更强：**不是"这个例子不判 Mismatch"，是标题这一处根本不产出它。**
+        // 只钉一个例子的话，下次有人为某个"看起来能确证"的情形加回 Mismatch 分支，
+        // 用例照样全绿——而那正是同一个伤害的下一次发作。
+        for (label in listOf("7.70KB/s", "张三", "微信", "0.10 KB/s", "▲ 12:04")) {
+            for (channel in listOf(EvidenceRebuildPolicy.CHANNEL_A11Y, EvidenceRebuildPolicy.CHANNEL_OCR)) {
+                val result = judge(readback = text, surfaceLabel = label, surfaceChannel = channel)
+                assertTrue("$channel/$label → $result", result !is EvidenceRebuild.Mismatch)
+            }
+        }
     }
 
     @Test
     fun `conversation is checked before content`() {
-        // 内容对不对，只有在"还在同一个会话"成立之后才有意义。会话都换了还去报内容摘要，
+        // 内容对不对，只有在"还在同一个会话"成立之后才有意义。会话都判不了还去报内容摘要，
         // 会把现场引到错误的方向。
-        val reason = (judge(readback = "别的内容", surfaceLabel = "张三") as EvidenceRebuild.Mismatch).reason
+        val result = judge(readback = "别的内容", surfaceLabel = "张三")
+        val reason = (result as EvidenceRebuild.Unverified).reason
 
-        assertTrue(reason, reason.contains("目标会话"))
+        assertTrue(reason, reason.contains("已批准会话"))
         assertTrue(reason, !reason.contains("内容摘要"))
     }
 
@@ -225,13 +252,14 @@ class EvidenceRebuildPolicyTest {
     }
 
     @Test
-    fun `ocr title that shares nothing with the approved label is a mismatch`() {
-        // 互不包含才是"能确证是另一个会话"的正证据——这条是 backlog §8 否决选项 B 的理由所在：
-        // 包名一致而标题不校验，等于可能把已批准的内容发进另一个会话。
+    fun `ocr title that shares nothing with the approved label still blocks, but as unverified`() {
+        // **它仍然一步都不放行**——backlog §8 否决选项 B 的理由（包名一致而标题不校验，
+        // 等于可能把已批准的内容发进另一个会话）一个字没变。变的只是那句话与错误码：
+        // 从「你换了会话」(`E_STALE_REF`) 变成「我没敢认」(`E_VERIFY_FAIL`)。
         val result = judgeTitleOcr("微信")
 
-        assertTrue(result.toString(), result is EvidenceRebuild.Mismatch)
-        assertTrue((result as EvidenceRebuild.Mismatch).reason.contains("文件传输助手"))
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("文件传输助手"))
     }
 
     @Test
@@ -255,10 +283,14 @@ class EvidenceRebuildPolicyTest {
 
     @Test
     fun `surface channel defaults to the content channel`() {
-        // 不传 surfaceChannel 时行为与题六之前一致，既有调用方不受影响。
-        val result = judge(readback = text, surfaceLabel = "文件传输助手8")
+        // 不传 surfaceChannel 时跟随内容通道：这里内容是 a11y，所以标题也按 a11y 的
+        // 逐位相等要求——「文件传输助手8」过不了，于是判不了（不是 Mismatch，见上面那两条）。
+        // 反过来若默认跟成了 OCR，这个尾随噪声会被宽松匹配放过去，两者差别就在这一条上。
+        val strict = judge(readback = text, surfaceLabel = "文件传输助手8")
+        assertTrue(strict.toString(), strict is EvidenceRebuild.Unverified)
 
-        assertTrue(result.toString(), result is EvidenceRebuild.Mismatch)
+        val loose = judge(readback = text, surfaceLabel = "文件传输助手8", surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR)
+        assertTrue(loose.toString(), loose is EvidenceRebuild.Rebuilt)
     }
 
     @Test

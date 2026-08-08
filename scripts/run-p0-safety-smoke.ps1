@@ -1044,11 +1044,18 @@ function Get-P0SurfaceTitleReadRecord {
     "第一次就读到"与"重试三次才读到"分不开，下次它抖起来照样两眼一抹黑。
 
     `trail` 逐次列结论：各次不同 = 时机问题（有界重试能救）；逐次相同 = 通道问题（得换通道）。
+
+    `sysrej` 是 2026-08-09 第四跑加的：**标题带里有几个候选因为不属于前台应用窗口被挡掉**。
+    那一跑网关把状态栏上每秒都在跳的实时网速 `7.70KB/s` 当成了会话标题，并据此告诉用户
+    "你换了会话"——**而用户全程没动过**。这一栏非零就是"带里站着别的窗口"的直接证据，
+    它是个纯数字，所以能进 note（候选清单含界面文本，只进错误信息）。
     #>
     param([Parameter(Mandatory)][AllowNull()]$Audit)
     $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    # 每一段都排除分隔符，**不靠"它现在是最后一个"**——`band=` 一周前还是串尾，
+    # 这次加 `sysrej`/`picked` 就把它变成了串中的（同一形态见 harness.md 那张三次对照表）。
     $matched = [regex]::Match(
-        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*)')
+        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*),sysrej=(?<sysrej>[^;,\s]*),picked=(?<picked>[^;,\s]*)')
     if (-not $matched.Success) {
         return [ordered]@{ reported = $false; detail = '审计 note 里没有 title_read 记录' }
     }
@@ -1061,6 +1068,10 @@ function Get-P0SurfaceTitleReadRecord {
         trail = [string]$matched.Groups['trail'].Value
         fg_elements = [string]$matched.Groups['fg'].Value
         band_elements = [string]$matched.Groups['band'].Value
+        # 逐次的"被别的窗口占了几个候选"。非零 → 标题带里混进了系统窗口。
+        system_window_rejects = [string]$matched.Groups['sysrej'].Value
+        # 最终选中的那个来自哪条通道，决定后面按 a11y 严格比还是 OCR 宽松比。
+        picked_source = [string]$matched.Groups['picked'].Value
     }
 }
 
