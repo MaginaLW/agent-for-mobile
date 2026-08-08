@@ -34,12 +34,10 @@ function Get-ExecutorProfile {
     }
 }
 
-# gateway MCP 客户端配置里 per-server `timeout` 的下限（毫秒）。
-# 取 420000 的算式：决定期 90s + 等前台预算 300s + 宏与输入开销 ~30s ≈ 420s。
-# **这只解决第 1 层（60s 首字节计时器）**；第 2 层（300s 空闲看门狗）靠网关在阻塞期间
-# 发 `notifications/progress` 心跳解决，两层缺一都会在真机上表现为同一个"客户端超时"。
-# 三层天花板的实测见 docs/knowledge/brain/harness.md。
-$GatewayMcpMinTimeoutMs = 420000
+# 下限、URL、配置构造器只有一份定义，**闸门与产出路径共用**（gateway-mcp-config.ps1）。
+# 2026-08-08 的翻车就是这里各写一份造成的：闸门加了 `timeout`，而 provision 那条产出路径
+# 没跟着写，且它每轮覆盖在前、校验在后。
+. (Join-Path $PSScriptRoot 'gateway-mcp-config.ps1')
 
 function Get-GatewayConfigProblem {
     [CmdletBinding()]
@@ -64,7 +62,7 @@ function Get-GatewayConfigProblem {
     if ([string]$gateway.type -cne 'http') {
         return 'gateway MCP 私密配置的 type 必须为 http。'
     }
-    if ([string]$gateway.url -cne 'http://127.0.0.1:8848/mcp') {
+    if ([string]$gateway.url -cne $GatewayMcpUrl) {
         return 'gateway MCP 私密配置的 URL 必须为本机 127.0.0.1:8848/mcp。'
     }
 

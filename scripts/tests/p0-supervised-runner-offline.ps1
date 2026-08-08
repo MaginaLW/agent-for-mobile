@@ -155,6 +155,10 @@ function New-Fixture {
     $fixtureRunner = Join-Path $repo 'scripts\run-p0-safety-smoke.ps1'
     Copy-Item -LiteralPath $SourceRunner -Destination $fixtureRunner
     Copy-Item -LiteralPath $SourceProvisioner -Destination (Join-Path $repo 'scripts\lib\p0-device-provision.ps1')
+    # provisioner 点源它：gateway MCP 配置的下限与构造器只有一份定义（gateway-mcp-config.ps1）。
+    # **fixture 漏拷 = 每条腿在点源那一步就挂**，症状与被测逻辑无关。
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\gateway-mcp-config.ps1') `
+        -Destination (Join-Path $repo 'scripts\lib\gateway-mcp-config.ps1')
     if ($Scenario -in @('token_temp_cleanup_failure','restore_temp_cleanup_failure')) {
         $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
         $faultHook = @'

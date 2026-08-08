@@ -2,6 +2,9 @@
 
 Set-StrictMode -Version 3.0
 
+# gateway MCP 私密配置的定义（下限、URL、构造器）只有一份，写入方与闸门共用。
+. (Join-Path $PSScriptRoot 'gateway-mcp-config.ps1')
+
 $script:P0PackageName = 'dev.magina.gateway'
 $script:P0AccessibilityComponent = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
 # vivo 的 dumpsys accessibility 绑定区段只显示 Service[label=...]，不含组件名；label 与 manifest application label 同源。
@@ -185,15 +188,10 @@ function Set-P0GatewayConfigToken {
 
     if ($Token -notmatch '^[A-Za-z0-9._-]{8,256}$') { throw '私密配置同步失败。' }
     $configPath = [string]$Session.ConfigPath
-    $config = [ordered]@{
-        mcpServers = [ordered]@{
-            gateway = [ordered]@{
-                type = 'http'
-                url = 'http://127.0.0.1:8848/mcp'
-                headers = [ordered]@{ Authorization = "Bearer $Token" }
-            }
-        }
-    }
+    # **配置长什么样只有一份定义**（scripts/lib/gateway-mcp-config.ps1）。
+    # 这里原先自己拼一份，于是 2026-08-08 给 `timeout` 加闸门时漏掉了这条产出路径——
+    # provision 每轮覆盖、dispatch 随后校验，四腿在第 1 腿开跑前就被自己的闸门拒掉。
+    $config = New-GatewayMcpConfigObject -Token $Token
     $directory = Split-Path $configPath -Parent
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $temporary = Join-Path $directory ('.gateway-mcp.' + [guid]::NewGuid().ToString('N') + '.tmp')

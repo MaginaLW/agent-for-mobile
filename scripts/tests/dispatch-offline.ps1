@@ -214,6 +214,13 @@ try {
         '测试设施错误：fixture 缺少 dispatch profile helper。'
     . $fixtureProfileHelper
 
+    # provisioner 也要加载：那条"把写和查接起来"的用例要调它真正的写入函数，
+    # **不是复刻一份等价实现**——复刻的话，写入路径改了用例照样绿，等于白写。
+    $fixtureProvisioner = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
+    Assert-True (Test-Path -LiteralPath $fixtureProvisioner -PathType Leaf) `
+        '测试设施错误：fixture 缺少 provisioner。'
+    . $fixtureProvisioner
+
     $fixtureConfigDir = Join-Path $RepoRoot 'configs\offline-fixtures'
     New-Item -ItemType Directory -Path $fixtureConfigDir -Force | Out-Null
     $testBearer = 'fixture-bearer-value-must-never-leak'
@@ -447,6 +454,44 @@ exit /b 97
             Assert-NotMatches $problem ([regex]::Escape($testBearer))
         }
         finally { if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Force } }
+    }
+
+    Test-Case 'provision 实际写出的配置必须能通过闸门（把"写"和"查"接起来的那一条）' {
+        # **这条用例是 2026-08-08 那次翻车的直接产物，注释写长一点值得。**
+        #
+        # 当时给 `timeout` 加了开跑前闸门，`Get-GatewayConfigProblem` 有用例、
+        # `Set-P0GatewayConfigToken` 也有它自己的路径——**两个函数各自都对，
+        # 缺的是把它们接起来的这一条**。而 `-Provision` 每轮都会覆盖那份配置
+        # （覆盖在前、校验在后），于是四腿在第 1 腿开跑前被自己的闸门拒掉，每轮复现，
+        # 且 check.ps1 五项全绿一点都没拦住。
+        #
+        # **这条用例对将来新增的任何闸门字段都自动生效**：它比"维护一张字段清单"结实，
+        # 因为它不依赖有人记得同步那张清单。
+        $probeDir = Join-Path ([IO.Path]::GetTempPath()) "gw-prov-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+        try {
+            $configPath = Join-Path $probeDir 'gateway-mcp.json'
+            $session = [pscustomobject]@{
+                ConfigPath = $configPath
+                PrivateTemporaryFiles = [Collections.Generic.List[string]]::new()
+                CleanupIssues = [Collections.Generic.List[string]]::new()
+            }
+            Set-P0GatewayConfigToken -Session $session -Token $testBearer
+
+            $problem = Get-GatewayConfigProblem -ConfigPath $configPath
+            Assert-True ($null -eq $problem) "provision 写出的配置被闸门拒了：$problem"
+
+            # 顺带把主会话点名的穷举核对钉住：闸门查的每个字段，产出路径都真的写了。
+            $written = (Get-Content -LiteralPath $configPath -Raw -Encoding utf8 |
+                ConvertFrom-Json).mcpServers.gateway
+            foreach ($field in $GatewayMcpGatedFields) {
+                Assert-True ($null -ne $written.PSObject.Properties[$field]) `
+                    "闸门校验 $field，而 provision 写出的配置里没有它。"
+            }
+            Assert-True ($written.timeout -eq $GatewayMcpMinTimeoutMs) `
+                "provision 必须从同一个常量取下限，实际写出 $($written.timeout)"
+        }
+        finally { Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
     Test-Case '模板里的 gateway MCP 示例自己就满足那条下限' {
