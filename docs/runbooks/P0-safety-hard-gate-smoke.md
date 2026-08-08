@@ -240,6 +240,13 @@ runner 断言 `token=yes` 且 `beats ≥ 1`。**不核这一条的话，"客户�
 > 两层缺一都会表现为同一个"客户端超时"。详见 [brain/harness.md](../knowledge/brain/harness.md)。
 > **进度通知不改 trace 形态**（同轮实测：`--output-format stream-json` 里一条记录都不产生），
 > 所以严格调用签名判据不受影响。
+>
+> ⚠️ **流式只对带 `Accept: text/event-stream` 的请求生效**（2026-08-08 第二跑的补丁）。
+> 第一版无条件回 SSE，把两个**直连 HTTP 的只读探针**打死了——`data:` 的第一个字符顶翻
+> 它们的 JSON 解析器，连锁成"marker 不在合法消息区"，**Allow 腿判死而消息其实已经发出去了**，
+> 还顺带让零 token 预检不可用、teardown 误报 `unverified`。现在按 `Accept` 协商，
+> 两个探针也显式声明要整包 JSON。**现场若再看到这一族症状（预检不可用 + teardown
+> unverified + marker 判不在消息区 同时出现），先怀疑响应帧，不是怀疑微信。**
 
 **新腿为什么需要"重建证据"，以及它的三种结局（现场按这个判）：**
 

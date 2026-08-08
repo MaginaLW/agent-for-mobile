@@ -40,6 +40,44 @@ object NoHeartbeat : CallHeartbeat {
 }
 
 /**
+ * `tools/call` 到底回**流式 SSE** 还是**整包 JSON**：按客户端的 `Accept` 协商。
+ *
+ * **这条判据是 2026-08-08 第二跑烧出来的**：改 SSE 时我让 `tools/call` **无条件**回
+ * `text/event-stream`，而仓库里还有两个**直连 HTTP 的只读探针**
+ * （`p0-probe-region-precheck.ps1` / `p0-foreground-bootstrap-check.ps1`）把响应体当整包
+ * JSON 解析——`data: {...}` 的第一个字符 `d` 当场把解析器打死，连锁成"marker 不在合法
+ * 消息区"，Allow 腿在第 1 腿判死，**而消息其实已经发出去了**。
+ *
+ * **改一个共享输出格式时，必须先穷举它的消费者。** 这是两天内同一形状的第三次
+ * （闸门与产出各写一份 · fixture 少拷文件 · 传输帧与直连消费者），三次都是
+ * **两个都对、接起来不对**。
+ *
+ * **按 `Accept` 协商之所以成立，是量出来的不是推出来的**：claude 2.1.206 的 MCP 客户端
+ * 在 `tools/call` 上实测发的是 `application/json, text/event-stream`（四次独立观测）。
+ * 若它哪天不发这个头，协商会把它切回非流式、心跳随之消失、300s 空闲窗当场回来——
+ * **而那次的失败形态与批次 4 首跑一模一样（约 90s 断开、无错误码），最难认**。
+ * 所以真实客户端那条 Accept 被写成用例钉住：它变了，用例先红，而不是真机先红。
+ */
+object AcceptNegotiation {
+
+    /** 实测：claude 2.1.206 的 MCP 客户端在 `tools/call` 上发的就是这一串。 */
+    const val MEASURED_CLIENT_ACCEPT = "application/json, text/event-stream"
+
+    /** 直连只读探针显式声明"我要整包 JSON"，不靠"它恰好没发 Accept"这种巧合。 */
+    const val PLAIN_JSON_ACCEPT = "application/json"
+
+    private const val EVENT_STREAM = "text/event-stream"
+
+    /**
+     * 缺省（没有 `Accept` 头）**回非流式**。fail-safe 方向选这一边的理由：
+     * 猜错成流式会打死一个只会解 JSON 的老实客户端（今天这次），
+     * 猜错成非流式只是让长调用退回没有心跳的老行为——后者仍会失败，但不会把别人的解析器打死。
+     */
+    fun wantsEventStream(accept: String?): Boolean =
+        accept != null && accept.split(',').any { it.substringBefore(';').trim().equals(EVENT_STREAM, true) }
+}
+
+/**
  * 心跳间隔与客户端空闲窗的关系。
  *
  * **两个数写在一起并用断言绑住，而不是各放一处**：它们一旦被人分别改动，失效方式是

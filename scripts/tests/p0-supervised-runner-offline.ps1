@@ -874,6 +874,44 @@ exit $exit
     }
 }
 
+function Start-MockGateway {
+    <#
+    起一台"只把响应帧发对"的最小网关，供直连探针的连接性用例用。
+    端口取 0 让系统分配再关掉拿号——固定端口会在并行分片之间打架。
+    #>
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "p0-mockgw-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $configPath = Join-Path $dir 'gateway-mcp.json'
+    @{ mcpServers = @{ gateway = [ordered]@{
+        type = 'http'; url = 'http://127.0.0.1:8848/mcp'; timeout = 420000
+        headers = @{ Authorization = 'Bearer mock-gateway-token' } } } } |
+        ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8
+    $logPath = Join-Path $dir 'mock.log'
+    $process = Start-Process -PassThru -WindowStyle Hidden -FilePath $PwshPath -ArgumentList @(
+        '-NoProfile', '-File', (Join-Path $SourceRepoRoot 'scripts\tests\lib\mock-gateway-frames.ps1'),
+        '-Port', "$port", '-LogPath', $logPath
+    )
+    # 等它真的听起来再返回：没等就发请求，失败会被读成"探针解析不了"，方向正好反。
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path -LiteralPath $logPath) -and (Get-Content -LiteralPath $logPath -Raw) -like '*listening*') { break }
+        Start-Sleep -Milliseconds 100
+    }
+    return [pscustomobject]@{ Port = $port; ConfigPath = $configPath; Dir = $dir; Process = $process }
+}
+
+function Stop-MockGateway {
+    param($Probe)
+    if ($null -ne $Probe.Process -and -not $Probe.Process.HasExited) {
+        Stop-Process -Id $Probe.Process.Id -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $Probe.Dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-FixtureRunner {
     param(
         $Fixture,
@@ -1258,6 +1296,58 @@ try {
         $result = Invoke-FixtureRunner (New-Fixture stale_no_wait_note) @('Stale')
         Assert-True ($result.ExitCode -ne 0) '缺等待记录必须判失败。'
         Assert-Contains $result.Text '没有 foreground_wait 记录'
+    }
+
+    # ——— 直连只读探针 × 网关传输帧（2026-08-08 那次翻车的补丁） ———
+    #
+    # 那一跑网关把 tools/call 改成**无条件 SSE**，而这两个探针把响应体当整包 JSON 解析，
+    # `data: {...}` 的第一个字符 `d` 当场顶翻解析器 → `Get-P0InputBarTop` 回 0 →
+    # "marker 不在合法消息区" → Allow 腿在第 1 腿判死，**而消息其实已经发出去了**。
+    # **check.ps1 五项全绿放它过去**：离线假网关一直只回纯 JSON，
+    # **没有任何一处把探针的 HTTP 解析器与真实传输帧接起来**。下面两条就是那根线。
+
+    Test-Case '直连只读探针能解析网关的非流式响应帧（正向）' {
+        $probe = Start-MockGateway
+        try {
+            $result = & $PwshPath -NoProfile -File (Join-Path $SourceRepoRoot 'scripts\lib\p0-probe-region-precheck.ps1') `
+                -ConfigPath $probe.ConfigPath -Port $probe.Port -TimeoutSec 5 -ReadyRetries 1 -NotReadyRetries 1 2>&1
+            Assert-True ($LASTEXITCODE -eq 0) "真实探针应解析成功并放行：`n$($result -join "`n")"
+            Assert-Contains ($result -join "`n") '"empty":true'
+        }
+        finally { Stop-MockGateway $probe }
+    }
+
+    Test-Case '带 text/event-stream 的请求仍然拿到流式帧（反向，更要紧）' {
+        # **只验正向等于没验**：把 SSE 整个关掉也能让正向变绿，
+        # 而那会悄悄把 300s 空闲窗天花板放回来——失败形态与批次 4 首跑一模一样，最难认。
+        $probe = Start-MockGateway
+        try {
+            $client = [Net.Http.HttpClient]::new()
+            try {
+                $request = [Net.Http.HttpRequestMessage]::new(
+                    [Net.Http.HttpMethod]::Post, "http://127.0.0.1:$($probe.Port)/mcp")
+                $request.Headers.Accept.ParseAdd('application/json, text/event-stream')
+                $request.Content = [Net.Http.StringContent]::new(
+                    '{"jsonrpc":"2.0","id":"x","method":"tools/call","params":{"name":"p0_probe_region_state","arguments":{}}}',
+                    [Text.Encoding]::UTF8, 'application/json')
+                $response = $client.Send($request)
+                $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                Assert-True ($response.Content.Headers.ContentType.MediaType -ceq 'text/event-stream') `
+                    "带 event-stream 的请求必须拿到流式帧，实际 $($response.Content.Headers.ContentType.MediaType)"
+                Assert-True ($text.StartsWith('data: ')) "流式帧必须是 SSE data 行，实际开头：$($text.Substring(0,[Math]::Min(20,$text.Length)))"
+            }
+            finally { $client.Dispose() }
+        }
+        finally { Stop-MockGateway $probe }
+    }
+
+    Test-Case '两个直连探针都显式声明了它们要非流式' {
+        # 不靠"它恰好没发 Accept"这种巧合：协商判据一旦改动，显式声明才让它们仍然确定。
+        # C 道已穷举：全仓直连 tools/call 的只有这两处（health probe 走 ping，不受影响）。
+        foreach ($relative in @('scripts\lib\p0-probe-region-precheck.ps1', 'scripts\p0-foreground-bootstrap-check.ps1')) {
+            $source = Get-Content -LiteralPath (Join-Path $SourceRepoRoot $relative) -Raw -Encoding utf8
+            Assert-Contains $source "Accept.ParseAdd('application/json')"
+        }
     }
 
     Test-Case 'Reentry 腿的停留时长不接受越界值' {

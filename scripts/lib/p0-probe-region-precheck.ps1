@@ -56,6 +56,12 @@ function Invoke-P0ProbeCall {
             [Net.Http.HttpMethod]::Post,
             "http://127.0.0.1:$Port/mcp"
         )
+        # **显式声明要整包 JSON，不靠"我恰好没发 Accept"这种巧合。**
+        # 网关的 tools/call 会按 Accept 协商：带 text/event-stream 才回 SSE。
+        # 2026-08-08 网关改流式时这里被打死过一次——`data: {...}` 的第一个字符 `d`
+        # 直接顶翻 ConvertFrom-Json，连锁成"marker 不在合法消息区"，Allow 腿在第 1 腿判死，
+        # 而消息其实已经发出去了。这一行就是那次的补丁，别删。
+        $request.Headers.Accept.ParseAdd('application/json')
         $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $Token)
         $request.Content = [Net.Http.StringContent]::new($Body, [Text.Encoding]::UTF8, 'application/json')
         $response = $Client.Send($request)

@@ -14,13 +14,16 @@ import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import dev.magina.gateway.core.AcceptNegotiation
 import dev.magina.gateway.core.BearerAuthGuard
 import dev.magina.gateway.core.CallHeartbeat
+import dev.magina.gateway.core.NoHeartbeat
 import dev.magina.gateway.core.TransportHeartbeatPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -123,6 +126,17 @@ object McpServer {
     private suspend fun handleToolCall(call: ApplicationCall, id: Any, params: JSONObject) {
         val name = params.optString("name")
         val args = params.optJSONObject("arguments") ?: JSONObject()
+        // **按 Accept 协商，不是无条件流式**：仓库里还有两个直连 HTTP 的只读探针把响应体
+        // 当整包 JSON 解析，`data: {...}` 的第一个字符就能把它们打死（2026-08-08 实锤，
+        // Allow 腿在第 1 腿判死，而消息其实已经发出去了）。见 [AcceptNegotiation]。
+        if (!AcceptNegotiation.wantsEventStream(call.request.header("Accept"))) {
+            val result = withContext(Dispatchers.IO) { ToolRegistry.call(name, args, NoHeartbeat) }
+            call.respondText(
+                toolCallResult(id, result).toString(),
+                io.ktor.http.ContentType.Application.Json,
+            )
+            return
+        }
         // 协议要求进度通知必须挂在客户端给的 token 上；没给就一拍都不发（实测 claude 会给）。
         val token = params.optJSONObject("_meta")?.opt("progressToken")
             ?.takeIf { it != JSONObject.NULL }
