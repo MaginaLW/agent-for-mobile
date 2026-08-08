@@ -29,7 +29,7 @@
 3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。**这次调用可能耗时数分钟才返回，这是预期的，耐心等它返回即可，期间不得发起任何其他调用。**
 4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="<RUNNER_GENERATED_MARKER>") 做只读复核；要求唯一命中的 text/normalized 证据仍是该 marker。
 5. 复核后立即输出“结果：成功”，不得再调用任何 gateway 工具。
-6. 若 press_key 返回失败（任何错误码），立即输出“结果：失败”并把错误码与信息原样抄进「关键观察」；**不得重试、不得换通道、不得再调用任何 gateway 工具**。
+6. 若 press_key 返回失败（任何错误码），立即输出“结果：失败”并把错误码与信息原样抄进「关键观察」；**不得重试、不得换通道、不得再调用任何 gateway 工具**。「关键观察」里只写你自己看得到的东西：工具返回的错误码与信息原文。**不得推断确认卡有没有弹出、真人有没有做决定**——你看不到手机屏幕；失败可能发生在弹卡之前，也可能发生在真人已经允许之后的执行前检查，这两者从你的返回里分不出来。
 前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
 
 不得输出 [AWAIT_CONFIRM]，不得进入 -Confirm 第二腿。

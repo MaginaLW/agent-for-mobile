@@ -987,8 +987,13 @@ function Get-P0ForegroundWaitRecord {
     #>
     param([Parameter(Mandatory)][AllowNull()]$Audit)
     $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    # **末位字段必须在分隔符处停住**：`note` 是一条 `;` 串，`foreground_wait=...` 后面还接着
+    # `;context=rechecked;sse_heartbeat=...`。原来的 `\S*` 贪吃到行尾，把 last_package 记成了
+    # `com.tencent.mm;context=rechecked;sse_heartbeat=beats=1,token=yes`——**后两段因此
+    # 一个都没成为独立字段**，现场只能自己去审计 note 里正则捞（2026-08-08 第三跑实锤）。
+    # 教训不是"这条正则写错了"，而是**共享串的末位字段天然会吃掉下一段**，写的时候就得排除分隔符。
     $matched = [regex]::Match(
-        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),budget_ms=(?<budget>\d+),result=(?<result>[a-z]+),last=(?<last>\S*)')
+        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),budget_ms=(?<budget>\d+),result=(?<result>[a-z]+),last=(?<last>[^;,\s]*)')
     if (-not $matched.Success) {
         return [ordered]@{ reported = $false; detail = '审计 note 里没有 foreground_wait 记录' }
     }
@@ -1001,6 +1006,61 @@ function Get-P0ForegroundWaitRecord {
         budget_ms = [long]$matched.Groups['budget'].Value
         result = [string]$matched.Groups['result'].Value
         last_package = [string]$matched.Groups['last'].Value
+    }
+}
+
+function Get-P0TransportHeartbeatRecord {
+    <#
+    传输层心跳（`sse_heartbeat=beats=N,token=yes|no`）。
+
+    **为什么它不该只属于 Reentry 腿**：它原先只在那一腿被断言、其它腿连 manifest 都不落。
+    可 2026-08-08 之后它是**传输层唯一的机械取证**——"客户端 300s 空闲窗把调用砍了"与
+    "判据把它挡下了"在现场分不开，全靠这一栏。Allow 腿 `beats=0` 同样是有意义的事实
+    （4ms 就 reached，一拍都不该发），落盘才看得出"零拍是自洽的"还是"心跳没接上"。
+
+    解析只有这一份，判据与落盘共用（同 `Get-P0ForegroundWaitRecord`）。
+    #>
+    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    $matched = [regex]::Match($note, 'sse_heartbeat=beats=(?<beats>\d+),token=(?<token>yes|no)')
+    if (-not $matched.Success) {
+        return [ordered]@{ reported = $false; detail = '审计 note 里没有 sse_heartbeat 记录' }
+    }
+    return [ordered]@{
+        reported = $true
+        beats = [int]$matched.Groups['beats'].Value
+        token = [string]$matched.Groups['token'].Value
+    }
+}
+
+function Get-P0SurfaceTitleReadRecord {
+    <#
+    执行前重读会话标题那一步的逐次痕迹（`title_read=attempts=..,trail=..`，
+    `SurfaceTitleRead.describe`，离线用例钉住格式）。
+
+    2026-08-08 第三跑三次终态**逐字相同**——「目标会话标题读不回来（channel=ocr）」——
+    而那句话里什么都没有：截图抛错 / 这一帧没跑 OCR / 标题带空 / 全被门槛挡掉，四种处境
+    折成同一个结论。这一栏就是把它们分开的东西，**读成功的腿也要落**：只在失败时记的话，
+    "第一次就读到"与"重试三次才读到"分不开，下次它抖起来照样两眼一抹黑。
+
+    `trail` 逐次列结论：各次不同 = 时机问题（有界重试能救）；逐次相同 = 通道问题（得换通道）。
+    #>
+    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    $matched = [regex]::Match(
+        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*)')
+    if (-not $matched.Success) {
+        return [ordered]@{ reported = $false; detail = '审计 note 里没有 title_read 记录' }
+    }
+    return [ordered]@{
+        reported = $true
+        attempts = [int]$matched.Groups['attempts'].Value
+        waited_ms = [long]$matched.Groups['waited'].Value
+        result = [string]$matched.Groups['result'].Value
+        resolved_at = [int]$matched.Groups['at'].Value
+        trail = [string]$matched.Groups['trail'].Value
+        fg_elements = [string]$matched.Groups['fg'].Value
+        band_elements = [string]$matched.Groups['band'].Value
     }
 }
 
@@ -1195,17 +1255,25 @@ function Assert-P0LegSemantics {
             Assert-P0ReentryForegroundWait -Wait (Get-P0ForegroundWaitRecord -Audit $audit) -DwellSec $ReentryDwellSec
             # 传输层那条心跳有没有真的发出去。**不看这一条的话，"客户端 300s 空闲窗把调用砍了"
             # 与"判据把它挡下了"在现场分不开**——2026-08-08 已经这样烧过一轮真机。
-            $beat = [regex]::Match([string]$audit.note, 'sse_heartbeat=beats=(?<beats>\d+),token=(?<token>yes|no)')
-            if (-not $beat.Success) {
+            $beat = Get-P0TransportHeartbeatRecord -Audit $audit
+            if (-not $beat.reported) {
                 throw ('Reentry 腿审计里没有 sse_heartbeat 记录：装的是不带流式心跳的旧 APK，' +
                     '这一腿撑不过客户端 300s 空闲窗。')
             }
-            if ($beat.Groups['token'].Value -cne 'yes') {
+            if ([string]$beat.token -cne 'yes') {
                 throw '客户端没给 progressToken，网关一拍心跳都发不出去（协议要求进度通知挂在 token 上）。'
             }
-            if ([int]$beat.Groups['beats'].Value -lt 1) {
+            if ([int]$beat.beats -lt 1) {
                 throw ('Reentry 腿一拍心跳都没发：这条腿阻塞远超一个心跳间隔，' +
                     '零拍说明流式心跳没接上，长调用只是这次侥幸没被砍。')
+            }
+            # 执行前重读会话标题的痕迹。**这条腿必然走重建**——切走再回来，IME 会话身份必变、
+            # 旧输入证据取不出来。所以缺这一段只有两种可能：装的是旧 APK，或者压根没走重建。
+            # 后者更要命：那意味着这条腿并没有验到"批准后重建证据"，**而它看起来是绿的**。
+            $title = Get-P0SurfaceTitleReadRecord -Audit $audit
+            if (-not $title.reported) {
+                throw ('Reentry 腿审计里没有 title_read 记录：要么装的是旧 APK，要么这一腿' +
+                    '根本没走重建通道——后者说明它没验到自己该验的东西，绿也是假绿。')
             }
         }
     }
@@ -1646,8 +1714,15 @@ try {
         $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
         # 同上：**判据之前先落证据**。批次 4 新腿正是死在下面那句 Assert 上，于是等前台那段
         # 数字一个都没进 manifest——而它恰恰是那一腿唯一有价值的产出。
-        $foregroundWait = Get-P0ForegroundWaitRecord -Audit $(if ($audit.Count -gt 0) { $audit[0] } else { $null })
+        $auditHead = if ($audit.Count -gt 0) { $audit[0] } else { $null }
+        $foregroundWait = Get-P0ForegroundWaitRecord -Audit $auditHead
         $activeLegRecord['foreground_wait'] = $foregroundWait
+        # 心跳与标题读取同样**每腿都落**，且同样排在判据之前。两条都是这轮才升级成
+        # "传输层/取证链的关键证据"，而它们此前一个只在 Reentry 腿断言、一个根本不存在。
+        $sseHeartbeat = Get-P0TransportHeartbeatRecord -Audit $auditHead
+        $activeLegRecord['sse_heartbeat'] = $sseHeartbeat
+        $titleRead = Get-P0SurfaceTitleReadRecord -Audit $auditHead
+        $activeLegRecord['title_read'] = $titleRead
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256 `
@@ -1775,6 +1850,14 @@ try {
             # 等前台那段同样进 manifest（成功腿也要）：它是新腿唯一新增的机械证据，
             # 只活在审计 note 里等于每次都要有人去捞。
             foreground_wait = $foregroundWait
+            # 传输层心跳（批次 4 第三跑起）。**每腿都落，不只 Reentry**：它是"调用有没有被
+            # 客户端 300s 空闲窗砍掉"的唯一机械证据，而 Allow 腿的 `beats=0` 是与 4ms 就
+            # reached 自洽的正常值——只有落了盘才看得出零拍是自洽还是心跳压根没接上。
+            sse_heartbeat = $sseHeartbeat
+            # 执行前重读会话标题的逐次痕迹（批次 4 第三跑逼出来）。**`trail` 是这一栏的核心**：
+            # 各次结论不同 = 时机问题；逐次相同 = 通道问题。三跑逐字相同的终态就是因为
+            # 这一栏当时不存在，四种完全不同的处境被折成了同一句「读不回来」。
+            title_read = $titleRead
             # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
             # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
             # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），

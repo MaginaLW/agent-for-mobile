@@ -49,8 +49,8 @@ class GatewayA11yService : AccessibilityService() {
     companion object {
         private const val TAG = "gateway-a11y"
 
-        /** 前台 app 贡献可读元素低于此数 → 视为树空/稀疏，snapshot 自动融合 OCR（spec §5.4，S1 微信实锤）。 */
-        private const val FUSE_FG_THRESHOLD = 5
+        /** 见 [OCR_FUSION_FG_THRESHOLD]（下沉到纯策略文件，与标题读取的分因共用同一个数）。 */
+        private const val FUSE_FG_THRESHOLD = OCR_FUSION_FG_THRESHOLD
 
         /** 覆盖自家确认卡收起后系统重新激活 App 窗口的那几帧；总上限 ~320ms，只在没有活动应用窗口时才付。 */
         private const val FOREGROUND_SETTLE_ATTEMPTS = 5
@@ -516,19 +516,35 @@ class GatewayA11yService : AccessibilityService() {
      * 走 [forceFreshVision] 而不是 [snapshot]：要的是**此刻**的屏幕，缓存的识别结果
      * 恰好是"人走开之前那一份"，拿它来校验等于什么都没校验。
      *
-     * 返回 null 有三种可能（读不到 / 标题带没有可信文字 / 感知抛错），调用方一律按
-     * "判不了"处理，不许推断成"还在原会话"。
+     * 读不到时**不返回裸 null**：2026-08-08 批次 4 第三跑连撞三次、终态逐字相同，而当时手上
+     * 只有「读不回来」五个字——"截图抛错 / 这一帧没跑 OCR / 标题带空 / 全被门槛挡掉"四种
+     * 完全不同的处境被折成了同一个 `null`。现在返回 [SurfaceTitleRead]，把"读了几次、
+     * 每次读到什么、等了多久"变成机械可读的事实（分因规则见 [SurfaceTitleReadPolicy]）。
+     *
+     * 重试是**有界的，而且只重试"读"**——比对方式一个字没放宽。逐次留痕让"过一会儿就读到"
+     * 与"一直读不到"在**同一跑**里就能分开，不用再烧一轮真机去问这个问题。
+     *
+     * 调用方一律按"判不了"处理没读到的情形，不许推断成"还在原会话"。
      */
-    internal fun readSurfaceTitle(): SurfaceElement? {
-        val raw = runCatching { forceFreshVision("interactive", maxElements = 400) }.getOrNull()
-            ?: return null
+    internal fun readSurfaceTitle(): SurfaceTitleRead {
         val metrics = resources.displayMetrics
-        val elements = ConversationSurfacePolicy.decodeElements(raw, metrics.heightPixels)
-        return ConversationSurfacePolicy.toolbarTitle(
-            elements = elements,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
-        )
+        val started = SystemClock.elapsedRealtime()
+        val attempts = mutableListOf<SurfaceTitleAttempt>()
+        while (true) {
+            val raw = runCatching { forceFreshVision("interactive", maxElements = 400) }.getOrNull()
+            val attempt = SurfaceTitleReadPolicy.classify(
+                raw = raw,
+                screenWidth = metrics.widthPixels,
+                screenHeight = metrics.heightPixels,
+                elapsedMs = SystemClock.elapsedRealtime() - started,
+            )
+            attempts += attempt
+            val elapsed = SystemClock.elapsedRealtime() - started
+            if (!SurfaceTitleReadPolicy.shouldRetry(attempt, attempts.size, elapsed)) {
+                return SurfaceTitleRead(attempts, elapsed)
+            }
+            Thread.sleep(SurfaceTitleReadPolicy.RETRY_INTERVAL_MS)
+        }
     }
 
     /** debug 受控阶段点击：fresh proof → resolve（可含慢 OCR）→ 最终状态闸门 → 立即 perform。 */

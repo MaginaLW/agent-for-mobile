@@ -187,8 +187,13 @@ internal object ConversationSurfacePolicy {
         LabelMatchPolicy.matches(expectedLabel, element.text) ||
             LabelMatchPolicy.matches(expectedLabel, element.description)
 
-    /** 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%。宏原值，一个数没动。 */
-    private fun inTitleBand(
+    /**
+     * 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%。宏原值，一个数没动。
+     *
+     * 不是 private：[SurfaceTitleReadPolicy] 在读不到标题时要报"标题带里到底有几个元素"，
+     * 而那个数必须按**这一条**几何算——另写一份就等于报的不是同一件事。
+     */
+    fun inTitleBand(
         element: SurfaceElement,
         screenWidth: Int,
         screenHeight: Int,

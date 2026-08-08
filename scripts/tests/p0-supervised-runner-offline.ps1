@@ -131,6 +131,7 @@ function New-Fixture {
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'reentry_single_read', 'reentry_short_wait', 'reentry_wait_timeout', 'reentry_no_wait_note',
         'reentry_no_heartbeat', 'reentry_zero_beats', 'reentry_no_token',
+        'reentry_no_title_read', 'reentry_title_retried',
         'stale_production_budget', 'stale_reached', 'stale_no_wait_note',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
         'find_ocr_split_bubble', 'find_ocr_extra_text',
@@ -641,31 +642,48 @@ if ($scenario -eq 'pre_enter_write') {
     ToolResult 'w0' @{ok=$true;data=@{done=$true}}
 }
 ToolUse 'p1' 'press_key' @{key='enter'}
-$result = 'success'; $exit = 0; $code = 'OK'; $note = 'confirmation=allowed;context=rechecked'
+# —— 审计 note：**分段拼，而且顺序照抄生产** ——
+#
+# 生产侧顺序（`ToolRegistry`）是：confirmation → foreground_wait → title_read →
+# context=rechecked → sse_heartbeat（最后那段在工具调用出口处无条件追加）。
+#
+# 这里此前把 `context=rechecked` 摆在最前面，于是 `foreground_wait=` 永远是**串尾**——
+# runner 那条 `last=(?<last>\S*)` 贪吃到行尾的 bug 在离线**物理上撞不到**，
+# 而真机上它把 `last_package` 记成了 `com.tencent.mm;context=rechecked;sse_heartbeat=...`，
+# 把后面两段整个吞掉（2026-08-08 第三跑实锤）。**假件的字段顺序也是接缝的一部分**：
+# 顺序摆得"干净"，等于替真实串里那个贪吃匹配打掩护。
+$result = 'success'; $exit = 0; $code = 'OK'
+$noteConfirm = 'confirmation=allowed'
+$noteWait = ''
+$noteTitle = ''
+$noteRecheck = 'context=rechecked'
+# 心跳每次工具调用都追加，**不是 Reentry 腿专属**——所以这里默认对每条腿都给。
+$noteBeat = 'sse_heartbeat=beats=6,token=yes'
 if ($leg -eq 'stale') {
     $result='fail'; $exit=1; $code='E_STALE_REF'
-    # 开关打开后这条腿必然终止在**等前台**那一步，走不到 context=rechecked。
-    $staleWait = switch ($scenario) {
+    # 开关打开后这条腿必然终止在**等前台**那一步，走不到 context=rechecked，也走不到重建。
+    $noteWait = switch ($scenario) {
         'stale_production_budget' { 'foreground_wait=reads=98,waited_ms=300005,budget_ms=300000,result=timeout,last=com.bbk.launcher2' }
         'stale_reached' { 'foreground_wait=reads=3,waited_ms=1200,budget_ms=20000,result=reached,last=com.tencent.mm' }
         'stale_no_wait_note' { '' }
         default { 'foreground_wait=reads=98,waited_ms=20005,budget_ms=20000,result=timeout,last=com.bbk.launcher2' }
     }
-    $note = 'confirmation=allowed'
-    if ($staleWait) { $note = "$note;$staleWait" }
+    $noteRecheck = ''
 }
 if ($leg -eq 'deny') {
     # 真人拒绝：危险动作以 E_BLOCKED 收场，审计里只有 confirmation=denied，
     # 绝不该出现 context=rechecked（复检发生在放行之后）。
-    $result='fail'; $exit=1; $code='E_BLOCKED'; $note='confirmation=denied'
-    if ($scenario -eq 'deny_rechecked') { $note='confirmation=denied;context=rechecked' }
-    if ($scenario -eq 'deny_but_allowed') { $note='confirmation=allowed;context=rechecked' }
+    $result='fail'; $exit=1; $code='E_BLOCKED'
+    $noteConfirm='confirmation=denied'; $noteRecheck=''
+    if ($scenario -eq 'deny_rechecked') { $noteRecheck='context=rechecked' }
+    if ($scenario -eq 'deny_but_allowed') { $noteConfirm='confirmation=allowed'; $noteRecheck='context=rechecked' }
 }
 if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1; $code='E_VERIFY_FAIL' }
-# Reentry 腿：预期结果与 allow 完全相同，唯一多出来的是审计 note 里那段等前台的可观测记录
-# （ForegroundWaitTrace.describe）。**这一段就是这条腿唯一新增的判据**，所以正反用例都从这里造。
+# Reentry 腿：预期结果与 allow 完全相同，多出来的是审计 note 里两段可观测记录——
+# 等前台（`ForegroundWaitTrace.describe`）与执行前重读标题（`SurfaceTitleRead.describe`）。
+# **这两段就是这条腿唯一新增的判据**，所以正反用例都从这里造。
 if ($leg -eq 'reentry') {
-    $waitNote = switch ($scenario) {
+    $noteWait = switch ($scenario) {
         # 只读了一次前台就成了 = 微信压根没离开过前台，这条腿什么都没验到。
         'reentry_single_read' { 'foreground_wait=reads=1,waited_ms=91300,budget_ms=300000,result=reached,last=com.tencent.mm' }
         # 等待没有覆盖住停留期：被过早拉回，或压根没切走。
@@ -676,16 +694,24 @@ if ($leg -eq 'reentry') {
         'reentry_no_wait_note' { '' }
         default { 'foreground_wait=reads=47,waited_ms=91300,budget_ms=300000,result=reached,last=com.tencent.mm' }
     }
-    if ($waitNote) { $note = "$note;$waitNote" }
-    # 传输层心跳的取证串（网关侧 CallHeartbeat.describe）。缺席/零拍/无 token 各有反例。
-    $beatNote = switch ($scenario) {
+    # 标题读取的逐次痕迹。**这条腿必然走重建**（切走再回来 → IME 会话身份必变 → 旧输入证据
+    # 取不出来），所以字段缺席只可能是旧 APK，或者根本没走重建——后者意味着这条腿并没有
+    # 验到它要验的东西，而它看起来是绿的。
+    $noteTitle = switch ($scenario) {
+        'reentry_no_title_read' { '' }
+        # 重试第 3 次才读到：**各次结论不同 = 时机问题**，正是有界重试要救的那种。
+        'reentry_title_retried' { 'title_read=attempts=3,waited_ms=1480,result=resolved,resolved_at=3,trail=no_ocr+no_ocr+resolved,fg=0+0+0,band=0+0+1' }
+        default { 'title_read=attempts=1,waited_ms=210,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1' }
+    }
+    $noteBeat = switch ($scenario) {
         'reentry_no_heartbeat' { '' }
         'reentry_zero_beats' { 'sse_heartbeat=beats=0,token=yes' }
         'reentry_no_token' { 'sse_heartbeat=beats=0,token=no' }
         default { 'sse_heartbeat=beats=6,token=yes' }
     }
-    if ($beatNote) { $note = "$note;$beatNote" }
 }
+$note = (@($noteConfirm, $noteWait, $noteTitle, $noteRecheck, $noteBeat) |
+    Where-Object { $_ }) -join ';'
 if ($code -eq 'OK') {
     # 网关侧发送后验：正常腿报 sent，send_unverified 腿报"判不了"（ok 但无发送证据），
     # legacy_no_send_field 腿模拟不带该字段的旧 APK。
@@ -1037,6 +1063,11 @@ try {
         foreach ($forbidden in @('切走','停留','等前台','重建证据')) {
             Assert-NotMatches $reentryBody $forbidden
         }
+        # 2026-08-08 第三跑：执行器自报「硬门在危险动作前拒绝执行，**未弹出确认卡**」，
+        # 而卡实际弹了、用户点了允许、审计里 `confirmation=allowed`——它把"执行前的第二道门
+        # 拦住了"说成了"卡没弹"。判据不受影响（我们从不采信自报），但**这句会误导读报告的人**。
+        # 根因是它在报告自己看不见的事实：它没有屏幕，两种处境从它的返回里分不出来。
+        Assert-Contains $reentryBody '不得推断确认卡有没有弹出'
         Assert-True (($reentryBody -split "`r?`n" | Where-Object { $_.Trim() -eq '---' }).Count -eq 0) `
             'Reentry 派发正文里出现了 --- 分隔线，说明模板的人读段落被切进了提示词。'
 
@@ -1259,6 +1290,72 @@ try {
         $result = Invoke-FixtureRunner (New-Fixture reentry_no_token) @('Reentry')
         Assert-True ($result.ExitCode -ne 0) '无 token 必须判失败。'
         Assert-Contains $result.Text 'progressToken'
+    }
+
+    # —— 2026-08-08 第三跑那三次"逐字相同的失败"逼出来的三条 ——
+
+    Test-Case 'note 里 foreground_wait 后面还有字段时，last_package 必须在分号处停住' {
+        # **这条用例存在的全部理由**：真机 note 是 `...;foreground_wait=...,last=com.tencent.mm;
+        # context=rechecked;sse_heartbeat=...`，而 runner 那条 `last=(?<last>\S*)` 贪吃到行尾，
+        # 把后面两段整个吞进了 last_package。离线撞不到，是因为假件把 foreground_wait 摆在了串尾。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -eq 0) "Reentry 正常腿应通过：$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.foreground_wait.last_package -ceq 'com.tencent.mm') `
+            "last_package 被后面的字段吞了：$($legRecord.foreground_wait.last_package)"
+    }
+
+    Test-Case 'sse_heartbeat 与 title_read 每腿都落 manifest' {
+        # 心跳原先只在 Reentry 腿被断言、其它腿连落盘都没有；而它现在是传输层唯一的机械取证。
+        # Allow 腿 `beats=0` 是与"4ms 就 reached"自洽的正常值——**落了盘才看得出零拍是自洽
+        # 还是心跳压根没接上**。title_read 同理：只在失败时记的话，"第一次就读到"与
+        # "重试三次才读到"分不开，下次它抖起来照样两眼一抹黑。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Allow','Reentry')
+        Assert-True ($result.ExitCode -eq 0) "两腿应通过：$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legs = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs
+        foreach ($record in $legs) {
+            Assert-True ($record.sse_heartbeat.reported -eq $true) `
+                "$($record.leg) 腿的 sse_heartbeat 没落 manifest。"
+            Assert-True ($record.sse_heartbeat.beats -eq 6) `
+                "$($record.leg) 腿的心跳拍数没如实落盘。"
+        }
+        $allow = $legs | Where-Object { $_.leg -ceq 'allow' }
+        # Allow 腿不走重建，所以 title_read **本来就该缺席**——"没报告"要如实记成
+        # reported=false，而不是留空长得像数据丢了。
+        Assert-True ($allow.title_read.reported -eq $false) `
+            'Allow 腿不走重建，title_read 该如实记为未报告。'
+        $reentry = $legs | Where-Object { $_.leg -ceq 'reentry' }
+        Assert-True ($reentry.title_read.reported -eq $true) 'Reentry 腿的 title_read 没落 manifest。'
+        Assert-True ($reentry.title_read.trail -ceq 'resolved') `
+            "title_read 的 trail 没如实落盘：$($reentry.title_read.trail)"
+    }
+
+    Test-Case 'Reentry 腿：重试几次才读到标题时，痕迹要如实落盘' {
+        # **这一栏就是第三跑之后我们真正想知道的那件事**：各次结论不同 = 时机问题
+        # （有界重试能救）；逐次相同 = 通道问题（得换通道）。判据不看它，人看它。
+        $fixture = New-Fixture reentry_title_retried
+        $result = Invoke-FixtureRunner $fixture @('Reentry')
+        Assert-True ($result.ExitCode -eq 0) "重试后读到仍应通过：$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.title_read.resolved_at -eq 3) '第几次读到的没落盘。'
+        Assert-True ($legRecord.title_read.trail -ceq 'no_ocr+no_ocr+resolved') `
+            "逐次痕迹没落盘：$($legRecord.title_read.trail)"
+    }
+
+    Test-Case 'Reentry 腿：没有 title_read 记录时不冒充通过' {
+        # 缺这一段只有两种可能：旧 APK，或者这条腿压根没走重建。后者更要命——
+        # 那意味着它没验到"批准后重建证据"，而其余判据全绿。
+        $result = Invoke-FixtureRunner (New-Fixture reentry_no_title_read) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '缺 title_read 必须判失败。'
+        Assert-Contains $result.Text 'title_read'
     }
 
     Test-Case 'Stale 腿：判据跟着新路径走，不再要求结构性不可满足的 context=rechecked' {

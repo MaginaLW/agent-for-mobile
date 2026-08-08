@@ -12,6 +12,16 @@ internal const val MIN_ACTION_OCR_CONFIDENCE = 0.65f
  */
 internal const val MIN_RECOGNITION_OCR_CONFIDENCE = 0.45f
 
+/**
+ * 前台 app 贡献的可读元素低于此数 → 视为树空/稀疏，`snapshot()` 自动融合 OCR
+ * （spec §5.4，S1 微信实锤）。
+ *
+ * 住在这里而不是 `GatewayA11yService` 的伴生对象里：**这道闸门决定了"这一帧有没有识别结果"**，
+ * 而 [SurfaceTitleReadPolicy] 在读不到标题时要说清"是不是这道闸门没放行"。同一个数写两遍，
+ * 就是本仓最贵的那一族错误（判据有两份迟早只改一份）。
+ */
+internal const val OCR_FUSION_FG_THRESHOLD = 5
+
 /** 盲点安全区下沿与系统手势条之间留出的余量（物理像素）。 */
 internal const val P0_PROBE_BOTTOM_MARGIN_PX = 10
 

@@ -415,7 +415,8 @@ object ToolRegistry {
             trace
         },
         clocks = intentClocks,
-        rebuildEvidence = ::rebuildApprovedEvidence,
+        // 与 `awaitForeground` 同理：重建这一步也必须自己说话，所以带上 call 而不是裸方法引用。
+        rebuildEvidence = { intent -> rebuildApprovedEvidence(call, intent) },
     )
 
     /**
@@ -461,10 +462,14 @@ object ToolRegistry {
      * 只重建输入证据的话，回来时会以「执行前没有短时目标会话证据」失败，
      * 而那条失败与今天长得一模一样，最难发现。
      */
-    private fun rebuildApprovedEvidence(intent: ApprovalIntent): EvidenceRebuild {
+    private fun rebuildApprovedEvidence(call: CallScope, intent: ApprovalIntent): EvidenceRebuild {
         val a11y = GatewayA11yService.instance
             ?: return EvidenceRebuild.Unverified("a11y 未开启，证据重建通道不可用")
-        val title = a11y.readSurfaceTitle()
+        // **读成功也要落痕**：只在失败时记的话，"第一次就读到"与"重试三次才读到"分不开，
+        // 下一次它抖起来照样两眼一抹黑（`foreground_wait` 已经上过这一课）。
+        val read = a11y.readSurfaceTitle()
+        call.safetyNote += ";title_read=${read.describe()}"
+        val title = read.title
         val focused = UiTools.focusedInputSnapshot(a11y)
         val identity = focused.identity
             ?: return EvidenceRebuild.Unverified("重建时拿不到焦点输入身份，无法把证据落回")
@@ -493,6 +498,12 @@ object ToolRegistry {
             normalize = OcrEngine::norm,
             surfaceChannel = surfaceChannel,
         )
+        // 标题没读回来时，**把为什么读不回来接在那句话后面**。判据本身一个字不动：
+        // 这里只补事实，不改结论。接的条件严格限定在"确实是标题没读到"，否则内容侧的
+        // Unverified 会被扣上一顶跟它无关的帽子——那是另一种形态的误导。
+        if (title == null && verdict is EvidenceRebuild.Unverified) {
+            return EvidenceRebuild.Unverified("${verdict.reason}｜标题读取：${read.detail()}")
+        }
         if (verdict !is EvidenceRebuild.Rebuilt) return verdict
 
         val sha256 = intent.contentSha256
