@@ -1,9 +1,11 @@
 {
   "_comment": "【模板】复制本文件为同目录 gateway-mcp.json（已 gitignore，不入库），把 <GATEWAY_TOKEN> 换成网关 App 主界面「复制 TOKEN」的值再用。前置：手机端网关服务已启动 + `adb forward tcp:8848 tcp:8848`。切勿把含真实 token 的 gateway-mcp.json 提交（2026-07-18 曾误提交并 push，token 已轮换作废）。",
+  "_comment_timeout": "timeout 不是可调优的旋钮：HTTP 传输的『首字节』计时器默认 60s（stdio/WebSocket 没有这一层），而危险动作要阻塞到「决定 90s + 等前台 300s + 开销」≈420s。缺这个字段真机上必被砍，且现场看到的是『客户端超时、无响应体、无错误码』，与功能坏了分不开（2026-08-08 烧过一轮）。dispatch 开跑前会校验它，缺席或过小直接拒跑。另一层 300s 空闲看门狗由网关发心跳解决，不在这里。",
   "mcpServers": {
     "gateway": {
       "type": "http",
       "url": "http://127.0.0.1:8848/mcp",
+      "timeout": 420000,
       "headers": {
         "Authorization": "Bearer <GATEWAY_TOKEN>"
       }

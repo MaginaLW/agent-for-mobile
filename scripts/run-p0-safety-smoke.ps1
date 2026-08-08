@@ -973,6 +973,10 @@ Reentry 腿唯一真正新增的判据：**证明那段等待确实发生过，�
 **字段缺席按失败处理，不按通过**：装的是不带这段可观测性的旧 APK 时，一条本该证明
 "等过"的腿会静默退化成"什么都没证明"，而它看起来是绿的。
 #>
+# Stale 腿生效预算的上限（毫秒）。它只需要"明显小于生产预算"，不必等于 debug 侧那个 20s——
+# 把两个数写成必须相等，等于让 runner 与 app 的常量绑死，改一处就得同时改两处。
+$StaleLegBudgetCeilingMs = 120000
+
 function Get-P0ForegroundWaitRecord {
     <#
     从审计 note 里把那段等待解出来。**解析只有这一份**——判据与 manifest 落盘共用它，
@@ -984,7 +988,7 @@ function Get-P0ForegroundWaitRecord {
     param([Parameter(Mandatory)][AllowNull()]$Audit)
     $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
     $matched = [regex]::Match(
-        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),last=(?<last>\S*)')
+        $note, 'foreground_wait=reads=(?<reads>\d+),waited_ms=(?<waited>\d+),budget_ms=(?<budget>\d+),result=(?<result>[a-z]+),last=(?<last>\S*)')
     if (-not $matched.Success) {
         return [ordered]@{ reported = $false; detail = '审计 note 里没有 foreground_wait 记录' }
     }
@@ -992,6 +996,9 @@ function Get-P0ForegroundWaitRecord {
         reported = $true
         reads = [int]$matched.Groups['reads'].Value
         waited_ms = [long]$matched.Groups['waited'].Value
+        # **本次真正生效的预算**，不是安全门按档位问的那个。Stale 腿这两者不同，
+        # 而验收单让现场核的恰恰是"短预算有没有生效"——只看问的那个会得出相反结论。
+        budget_ms = [long]$matched.Groups['budget'].Value
         result = [string]$matched.Groups['result'].Value
         last_package = [string]$matched.Groups['last'].Value
     }
@@ -1123,6 +1130,29 @@ function Assert-P0LegSemantics {
             throw "Deny 腿审计出现确认后上下文复检，说明拒绝之后仍走了放行路径。"
         }
     }
+    elseif ($Leg -ceq 'Stale') {
+        # **`context=rechecked` 对这条腿是结构性不可满足的**（2026-08-08 真机实测暴露）：
+        # 开关打开后 Stale 腿必然终止在**等前台**那一步，而"确认后上下文复检"发生在
+        # 等到之后——它永远走不到那里。判据要跟着新路径改，这不是产品有问题。
+        #
+        # 换成这条腿真正该有的机械证据：真人允许过 + 那段等待确实跑过且**超时**。
+        if ([string]$audit.note -notmatch 'confirmation=allowed') {
+            throw "Stale 腿审计未证明真人允许（note=$($audit.note)）。"
+        }
+        $wait = Get-P0ForegroundWaitRecord -Audit $audit
+        if (-not $wait.reported) {
+            throw "Stale 腿审计里没有 foreground_wait 记录：这条腿现在正是靠它挡下的。"
+        }
+        if ([string]$wait.result -cne 'timeout') {
+            throw ("Stale 腿的等前台结果是 $($wait.result)，期望 timeout——" +
+                '它按定义永远不会把微信切回来，等到了就说明这条腿的场景没构造成功。')
+        }
+        # 短预算有没有生效，看**生效预算**这一列，不是看安全门问的那个数。
+        if ([long]$wait.budget_ms -ge [long]$StaleLegBudgetCeilingMs) {
+            throw ("Stale 腿用的是生产预算（budget_ms=$($wait.budget_ms)）而不是测试短预算：" +
+                '现场会白等 5 分钟，且说明 debug 测试控制那条短预算没生效。')
+        }
+    }
     elseif ([string]$audit.note -notmatch 'confirmation=allowed' -or [string]$audit.note -notmatch 'context=rechecked') {
         throw "$Leg 腿审计未证明真人允许和确认后复检。"
     }
@@ -1163,6 +1193,20 @@ function Assert-P0LegSemantics {
         if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw "$Leg 终态报告不是成功。" }
         if ($Leg -ceq 'Reentry') {
             Assert-P0ReentryForegroundWait -Wait (Get-P0ForegroundWaitRecord -Audit $audit) -DwellSec $ReentryDwellSec
+            # 传输层那条心跳有没有真的发出去。**不看这一条的话，"客户端 300s 空闲窗把调用砍了"
+            # 与"判据把它挡下了"在现场分不开**——2026-08-08 已经这样烧过一轮真机。
+            $beat = [regex]::Match([string]$audit.note, 'sse_heartbeat=beats=(?<beats>\d+),token=(?<token>yes|no)')
+            if (-not $beat.Success) {
+                throw ('Reentry 腿审计里没有 sse_heartbeat 记录：装的是不带流式心跳的旧 APK，' +
+                    '这一腿撑不过客户端 300s 空闲窗。')
+            }
+            if ($beat.Groups['token'].Value -cne 'yes') {
+                throw '客户端没给 progressToken，网关一拍心跳都发不出去（协议要求进度通知挂在 token 上）。'
+            }
+            if ([int]$beat.Groups['beats'].Value -lt 1) {
+                throw ('Reentry 腿一拍心跳都没发：这条腿阻塞远超一个心跳间隔，' +
+                    '零拍说明流式心跳没接上，长调用只是这次侥幸没被砍。')
+            }
         }
     }
     elseif ($Leg -ceq 'Deny') {

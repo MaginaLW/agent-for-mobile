@@ -34,6 +34,13 @@ function Get-ExecutorProfile {
     }
 }
 
+# gateway MCP 客户端配置里 per-server `timeout` 的下限（毫秒）。
+# 取 420000 的算式：决定期 90s + 等前台预算 300s + 宏与输入开销 ~30s ≈ 420s。
+# **这只解决第 1 层（60s 首字节计时器）**；第 2 层（300s 空闲看门狗）靠网关在阻塞期间
+# 发 `notifications/progress` 心跳解决，两层缺一都会在真机上表现为同一个"客户端超时"。
+# 三层天花板的实测见 docs/knowledge/brain/harness.md。
+$GatewayMcpMinTimeoutMs = 420000
+
 function Get-GatewayConfigProblem {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ConfigPath)
@@ -69,6 +76,23 @@ function Get-GatewayConfigProblem {
     $token = $Matches[1]
     if ([string]::IsNullOrWhiteSpace($token) -or $token -ieq '<GATEWAY_TOKEN>') {
         return 'gateway MCP 私密配置仍是 token 占位符。'
+    }
+
+    # per-server `timeout` 缺席 = 客户端对 HTTP MCP 的**首字节计时器停在 60 秒**
+    # （stdio/WebSocket 没有这一层，只有 HTTP/SSE 有）。语义意图那条链的 press_key
+    # 会阻塞到 400s 量级，缺了这个字段一定被砍——2026-08-08 真机上已经烧过一轮，
+    # 现场看到的是"客户端超时、无响应体、无错误码"，与"功能坏了"分不开。
+    #
+    # **配置是 gitignored 的私密文件，不随 checkout 过来**，所以这条只能在开跑前查。
+    # 字段缺席按失败处理，不按"大概没事"处理。
+    $timeout = $gateway.PSObject.Properties['timeout']
+    if ($null -eq $timeout) {
+        return ('gateway MCP 私密配置缺少 timeout 字段：HTTP 传输的首字节计时器默认 60s，' +
+            "危险动作会阻塞更久。请照 example 加 `"timeout`": $GatewayMcpMinTimeoutMs。")
+    }
+    if ([int64]$timeout.Value -lt $GatewayMcpMinTimeoutMs) {
+        return ("gateway MCP 私密配置的 timeout=$($timeout.Value) 小于下限 $GatewayMcpMinTimeoutMs，" +
+            '不足以覆盖「决定 90s + 等前台 300s + 开销」。')
     }
 
     return $null

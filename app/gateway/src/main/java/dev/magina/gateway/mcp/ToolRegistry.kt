@@ -6,6 +6,8 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ApprovalIntent
+import dev.magina.gateway.core.CallHeartbeat
+import dev.magina.gateway.core.NoHeartbeat
 import dev.magina.gateway.core.EvidenceRebuild
 import dev.magina.gateway.core.EvidenceRebuildPolicy
 import dev.magina.gateway.core.FocusIdentity
@@ -321,7 +323,15 @@ object ToolRegistry {
         return arr
     }
 
-    fun call(name: String, args: JSONObject): ToolResult {
+    /**
+     * [heartbeat] 是传输层那条心跳的取证句柄（[CallHeartbeat]）：调用方（[McpServer]）
+     * 一边跑这个工具一边往 SSE 上发 `notifications/progress`，拍数经审计 note 落盘。
+     *
+     * **为什么要落盘**：心跳不发或发不出去时，长调用会在客户端 300s 空闲窗上被砍，
+     * 而那条失败与「重建功能不行」在现场分不开——2026-08-08 真机上已经这样烧过一轮。
+     * 有了拍数，"是传输层没顶住"与"是判据挡下的"当场分得开。
+     */
+    fun call(name: String, args: JSONObject, heartbeat: CallHeartbeat = NoHeartbeat): ToolResult {
         val spec = byName[name]
         val mutatesUi = shouldSerializeUiCall(
             spec?.level,
@@ -329,9 +339,9 @@ object ToolRegistry {
             args.optBoolean("scroll_search", false),
         )
         return if (mutatesUi) {
-            Gateway.uiMutationCoordinator.runExclusive { callInternal(name, args) }
+            Gateway.uiMutationCoordinator.runExclusive { callInternal(name, args, heartbeat) }
         } else {
-            callInternal(name, args)
+            callInternal(name, args, heartbeat)
         }
     }
 
@@ -402,7 +412,7 @@ object ToolRegistry {
             // **这段等待必须自己说话**：只回 true/false 的话，"人在外面待了 90 秒再回来"
             // 与"根本没等就成了"在台账上完全分不开，而前者正是新腿要证明的东西。
             call.safetyNote += ";foreground_wait=${trace.describe()}"
-            trace.reached
+            trace
         },
         clocks = intentClocks,
         rebuildEvidence = ::rebuildApprovedEvidence,
@@ -426,10 +436,16 @@ object ToolRegistry {
             if (
                 ctx != null && ctx.optBoolean("foreground_known", false) &&
                 ctx.optString("app") == targetPackage
-            ) return ForegroundWaitTrace(true, reads, SystemClock.elapsedRealtime() - started, last)
+            ) {
+                return ForegroundWaitTrace(
+                    true, reads, SystemClock.elapsedRealtime() - started, budgetMs, last,
+                )
+            }
             val remaining = deadline - SystemClock.elapsedRealtime()
             if (remaining <= 0) {
-                return ForegroundWaitTrace(false, reads, SystemClock.elapsedRealtime() - started, last)
+                return ForegroundWaitTrace(
+                    false, reads, SystemClock.elapsedRealtime() - started, budgetMs, last,
+                )
             }
             Thread.sleep(minOf(FOREGROUND_POLL_INTERVAL_MS, remaining))
         }
@@ -674,7 +690,11 @@ object ToolRegistry {
         return ctx
     }
 
-    private fun callInternal(name: String, args: JSONObject): ToolResult {
+    private fun callInternal(
+        name: String,
+        args: JSONObject,
+        heartbeat: CallHeartbeat = NoHeartbeat,
+    ): ToolResult {
         val spec = byName[name]
         invalidateInputEvidenceForMutation(
             store = Gateway.inputCommitEvidence,
@@ -697,9 +717,11 @@ object ToolRegistry {
         val auditArgs = sanitizeAuditArgs(name, args)
 
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
+            // 心跳拍数在**最后一刻**读：它一直在涨，这里要的是"这次调用总共发了几拍"。
+            // 与最后一拍可能有一拍的竞态，所以判据只该问"发没发够"，不问精确值。
             Gateway.audit.write(
                 auditId, name, auditArgs, code, channel, SystemClock.elapsedRealtime() - start,
-                note = call.safetyNote,
+                note = call.safetyNote + ";sse_heartbeat=${heartbeat.describe()}",
             )
             return ToolResult(env, image)
         }

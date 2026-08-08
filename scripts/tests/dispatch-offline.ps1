@@ -227,6 +227,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:8848/mcp'
+                timeout = 420000
                 headers = @{ Authorization = "Bearer $testBearer" }
             }
         }
@@ -236,6 +237,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:8848/mcp'
+                timeout = 420000
                 headers = @{ Authorization = 'Bearer <GATEWAY_TOKEN>' }
             }
         }
@@ -245,6 +247,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:9999/mcp'
+                timeout = 420000
                 headers = @{ Authorization = "Bearer $testBearer" }
             }
         }
@@ -418,6 +421,40 @@ exit /b 97
         $problem = Get-GatewayConfigProblem -ConfigPath $wrongUrlGatewayConfig
         Assert-True (-not [string]::IsNullOrWhiteSpace($problem)) '错误 URL 应返回问题。'
         Assert-NotMatches $problem ([regex]::Escape($testBearer))
+    }
+
+    Test-Case 'gateway 私密配置缺 timeout 或过小一律拒跑' {
+        # HTTP 传输的「首字节」计时器默认 60s（stdio/WebSocket 没有这一层），而危险动作
+        # 要阻塞到「决定 90s + 等前台 300s + 开销」≈420s。2026-08-08 真机上就是这么被砍的，
+        # 现场看到的是"客户端超时、无响应体、无错误码"，与功能坏了分不开。
+        # **配置是 gitignored 的私密文件，不随 checkout 过来**，所以只能在开跑前查。
+        $probe = Join-Path ([IO.Path]::GetTempPath()) "gw-cfg-$([guid]::NewGuid().ToString('N')).json"
+        try {
+            $missing = @{ mcpServers = @{ gateway = [ordered]@{
+                type = 'http'; url = 'http://127.0.0.1:8848/mcp'
+                headers = @{ Authorization = "Bearer $testBearer" } } } }
+            $missing | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $probe -Encoding utf8
+            $problem = Get-GatewayConfigProblem -ConfigPath $probe
+            Assert-True ($problem -like '*timeout*') "缺 timeout 应被拒：$problem"
+            Assert-NotMatches $problem ([regex]::Escape($testBearer))
+
+            $tooSmall = @{ mcpServers = @{ gateway = [ordered]@{
+                type = 'http'; url = 'http://127.0.0.1:8848/mcp'; timeout = 60000
+                headers = @{ Authorization = "Bearer $testBearer" } } } }
+            $tooSmall | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $probe -Encoding utf8
+            $problem = Get-GatewayConfigProblem -ConfigPath $probe
+            Assert-True ($problem -like '*下限*') "timeout 过小应被拒：$problem"
+            Assert-NotMatches $problem ([regex]::Escape($testBearer))
+        }
+        finally { if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Force } }
+    }
+
+    Test-Case '模板里的 gateway MCP 示例自己就满足那条下限' {
+        # 例子不满足下限的话，照着抄的人一定被拒跑，而他会以为是校验坏了。
+        $example = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'configs\gateway-mcp.json.example') `
+            -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($example.mcpServers.gateway.timeout -ge 420000) `
+            "example 里的 timeout 低于下限：$($example.mcpServers.gateway.timeout)"
     }
 
     Test-Case 'gateway 畸形 JSON 被拒绝且不泄露 Bearer' {

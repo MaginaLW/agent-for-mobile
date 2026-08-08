@@ -130,6 +130,8 @@ function New-Fixture {
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'reentry_single_read', 'reentry_short_wait', 'reentry_wait_timeout', 'reentry_no_wait_note',
+        'reentry_no_heartbeat', 'reentry_zero_beats', 'reentry_no_token',
+        'stale_production_budget', 'stale_reached', 'stale_no_wait_note',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
         'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
@@ -636,7 +638,18 @@ if ($scenario -eq 'pre_enter_write') {
 }
 ToolUse 'p1' 'press_key' @{key='enter'}
 $result = 'success'; $exit = 0; $code = 'OK'; $note = 'confirmation=allowed;context=rechecked'
-if ($leg -eq 'stale') { $result='fail'; $exit=1; $code='E_STALE_REF' }
+if ($leg -eq 'stale') {
+    $result='fail'; $exit=1; $code='E_STALE_REF'
+    # 开关打开后这条腿必然终止在**等前台**那一步，走不到 context=rechecked。
+    $staleWait = switch ($scenario) {
+        'stale_production_budget' { 'foreground_wait=reads=98,waited_ms=300005,budget_ms=300000,result=timeout,last=com.bbk.launcher2' }
+        'stale_reached' { 'foreground_wait=reads=3,waited_ms=1200,budget_ms=20000,result=reached,last=com.tencent.mm' }
+        'stale_no_wait_note' { '' }
+        default { 'foreground_wait=reads=98,waited_ms=20005,budget_ms=20000,result=timeout,last=com.bbk.launcher2' }
+    }
+    $note = 'confirmation=allowed'
+    if ($staleWait) { $note = "$note;$staleWait" }
+}
 if ($leg -eq 'deny') {
     # 真人拒绝：危险动作以 E_BLOCKED 收场，审计里只有 confirmation=denied，
     # 绝不该出现 context=rechecked（复检发生在放行之后）。
@@ -650,16 +663,24 @@ if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1;
 if ($leg -eq 'reentry') {
     $waitNote = switch ($scenario) {
         # 只读了一次前台就成了 = 微信压根没离开过前台，这条腿什么都没验到。
-        'reentry_single_read' { 'foreground_wait=reads=1,waited_ms=91300,result=reached,last=com.tencent.mm' }
+        'reentry_single_read' { 'foreground_wait=reads=1,waited_ms=91300,budget_ms=300000,result=reached,last=com.tencent.mm' }
         # 等待没有覆盖住停留期：被过早拉回，或压根没切走。
-        'reentry_short_wait' { 'foreground_wait=reads=9,waited_ms=1200,result=reached,last=com.tencent.mm' }
+        'reentry_short_wait' { 'foreground_wait=reads=9,waited_ms=1200,budget_ms=300000,result=reached,last=com.tencent.mm' }
         # 等前台超时：后面那些"发出去了"的判据根本谈不上。
-        'reentry_wait_timeout' { 'foreground_wait=reads=100,waited_ms=300000,result=timeout,last=com.android.launcher' }
+        'reentry_wait_timeout' { 'foreground_wait=reads=100,waited_ms=300000,budget_ms=300000,result=timeout,last=com.android.launcher' }
         # 旧 APK 不带这段可观测性：字段缺席按失败处理，不许静默退化成"什么都没证明"。
         'reentry_no_wait_note' { '' }
-        default { 'foreground_wait=reads=47,waited_ms=91300,result=reached,last=com.tencent.mm' }
+        default { 'foreground_wait=reads=47,waited_ms=91300,budget_ms=300000,result=reached,last=com.tencent.mm' }
     }
     if ($waitNote) { $note = "$note;$waitNote" }
+    # 传输层心跳的取证串（网关侧 CallHeartbeat.describe）。缺席/零拍/无 token 各有反例。
+    $beatNote = switch ($scenario) {
+        'reentry_no_heartbeat' { '' }
+        'reentry_zero_beats' { 'sse_heartbeat=beats=0,token=yes' }
+        'reentry_no_token' { 'sse_heartbeat=beats=0,token=no' }
+        default { 'sse_heartbeat=beats=6,token=yes' }
+    }
+    if ($beatNote) { $note = "$note;$beatNote" }
 }
 if ($code -eq 'OK') {
     # 网关侧发送后验：正常腿报 sent，send_unverified 腿报"判不了"（ok 但无发送证据），
@@ -1171,6 +1192,68 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Reentry')
         Assert-True ($result.ExitCode -ne 0) '等前台超时必须判失败。'
         Assert-Contains $result.Text '等前台没有等到'
+    }
+
+    # **不看心跳的话，"客户端 300s 空闲窗把调用砍了"与"判据把它挡下了"在现场分不开**
+    # ——2026-08-08 已经这样烧过一轮真机。三种坏法**各占一条用例**，不合并成一个循环：
+    # 合并的话一路生效就能让整条用例变绿，替另外两路没接上打掩护（backlog §7.1.3 那条）。
+
+    Test-Case 'Reentry 腿：审计里没有 sse_heartbeat 必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture reentry_no_heartbeat) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '缺 sse_heartbeat 必须判失败。'
+        Assert-Contains $result.Text 'sse_heartbeat'
+    }
+
+    Test-Case 'Reentry 腿：一拍心跳都没发必须判失败' {
+        # 零拍 = 流式心跳没接上，长调用只是这次侥幸没被砍。
+        $result = Invoke-FixtureRunner (New-Fixture reentry_zero_beats) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '零拍必须判失败。'
+        Assert-Contains $result.Text '一拍心跳都没发'
+    }
+
+    Test-Case 'Reentry 腿：客户端没给 progressToken 必须判失败' {
+        # 协议要求进度通知挂在 token 上；没有 token 就一拍都发不出去——
+        # 那不是"没必要发"，是"发不出去"，两者必须分得开。
+        $result = Invoke-FixtureRunner (New-Fixture reentry_no_token) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '无 token 必须判失败。'
+        Assert-Contains $result.Text 'progressToken'
+    }
+
+    Test-Case 'Stale 腿：判据跟着新路径走，不再要求结构性不可满足的 context=rechecked' {
+        # 开关打开后这条腿必然终止在**等前台**那一步，而"确认后上下文复检"发生在等到之后
+        # ——它永远走不到那里（2026-08-08 真机实测暴露）。判据换成这条腿真正该有的证据：
+        # 真人允许过 + 那段等待跑过且超时 + 用的是测试短预算。
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Stale')
+        Assert-True ($result.ExitCode -eq 0) "Stale 腿应整组通过：`n$($result.Text)"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.foreground_wait.result -ceq 'timeout') `
+            'Stale 腿的等前台结果必须如实记成 timeout。'
+        Assert-True ($legRecord.foreground_wait.budget_ms -eq 20000) `
+            "manifest 必须记下**生效**预算，实际 $($legRecord.foreground_wait.budget_ms)"
+    }
+
+    # 三条反例各占一条用例（同上，不合并成循环）：
+    # 场景没构造成功 / 短预算没生效（现场会白等 5 分钟）/ 旧 APK。
+
+    Test-Case 'Stale 腿：等到了前台说明场景没构造成功，必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture stale_reached) @('Stale')
+        Assert-True ($result.ExitCode -ne 0) '等到了前台必须判失败。'
+        Assert-Contains $result.Text '期望 timeout'
+    }
+
+    Test-Case 'Stale 腿：用了生产预算说明短预算没生效，必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture stale_production_budget) @('Stale')
+        Assert-True ($result.ExitCode -ne 0) '生产预算必须判失败。'
+        Assert-Contains $result.Text '生产预算'
+    }
+
+    Test-Case 'Stale 腿：没有等待记录必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture stale_no_wait_note) @('Stale')
+        Assert-True ($result.ExitCode -ne 0) '缺等待记录必须判失败。'
+        Assert-Contains $result.Text '没有 foreground_wait 记录'
     }
 
     Test-Case 'Reentry 腿的停留时长不接受越界值' {

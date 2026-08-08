@@ -317,23 +317,36 @@ data class ForegroundWaitTrace(
     /** 读了几次前台。**新腿至少要 >1**：只读一次就成了，说明它压根没在外面待过。 */
     val reads: Int,
     val waitedMs: Long,
+    /**
+     * **本次真正生效的**预算，不是 [SafetyGate] 按档位算出来问的那个。
+     *
+     * 两者会不一样：监督式跑测的 Stale 腿经 debug 测试控制拿到短预算。
+     * 2026-08-08 真机上错误文案印的是**问的那个**（300000ms），而实际只等了 20005ms
+     * ——**验收单让现场核的恰恰是"短预算有没有生效"，只读那句话会得出"没生效"的相反结论**。
+     * 错误信息本身是判据的一部分，指错方向的代价和判错一样大。
+     */
+    val budgetMs: Long,
     /** 最后一次读到的前台包名；读不出来为空串。只进诊断，不参与判定。 */
     val lastPackage: String,
 ) {
     fun describe(): String =
-        "reads=$reads,waited_ms=$waitedMs,result=${if (reached) "reached" else "timeout"}" +
-            ",last=${lastPackage.ifBlank { "-" }}"
+        "reads=$reads,waited_ms=$waitedMs,budget_ms=$budgetMs," +
+            "result=${if (reached) "reached" else "timeout"},last=${lastPackage.ifBlank { "-" }}"
 }
 
 /**
  * 语义意图路径的装配（[SafetyGate] 的可选构造参数）。
  *
  * [awaitForeground] 没有默认实现，**必须由调用方显式给**：它是"批准后等前台恢复"那段有界等待，
- * 给个默认值等于替调用方决定"不用等也行"。返回 true = 前台已经是目标包。
+ * 给个默认值等于替调用方决定"不用等也行"。
+ *
+ * 它返回的是 [ForegroundWaitTrace] 而不是布尔：**失败时要说清楚"等了多久、读了几次、
+ * 生效预算是多少、一直看见的是什么"**。只回布尔的话，超时那句话只能印调用方**问的**那个
+ * 预算，而它与实际生效的可以不同（Stale 腿有短预算），于是现场读到的结论正好相反。
  */
 class IntentApproval(
     val intentIdFactory: () -> String,
-    val awaitForeground: (targetPackage: String, budgetMs: Long) -> Boolean,
+    val awaitForeground: (targetPackage: String, budgetMs: Long) -> ForegroundWaitTrace,
     val clocks: IntentApprovalClocks = IntentApprovalClocks(),
     val store: IntentApprovalStore = IntentApprovalStore(),
     val clock: () -> Long = System::currentTimeMillis,

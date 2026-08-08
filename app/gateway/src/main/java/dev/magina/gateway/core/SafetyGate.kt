@@ -471,8 +471,18 @@ class SafetyGate(
         approval.store.open(intent)
         try {
             val waitBudget = approval.clocks.foregroundWaitBudgetFor(decision.riskTier)
-            if (waitBudget > 0 && !approval.awaitForeground(intent.targetPackage, waitBudget)) {
-                stale("批准后等前台恢复到 ${intent.targetPackage} 超时（预算 ${waitBudget}ms）")
+            if (waitBudget > 0) {
+                val wait = approval.awaitForeground(intent.targetPackage, waitBudget)
+                if (!wait.reached) {
+                    // **印的是实际生效的那个预算与真实等待时长**，不是上面按档位算出来问的那个：
+                    // 两者可以不同（监督式跑测的 Stale 腿有短预算），而验收单让现场核的
+                    // 恰恰是"短预算有没有生效"——印错那个数会得出完全相反的结论。
+                    stale(
+                        "批准后等前台恢复到 ${intent.targetPackage} 超时：" +
+                            "实际等了 ${wait.waitedMs}ms（生效预算 ${wait.budgetMs}ms，" +
+                            "读了 ${wait.reads} 次，最后看到 ${wait.lastPackage.ifBlank { "-" }}）",
+                    )
+                }
             }
             var currentContext = try {
                 contextProvider(deepCopy(frozenArgs))

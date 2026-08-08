@@ -12,6 +12,10 @@ import org.junit.Test
  * 机械证据的形态与既有那条 `confirmerCalls == 0` 完全一样：**失败时 executor 调用次数必须为 0**
  * ——"没执行"这件事不能靠读代码相信，要有一个数字说话。
  */
+/** "等到了"的等待记录。默认给 2 次读——`reads>1` 是新腿的判据，别让公共夹具替它作弊。 */
+private fun reached(budgetMs: Long, reads: Int = 2, waitedMs: Long = 1_000): ForegroundWaitTrace =
+    ForegroundWaitTrace(true, reads, waitedMs, budgetMs, "com.tencent.mm")
+
 class SafetyGateIntentPathTest {
 
     private val imeSessionId = "ime|0123456789abcdef01234567"
@@ -57,7 +61,7 @@ class SafetyGateIntentPathTest {
     private class Harness(
         confirmed: Boolean = true,
         val contexts: MutableList<SafetyContext>,
-        awaitForeground: (String, Long) -> Boolean = { _, _ -> true },
+        awaitForeground: (String, Long) -> ForegroundWaitTrace = { _, b -> reached(b) },
         clock: () -> Long = { 1_000 },
         rebuildEvidence: ((ApprovalIntent) -> EvidenceRebuild)? = null,
     ) {
@@ -126,7 +130,7 @@ class SafetyGateIntentPathTest {
     fun `foreground wait timeout is terminal and never executes`() {
         val harness = Harness(
             contexts = mutableListOf(context(), context()),
-            awaitForeground = { _, _ -> false },
+            awaitForeground = { _, b -> ForegroundWaitTrace(false, 98, b, b, "com.bbk.launcher2") },
         )
 
         val result = harness.press(args)
@@ -181,7 +185,7 @@ class SafetyGateIntentPathTest {
         val harness = Harness(
             contexts = mutableListOf(context(), context()),
             clock = { now },
-            awaitForeground = { _, _ -> now += 400_000; true },
+            awaitForeground = { _, b -> now += 400_000; reached(b) },
         )
 
         val result = harness.press(args)
@@ -221,7 +225,7 @@ class SafetyGateIntentPathTest {
         val ctx = context().copy(target = target)
         val harness = Harness(
             contexts = mutableListOf(ctx, ctx),
-            awaitForeground = { _, _ -> waits += 1; true },
+            awaitForeground = { _, b -> waits += 1; reached(b) },
         )
 
         harness.gate.execute("ui_action", Level.W, clicking) { _, _ -> harness.executorCalls += 1; "clicked" }
@@ -372,7 +376,7 @@ class SafetyGateIntentPathTest {
         val harness = Harness(
             contexts = mutableListOf(context(), afterReentry(), afterRebuild()),
             clock = { now },
-            awaitForeground = { _, _ -> now += 400_000; true },
+            awaitForeground = { _, b -> now += 400_000; reached(b) },
             rebuildEvidence = { EvidenceRebuild.Rebuilt(InputCommitEvidence.sha256(text), text.length) },
         )
 
@@ -391,7 +395,7 @@ class SafetyGateIntentPathTest {
                 waits += 1
                 assertEquals("com.tencent.mm", pkg)
                 assertEquals(IntentApprovalClocks.DEFAULT_FOREGROUND_WAIT_BUDGET_MS, budget)
-                true
+                reached(budget)
             },
         )
 
