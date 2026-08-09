@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复）** | **`ceaabeb0e72ecc7f13f22fc18389ff90447bf4d8`** | `claude/serene-faraday-42d1fb` | **待验收（最终 build 0/4）** | 离线全绿：dispatch 50、runner 132、Debug 496、Release 393；C 只检出本 SHA，显式 `-Brain codex`，同一 build 连跑 Allow → Stale → Deny → Reentry |
+| **4（最终安全修复 + Codex 通道）** | **`3ed077d`** | `claude/serene-faraday-42d1fb` | **等待 B 道 residual 放行（0/4）** | 旧 C 的占位 exit 2 只算基础设施失败；新通道全 gate：dispatch 58、runner 142、Debug/Release/assembleDebug。用户接受 0.147 `view_image` 有界 residual 后，才新建 clean C 并同一 build 连跑 Allow → Stale → Deny → Reentry |
 
 **批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
 `cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
@@ -435,6 +435,7 @@ Deny 带外截屏比对可行。
 
 | 问题 | 收敛到的选项 | 提出时间 |
 |---|---|---|
+| Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **待用户明确决定**：接受“空 cwd + 无 shell/枚举 + 不提供本机路径 + 未知 item fail closed”，或先升级/加 OS 隔离 | 2026-08-09 |
 | 语义意图审批四题 | **全部按推荐拍定**（用户 08-02），见下 | 2026-08-02 |
 | 锁屏审批与 D1 结构性冲突，走哪条路？ | **先收窄批次 2，再做语义意图**（用户 08-02 拍板） | 2026-08-02 |
 

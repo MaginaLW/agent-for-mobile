@@ -7,11 +7,12 @@
 - **已通过并合入 main 的：批次 1**（干掉每跑一腿的人工前后置，`337113c`）· **批次 2**（通知栏审批）· **批次 3**（Deny 带外验证），后两批 `f08cda2`。批次 1 三腿一次连跑、`teardown.verdict` 全 `clean`、人只点 3 次卡。详细复盘见归档。
 - **批次 2 判据 1 收窄为「屏幕亮着但人没盯着」**：锁屏审批与 D1 结构性冲突（`requireKnownForeground` 跑在 `policy.assess` 之前，锁屏时**卡与通知都不会出现**），用户 08-02 拍板"先收窄、再做语义意图"。**锁屏两条如实归档为从未验过、不当成通过。**
 - **工序按"是否消耗人的精力"分三道并行**（[backlog](docs/backlog.md)）：A 独立闭环 / B 你一个决定 / C 你在真机旁。改动堆成**验收批次**、钉 commit SHA，把人的参与从"每个改动一次跑测"降到"一批一次"。队列写权在主会话，工序会话经 `git show main:` 读，干完主动 `send_message` 叫醒主会话。
-- **批次 4 最终安全修复已离线闭环，钉 `ceaabeb0e72ecc7f13f22fc18389ff90447bf4d8`，分支 `claude/serene-faraday-42d1fb`；main 行为仍未改变。** PendingIntent/前台身份、fresh evidence→Enter 原子边界、桌面人工门/Job/lease/Reentry/敏感净化均经独立 Critical/Important 复审 Approved；主会话 `check.ps1 -Shards 3` 全绿（dispatch 50、runner 132、Debug 496、Release 393、debug APK、凭据扫描）。
+- **批次 4 最终安全修复 + Codex CLI 派单通道已离线闭环，逻辑 SHA `3ed077d`，分支 `claude/serene-faraday-42d1fb`；main 行为仍未改变。** 独立 Critical/Important 复审 Approved；`check.ps1 -Shards 3` 全绿：dispatch 58、runner 142、Debug/Release/assembleDebug、凭据扫描。
 - **意图有效期用户 08-03 拍板 5 分钟**（语义："批准后最多隔多久回到微信"）：`foregroundWaitBudget`→300s、`intentTtl`→360s、`decisionTimeout` 保持 90s，关系写成构造断言（`intentTtl ≥ foregroundWaitBudget`；等前台超过证据 TTL 则**必须装配重建通道**——断言挂在能看见通道装没装的地方，不挂可写错的布尔）。**放宽有效期不放宽内容完整性**：执行前重读并与卡上摘要比对。
 - **两处证据都要重建，两次都是离线挖出来的"上真机必然白跑"**：①输入证据按焦点身份取，而 IME 会话 id 每次 `onStartInput` 自增哈希必变；②`PreparedTargetEvidence` 同为 120s 硬要求。**两次的失败形态都与今天一模一样。** 三态 `Rebuilt`/`Mismatch`/`Unverified`，基线一律是卡上那份，**先验会话再验内容**。
 - **比对方式两档**：a11y 严格 sha256；**OCR 归一包含**（`sha256` 逐位相等在 OCR-only 链上物理不可满足，且失败方向是**诬告用户改过内容**）。`contains` 弱在"发得比批准的多"→ 加长度守卫（容差 4）；**漏识导致的不匹配判 `Unverified` 而不是 `Mismatch`**——两者在 OCR-only 链上物理不可分，"读不准不敢放行" ≠ "确认你改过"。
-- **下一步只做 C 道同一 build 四腿真机，当前 0/4。** 新建 clean worktree，先机械确认 `HEAD == ceaabeb0e72ecc7f13f22fc18389ff90447bf4d8`，显式 `-Brain codex`，只构建/安装一次，再按 **Allow → Stale → Deny → Reentry** 连跑；Reentry 固定独立 away 75 秒并机械验证 continuous-away/restored/wait/heartbeat/title rebuild。任一腿失败即停止、保留脱敏证据，不在 C 道改代码或重试。
+- **旧 C 道 run `20260809T203420-6cf147532b9f` 只判基础设施失败**：当时 `-Brain codex` 固定占位 exit 2，未进入安全门；旧 C 冻结且不复用，批次 4 仍 **0/4、未判定**。
+- **新 C 道前只剩一个 B 道决定**：Codex 0.147 没有可用的 `view_image` 禁用键。用户明确接受“空 cwd、无 shell/枚举、prompt/MCP 不提供本机路径、未知 item fail closed”的版本 residual 后，才从 `3ed077d` 新建 clean worktree；否则先升级或加 OS 隔离。
 - **批次 4 现场三条防误判**（验收单已写）：**Stale 腿几十秒终态是对的**，且**挡住它的理由是"等前台恢复超时"而不是"包变了"**；**OCR 抖动导致的 `Unverified` 是正确的 fail-closed，不是功能不稳定**；`-Provision` 装的是 **debug APK**，所以**通过不能区分"功能成立"与"功能只在 debug 里成立"**。
 - **跑前物理前置（都付过学费）**：微信停在「文件传输助手」· 输入框空 · 「回车发送」开着 · `zen_mode=0` · **输入栏上方无系统浮层**（联通流量提示那次把 teardown 判成 dirty）· **切 App 要真的切过去、界面显示出来再点通知**（上轮首跑没真切走，网关仍读到微信而以 `E_CHANNEL_DOWN` 终止）· **跑真机时别同时跑离线闸门**（310MB 可用内存下套件退化成顺序单分片，成片超时与代码无关却最像"新判据不稳"）。
 - **判据纪律（本轮反复付学费，已进 [backlog 复核清单](docs/backlog.md)）**：断言源码文本 = 未覆盖 · 断言"个数>0"会替坏掉的注入打掩护 · **对照实验本身也需要一次对照**（短路没写进去 → 全绿 → 会读成"判据不灵"，方向正好反）· **判据与物理通道相不相称，要等真的去接才暴露** · 判据要挂在能被机械验证的东西上，不挂需要有人记得填对的字段。
