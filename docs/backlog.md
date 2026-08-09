@@ -102,6 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
+| **4（最终安全修复）** | **`ceaabeb0e72ecc7f13f22fc18389ff90447bf4d8`** | `claude/serene-faraday-42d1fb` | **待验收（最终 build 0/4）** | 离线全绿：dispatch 50、runner 132、Debug 496、Release 393；C 只检出本 SHA，显式 `-Brain codex`，同一 build 连跑 Allow → Stale → Deny → Reentry |
 
 **批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
 `cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
