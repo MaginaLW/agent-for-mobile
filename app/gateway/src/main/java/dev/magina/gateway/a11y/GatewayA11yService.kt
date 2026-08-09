@@ -14,10 +14,15 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.EvidenceRebuild
+import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.InputCommitEvidence
+import dev.magina.gateway.core.PreparedTargetEvidence
 import dev.magina.gateway.ocr.OcrEngine
 import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.ime.ImeBridge
+import dev.magina.gateway.tools.UiFindJsonContract
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -194,17 +199,10 @@ class GatewayA11yService : AccessibilityService() {
     private fun resolveForegroundOf(currentWindows: List<AccessibilityWindowInfo>): ResolvedForeground {
         val currentWindow = applicationWindow(currentWindows)
         val rootPackage = runCatching { currentWindow?.root?.packageName?.toString() }.getOrNull()
-        if (currentWindow != null && !rootPackage.isNullOrEmpty()) {
-            foregroundWindowTracker.bootstrapFromWindow(
-                applicationWindowId = currentWindow.id,
-                packageName = rootPackage,
-                windows = foregroundWindows(currentWindows),
-            )
-        }
-        return resolveForeground(
-            identity = foregroundWindowTracker.current(),
+        return foregroundWindowTracker.resolveForegroundOrBootstrap(
             applicationWindowId = currentWindow?.id,
             applicationWindowPackageName = rootPackage,
+            windows = foregroundWindows(currentWindows),
         )
     }
 
@@ -267,13 +265,20 @@ class GatewayA11yService : AccessibilityService() {
             .put("selected_window_id", selected?.id ?: JSONObject.NULL)
             .put(
                 "tracked_identity",
-                (identity as? ForegroundIdentity.Known)?.let {
-                    JSONObject()
-                        .put("window_id", it.windowId)
-                        .put("package", it.packageName)
-                        .put("activity", it.activityName)
-                        .put("bootstrapped", it.bootstrapped)
-                } ?: JSONObject.NULL,
+                when (identity) {
+                    is ForegroundIdentity.Known -> JSONObject()
+                        .put("window_id", identity.windowId)
+                        .put("package", identity.packageName)
+                        .put("activity", identity.activityName)
+                        .put("bootstrapped", identity.bootstrapped)
+                        .put("invalidated", false)
+                    is ForegroundIdentity.Invalidated -> JSONObject()
+                        .put("window_id", identity.windowId)
+                        .put("package", identity.acceptedPackageName)
+                        .put("conflicting_package", identity.conflictingPackageName)
+                        .put("invalidated", true)
+                    ForegroundIdentity.Unknown -> JSONObject.NULL
+                },
             )
             .put("now_ms", System.currentTimeMillis())
             .put("revision", revision)
@@ -368,13 +373,18 @@ class GatewayA11yService : AccessibilityService() {
     fun snapshot(scope: String, maxElements: Int = 200): JSONObject {
         refs.clear()
         lastSnapshotRev = revision
+        // 窗口 id、包身份、元素与 blocking overlay 必须来自同一份窗口列表；逐项另取 `windows`
+        // 会把两个世代拼成一张看似完整的 snapshot。fresh 路径还会在返回前复核 revision。
+        val snapshotWindows = settledWindows()
+        val snapshotApplicationWindow = applicationWindow(snapshotWindows)
+        val snapshotForeground = resolveForegroundOf(snapshotWindows)
         val elements = JSONArray()
         val jsonByRef = HashMap<String, JSONObject>()
         // interactive 与 full 的差异在文本截断长度：interactive 面向操作（短），full 面向阅读（长）
         val cap = if (scope == "full") 500 else 80
         // 前台归属按「活动应用窗口」判定，不用包名比对——vivo 系统窗口事件会污染前台包名跟踪
         //（实测：设置页 43 节点却被误判 fg=0 触发 OCR）；WeChat 类 root=null 的应用窗口自然贡献 0。
-        val fgWinId = appWindowId()
+        val fgWinId = snapshotApplicationWindow?.id ?: -1
         var fgCount = 0
         var count = 0
         var truncated = false
@@ -419,7 +429,7 @@ class GatewayA11yService : AccessibilityService() {
         }
 
         // 遍历全部交互窗口（含弹窗/对话框），跳过 IME 窗口
-        val ws = exposedWindows()
+        val ws = exposedWindows(snapshotWindows)
         for (w in ws) w.root?.let { visit(it, 0, w.id == fgWinId, w.id) }
         if (count == 0) {
             rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { visit(it, 0, true, fgWinId) }
@@ -497,8 +507,10 @@ class GatewayA11yService : AccessibilityService() {
             .put("vision_generation", usedVisionGeneration)
             .put("capture_revision", usedCaptureRevision)
             .put("foreground_window_id", fgWinId)
+            .put("foreground_known", snapshotForeground.known)
+            .put("foreground_package", snapshotForeground.packageName)
             .put("blocking_overlay", hasBlockingOverlay(ws, fgWinId))
-            .put("ime_visible", windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD })
+            .put("ime_visible", snapshotWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD })
             .put("system_bottom_inset", systemBottomInset())
             .put("system_top_inset", systemTopInset())
             .put("elements", elements)
@@ -509,9 +521,19 @@ class GatewayA11yService : AccessibilityService() {
     /** debug 受控宏内部使用：无论 a11y 树是否稠密，都先取得独立世代的真实新截图。 */
     @Synchronized
     internal fun forceFreshVision(scope: String = "interactive", maxElements: Int = 400): JSONObject {
+        return withFreshVisionSnapshot(scope, maxElements) { it }
+    }
+
+    /** consume 在 active capture 尚未释放时执行，供标题与 focused input 形成同世代 bundle。 */
+    @Synchronized
+    private fun <T> withFreshVisionSnapshot(
+        scope: String,
+        maxElements: Int,
+        consume: (JSONObject) -> T,
+    ): T {
         forceFreshOcrOnce = true
         return try {
-            freshVisionSession.withFreshCapture { snapshot(scope, maxElements) }
+            freshVisionSession.withFreshCapture { consume(snapshot(scope, maxElements)) }
         } finally {
             forceFreshOcrOnce = false
         }
@@ -541,13 +563,46 @@ class GatewayA11yService : AccessibilityService() {
         val started = SystemClock.elapsedRealtime()
         val attempts = mutableListOf<SurfaceTitleAttempt>()
         while (true) {
-            val raw = runCatching { forceFreshVision("interactive", maxElements = 400) }.getOrNull()
-            val attempt = SurfaceTitleReadPolicy.classify(
-                raw = raw,
-                screenWidth = metrics.widthPixels,
-                screenHeight = metrics.heightPixels,
-                elapsedMs = SystemClock.elapsedRealtime() - started,
-            )
+            val attempt = try {
+                withFreshVisionSnapshot("interactive", maxElements = 400) { raw ->
+                    val classified = SurfaceTitleReadPolicy.classify(
+                        raw = raw,
+                        screenWidth = metrics.widthPixels,
+                        screenHeight = metrics.heightPixels,
+                        elapsedMs = SystemClock.elapsedRealtime() - started,
+                    )
+                    val capture = classified.capture
+                    if (classified.outcome == SurfaceTitleOutcome.RESOLVED && capture != null) {
+                        val inputProof = readFreshPreparedInputProof(capture)
+                        val inputOcrReadback = if (inputProof.readableText == null) {
+                            val preferredBounds = inputProof.nodeId?.let {
+                                Rect(inputProof.left, inputProof.top, inputProof.right, inputProof.bottom)
+                            }
+                            try {
+                                val bitmap = requireNotNull(freshVisionSession.current()).payload
+                                ocrReadInputBarRegionOf(bitmap, preferredBounds).text
+                            } catch (_: Exception) {
+                                null
+                            }
+                        } else {
+                            null
+                        }
+                        classified.copy(
+                            inputProof = inputProof,
+                            inputOcrReadback = inputOcrReadback,
+                        )
+                    } else {
+                        classified
+                    }
+                }
+            } catch (_: Exception) {
+                SurfaceTitleReadPolicy.classify(
+                    raw = null,
+                    screenWidth = metrics.widthPixels,
+                    screenHeight = metrics.heightPixels,
+                    elapsedMs = SystemClock.elapsedRealtime() - started,
+                )
+            }
             attempts += attempt
             val elapsed = SystemClock.elapsedRealtime() - started
             if (!SurfaceTitleReadPolicy.shouldRetry(attempt, attempts.size, elapsed)) {
@@ -614,17 +669,13 @@ class GatewayA11yService : AccessibilityService() {
     ): T {
         rejectWhileConfirming()
         val fresh = forceFreshVision("interactive", maxElements = 400)
-        val captureRevision = fresh.getLong("capture_revision")
-        val windowId = fresh.getInt("foreground_window_id")
+        val capture = SurfaceTitleReadPolicy.captureOf(fresh)
+        val session = ImeBridge.session()
         // 逐条命名失败原因：合并成一句话时，真机上排查要额外烧一整轮派单才能定位。
         val proofProblems = buildList {
-            if (captureRevision != fresh.getLong("revision")) add("capture_revision 与 revision 不一致")
-            if (fresh.optLong("vision_generation", 0) <= 0) add("vision_generation 无效")
-            if (windowId < 0) add("前台窗口 id 无效")
-            if (fresh.optBoolean("blocking_overlay", true)) add("存在遮挡浮层")
+            addAll(FreshEvidenceRebuildGuard.captureProblems(capture, expectedPackage))
             // 不能用 ime_visible 当活性证据：自有 IME 零 UI，该值恒假（knowledge）。
             // 改用会话身份本身——活的连接 + 会话属于目标 App。
-            val session = ImeBridge.session()
             if (session == null) add("没有活的 IME 输入会话")
             else if (!session.belongsTo(expectedPackage)) {
                 add("IME 输入会话不属于目标 App（session=${session.packageName ?: "未知"}）")
@@ -637,50 +688,19 @@ class GatewayA11yService : AccessibilityService() {
             retryable = false,
         )
         fun requireCurrent() {
-            val current = readFreshActionState()
-            FreshClickFinalGuard.requireCurrent(
-                FreshClickExpectation(
-                    revision = captureRevision,
-                    expectedWindowId = windowId,
-                    expectedPackage = expectedPackage,
-                    imeMustBeHidden = false,
-                ),
-                current,
-            )
-            // 同上：终验也改看会话身份，不看键盘可见性。
-            if (ImeBridge.session()?.belongsTo(expectedPackage) != true) throw GatewayError(
-                ErrorCode.E_STALE_REF,
-                "准备目标终验时 IME 输入会话已失效或不属于目标 App",
-                channel = "vision",
-                retryable = false,
+            FreshEvidenceRebuildGuard.requireCurrent(
+                capture = capture,
+                expectedPackage = expectedPackage,
+                expectedSessionId = requireNotNull(session).id,
+                current = readFreshActionState(),
+                session = ImeBridge.session(),
             )
         }
         requireCurrent()
-        fun readInputProof(): FreshPreparedInputProof {
-            val node = focusedEditable()
-            val present = node?.let { runCatching { it.refresh() }.getOrDefault(false) } == true
-            // 与 UiTools.focusedInputSnapshot 同一判据：不可编辑的节点不产出 a11y 身份与几何，
-            // 否则两处对"有没有可用节点"的判断会打架，验证器必然误判错配。
-            val usable = present && node?.isEditable == true
-            val bounds = node?.takeIf { usable }?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
-            return FreshPreparedInputProof(
-                captureRevision = captureRevision,
-                foregroundWindowId = windowId,
-                nodePresent = present,
-                nodeId = node?.takeIf { usable }?.let(FocusedInputIdentity::fromRefreshedNode),
-                imeSessionId = ImeBridge.focusedInputId,
-                focused = present && node?.isFocused == true,
-                editable = present && node?.isEditable == true,
-                left = bounds.left,
-                top = bounds.top,
-                right = bounds.right,
-                bottom = bounds.bottom,
-            )
-        }
-        val inputProof = readInputProof()
+        val inputProof = readFreshPreparedInputProof(capture)
         val result = validateAndRecord(fresh, inputProof)
         requireCurrent()
-        if (readInputProof() != inputProof) throw GatewayError(
+        if (readFreshPreparedInputProof(capture) != inputProof) throw GatewayError(
             ErrorCode.E_STALE_REF,
             "准备目标记录期间 focused input proof 已变化",
             channel = "vision",
@@ -689,15 +709,61 @@ class GatewayA11yService : AccessibilityService() {
         return result
     }
 
+    /** 同一份 capture 身份下读取 focused input；文本仅供内存内重建，不进入任何诊断。 */
+    private fun readFreshPreparedInputProof(capture: FreshEvidenceCapture): FreshPreparedInputProof =
+        readFreshPreparedInputProof(capture, focusedEditable())
+
+    /** 用同一个真实 node 同时形成 proof 与后续动作，避免 proof 后重新解析到另一世代节点。 */
+    private fun readFreshPreparedInputProof(
+        capture: FreshEvidenceCapture,
+        node: AccessibilityNodeInfo?,
+    ): FreshPreparedInputProof {
+        val present = node?.let {
+            try {
+                it.refresh()
+            } catch (_: Exception) {
+                false
+            }
+        } == true
+        // 与 UiTools.focusedInputSnapshot 同一判据：不可编辑节点不产出 a11y 身份、文本与几何。
+        val usable = present && node?.isEditable == true
+        val bounds = node?.takeIf { usable }?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
+        val session = ImeBridge.session()
+        return FreshPreparedInputProof(
+            captureRevision = capture.captureRevision,
+            foregroundWindowId = capture.foregroundWindowId,
+            visionGeneration = capture.visionGeneration,
+            nodePresent = present,
+            nodeId = node?.takeIf { usable }?.let(FocusedInputIdentity::fromRefreshedNode),
+            imeSessionId = session?.id,
+            focused = present && node?.isFocused == true,
+            editable = present && node?.isEditable == true,
+            left = bounds.left,
+            top = bounds.top,
+            right = bounds.right,
+            bottom = bounds.bottom,
+            readableText = node?.takeIf { usable }?.text?.toString(),
+        )
+    }
+
     /** IME 会话锁内可调用的快速最终校验；不截图、不 OCR、无 UI 副作用。 */
     internal fun isFreshActionStateCurrent(
         expectedRevision: Long,
         expectedWindowId: Int,
         expectedPackage: String,
         imeMustBeHidden: Boolean,
-    ): Boolean = runCatching {
-        requireFreshActionState(expectedRevision, expectedWindowId, expectedPackage, imeMustBeHidden)
-    }.isSuccess
+    ): Boolean = try {
+        requireFreshActionState(
+            expectedRevision,
+            expectedWindowId,
+            expectedPackage,
+            imeMustBeHidden,
+            allowSettling = false,
+        )
+        true
+    } catch (_: Exception) {
+        false
+    }
 
     /** 固定查询提交的锁内快检：页面 proof 不变之外，真实 editable 焦点仍须位于 SEARCH 区。 */
     internal fun isFreshSearchCommitStateCurrent(
@@ -736,17 +802,21 @@ class GatewayA11yService : AccessibilityService() {
         expectedWindowId: Int,
         expectedPackage: String,
         imeMustBeHidden: Boolean,
+        allowSettling: Boolean = true,
     ) {
         FreshClickFinalGuard.requireCurrent(
             FreshClickExpectation(expectedRevision, expectedWindowId, expectedPackage, imeMustBeHidden),
-            readFreshActionState(),
+            readFreshActionState(allowSettling),
         )
     }
 
-    private fun readFreshActionState(): FreshClickCurrent {
+    private fun readFreshActionState(): FreshClickCurrent = readFreshActionState(allowSettling = true)
+
+    private fun readFreshActionState(allowSettling: Boolean): FreshClickCurrent {
         // 先让窗口稳定（见 settledWindows），再开始这段"期间不得有事件"的原子读取——
         // 否则重读期间的自然事件会把新鲜度校验直接顶成 fail-closed。
-        settledWindows()
+        // IME sessionLock 内的最后一次 fast precondition 禁止等待；它只读现状，漂移就直接失败。
+        if (allowSettling) settledWindows()
         val revisionBefore = rev.get()
         val currentWindows = windows
         val applicationWindow = applicationWindow(currentWindows)
@@ -838,21 +908,95 @@ class GatewayA11yService : AccessibilityService() {
 
     fun find(text: String?, role: String?, desc: String?): JSONArray {
         val snap = snapshot("interactive", maxElements = 400)
-        val out = JSONArray()
         val arr = snap.getJSONArray("elements")
-        for (i in 0 until arr.length()) {
-            val e = arr.getJSONObject(i)
-            val et = e.getString("text")
-            // OCR 来源文本额外做归一匹配（全角/大小写/0O 形近，S3 实锤），a11y 文本保持精确 contains
-            val ocrSourced = e.optString("source") != "a11y"
-            val tOk = text.isNullOrEmpty() || et.contains(text) || e.getString("desc").contains(text) ||
-                (ocrSourced && OcrEngine.norm(et).contains(OcrEngine.norm(text)))
-            val rOk = role.isNullOrEmpty() || e.getString("role") == role
-            val dOk = desc.isNullOrEmpty() || e.getString("desc").contains(desc)
-            if (tOk && rOk && dOk) out.put(e)
-        }
-        return out
+        // 过滤与 normalized 产出必须共用同一纯契约；否则测试只能做源码字符串断言，
+        // 而调用方拿到的字段可能与真正用于命中的归一规则分叉。
+        return UiFindJsonContract.matches(arr, text, role, desc)
     }
+
+    /**
+     * 危险 Enter 的最终视觉 + IME 动作边界。
+     *
+     * service monitor 内强制取得新的标题/输入 bundle，再用同一个 focused node 形成动作 proof，
+     * 最后按 service → IME sessionLock 的固定锁序完成唯一一次投递。IME 锁里的 fast precondition
+     * 只读 revision/window/package/overlay，不截图、不 OCR、也不反向取得 service monitor。
+     */
+    @Synchronized
+    internal fun performFreshEvidenceEnter(
+        expectedFocusIdentity: FocusIdentity,
+        expectedInputCommitEvidence: InputCommitEvidence,
+        expectedFocusedInputBounds: String?,
+        expectedPreparedTargetEvidence: PreparedTargetEvidence,
+        rollback: () -> Unit,
+    ): Boolean {
+        rejectWhileConfirming()
+        return FreshEnterActionExecutor.execute(
+            expectedFocusIdentity = expectedFocusIdentity,
+            expectedFocusedInputBounds = expectedFocusedInputBounds,
+            expectedPrepared = expectedPreparedTargetEvidence,
+            expectedInput = expectedInputCommitEvidence,
+            readFreshBundle = { readSurfaceTitle().bundle },
+            readCurrent = ::readFreshActionState,
+            readSession = ImeBridge::session,
+            prepareAction = { capture ->
+                val node = focusedEditable()
+                val inputProof = readFreshPreparedInputProof(capture, node)
+                val a11yAction = node
+                    ?.takeIf {
+                        inputProof.nodePresent && inputProof.focused && inputProof.editable &&
+                            inputProof.nodeId != null
+                    }
+                    ?.let { current ->
+                        {
+                            current.performAction(
+                                AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id,
+                            )
+                        }
+                    }
+                FreshEnterPreparedAction(inputProof) {
+                    ImeBridge.enterIfCurrentSession(
+                        expectedPackage = expectedPreparedTargetEvidence.packageName,
+                        expectedSessionId = expectedFocusIdentity.imeSessionId,
+                        fastPrecondition = {
+                            isFreshActionStateCurrent(
+                                expectedRevision = capture.revision,
+                                expectedWindowId = capture.foregroundWindowId,
+                                expectedPackage = expectedPreparedTargetEvidence.packageName,
+                                imeMustBeHidden = false,
+                            )
+                        },
+                        a11yAction = a11yAction,
+                    )
+                }
+            },
+            rollback = rollback,
+        )
+    }
+
+    /**
+     * Release 语义重建的共享临界区：初读标题不能单独流出，最终 fresh 标题、输入 proof、
+     * 双 store 写入与 post-check 由同一个 executor 排序；任何漂移由 rollback 清空两份证据。
+     */
+    @Synchronized
+    internal fun rebuildEvidenceWithFreshGuard(
+        initialBundle: FreshEvidenceReadBundle,
+        expectedPackage: String,
+        expectedSessionId: String,
+        readEvidence: (FreshEvidenceReadBundle) -> EvidenceRebuild,
+        publish: (EvidenceRebuild.Rebuilt, FreshPreparedInputProof) -> Unit,
+        rollback: () -> Unit,
+    ): EvidenceRebuild = FreshEvidenceRebuildExecutor.execute(
+        initialBundle = initialBundle,
+        expectedPackage = expectedPackage,
+        expectedSessionId = expectedSessionId,
+        readCurrent = ::readFreshActionState,
+        readSession = ImeBridge::session,
+        readCurrentInput = ::readFreshPreparedInputProof,
+        readFreshBundle = { readSurfaceTitle().bundle },
+        readEvidence = readEvidence,
+        publish = publish,
+        rollback = rollback,
+    )
 
     /**
      * 本次感知里视觉通道的失败原因；null 表示上一次并入 OCR 时是正常的。
@@ -1437,9 +1581,14 @@ class GatewayA11yService : AccessibilityService() {
      * 换 App 或换姿势就不成立，所以但凡有真几何就别用它。
      */
     internal fun ocrReadInputBarRegion(preferredBounds: Rect? = null): InputBarReadback {
+        val full = captureBitmapRetry()
+        return ocrReadInputBarRegionOf(full, preferredBounds)
+    }
+
+    /** 已有 fresh Bitmap 时复用它，避免标题与输入内容分别来自两次截图。 */
+    private fun ocrReadInputBarRegionOf(full: Bitmap, preferredBounds: Rect?): InputBarReadback {
         val metrics = resources.displayMetrics
         val inset = systemBottomInset()
-        val full = captureBitmapRetry()
         val preferred = preferredBounds?.let { wanted ->
             Rect(
                 wanted.left.coerceIn(0, full.width - 1),
@@ -1460,7 +1609,11 @@ class GatewayA11yService : AccessibilityService() {
             (full.width * 0.94).toInt(),
             bottom,
         )
-        val text = runCatching { ocrReadRegionOf(full, region) }.getOrNull()
+        val text = try {
+            ocrReadRegionOf(full, region)
+        } catch (_: Exception) {
+            null
+        }
         return InputBarReadback(
             text = text,
             region = region,

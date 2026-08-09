@@ -6,8 +6,76 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import dev.magina.gateway.core.ConfirmNotificationContent
 import dev.magina.gateway.core.RiskTier
+
+/**
+ * 决策广播的 Android `PendingIntent` 身份与生命周期策略。纯函数产出，供 JVM 用例钉住；
+ * [ConfirmNotifier.decisionIntent] 必须直接消费这份结果，不能另造一套 identity。
+ */
+internal data class DecisionPendingIntentSpec(
+    val requestCode: Int,
+    val dataUri: String,
+    val flags: Int,
+)
+
+internal fun decisionPendingIntentSpec(
+    confirmationId: String,
+    allowed: Boolean,
+): DecisionPendingIntentSpec {
+    val decision = if (allowed) "allow" else "deny"
+    return DecisionPendingIntentSpec(
+        requestCode = if (allowed) REQUEST_ALLOW else REQUEST_DENY,
+        // extras 不参与 PendingIntent 匹配；把完整 confirmationId 无碰撞编码进 data 才是身份。
+        dataUri = "gateway-approval://decision/$decision/${confirmationId.encodeAsHex()}",
+        flags = PendingIntent.FLAG_CANCEL_CURRENT or
+            PendingIntent.FLAG_IMMUTABLE or
+            PendingIntent.FLAG_ONE_SHOT,
+    )
+}
+
+/**
+ * 通知本身不会在点击后自动消失，详情入口也必须保持可重复点击；它不承载可变 extras，
+ * 因而只需不可变语义，不能使用 one-shot、update 或 cancel-current。
+ */
+internal fun detailsPendingIntentFlags(): Int = PendingIntent.FLAG_IMMUTABLE
+
+/**
+ * 生产实际使用的审批回执 Intent builder。JVM 契约测试通过 Robolectric 直接执行这段 Android
+ * 组装代码，避免只测一份平行 spec、而真实 Intent 漏掉 component/data/extras 仍然绿。
+ */
+internal fun buildDecisionIntent(
+    context: Context,
+    confirmationId: String,
+    nonce: String,
+    allowed: Boolean,
+): Intent {
+    val spec = decisionPendingIntentSpec(confirmationId, allowed)
+    return Intent(ConfirmNotifier.ACTION_DECIDE)
+        .setClassName(context.packageName, ConfirmDecisionReceiver::class.java.name)
+        .setPackage(context.packageName)
+        .setData(Uri.parse(spec.dataUri))
+        .putExtra(ConfirmNotifier.EXTRA_CONFIRMATION_ID, confirmationId)
+        .putExtra(ConfirmNotifier.EXTRA_NONCE, nonce)
+        .putExtra(ConfirmNotifier.EXTRA_ALLOWED, allowed)
+}
+
+private fun String.encodeAsHex(): String {
+    return buildString(length * 4) {
+        this@encodeAsHex.forEach { character ->
+            val value = character.code
+            append(HEX_DIGITS[(value ushr 12) and 0x0f])
+            append(HEX_DIGITS[(value ushr 8) and 0x0f])
+            append(HEX_DIGITS[(value ushr 4) and 0x0f])
+            append(HEX_DIGITS[value and 0x0f])
+        }
+    }
+}
+
+private const val HEX_DIGITS = "0123456789abcdef"
+private const val REQUEST_ALLOW = 0x9101
+private const val REQUEST_DENY = 0x9102
 
 /**
  * 危险动作审批通知（批次 2）。与 [ConfirmOverlay] 的悬浮卡**并联**：同一次确认两条通道，
@@ -183,44 +251,39 @@ object ConfirmNotifier {
                 context,
                 REQUEST_DETAILS,
                 open,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                detailsPendingIntentFlags(),
             ),
         ).build()
     }
 
     /**
-     * 回执 PendingIntent。三处刻意的写法：
+     * 回执 PendingIntent。四处刻意的写法：
      *
      * - **显式组件 + 限定本包**：广播只可能落到自家不导出的 receiver 上。
      * - **`FLAG_IMMUTABLE`**：拿到这个 PendingIntent 的人改不了里面的 extras，
      *   也就伪造不出"另一个 confirmationId / 另一个 allowed"。
-     * - **`FLAG_UPDATE_CURRENT` + 按 allowed 分开的 requestCode**：允许与拒绝是两个不同的
-     *   PendingIntent，不会互相覆盖；而同一次确认重复 post 时更新的是同一个，nonce 保持一致。
+     * - **唯一 data URI + 按 allowed 分开的 requestCode**：confirmationId 与决定共同构成身份，
+     *   A 的句柄绝不会因 B 到来而被改写；允许与拒绝也不会互相覆盖。
+     * - **`FLAG_CANCEL_CURRENT | FLAG_ONE_SHOT`**：同一次确认若重复 post，新句柄先取消旧句柄；
+     *   任一句柄成功发送一次后也立即失效。旧确认即使迟到，arbiter 的 id/nonce 校验仍会拒绝。
      */
-    private fun decisionIntent(
+    internal fun decisionIntent(
         context: Context,
         confirmationId: String,
         nonce: String,
         allowed: Boolean,
     ): PendingIntent {
-        val intent = Intent(ACTION_DECIDE)
-            .setClassName(context.packageName, ConfirmDecisionReceiver::class.java.name)
-            .setPackage(context.packageName)
-            .putExtra(EXTRA_CONFIRMATION_ID, confirmationId)
-            .putExtra(EXTRA_NONCE, nonce)
-            .putExtra(EXTRA_ALLOWED, allowed)
+        val spec = decisionPendingIntentSpec(confirmationId, allowed)
         return PendingIntent.getBroadcast(
             context,
-            if (allowed) REQUEST_ALLOW else REQUEST_DENY,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            spec.requestCode,
+            buildDecisionIntent(context, confirmationId, nonce, allowed),
+            spec.flags,
         )
     }
 
     /** 确认窗口之外再多给 15s：宁可晚一点被系统收走，不可早于人还能点的时候就消失。 */
     private const val TIMEOUT_SLACK_MS = 15_000L
 
-    private const val REQUEST_ALLOW = 0x9101
-    private const val REQUEST_DENY = 0x9102
     private const val REQUEST_DETAILS = 0x9103
 }

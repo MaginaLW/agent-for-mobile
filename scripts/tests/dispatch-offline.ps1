@@ -1,6 +1,6 @@
 #Requires -Version 7
 [CmdletBinding()]
-param()
+param([string]$Filter = '*')
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -15,6 +15,7 @@ $TracesDir = Join-Path $RepoRoot 'docs\runs\traces'
 $LedgerPath = Join-Path $RepoRoot 'docs\runs\ledger.csv'
 $LockPath = Join-Path $RepoRoot 'scripts\.dispatch.lock'
 $PwshPath = (Get-Process -Id $PID).Path
+$FixturePowerShellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
 if (-not (Test-Path -LiteralPath $SourceDispatchPath -PathType Leaf)) {
     throw "测试设施错误：找不到真实 wrapper：$SourceDispatchPath"
@@ -53,7 +54,9 @@ function Assert-NotMatches {
 
 function Get-RepoEffectState {
     $traceState = if (Test-Path -LiteralPath $TracesDir) {
-        @(Get-ChildItem -LiteralPath $TracesDir -File -Recurse | Sort-Object FullName | ForEach-Object {
+        @(Get-ChildItem -LiteralPath $TracesDir -File -Recurse |
+            Where-Object { $_.Name -notlike 'fixture-*.pause.md' } |
+            Sort-Object FullName | ForEach-Object {
             $relative = [IO.Path]::GetRelativePath($TracesDir, $_.FullName)
             "$relative|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)"
         }) -join "`n"
@@ -88,7 +91,10 @@ function Assert-NoExternalTools {
 }
 
 function Invoke-Dispatch {
-    param([string[]]$Arguments)
+    param(
+        [string[]]$Arguments,
+        [AllowNull()][string]$StandardInput = $null
+    )
 
     foreach ($tool in $ExternalTools) {
         $oldToolSentinel = Join-Path $SentinelDir "$tool-called.txt"
@@ -111,6 +117,7 @@ function Invoke-Dispatch {
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $start.Environment['PATH'] = $FakeBin + [IO.Path]::PathSeparator + $start.Environment['PATH']
     $start.Environment['DISPATCH_TEST_SENTINEL_DIR'] = $SentinelDir
+    $start.Environment['DISPATCH_TEST_LOCK_PATH'] = $LockPath
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
@@ -120,6 +127,7 @@ function Invoke-Dispatch {
     try {
         if (-not $process.Start()) { throw '测试设施错误：无法启动 dispatch 子进程。' }
         $started = $true
+        if ($null -ne $StandardInput) { $process.StandardInput.Write($StandardInput) }
         $process.StandardInput.Close()
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -132,6 +140,13 @@ function Invoke-Dispatch {
         }
 
         # 进程树退出后必须回收两个异步读取任务，避免管道句柄拖住 TEMP 清理。
+        # 若被测实现错误地遗留了仍持有管道句柄的孤儿孙进程，这里也必须有界失败，
+        # 不能让 RED fixture 自己无限挂住整个离线套件。
+        foreach ($readTask in @($stdoutTask, $stderrTask)) {
+            if (-not $readTask.Wait(5000)) {
+                throw '测试设施错误：dispatch 已退出但输出管道仍被遗留孙进程持有。'
+            }
+        }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($timedOut) {
@@ -179,6 +194,7 @@ function Invoke-Dispatch {
 
 function Test-Case {
     param([string]$Name, [scriptblock]$Body)
+    if ($Name -notlike $Filter) { return }
     try {
         & $Body
         $script:Passed++
@@ -266,6 +282,11 @@ try {
     $fakeAdb = @'
 @echo off
 >>"%DISPATCH_TEST_SENTINEL_DIR%\adb-called.txt" echo %*
+if /I "%1"=="get-state" (
+  echo device
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="input" if /I "%3"=="keyevent" exit /b 0
 if /I "%1"=="get-serialno" (
   echo FAKE-DISPATCH-DEVICE
   exit /b 0
@@ -298,6 +319,37 @@ exit /b 97
         }
     }
 
+    # gateway -Confirm 的正向证据必须来自固定 traces 目录；夹具先造好，再冻结 DryRun 副作用快照。
+    $gatewaySafeTraceName = '20260809-000001-offline-gateway-confirm-gateway-claude-leg1.jsonl'
+    $gatewaySafeTrace = Join-Path $TracesDir $gatewaySafeTraceName
+    $gatewaySafetyTraceName = '20260809-000002-offline-gateway-safety-terminal-gateway-claude-leg1.jsonl'
+    $gatewaySafetyTrace = Join-Path $TracesDir $gatewaySafetyTraceName
+    $gatewayVerifyFailTraceName = '20260809-000000-offline-gateway-verify-fail-gateway-claude-leg1.jsonl'
+    $gatewayVerifyFailTrace = Join-Path $TracesDir $gatewayVerifyFailTraceName
+    $gatewayEmptySessionTraceName = '20260809-000003-offline-gateway-empty-session-gateway-claude-leg1.jsonl'
+    $gatewayEmptySessionTrace = Join-Path $TracesDir $gatewayEmptySessionTraceName
+    New-Item -ItemType Directory -Path $TracesDir -Force | Out-Null
+    @(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"mcp__gateway__foreground_app","input":{}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":[{"type":"text","text":"{\"ok\":true,\"data\":{\"package\":\"com.tencent.mm\"}}"}]}]}}',
+        '{"type":"result","subtype":"success","session_id":"offline","result":"[AWAIT_CONFIRM]\n屏幕现状：离线测试，不存在真实手机动作。\n待执行动作：离线验证 profile 继承。\n剩余步骤：无。"}'
+    ) | Set-Content -LiteralPath $gatewaySafeTrace -Encoding utf8
+    @(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"mcp__gateway__press_key","input":{"key":"enter"}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"p1","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_CONFIRM_TIMEOUT\",\"channel\":\"safety\",\"retryable\":false}}"}]}]}}',
+        '{"type":"result","subtype":"success","session_id":"offline","result":"[AWAIT_CONFIRM]\n屏幕现状：secret-pause-body-must-not-leak\n待执行动作：危险工具已返回 E_CONFIRM_TIMEOUT。\n剩余步骤：不得恢复。"}'
+    ) | Set-Content -LiteralPath $gatewaySafetyTrace -Encoding utf8
+    @(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"mcp__gateway__press_key","input":{"key":"enter"}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"p1","content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_VERIFY_FAIL\",\"channel\":\"safety\",\"retryable\":false}}"}]}]}}',
+        '{"type":"result","subtype":"success","session_id":"offline-verify-fail","result":"[AWAIT_CONFIRM]\n屏幕现状：危险调用已经返回。\n待执行动作：危险工具已返回 E_VERIFY_FAIL。\n剩余步骤：不得恢复。"}'
+    ) | Set-Content -LiteralPath $gatewayVerifyFailTrace -Encoding utf8
+    @(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"mcp__gateway__foreground_app","input":{}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":[{"type":"text","text":"{\"ok\":true,\"data\":{\"package\":\"com.tencent.mm\"}}"}]}]}}',
+        '{"type":"result","subtype":"success","result":"[AWAIT_CONFIRM]\n屏幕现状：空 session 不能建立关联。\n待执行动作：不得恢复。\n剩余步骤：无。"}'
+    ) | Set-Content -LiteralPath $gatewayEmptySessionTrace -Encoding utf8
+
     $before = Get-RepoEffectState
     $taskArgs = @('-Task', 'offline profile contract', '-Slug', 'offline-profile', '-DryRun')
 
@@ -308,22 +360,25 @@ exit /b 97
 
     Test-Case '执行器拒绝名单覆盖本机 shell、派生执行体与汇报类工具' {
         $src = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8
+        $denyMatch = [regex]::Match($src, '(?s)\$LocalToolDenyList\s*=\s*@\((?<body>.*?)\)\s*-join')
+        Assert-True $denyMatch.Success '无法定位 LocalToolDenyList。'
+        $denyBody = $denyMatch.Groups['body'].Value
         # 两个 shell 必须成对出现：本机是 Windows，只禁 Bash 等于没禁
         # （2026-07-31 复查发现 PowerShell 一直漏在名单外）。
         foreach ($shell in @('Bash', 'PowerShell')) {
-            Assert-Matches $src "'$shell'"
+            Assert-Matches $denyBody "'$shell'"
         }
         # 派生执行体会绕开本名单本身。
         foreach ($spawner in @('Task', 'Agent', 'Workflow')) {
-            Assert-Matches $src "'$spawner'"
+            Assert-Matches $denyBody "'$spawner'"
         }
         # 汇报/交互类：对驱动手机无用，一旦出现就会被 trace 审计判成越权，
         # 在真人已点确认、危险动作已执行之后把整腿判死（2026-07-31 ReportFindings 实锤）。
         foreach ($noise in @('ReportFindings', 'AskUserQuestion', 'TodoWrite')) {
-            Assert-Matches $src "'$noise'"
+            Assert-Matches $denyBody "'$noise'"
         }
         # ToolSearch 必须**不在**拒绝名单里：延迟注册的 MCP 工具要靠它加载 schema。
-        Assert-NotMatches $src "'ToolSearch'"
+        Assert-NotMatches $denyBody "'ToolSearch'"
     }
 
     Test-Case '终态判据容忍 markdown 强调，且失败绝不落成成功' {
@@ -560,16 +615,30 @@ exit /b 97
         Assert-NoRepoEffects $before
     }
 
-    $gatewayPause = Join-Path $TestRoot 'gateway.pause.md'
-    Set-Content -LiteralPath $gatewayPause -Encoding utf8 -Value @'
+    $gatewayPause = Join-Path $TracesDir 'fixture-gateway.pause.md'
+    Set-Content -LiteralPath $gatewayPause -Encoding utf8 -Value @"
 slug: offline-gateway-confirm
 leg: 1
 executor: gateway
 session_id: offline
+trace: $gatewaySafeTraceName
 ---
 [AWAIT_CONFIRM]
 屏幕现状：离线测试，不存在真实手机动作。
 待执行动作：离线验证 profile 继承。
+剩余步骤：无。
+"@
+
+    $redirectedPause = Join-Path $TracesDir 'fixture-redirected-confirm.pause.md'
+    Set-Content -LiteralPath $redirectedPause -Encoding utf8 -Value @'
+slug: offline-redirected-confirm
+leg: 1
+executor: mobile
+session_id: offline
+---
+[AWAIT_CONFIRM]
+屏幕现状：离线测试。
+待执行动作：不得由重定向 stdin 授权。
 剩余步骤：无。
 '@
 
@@ -585,27 +654,209 @@ session_id: offline
         Assert-NoRepoEffects $before
     }
 
-    $gatewaySafetyPause = Join-Path $TestRoot 'gateway-safety-terminal.pause.md'
-    Set-Content -LiteralPath $gatewaySafetyPause -Encoding utf8 -Value @'
+    Test-Case '-Confirm 暂停件 direct leaf hardlink 必须在首次读取前拒绝' {
+        $outsidePause = Join-Path $SentinelDir 'confirm-pause-link-target.md'
+        $linkedPause = Join-Path $TracesDir 'fixture-confirm-pause-link.pause.md'
+        Set-Content -LiteralPath $outsidePause -Encoding utf8 -Value @"
+slug: offline-gateway-confirm
+leg: 1
+executor: gateway
+session_id: offline
+trace: $gatewaySafeTraceName
+---
+[AWAIT_CONFIRM]
+屏幕现状：离线测试，不存在真实手机动作。
+待执行动作：离线验证 profile 继承。
+剩余步骤：无。
+"@
+        $expectedHash = (Get-FileHash -LiteralPath $outsidePause -Algorithm SHA256).Hash
+        try {
+            New-Item -ItemType HardLink -Path $linkedPause -Target $outsidePause -ErrorAction Stop | Out-Null
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $linkedPause -Force).LinkType)) `
+                'fixture 未实际建立 pause hardlink。'
+            $result = Invoke-Dispatch @('-Confirm', $linkedPause, '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) 'Confirm pause hardlink 必须 fail closed。'
+            Assert-Contains $result.Text 'unsafe_artifact_path'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+|confirm-pause-link-target'
+            Assert-NoExternalTools $result
+            Assert-True ((Get-FileHash -LiteralPath $outsidePause -Algorithm SHA256).Hash -ceq $expectedHash) `
+                'dispatch 跟随或改写了根外 pause target。'
+        }
+        finally { Remove-Item -LiteralPath $linkedPause -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case '-Confirm 暂停件 ancestor junction 必须在首次读取前拒绝且不泄漏正文' {
+        $outsideRoot = Join-Path $SentinelDir 'confirm-ancestor-target'
+        $outsideSub = Join-Path $outsideRoot 'ordinary-subdirectory'
+        $outsidePause = Join-Path $outsideSub 'nested.pause.md'
+        $junction = Join-Path $TracesDir 'fixture-confirm-ancestor-link'
+        New-Item -ItemType Directory -Path $outsideSub -Force | Out-Null
+        Set-Content -LiteralPath $outsidePause -Encoding utf8 -Value @'
+slug: offline-confirm-ancestor
+leg: 1
+executor: mobile
+session_id: offline
+---
+[AWAIT_CONFIRM]
+屏幕现状：Authorization: Bearer confirm-ancestor-fixture-secret
+待执行动作：不得跟随 ancestor junction 读取。
+剩余步骤：无。
+'@
+        $expectedHash = (Get-FileHash -LiteralPath $outsidePause -Algorithm SHA256).Hash
+        try {
+            New-Item -ItemType Junction -Path $junction -Target $outsideRoot -ErrorAction Stop | Out-Null
+            $item = Get-Item -LiteralPath $junction -Force
+            Assert-True (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) `
+                'fixture 未实际建立 Confirm ancestor junction。'
+            $result = Invoke-Dispatch @(
+                '-Confirm', (Join-Path (Join-Path $junction 'ordinary-subdirectory') 'nested.pause.md'), '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) 'Confirm ancestor junction 必须 fail closed。'
+            Assert-Contains $result.Text 'unsafe_artifact_path'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+confirm-ancestor-fixture-secret|confirm-ancestor-target'
+            Assert-NoExternalTools $result
+            Assert-True ((Get-FileHash -LiteralPath $outsidePause -Algorithm SHA256).Hash -ceq $expectedHash) `
+                'dispatch 跟随/消费了 ancestor junction 根外 pause。'
+        }
+        finally { Remove-Item -LiteralPath $junction -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case '-Confirm 引用的固定 trace direct leaf hardlink 必须在首次读取前拒绝' {
+        $traceName = '20260809-000004-offline-gateway-trace-link-gateway-claude-leg1.jsonl'
+        $traceLink = Join-Path $TracesDir $traceName
+        $outsideTrace = Join-Path $SentinelDir 'confirm-trace-link-target.jsonl'
+        Copy-Item -LiteralPath $gatewaySafeTrace -Destination $outsideTrace
+        $expectedHash = (Get-FileHash -LiteralPath $outsideTrace -Algorithm SHA256).Hash
+        $pause = Join-Path $TracesDir 'fixture-confirm-trace-link.pause.md'
+        Set-Content -LiteralPath $pause -Encoding utf8 -Value @"
+slug: offline-gateway-trace-link
+leg: 1
+executor: gateway
+session_id: offline
+trace: $traceName
+---
+[AWAIT_CONFIRM]
+屏幕现状：离线测试，不存在真实手机动作。
+待执行动作：离线验证 profile 继承。
+剩余步骤：无。
+"@
+        try {
+            New-Item -ItemType HardLink -Path $traceLink -Target $outsideTrace -ErrorAction Stop | Out-Null
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $traceLink -Force).LinkType)) `
+                'fixture 未实际建立 trace hardlink。'
+            $result = Invoke-Dispatch @('-Confirm', $pause, '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) 'Confirm trace hardlink 必须 fail closed。'
+            Assert-Contains $result.Text 'unsafe_artifact_path'
+            Assert-NotMatches $result.Text 'confirm-trace-link-target'
+            Assert-NoExternalTools $result
+            Assert-True ((Get-FileHash -LiteralPath $outsideTrace -Algorithm SHA256).Hash -ceq $expectedHash) `
+                'dispatch 跟随或改写了根外 trace target。'
+        }
+        finally { Remove-Item -LiteralPath $traceLink -Force -ErrorAction SilentlyContinue }
+    }
+
+    $gatewaySafetyPause = Join-Path $TracesDir 'fixture-gateway-safety-terminal.pause.md'
+    Set-Content -LiteralPath $gatewaySafetyPause -Encoding utf8 -Value @"
 slug: offline-gateway-safety-terminal
 leg: 1
 executor: gateway
 session_id: offline
+trace: $gatewaySafetyTraceName
 ---
 [AWAIT_CONFIRM]
 屏幕现状：secret-pause-body-must-not-leak
 待执行动作：危险工具已返回 E_CONFIRM_TIMEOUT。
 剩余步骤：不得恢复。
-'@
+"@
 
     Test-Case 'gateway safety 终态暂停件机械拒绝恢复' {
         $result = Invoke-Dispatch @('-Confirm', $gatewaySafetyPause, '-DryRun')
         Assert-True ($result.ExitCode -ne 0) 'gateway safety 终态不应允许进入第二腿。'
-        Assert-Contains $result.Text 'E_CONFIRM_TIMEOUT'
-        Assert-Contains $result.Text '拒绝恢复'
+        Assert-Matches $result.Text '只读|危险或未知工具|结构化 trace|拒绝恢复'
         Assert-NotMatches $result.Text 'secret-pause-body-must-not-leak|键入\s*CONFIRM|Read-Host'
         Assert-NoExternalTools $result
         Assert-NoRepoEffects $before
+    }
+
+    Test-Case '旧 gateway 暂停件缺 trace 正向证据时 fail closed' {
+        $legacyGateway = Join-Path $TracesDir 'fixture-legacy-gateway-no-trace.pause.md'
+        Set-Content -LiteralPath $legacyGateway -Encoding utf8 -Value @'
+slug: offline-legacy-gateway
+leg: 1
+executor: gateway
+session_id: offline
+---
+[AWAIT_CONFIRM]
+屏幕现状：旧格式。
+待执行动作：无法证明。
+剩余步骤：无。
+'@
+        $result = Invoke-Dispatch @('-Confirm', $legacyGateway, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) '旧 gateway 暂停件不能证明危险工具未调用，必须拒绝。'
+        Assert-Matches $result.Text 'trace.*证明|正向证明|拒绝恢复'
+        Assert-NoExternalTools $result
+        Assert-NoRepoEffects $before
+    }
+
+    Test-Case 'gateway pause 与 trace 的 session_id 同为空也不能冒充正向关联' {
+        $emptySessionPause = Join-Path $TracesDir 'fixture-gateway-empty-session.pause.md'
+        Set-Content -LiteralPath $emptySessionPause -Encoding utf8 -Value @"
+slug: offline-gateway-empty-session
+leg: 1
+executor: gateway
+session_id:
+trace: $gatewayEmptySessionTraceName
+---
+[AWAIT_CONFIRM]
+屏幕现状：空 session 不能建立关联。
+待执行动作：不得恢复。
+剩余步骤：无。
+"@
+        $result = Invoke-Dispatch @('-Confirm', $emptySessionPause, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) '空 session_id 不能用空==空伪造 trace/pause 关联。'
+        Assert-Contains $result.Text 'gateway 暂停件 session_id 不能为空'
+        Assert-NoExternalTools $result
+    }
+
+    Test-Case 'gateway trace 的 terminal session_id 缺失必须由 proof 显式拒绝' {
+        $missingTerminalSessionPause = Join-Path $TracesDir 'fixture-gateway-missing-terminal-session.pause.md'
+        Set-Content -LiteralPath $missingTerminalSessionPause -Encoding utf8 -Value @"
+slug: offline-gateway-empty-session
+leg: 1
+executor: gateway
+session_id: offline-present-in-pause
+trace: $gatewayEmptySessionTraceName
+---
+[AWAIT_CONFIRM]
+屏幕现状：空 session 不能建立关联。
+待执行动作：不得恢复。
+剩余步骤：无。
+"@
+        $result = Invoke-Dispatch @('-Confirm', $missingTerminalSessionPause, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) 'trace terminal session_id 缺失必须 fail closed。'
+        Assert-Contains $result.Text 'gateway trace terminal session_id 不能为空'
+        Assert-NoExternalTools $result
+    }
+
+    $gatewayVerifyFailPause = Join-Path $TracesDir 'fixture-gateway-verify-fail.pause.md'
+    Set-Content -LiteralPath $gatewayVerifyFailPause -Encoding utf8 -Value @"
+slug: offline-gateway-verify-fail
+leg: 1
+executor: gateway
+session_id: offline-verify-fail
+trace: $gatewayVerifyFailTraceName
+---
+[AWAIT_CONFIRM]
+屏幕现状：危险调用已经返回。
+待执行动作：危险工具已返回 E_VERIFY_FAIL。
+剩余步骤：不得恢复。
+"@
+
+    Test-Case 'gateway 危险调用后返回 E_VERIFY_FAIL 的暂停件不得进入第二腿' {
+        $result = Invoke-Dispatch @('-Confirm', $gatewayVerifyFailPause, '-DryRun')
+        Assert-True ($result.ExitCode -ne 0) '危险调用已经发生，E_VERIFY_FAIL 不得被恢复。'
+        Assert-Matches $result.Text '危险工具|结构化 trace|拒绝恢复|E_VERIFY_FAIL'
+        Assert-NotMatches $result.Text 'executor=gateway.*leg=2'
+        Assert-NoExternalTools $result
     }
 
     Test-Case '确认腿显式不同 executor 时 fail-fast' {
@@ -652,7 +903,7 @@ session_id: offline
     }
 
     Test-Case '暂停件 leg 接龙被拒（两段式只有第二腿）' {
-        $chained = Join-Path $TestRoot 'chained.pause.md'
+        $chained = Join-Path $TracesDir 'fixture-chained.pause.md'
         Set-Content -LiteralPath $chained -Encoding utf8 -Value @'
 slug: offline-chained
 leg: 2
@@ -671,7 +922,7 @@ session_id: offline
     }
 
     Test-Case '暂停件 leg 非数字时 fail-fast' {
-        $bogus = Join-Path $TestRoot 'bogus-leg.pause.md'
+        $bogus = Join-Path $TracesDir 'fixture-bogus-leg.pause.md'
         Set-Content -LiteralPath $bogus -Encoding utf8 -Value @'
 slug: offline-bogus-leg
 leg: 一
@@ -692,7 +943,7 @@ session_id: offline
     Test-Case '已消费的暂停件拒绝重放' {
         # 一次人工确认只授权一次执行（硬门不变量 4）。落盘的暂停件天然可重放——
         # 同一份 -Confirm 跑两次就是两次执行，而人只点过一次头。
-        $consumed = Join-Path $TestRoot 'consumed.pause.md'
+        $consumed = Join-Path $TracesDir 'fixture-consumed.pause.md'
         Set-Content -LiteralPath $consumed -Encoding utf8 -Value @'
 slug: offline-consumed
 leg: 1
@@ -724,7 +975,7 @@ consumed: 2026-08-01T00:00:00.0000000Z
         Assert-NoRepoEffects $before
     }
 
-    $legacyPause = Join-Path $TestRoot 'legacy.pause.md'
+    $legacyPause = Join-Path $TracesDir 'fixture-legacy.pause.md'
     Set-Content -LiteralPath $legacyPause -Encoding utf8 -Value @'
 slug: offline-legacy-confirm
 leg: 1
@@ -755,6 +1006,139 @@ session_id: offline
     . $fixtureLockHelper
     $lockProbeDir = Join-Path $TestRoot 'lock-probe'
     New-Item -ItemType Directory -Path $lockProbeDir -Force | Out-Null
+
+    function New-DispatchLockLinkVariants {
+        param(
+            [Parameter(Mandatory)][string]$Prefix,
+            [Parameter(Mandatory)][string]$Target
+        )
+
+        $variants = @()
+        $hardLink = Join-Path $lockProbeDir "$Prefix-hardlink.lock"
+        New-Item -ItemType HardLink -Path $hardLink -Target $Target -ErrorAction Stop | Out-Null
+        $hardLinkItem = Get-Item -LiteralPath $hardLink -Force -ErrorAction Stop
+        Assert-True ([string]$hardLinkItem.LinkType -ceq 'HardLink') `
+            '测试设施错误：未创建真实 HardLink 锁叶子。'
+        $variants += [pscustomobject]@{ Kind = 'HardLink'; Path = $hardLink }
+
+        $symbolicLink = Join-Path $lockProbeDir "$Prefix-symlink.lock"
+        try {
+            New-Item -ItemType SymbolicLink -Path $symbolicLink -Target $Target -ErrorAction Stop | Out-Null
+            $symbolicLinkItem = Get-Item -LiteralPath $symbolicLink -Force -ErrorAction Stop
+            Assert-True (
+                [string]$symbolicLinkItem.LinkType -ceq 'SymbolicLink' -and
+                ($symbolicLinkItem.Attributes -band [IO.FileAttributes]::ReparsePoint)
+            ) '测试设施错误：未创建真实 SymbolicLink 重解析锁叶子。'
+            $variants += [pscustomobject]@{ Kind = 'SymbolicLink'; Path = $symbolicLink }
+        }
+        catch {
+            Write-Host 'INFO  当前 Windows 权限不允许创建 SymbolicLink；HardLink 负例仍为强制覆盖。'
+            Remove-Item -LiteralPath $symbolicLink -Force -ErrorAction SilentlyContinue
+        }
+        return $variants
+    }
+
+    function Assert-DispatchLockLinkRejected {
+        param(
+            [Parameter(Mandatory)]$Variant,
+            [Parameter(Mandatory)][string]$ExternalTarget,
+            [Parameter(Mandatory)][string]$Secret,
+            [Parameter(Mandatory)][ValidateSet('GetHolder', 'Open')][string]$Operation
+        )
+
+        $hashBefore = (Get-FileHash -LiteralPath $ExternalTarget -Algorithm SHA256).Hash
+        $captured = @(& {
+            try {
+                if ($Operation -ceq 'GetHolder') {
+                    $value = Get-DispatchLockHolder -Path $Variant.Path
+                }
+                else {
+                    $value = Open-DispatchLock -Path $Variant.Path -Owner 'offline/link-rejection'
+                }
+                [pscustomobject]@{
+                    DispatchLockLinkOutcome = $true
+                    Threw = $false
+                    Message = if ($Operation -ceq 'GetHolder') { [string]$value.Detail } else { '' }
+                    Stream = if ($Operation -ceq 'Open') { $value } else { $null }
+                }
+            }
+            catch {
+                [pscustomobject]@{
+                    DispatchLockLinkOutcome = $true
+                    Threw = $true
+                    Message = $_.Exception.Message
+                    Stream = $null
+                }
+            }
+        } 6>&1)
+        $outcome = @($captured | Where-Object { $_.PSObject.Properties['DispatchLockLinkOutcome'] })[-1]
+        $observable = (@(
+            $captured | Where-Object { $_ -is [Management.Automation.InformationRecord] } |
+                ForEach-Object { $_.ToString() }
+        ) + @($outcome.Message)) -join "`n"
+
+        $issues = @()
+        try {
+            if (-not $outcome.Threw) { $issues += "$Operation 未拒绝 $($Variant.Kind) 锁叶子" }
+            if ($outcome.Message -cne 'unsafe_dispatch_lock_path') { $issues += "$Operation 未返回固定错误" }
+            if ($observable -match [regex]::Escape($Secret)) { $issues += "$Operation 泄露了外部 Bearer sentinel" }
+            if ($observable -match [regex]::Escape($ExternalTarget)) { $issues += "$Operation 泄露了外部目标路径" }
+            if (-not (Test-Path -LiteralPath $Variant.Path -PathType Leaf)) {
+                $issues += "$Operation 删除了链接锁叶子"
+            }
+            else {
+                $leafAfter = Get-Item -LiteralPath $Variant.Path -Force -ErrorAction Stop
+                if ([string]$leafAfter.LinkType -cne [string]$Variant.Kind) {
+                    $issues += "$Operation 把链接锁叶子替换成了普通文件"
+                }
+            }
+            $hashAfter = (Get-FileHash -LiteralPath $ExternalTarget -Algorithm SHA256).Hash
+            if ($hashAfter -cne $hashBefore) { $issues += "$Operation 修改了外部目标内容"
+            }
+        }
+        finally {
+            if ($null -ne $outcome.Stream) { $outcome.Stream.Dispose() }
+        }
+        Assert-True ($issues.Count -eq 0) ($issues -join '；')
+    }
+
+    Test-Case 'GetHolder 在读取前拒绝链接锁叶子且不泄露外部 sentinel' {
+        $secret = 'Bearer dispatch-lock-getholder-sentinel-must-not-leak'
+        $externalTarget = Join-Path $lockProbeDir 'getholder-external-sentinel.txt'
+        Set-Content -LiteralPath $externalTarget -Value $secret -Encoding utf8
+        $variants = @(New-DispatchLockLinkVariants -Prefix 'getholder' -Target $externalTarget)
+        try {
+            foreach ($variant in $variants) {
+                Assert-DispatchLockLinkRejected -Variant $variant -ExternalTarget $externalTarget `
+                    -Secret $secret -Operation GetHolder
+            }
+        }
+        finally {
+            foreach ($variant in $variants) {
+                Remove-Item -LiteralPath $variant.Path -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $externalTarget -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case 'Open 在清理或读取前拒绝链接锁叶子且不改外部 sentinel' {
+        $secret = 'Bearer dispatch-lock-open-sentinel-must-not-leak'
+        $externalTarget = Join-Path $lockProbeDir 'open-external-sentinel.txt'
+        Set-Content -LiteralPath $externalTarget -Value $secret -Encoding utf8
+        $variants = @(New-DispatchLockLinkVariants -Prefix 'open' -Target $externalTarget)
+        try {
+            foreach ($variant in $variants) {
+                Assert-DispatchLockLinkRejected -Variant $variant -ExternalTarget $externalTarget `
+                    -Secret $secret -Operation Open
+            }
+        }
+        finally {
+            foreach ($variant in $variants) {
+                Remove-Item -LiteralPath $variant.Path -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $externalTarget -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     Test-Case '无锁时正常取得并写入可读的持有者信息' {
         $path = Join-Path $lockProbeDir 'fresh.lock'
@@ -799,12 +1183,580 @@ session_id: offline
         finally { $held.Close(); Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     }
 
+    Test-Case 'runner 设备 lease 存续时普通 dispatch 在任何 adb 预检前被拒绝' {
+        $token = [guid]::NewGuid().ToString('N')
+        $lease = Open-DispatchLock -Path $LockPath -Owner 'offline-runner/full-lifecycle' `
+            -LeaseOwnerToken $token
+        try {
+            $result = Invoke-Dispatch @('-Task', '不得插入 runner 生命周期', '-Slug', 'offline-overlap')
+            Assert-True ($result.ExitCode -ne 0) '普通 dispatch 不得插入 runner 的 provision/inter-leg/teardown。'
+            Assert-Matches $result.Text '设备|lease|派单进行中|锁'
+            Assert-NoExternalTools $result
+        }
+        finally {
+            $lease.Close()
+            Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case '设备 lease owner 与真实继承句柄可共存且继续排斥普通 writer' {
+        $path = Join-Path $lockProbeDir 'inherited.lock'
+        $token = [guid]::NewGuid().ToString('N')
+        $ownerLease = Open-DispatchLock -Path $path -Owner 'offline-runner/full-lifecycle' `
+            -LeaseOwnerToken $token
+        $childLease = $null
+        try {
+            $childLease = Open-DispatchLock -Path $path -Owner 'offline-child/leg1' `
+                -LeaseOwnerToken $token -InheritLease
+            Assert-True ($null -ne $childLease) '真实子 dispatch 句柄无法加入 owner lease。'
+            $ordinaryRejected = $false
+            try { Open-DispatchLock -Path $path -Owner 'ordinary-dispatch' | Out-Null }
+            catch { $ordinaryRejected = $true }
+            Assert-True $ordinaryRejected 'owner+child 共存时普通 writer 插入了设备 lease。'
+
+            # 模拟 runner 崩溃：owner 句柄由 OS 回收、来不及删文件；仍活着的 child 必须独自
+            # 维持设备排他，直到它也退出，不能给普通 dispatch 留插入窗口。
+            $ownerLease.Dispose()
+            $ownerLease = $null
+            $ordinaryRejected = $false
+            try { Open-DispatchLock -Path $path -Owner 'ordinary-after-owner-crash' | Out-Null }
+            catch { $ordinaryRejected = $true }
+            Assert-True $ordinaryRejected 'owner 先退出后，仍活着的 child 没有继续排斥普通 writer。'
+        }
+        finally {
+            if ($null -ne $childLease) { Close-DispatchLock -Stream $childLease -Path $path }
+            if ($null -ne $ownerLease) { Close-DispatchLock -Stream $ownerLease -Path $path }
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case 'TimeoutMin 越界必须在任何外部工具或子进程前 fail-fast' {
+        foreach ($badTimeout in @(-1, 0, 61, 2147483647)) {
+            $result = Invoke-Dispatch @(
+                '-Task', 'timeout 参数离线负例', '-Slug', "offline-timeout-$badTimeout",
+                '-TimeoutMin', "$badTimeout"
+            )
+            Assert-True ($result.ExitCode -ne 0) "TimeoutMin=$badTimeout 不得进入预检或派单。"
+            Assert-Matches $result.Text 'TimeoutMin.*1.*60|1\.\.60'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
+        }
+    }
+
+    Test-Case 'standalone dispatch 必须在 adb 前拒绝预存 traces root junction' {
+        $backup = Join-Path $TestRoot 'standalone-traces-root-backup'
+        $outsideRoot = Join-Path $SentinelDir 'standalone-traces-root-target'
+        $sentinel = Join-Path $outsideRoot 'outside-sentinel.txt'
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        try {
+            Move-Item -LiteralPath $TracesDir -Destination $backup
+            New-Item -ItemType Directory -Path $outsideRoot -Force | Out-Null
+            Set-Content -LiteralPath $sentinel -Encoding utf8 `
+                -Value 'Authorization: Bearer standalone-trace-root-fixture-secret'
+            $expectedHash = (Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash
+            $beforeNames = @(Get-ChildItem -LiteralPath $outsideRoot -Force | Sort-Object Name |
+                ForEach-Object Name)
+            New-Item -ItemType Junction -Path $TracesDir -Target $outsideRoot -ErrorAction Stop | Out-Null
+            $rootItem = Get-Item -LiteralPath $TracesDir -Force
+            Assert-True (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) `
+                'fixture 未实际建立 traces root junction。'
+
+            $result = Invoke-Dispatch @('-Task','standalone first-use root','-Slug','offline-root-link')
+            Assert-True ($result.ExitCode -ne 0) '预存 traces junction 必须 fail closed。'
+            Assert-Contains $result.Text 'unsafe_artifact_path'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+standalone-trace-root-fixture-secret'
+            Assert-NoExternalTools $result
+            Assert-True ((Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash -ceq $expectedHash) `
+                'dispatch 改写了 junction 根外 sentinel。'
+            $afterNames = @(Get-ChildItem -LiteralPath $outsideRoot -Force | Sort-Object Name |
+                ForEach-Object Name)
+            Assert-True (($afterNames -join "`n") -ceq ($beforeNames -join "`n")) `
+                "dispatch 在根外 traces 目标新建了文件：$($afterNames -join ',')"
+        }
+        finally {
+            if (Test-Path -LiteralPath $TracesDir) { Remove-Item -LiteralPath $TracesDir -Force -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $backup -PathType Container) {
+                Move-Item -LiteralPath $backup -Destination $TracesDir
+            }
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) { [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length) }
+            Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+            foreach ($tool in $ExternalTools) {
+                Remove-Item -LiteralPath (Join-Path $SentinelDir "$tool-called.txt") -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    Test-Case 'standalone dispatch 必须在 adb 前拒绝预存 ledger hardlink' {
+        $traceBackup = Join-Path $TestRoot 'standalone-ledger-traces-backup'
+        $ledgerBackup = Join-Path $TestRoot 'standalone-ledger-backup.csv'
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        try {
+            Move-Item -LiteralPath $TracesDir -Destination $traceBackup
+            New-Item -ItemType Directory -Path $TracesDir -Force | Out-Null
+            if ($ledgerExisted) { Move-Item -LiteralPath $LedgerPath -Destination $ledgerBackup }
+            $outsideLedger = Join-Path $SentinelDir 'standalone-ledger-target.csv'
+            @(
+                'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note',
+                '2026-08-09T00:00:00,"outside-sentinel",1,claude,sonnet,0,0,0,0,0,0,0,fail,,,"Authorization: Bearer standalone-ledger-fixture-secret"'
+            ) | Set-Content -LiteralPath $outsideLedger -Encoding utf8
+            $expectedHash = (Get-FileHash -LiteralPath $outsideLedger -Algorithm SHA256).Hash
+            New-Item -ItemType HardLink -Path $LedgerPath -Target $outsideLedger -ErrorAction Stop | Out-Null
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $LedgerPath -Force).LinkType)) `
+                'fixture 未实际建立 ledger hardlink。'
+
+            $result = Invoke-Dispatch @('-Task','standalone first-use ledger','-Slug','offline-ledger-link')
+            Assert-True ($result.ExitCode -ne 0) '预存 ledger hardlink 必须 fail closed。'
+            Assert-Contains $result.Text 'unsafe_artifact_path'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+standalone-ledger-fixture-secret'
+            Assert-NoExternalTools $result
+            Assert-True ((Get-FileHash -LiteralPath $outsideLedger -Algorithm SHA256).Hash -ceq $expectedHash) `
+                'dispatch 在安全验证前跟随 ledger hardlink 追加了根外 sentinel。'
+        }
+        finally {
+            Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue
+            if ($ledgerExisted -and (Test-Path -LiteralPath $ledgerBackup -PathType Leaf)) {
+                Move-Item -LiteralPath $ledgerBackup -Destination $LedgerPath
+            }
+            Remove-Item -LiteralPath $TracesDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $traceBackup -PathType Container) {
+                Move-Item -LiteralPath $traceBackup -Destination $TracesDir
+            }
+            Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+            foreach ($tool in $ExternalTools) {
+                Remove-Item -LiteralPath (Join-Path $SentinelDir "$tool-called.txt") -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    Test-Case 'standalone dispatch 动态 prompt/trace/err/pause 叶子 link 均须在 adb 前拒绝' {
+        $originalDispatch = Get-Content -LiteralPath $DispatchPath -Raw -Encoding utf8
+        $fixedStamp = '20260809-010203'
+        $oldFixedStamp = $env:DISPATCH_TEST_FIXED_STAMP
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        try {
+            $stampNeedle = '$stamp = Get-Date -Format ''yyyyMMdd-HHmmss'''
+            Assert-True $originalDispatch.Contains($stampNeedle, [StringComparison]::Ordinal) `
+                '测试设施错误：无法定位 dispatch stamp seam。'
+            $fixedSource = $originalDispatch.Replace(
+                $stampNeedle,
+                '$stamp = if ($env:DISPATCH_TEST_FIXED_STAMP) { $env:DISPATCH_TEST_FIXED_STAMP } else { Get-Date -Format ''yyyyMMdd-HHmmss'' }'
+            )
+            Set-Content -LiteralPath $DispatchPath -Value $fixedSource -Encoding utf8
+            $env:DISPATCH_TEST_FIXED_STAMP = $fixedStamp
+
+            $suffixes = @('.prompt.md','.jsonl','.err.txt','.pause.md')
+            for ($index = 0; $index -lt $suffixes.Count; $index++) {
+                $suffix = $suffixes[$index]
+                $slug = "offline-dynamic-leaf-$index"
+                $prefix = "$fixedStamp-$slug-mobile-claude-leg1"
+                $outside = Join-Path $SentinelDir "dynamic-leaf-$index-target.txt"
+                Set-Content -LiteralPath $outside -Encoding utf8 `
+                    -Value "Authorization: Bearer dynamic-leaf-$index-fixture-secret"
+                $expectedHash = (Get-FileHash -LiteralPath $outside -Algorithm SHA256).Hash
+                $link = Join-Path $TracesDir "$prefix$suffix"
+                try {
+                    New-Item -ItemType HardLink -Path $link -Target $outside -ErrorAction Stop | Out-Null
+                    Assert-True (-not [string]::IsNullOrWhiteSpace([string](Get-Item -LiteralPath $link -Force).LinkType)) `
+                        "fixture 未实际建立 $suffix hardlink。"
+                    $result = Invoke-Dispatch @('-Task','dynamic leaf first-use','-Slug',$slug)
+                    Assert-True ($result.ExitCode -ne 0) "$suffix 预存 link 必须 fail closed。"
+                    Assert-Contains $result.Text 'unsafe_artifact_path'
+                    Assert-NotMatches $result.Text "(?i)Bearer\s+dynamic-leaf-$index-fixture-secret"
+                    Assert-NoExternalTools $result
+                    Assert-True ((Get-FileHash -LiteralPath $outside -Algorithm SHA256).Hash -ceq $expectedHash) `
+                        "dispatch 跟随 $suffix hardlink 改写了根外 sentinel。"
+                }
+                finally {
+                    Get-ChildItem -LiteralPath $TracesDir -Filter "$prefix*" -File -Force -ErrorAction SilentlyContinue |
+                        Remove-Item -Force -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+                    foreach ($tool in $ExternalTools) {
+                        Remove-Item -LiteralPath (Join-Path $SentinelDir "$tool-called.txt") -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
+        finally {
+            $env:DISPATCH_TEST_FIXED_STAMP = $oldFixedStamp
+            Set-Content -LiteralPath $DispatchPath -Value $originalDispatch -Encoding utf8
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) { [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length) }
+        }
+    }
+
+    Test-Case 'dispatch 启动后异常路径必须在 finally 回收 Job 后再释放 lease' {
+        $source = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8
+        $outerFinallyIndex = $source.LastIndexOf("`nfinally {", [StringComparison]::Ordinal)
+        Assert-True ($outerFinallyIndex -ge 0) 'dispatch 缺少外层 finally。'
+        $outerFinally = $source.Substring($outerFinallyIndex)
+        $jobStopIndex = $outerFinally.IndexOf('Stop-DispatchJobProcesses', [StringComparison]::Ordinal)
+        $leaseCloseIndex = $outerFinally.IndexOf('Close-DispatchLock', [StringComparison]::Ordinal)
+        Assert-True ($jobStopIndex -ge 0 -and $leaseCloseIndex -gt $jobStopIndex) `
+            'dispatch 外层 finally 必须先机械清空 Job，再释放设备 lease。'
+    }
+
+    Test-Case '根进程先退出后异常仍须在释放 lease 前终止长寿孙进程' {
+        $grandchildScript = Join-Path $SentinelDir 'dispatch-grandchild.ps1'
+        $grandchildPidPath = Join-Path $SentinelDir 'dispatch-grandchild.pid'
+        $leaseViolationPath = Join-Path $SentinelDir 'lease-released-while-grandchild-alive.txt'
+        $fakeClaudeSource = Join-Path $SentinelDir 'dispatch-fake-claude.cs'
+        $fakeClaudeExe = Join-Path $FakeBin 'claude.exe'
+        $originalDispatch = Get-Content -LiteralPath $DispatchPath -Raw -Encoding utf8
+        $oldFault = $env:DISPATCH_TEST_POST_START_FAILURE
+        $oldFixturePowerShell = $env:DISPATCH_TEST_FIXTURE_POWERSHELL
+        $grandchildPid = $null
+        try {
+            @'
+$PID | Set-Content -LiteralPath (Join-Path $env:DISPATCH_TEST_SENTINEL_DIR 'dispatch-grandchild.pid') -NoNewline -Encoding ascii
+while ($true) {
+    if (-not (Test-Path -LiteralPath $env:DISPATCH_TEST_LOCK_PATH -PathType Leaf)) {
+        Set-Content -LiteralPath (Join-Path $env:DISPATCH_TEST_SENTINEL_DIR 'lease-released-while-grandchild-alive.txt') `
+            -Value '1' -NoNewline -Encoding ascii
+    }
+    Start-Sleep -Milliseconds 25
+}
+'@ | Set-Content -LiteralPath $grandchildScript -Encoding utf8
+
+            @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class Program {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string applicationName, string commandLine, IntPtr processAttributes,
+        IntPtr threadAttributes, bool inheritHandles, int creationFlags,
+        IntPtr environment, string currentDirectory, ref STARTUPINFO startupInfo,
+        out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr thread);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    public static int Main() {
+        string sentinel = Environment.GetEnvironmentVariable("DISPATCH_TEST_SENTINEL_DIR");
+        string executable = Environment.GetEnvironmentVariable("DISPATCH_TEST_FIXTURE_POWERSHELL");
+        string script = Path.Combine(sentinel, "dispatch-grandchild.ps1");
+        string pidPath = Path.Combine(sentinel, "dispatch-grandchild.pid");
+        string commandLine = "\"" + executable + "\" -NoProfile -File \"" + script + "\"";
+        STARTUPINFO startup = new STARTUPINFO();
+        startup.cb = Marshal.SizeOf<STARTUPINFO>();
+        PROCESS_INFORMATION process;
+        const int CREATE_NO_WINDOW = 0x08000000;
+        const int CREATE_SUSPENDED = 0x00000004;
+        if (!CreateProcess(executable, commandLine, IntPtr.Zero, IntPtr.Zero,
+            false, CREATE_NO_WINDOW | CREATE_SUSPENDED, IntPtr.Zero, null, ref startup, out process)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        try {
+            File.WriteAllText(pidPath, process.dwProcessId.ToString(), Encoding.ASCII);
+            if (ResumeThread(process.hThread) == 0xffffffff) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        } catch {
+            TerminateProcess(process.hProcess, 1);
+            throw;
+        } finally {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $fakeClaudeSource -Encoding utf8
+            $cscPath = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+            Assert-True (Test-Path -LiteralPath $cscPath -PathType Leaf) '测试设施错误：缺少系统 C# 编译器。'
+            $compilerOutput = & $cscPath /nologo /target:exe "/out:$fakeClaudeExe" $fakeClaudeSource 2>&1
+            Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $fakeClaudeExe -PathType Leaf)) `
+                "测试设施错误：无法编译 fake claude.exe：$compilerOutput"
+            $env:DISPATCH_TEST_FIXTURE_POWERSHELL = $FixturePowerShellPath
+
+            # 故障必须落在 root WaitForExit 已返回、首次 normal Job drain 尚未发生的窄窗：
+            # fake root 已派生长寿孙进程并退出，此时唯一能收口的是 outer finally。
+            $faultNeedle = '    $finished = $proc.WaitForExit($TimeoutMin * 60 * 1000)'
+            Assert-True $originalDispatch.Contains($faultNeedle, [StringComparison]::Ordinal) `
+                '测试设施错误：无法定位 dispatch post-start 故障注入点。'
+            $faultedDispatch = $originalDispatch.Replace(
+                $faultNeedle,
+                "$faultNeedle`r`n    if (`$env:DISPATCH_TEST_POST_START_FAILURE -ceq '1') { throw 'fixture_post_start_failure' }"
+            )
+            if ($env:DISPATCH_TEST_MUTATE_OUTER_JOB_CLEANUP -ceq '1') {
+                # 隔离 RED 控制：只改 TEMP fixture，故意在 outer-finally drain Job 前释放 lease，
+                # 留 500ms 让仍活的孙进程机械记录顺序违规。正常回归永不启用此开关。
+                $cleanupNeedle = '    $treeCleanupFailure = $null'
+                Assert-True $faultedDispatch.Contains($cleanupNeedle, [StringComparison]::Ordinal) `
+                    '测试设施错误：无法定位 outer-finally cleanup seam。'
+                $faultedDispatch = $faultedDispatch.Replace(
+                    $cleanupNeedle,
+                    "    if (`$lockFs) { Close-DispatchLock -Stream `$lockFs -Path `$LockFile; `$lockFs = `$null; Start-Sleep -Milliseconds 500 }`r`n$cleanupNeedle"
+                )
+            }
+            Set-Content -LiteralPath $DispatchPath -Value $faultedDispatch -Encoding utf8
+            $env:DISPATCH_TEST_POST_START_FAILURE = '1'
+
+            $result = Invoke-Dispatch @('-Task','孙进程生命周期离线负例','-Slug','offline-grandchild-lifetime')
+            Assert-True ($result.ExitCode -ne 0) 'post-start 故障必须令 dispatch 非零退出。'
+            Assert-Contains $result.Text 'fixture_post_start_failure'
+
+            $pidDeadline = [DateTime]::UtcNow.AddSeconds(3)
+            while (-not (Test-Path -LiteralPath $grandchildPidPath -PathType Leaf) -and
+                [DateTime]::UtcNow -lt $pidDeadline) { Start-Sleep -Milliseconds 25 }
+            Assert-True (Test-Path -LiteralPath $grandchildPidPath -PathType Leaf) `
+                "fake claude.exe 没有实际 CreateProcess 长寿孙进程。dispatch output=$($result.Text)"
+            $grandchildPid = [int](Get-Content -LiteralPath $grandchildPidPath -Raw)
+            Assert-True ($grandchildPid -gt 0) 'fake claude.exe 落下了无效孙进程 PID。'
+            $exitDeadline = [DateTime]::UtcNow.AddSeconds(3)
+            $grandchildProcess = Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue
+            while ($null -ne $grandchildProcess -and [DateTime]::UtcNow -lt $exitDeadline) {
+                try { if ($grandchildProcess.HasExited) { break } } catch { break }
+                Start-Sleep -Milliseconds 25
+                $grandchildProcess = Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue
+            }
+            $grandchildStillAlive = $false
+            if ($null -ne $grandchildProcess) {
+                try { $grandchildStillAlive = -not $grandchildProcess.HasExited }
+                catch { $grandchildStillAlive = $false }
+            }
+            $grandchildCim = Get-CimInstance Win32_Process -Filter "ProcessId=$grandchildPid" -ErrorAction SilentlyContinue
+            $grandchildCimText = if ($null -eq $grandchildCim) { '<absent>' } else {
+                "name=$($grandchildCim.Name);ppid=$($grandchildCim.ParentProcessId);cmd=$($grandchildCim.CommandLine)"
+            }
+            Assert-True (-not (Test-Path -LiteralPath $leaseViolationPath -PathType Leaf)) `
+                "dispatch 在孙进程仍活着时提前释放了设备 lease（孙进程仍活=$grandchildStillAlive）。"
+            Assert-True (-not $grandchildStillAlive) `
+                "dispatch 根进程已退出，但长寿孙进程仍存活（$grandchildCimText）。"
+            Assert-True (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) `
+                '确认孙进程退出后 dispatch 仍未释放 lease。'
+        }
+        finally {
+            $env:DISPATCH_TEST_POST_START_FAILURE = $oldFault
+            $env:DISPATCH_TEST_FIXTURE_POWERSHELL = $oldFixturePowerShell
+            Set-Content -LiteralPath $DispatchPath -Value $originalDispatch -Encoding utf8
+            if ($null -eq $grandchildPid -and (Test-Path -LiteralPath $grandchildPidPath -PathType Leaf)) {
+                $grandchildPid = [int](Get-Content -LiteralPath $grandchildPidPath -Raw)
+            }
+            if ($null -ne $grandchildPid) {
+                Stop-Process -Id $grandchildPid -Force -ErrorAction SilentlyContinue
+                try { Wait-Process -Id $grandchildPid -Timeout 5 -ErrorAction SilentlyContinue } catch {}
+            }
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*-offline-grandchild-lifetime-mobile-claude-leg1.*' } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ($before.Ledger -ceq '<missing>' -and (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) {
+                Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $fakeClaudeExe -Force -ErrorAction SilentlyContinue
+            foreach ($name in @(
+                'adb-called.txt','claude-called.txt','dispatch-grandchild.pid',
+                'dispatch-grandchild.ps1','dispatch-fake-claude.cs',
+                'lease-released-while-grandchild-alive.txt'
+            )) {
+                Remove-Item -LiteralPath (Join-Path $SentinelDir $name) -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    Test-Case '硬杀仅 dispatch 根时 Job close 必须终止 wrapper 与全部后代再允许取 lease' {
+        $claudeCmd = Join-Path $FakeBin 'claude.cmd'
+        $originalClaudeCmd = Get-Content -LiteralPath $claudeCmd -Raw -Encoding utf8
+        $childScript = Join-Path $SentinelDir 'dispatch-rootkill-child.ps1'
+        $childPidPath = Join-Path $SentinelDir 'dispatch-rootkill-child.pid'
+        $leaseViolationPath = Join-Path $SentinelDir 'dispatch-rootkill-lease-violation.txt'
+        $dispatchProcess = $null
+        $childPid = $null
+        $fakeRootPid = $null
+        $wrapperPid = $null
+        try {
+            @'
+Set-Content -LiteralPath (Join-Path $env:DISPATCH_TEST_SENTINEL_DIR 'dispatch-rootkill-child.pid') `
+    -Value $PID -NoNewline -Encoding ascii
+while ($true) {
+    $probe = $null
+    try {
+        $lockPath = $env:DISPATCH_TEST_LOCK_PATH
+        if (Test-Path -LiteralPath $lockPath -PathType Leaf) {
+            $probe = [IO.File]::Open($lockPath, 'Open', 'ReadWrite', 'None')
+        }
+        else {
+            $probe = [IO.File]::Open($lockPath, 'CreateNew', 'ReadWrite', 'None')
+        }
+        Set-Content -LiteralPath (Join-Path $env:DISPATCH_TEST_SENTINEL_DIR `
+            'dispatch-rootkill-lease-violation.txt') -Value '1' -NoNewline -Encoding ascii
+    }
+    catch { }
+    finally { if ($null -ne $probe) { $probe.Dispose() } }
+    Start-Sleep -Milliseconds 10
+}
+'@ | Set-Content -LiteralPath $childScript -Encoding utf8
+
+            @'
+@echo off
+start "" /b "%DISPATCH_TEST_FIXTURE_POWERSHELL%" -NoProfile -File "%DISPATCH_TEST_SENTINEL_DIR%\dispatch-rootkill-child.ps1"
+:hold
+ping -n 2 127.0.0.1 >nul
+goto hold
+'@ | Set-Content -LiteralPath $claudeCmd -Encoding ascii
+
+            foreach ($path in @($childPidPath,$leaseViolationPath,$LockPath)) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = $PwshPath
+            $start.WorkingDirectory = $RepoRoot
+            $start.UseShellExecute = $false
+            $start.RedirectStandardInput = $true
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $start.CreateNoWindow = $true
+            foreach ($arg in @(
+                '-NoProfile','-File',$DispatchPath,'-Task','root hard-kill lifetime fixture',
+                '-Slug','offline-root-hardkill','-TimeoutMin','5'
+            )) { $start.ArgumentList.Add($arg) }
+            $start.Environment['PATH'] = $FakeBin + [IO.Path]::PathSeparator + $start.Environment['PATH']
+            $start.Environment['DISPATCH_TEST_SENTINEL_DIR'] = $SentinelDir
+            $start.Environment['DISPATCH_TEST_LOCK_PATH'] = $LockPath
+            $start.Environment['DISPATCH_TEST_FIXTURE_POWERSHELL'] = $FixturePowerShellPath
+            $dispatchProcess = [Diagnostics.Process]::new()
+            $dispatchProcess.StartInfo = $start
+            Assert-True ($dispatchProcess.Start()) '测试设施错误：无法启动 root-hardkill dispatch。'
+            $dispatchProcess.StandardInput.Close()
+
+            $pidDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (-not (Test-Path -LiteralPath $childPidPath -PathType Leaf) -and
+                [DateTime]::UtcNow -lt $pidDeadline) { Start-Sleep -Milliseconds 20 }
+            Assert-True (Test-Path -LiteralPath $childPidPath -PathType Leaf) `
+                'root-hardkill fixture 未实际启动长寿 child。'
+            $childPid = [int](Get-Content -LiteralPath $childPidPath -Raw)
+            $childCim = Get-CimInstance Win32_Process -Filter "ProcessId=$childPid" -ErrorAction SilentlyContinue
+            Assert-True ($null -ne $childCim) '无法读取长寿 child 进程关系。'
+            $fakeRootPid = [int]$childCim.ParentProcessId
+            $fakeRootCim = Get-CimInstance Win32_Process -Filter "ProcessId=$fakeRootPid" -ErrorAction SilentlyContinue
+            Assert-True ($null -ne $fakeRootCim) '无法读取 fake Claude 根进程。'
+            $wrapperPid = [int]$fakeRootCim.ParentProcessId
+            $wrapperCim = Get-CimInstance Win32_Process -Filter "ProcessId=$wrapperPid" -ErrorAction SilentlyContinue
+            Assert-True ($null -ne $wrapperCim -and $wrapperCim.ParentProcessId -eq $dispatchProcess.Id) `
+                'fixture 没有形成 dispatch → wrapper → fake Claude → child 的真实进程链。'
+            Assert-True (Test-Path -LiteralPath $LockPath -PathType Leaf) `
+                'dispatch 根尚未硬杀时没有持有设备 lease。'
+
+            # 只杀根；绝不能用 Kill(true)，否则测试会替生产 Job 兜底把后代清掉。
+            $dispatchProcess.Kill()
+            Assert-True ($dispatchProcess.WaitForExit(5000)) 'dispatch 根硬杀后 5s 未退出。'
+
+            $exitDeadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $alive = @($wrapperPid,$fakeRootPid,$childPid | Where-Object {
+                    $candidate = Get-Process -Id $_ -ErrorAction SilentlyContinue
+                    if ($null -eq $candidate) { return $false }
+                    try { return -not $candidate.HasExited } catch { return $false }
+                })
+                if ($alive.Count -eq 0) { break }
+                Start-Sleep -Milliseconds 20
+            } while ([DateTime]::UtcNow -lt $exitDeadline)
+
+            Assert-True (-not (Test-Path -LiteralPath $leaseViolationPath -PathType Leaf)) `
+                'dispatch 根退出后仍活的 Job 后代取得了设备 lease。'
+            Assert-True ($alive.Count -eq 0) `
+                "dispatch 根硬杀后 Job 后代仍存活：$($alive -join ',')"
+
+            . (Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1')
+            $releasedLease = Open-DispatchLock -Path $LockPath -Owner 'root-hardkill-after-drain'
+            Close-DispatchLock -Stream $releasedLease -Path $LockPath
+        }
+        finally {
+            foreach ($processId in @($childPid,$fakeRootPid,$wrapperPid)) {
+                if ($null -ne $processId) {
+                    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+                    try { Wait-Process -Id $processId -Timeout 5 -ErrorAction SilentlyContinue } catch {}
+                }
+            }
+            if ($null -ne $dispatchProcess) {
+                try {
+                    if (-not $dispatchProcess.HasExited) {
+                        $dispatchProcess.Kill($true)
+                        [void]$dispatchProcess.WaitForExit(5000)
+                    }
+                }
+                finally { $dispatchProcess.Dispose() }
+            }
+            Set-Content -LiteralPath $claudeCmd -Value $originalClaudeCmd -Encoding utf8
+            Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+            foreach ($path in @($childScript,$childPidPath,$leaseViolationPath)) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+            # 本用例故意走真实（fake）adb/claude 生命周期；通用 called sentinel 属于夹具输出，
+            # 必须在交还给后续 DryRun 全局不变量前清掉，不能把行为用例误报成 DryRun 副作用。
+            foreach ($tool in $ExternalTools) {
+                Remove-Item -LiteralPath (Join-Path $SentinelDir "$tool-called.txt") `
+                    -Force -ErrorAction SilentlyContinue
+            }
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*-offline-root-hardkill-mobile-claude-leg1.*' } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Test-Case '全部 DryRun 汇总后仍无仓库副作用' {
         Assert-NoRepoEffects $before
         foreach ($tool in $ExternalTools) {
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $SentinelDir "$tool-called.txt"))) `
                 "最后一次 DryRun 仍触发了 fake $tool。"
         }
+    }
+
+    # 放在 DryRun 不变量之后：旧实现会错误消费暂停件并进入 adb 预检；这条 RED 不应污染
+    # 前面的无副作用断言，TEMP fixture 会在套件 finally 中统一回收。
+    Test-Case '重定向 stdin 即使含 CONFIRM 也必须在消费暂停件或启动子进程前拒绝' {
+        $beforePause = Get-Content -LiteralPath $redirectedPause -Raw -Encoding utf8
+        $result = Invoke-Dispatch -Arguments @('-Confirm', $redirectedPause) -StandardInput "CONFIRM`n"
+        Assert-True ($result.ExitCode -ne 0) '重定向 stdin 不得构成人工身份。'
+        Assert-Matches $result.Text '(?i)stdin|重定向|交互终端|人工确认'
+        Assert-True ((Get-Content -LiteralPath $redirectedPause -Raw -Encoding utf8) -ceq $beforePause) `
+            '非交互输入被错误消费，暂停件已被作废。'
+        Assert-NoExternalTools $result
     }
 
     Write-Host ''

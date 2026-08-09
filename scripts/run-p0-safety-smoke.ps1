@@ -41,10 +41,9 @@ if ($ConfirmationTimeoutSec -lt 1 -or $ConfirmationTimeoutSec -gt 240) { throw '
 if ($DispatchTimeoutMin -lt 1 -or $DispatchTimeoutMin -gt 60) { throw 'DispatchTimeoutMin 必须为 1..60。' }
 if ($PollIntervalMs -lt 10 -or $PollIntervalMs -gt 5000) { throw 'PollIntervalMs 必须为 10..5000。' }
 if ($A11yBindTimeoutSec -lt 1 -or $A11yBindTimeoutSec -gt 300) { throw 'A11yBindTimeoutSec 必须为 1..300。' }
-# 下限 30s：短于这个数就谈不上"人走开过"，这条腿会退化成"批准后立刻回来"，
-# 而它看起来照样通过——**判据看不见它要判的东西**，正是这条腿存在的理由被抹掉。
-# 上限 240s：必须留在生产等前台预算（300s）之内，否则等待先超时，失败与功能坏了长得一样。
-if ($ReentryDwellSec -lt 30 -or $ReentryDwellSec -gt 240) { throw 'ReentryDwellSec 必须为 30..240。' }
+# 60–90s 是本腿的硬验收窗口，不再暴露 30–240s 的“调参范围”：太短没有覆盖意义，
+# 太长则让独立 dwell 与 gateway 等待预算的关系失真。
+if ($ReentryDwellSec -lt 60 -or $ReentryDwellSec -gt 90) { throw 'ReentryDwellSec 必须为 60..90。' }
 
 $RepoRoot = if ([string]::IsNullOrWhiteSpace($RepoRootOverride)) { Split-Path $PSScriptRoot -Parent } else { $RepoRootOverride }
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
@@ -53,6 +52,7 @@ $ProvisionerPath = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
 $TaskTemplateHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-task-template.ps1'
 # 终态报告的匹配模式与 dispatch 共用一份，避免两边对"什么算成功"的判据漂移。
 $LedgerHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-ledger.ps1'
+$DispatchLockHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
 $TaskTemplateDir = Join-Path $RepoRoot 'scripts\tasks'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
@@ -122,6 +122,10 @@ if (-not (Test-Path -LiteralPath $LedgerHelperPath -PathType Leaf)) {
     throw "缺少台账/终态判据 helper：$LedgerHelperPath"
 }
 . $LedgerHelperPath
+if (-not (Test-Path -LiteralPath $DispatchLockHelperPath -PathType Leaf)) {
+    throw "缺少设备 lease helper：$DispatchLockHelperPath"
+}
+. $DispatchLockHelperPath
 
 function New-P0DispatchProcess {
     param(
@@ -129,8 +133,12 @@ function New-P0DispatchProcess {
         [Parameter(Mandatory)][string]$TaskFile,
         [Parameter(Mandatory)][string]$Slug,
         [Parameter(Mandatory)][string]$StdoutPath,
-        [Parameter(Mandatory)][string]$StderrPath
+        [Parameter(Mandatory)][string]$StderrPath,
+        [Parameter(Mandatory)][string]$DeviceLeaseOwnerToken,
+        [Parameter(Mandatory)][ref]$Handle
     )
+
+    if ($null -ne $Handle.Value) { throw 'dispatch handle 必须为空才能启动。' }
 
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = (Get-Process -Id $PID).Path
@@ -148,41 +156,86 @@ function New-P0DispatchProcess {
     )) {
         $start.ArgumentList.Add($arg)
     }
+    # raw token 只进这个子进程的环境；dispatch 校验后立即清掉，不会继续传给大脑/MCP。
+    $start.Environment['AGENT_MOBILE_DEVICE_LEASE_TOKEN'] = $DeviceLeaseOwnerToken
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
-    if (-not $process.Start()) { throw 'dispatch 子进程启动失败。' }
-    $process.StandardInput.Close()
-    $stdoutStream = [IO.File]::Open($StdoutPath, 'Create', 'Write', 'Read')
-    $stderrStream = [IO.File]::Open($StderrPath, 'Create', 'Write', 'Read')
-    $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
-    $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
-    return [pscustomobject]@{
+    # 在 Start 前把 drain owner 的形状完整建好；Start 一成功，第一条语句就发布到外层 ref。
+    # 后续 stdin/文件/CopyToAsync 任一步失败，outer catch/finally 都仍看得见真实 Process。
+    $publishedHandle = [pscustomobject]@{
         Process = $process
-        StdoutStream = $stdoutStream
-        StderrStream = $stderrStream
-        StdoutCopy = $stdoutCopy
-        StderrCopy = $stderrCopy
-        StartedUtc = [DateTime]::UtcNow
+        StdoutStream = $null
+        StderrStream = $null
+        StdoutCopy = $null
+        StderrCopy = $null
+        StartedUtc = [DateTime]::MinValue
+        ProcessTreeDrained = $false
+        OutputCaptureOk = $false
+    }
+    $started = $false
+    $stdoutStream = $null
+    $stderrStream = $null
+    try {
+        if (-not $process.Start()) { throw 'dispatch 子进程启动失败。' }
+        $started = $true
+        $Handle.Value = $publishedHandle
+        $publishedHandle.StartedUtc = [DateTime]::UtcNow
+        $process.StandardInput.Close()
+        $stdoutStream = [IO.File]::Open($StdoutPath, 'Create', 'Write', 'Read')
+        $publishedHandle.StdoutStream = $stdoutStream
+        $stderrStream = [IO.File]::Open($StderrPath, 'Create', 'Write', 'Read')
+        $publishedHandle.StderrStream = $stderrStream
+        $publishedHandle.StdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
+        $publishedHandle.StderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+    }
+    catch {
+        $startFailure = $_
+        if ($started) {
+            # ref 发布/属性赋值本身若异常，也要先恢复 owner，再走与所有其他 kill 分支相同的
+            # “成功才清空”协议。Close 失败时保留 handle，让外层 undrained gate 接管。
+            if ($null -eq $Handle.Value) { $Handle.Value = $publishedHandle }
+            if ($null -eq $publishedHandle.StdoutStream -and $null -ne $stdoutStream) {
+                $publishedHandle.StdoutStream = $stdoutStream
+            }
+            if ($null -eq $publishedHandle.StderrStream -and $null -ne $stderrStream) {
+                $publishedHandle.StderrStream = $stderrStream
+            }
+            Close-P0DispatchHandle -Handle $Handle -Kill
+        }
+        else {
+            $process.Dispose()
+        }
+        throw $startFailure
     }
 }
 
 function Stop-P0DispatchProcess {
     param($Handle, [switch]$Kill)
     if ($null -eq $Handle) { return }
-    try {
-        if ($Kill -and -not $Handle.Process.HasExited) {
-            $Handle.Process.Kill($true)
-            [void]$Handle.Process.WaitForExit(5000)
+    if ($Kill -and -not $Handle.Process.HasExited) {
+        $Handle.Process.Kill($true)
+        if (-not $Handle.Process.WaitForExit(5000)) {
+            throw 'dispatch 进程树终止后 5 秒仍未退出。'
         }
-        elseif (-not $Handle.Process.HasExited) {
-            [void]$Handle.Process.WaitForExit(5000)
-        }
-        [void]$Handle.StdoutCopy.GetAwaiter().GetResult()
-        [void]$Handle.StderrCopy.GetAwaiter().GetResult()
     }
-    finally {
-        $Handle.StdoutStream.Dispose()
-        $Handle.StderrStream.Dispose()
+    elseif (-not $Handle.Process.HasExited) {
+        if (-not $Handle.Process.WaitForExit(5000)) {
+            throw 'dispatch 进程 5 秒内未退出。'
+        }
+    }
+
+    # 从这里起，根进程的退出已由 HasExited/WaitForExit 正向证明；后续 pipe I/O fault 只影响
+    # 证据完整性，不得反向把 dead tree 冒充成 active tree 并跳过敏感净化/manifest。
+    $Handle.ProcessTreeDrained = $true
+    $captureFailed = $false
+    foreach ($copy in @($Handle.StdoutCopy, $Handle.StderrCopy)) {
+        if ($null -eq $copy) { continue }
+        try { [void]$copy.GetAwaiter().GetResult() }
+        catch { $captureFailed = $true }
+    }
+    $Handle.OutputCaptureOk = -not $captureFailed
+    if ($captureFailed) {
+        throw [IO.IOException]::new('dispatch_output_capture_failed')
     }
 }
 
@@ -204,20 +257,25 @@ function Get-ToolResultEnvelope {
 function Get-P0Sha256 {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
-    try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
-    finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+    $digest = $null
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($bytes)
+        return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+        if ($null -ne $digest -and $digest.Length -gt 0) { [Array]::Clear($digest, 0, $digest.Length) }
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
 }
 
 function Test-P0MatchEvidenceContainsMarker {
     param($Value, [Parameter(Mandatory)][string]$ExpectedNormalized)
     if ($null -eq $Value) { return $false }
-    if ($Value -is [string]) { return (Normalize-P0MarkerText $Value) -ceq $ExpectedNormalized }
-    foreach ($property in $Value.PSObject.Properties) {
-        if ($property.Name -match '(?i)(text|description|normalized|ocr|matched)') {
-            if (Test-P0MatchEvidenceContainsMarker -Value $property.Value -ExpectedNormalized $ExpectedNormalized) { return $true }
-        }
-    }
-    return $false
+    $property = $Value.PSObject.Properties['normalized']
+    return $null -ne $property -and $property.Value -is [string] -and
+        [string]$property.Value -ceq $ExpectedNormalized
 }
 
 function ConvertTo-P0RectEvidence {
@@ -399,6 +457,7 @@ function Save-P0ApprovalNotificationState {
     param(
         [Parameter(Mandatory)]$Session,
         [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$ExpectedRoot,
         [int]$Attempts = 6,
         [int]$IntervalMs = 700
     )
@@ -425,7 +484,13 @@ function Save-P0ApprovalNotificationState {
             Start-Sleep -Milliseconds $IntervalMs
             continue
         }
-        Set-Content -LiteralPath $Destination -Value $dump.Stdout -Encoding utf8
+        # dumpsys 可能等数秒；不能只在调用方、等待之前检查一次。紧贴实际写入重验 leaf/ancestor，
+        # 现存 symlink/reparse/hardlink 一律在 Set-Content 之前拒绝，写后再验落下的仍是普通直接 leaf。
+        $safeDestination = Resolve-P0SafePersistentPath -Path $Destination -ExpectedRoot $ExpectedRoot `
+            -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+        Set-Content -LiteralPath $safeDestination -Value $dump.Stdout -Encoding utf8
+        [void](Resolve-P0SafePersistentPath -Path $safeDestination -ExpectedRoot $ExpectedRoot `
+            -BoundaryRoot $RepoRoot -PathKind Leaf)
         $state = $null
         $records = @()
         try {
@@ -719,6 +784,9 @@ function Read-P0TraceEvidence {
     if ($null -ne $findData -and $null -ne $findData.PSObject.Properties['matches']) {
         $matches = [object[]]@($findData.matches)
     }
+    $queryNormalized = if ($null -ne $findData -and
+        $null -ne $findData.PSObject.Properties['query_normalized'] -and
+        $findData.query_normalized -is [string]) { [string]$findData.query_normalized } else { '' }
     $screenWidth = if ($null -ne $findData -and $null -ne $findData.PSObject.Properties['screen_width']) {
         [int]$findData.screen_width
     } else { 0 }
@@ -743,9 +811,9 @@ function Read-P0TraceEvidence {
     # 要判的是"有没有别的东西混进来"，**框数是 OCR 的实现细节，不该进判据**。
     # 这与「marker 归一化把一次成功发送判成证据不匹配」是同一族第二次。
     # 严格性一分没少：任何一个框归一后不等于期望 marker，整条判据仍然不成立。
-    $matchedEvidence = $matches.Count -ge 1 -and
+    $matchedEvidence = $queryNormalized -ceq $expectedNormalized -and $matches.Count -ge 1 -and
         (@($matches | Where-Object {
-            -not (Test-P0MatchEvidenceContainsMarker -Value $_ -ExpectedNormalized $expectedNormalized)
+            -not (Test-P0MatchEvidenceContainsMarker -Value $_ -ExpectedNormalized $queryNormalized)
         }).Count -eq 0)
     $messageRegionEvidence = $matchedEvidence -and
         (@($matches | Where-Object {
@@ -826,11 +894,16 @@ function Get-P0LedgerRow {
         [Parameter(Mandatory)][string]$Slug,
         [switch]$AllowMissing
     )
-    if (-not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) {
+    $ledgerRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($LedgerPath))
+    $safeLedger = Resolve-P0SafePersistentPath -Path $LedgerPath -ExpectedRoot $ledgerRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+    if (-not (Test-Path -LiteralPath $safeLedger -PathType Leaf)) {
         if ($AllowMissing) { return $null }
         throw '缺少 dispatch ledger。'
     }
-    $rows = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq $Slug })
+    $safeLedger = Resolve-P0SafePersistentPath -Path $safeLedger -ExpectedRoot $ledgerRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf
+    $rows = @(Import-Csv -LiteralPath $safeLedger | Where-Object { $_.slug -ceq $Slug })
     if ($AllowMissing) { return $(if ($rows.Count -ge 1) { $rows[0] } else { $null }) }
     if ($rows.Count -ne 1) { throw "ledger 中 slug=$Slug 的行数不是 1。" }
     return $rows[0]
@@ -869,16 +942,44 @@ function Resolve-P0TraceSource {
     if ([IO.Path]::GetDirectoryName($candidate) -cne $rootFull) {
         throw 'ledger trace_file 越出 traces 根目录。'
     }
-    $rootItem = Get-Item -LiteralPath $rootFull -Force -ErrorAction Stop
-    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $null -ne $rootItem.LinkType) {
-        throw 'ledger traces 根目录禁止 symlink/reparse。'
+    try {
+        return Resolve-P0SafePersistentPath -Path $candidate -ExpectedRoot $rootFull `
+            -BoundaryRoot $RepoRoot -PathKind Leaf
     }
-    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw '缺少 dispatch trace。' }
-    $item = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop
-    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $null -ne $item.LinkType) {
-        throw 'ledger trace_file 禁止 symlink/reparse。'
+    catch {
+        if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+            throw 'ledger trace_file 或 traces 根目录禁止 symlink/reparse/越界。'
+        }
+        throw
     }
-    return $candidate
+}
+
+function Get-P0ReentryForegroundObservation {
+    param([Parameter(Mandatory)]$Session)
+
+    $probe = Invoke-P0DeviceCommand -Session $Session `
+        -Arguments @('shell','dumpsys','activity','activities') `
+        -Operation 'Reentry 独立查询当前前台 Activity' -AllowFailure
+    if ($probe.ExitCode -ne 0) {
+        return [pscustomobject]@{ Known=$false; IsTarget=$false; Package=''; Reason='probe_failed' }
+    }
+
+    # 只接受 dumpsys 明确标出的 resumed/topResumed component。输出成功但没有可解析组件，
+    # 或同时出现互相矛盾的 resumed package，都属于 unknown，绝不能借布尔 false 冒充 away。
+    $pattern = '(?m)(?:mResumedActivity|topResumedActivity)\s*[:=][^\r\n]*?' +
+        '(?<package>[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)/(?<activity>[A-Za-z0-9_.$]+)'
+    $packages = @([regex]::Matches([string]$probe.Stdout, $pattern) |
+        ForEach-Object { $_.Groups['package'].Value } | Select-Object -Unique)
+    if ($packages.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$packages[0])) {
+        return [pscustomobject]@{ Known=$false; IsTarget=$false; Package=''; Reason='unparseable_or_ambiguous' }
+    }
+    $package = [string]$packages[0]
+    return [pscustomobject]@{
+        Known = $true
+        IsTarget = $package -ceq $script:P0WechatPackage
+        Package = $package
+        Reason = 'resumed_activity'
+    }
 }
 
 <#
@@ -899,43 +1000,121 @@ function Invoke-P0ReentryInterlude {
         [Parameter(Mandatory)]$Session,
         [Parameter(Mandatory)][int]$DwellSec,
         [Parameter(Mandatory)]$DispatchHandle,
-        [int]$RestoreTimeoutSec = 20
+        [int]$RestoreTimeoutSec = 20,
+        [int]$AwayTimeoutSec = 20
     )
-    $started = [DateTime]::UtcNow
-    $dwellDeadline = $started.AddSeconds($DwellSec)
+    $observationStarted = [DateTime]::UtcNow
+    $awayDeadline = $observationStarted.AddSeconds($AwayTimeoutSec)
+    $awayConfirmedAt = $null
     $awaySamples = 0
     $awayObserved = 0
+    $dwellSamples = 0
+    $dwellAwayObserved = 0
+    $returnedForegroundEarly = $false
+    $awayObservationUnknown = $false
+    $dwellObservationUnknown = $false
+    $restoreObservationUnknown = $false
+    $unknownSamples = 0
     $dispatchDied = $false
-    Write-Host ("[Reentry] 现在开始在外面停留 $DwellSec 秒——**这条腿慢是设计使然**：" +
-        '不待够时间就碰不到那 5 分钟等待预算。期间请不要碰手机。') -ForegroundColor Cyan
-    while ([DateTime]::UtcNow -lt $dwellDeadline) {
-        # dispatch 提前结束 = 这条腿已经终态（多半是 debug hook 没等到非目标前台）。
-        # 继续傻等只会把真因埋在一分多钟的静默里。
+    while ([DateTime]::UtcNow -lt $awayDeadline) {
         if ($DispatchHandle.Process.HasExited) { $dispatchDied = $true; break }
-        Start-Sleep -Seconds 5
         $awaySamples += 1
-        if (-not (Test-P0TargetAppForeground -Session $Session)) { $awayObserved += 1 }
+        $foreground = Get-P0ReentryForegroundObservation -Session $Session
+        if (-not $foreground.Known) {
+            $awayObservationUnknown = $true
+            $unknownSamples += 1
+            break
+        }
+        if (-not $foreground.IsTarget) {
+            $awayObserved += 1
+            # 计时起点必须位于这次独立 ADB 观察之后，不能拿“真人点了允许”的时刻代替 away。
+            $awayConfirmedAt = [DateTime]::UtcNow
+            break
+        }
+        Start-Sleep -Milliseconds 500
     }
-    $dwellMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+
+    $dwellStarted = $awayConfirmedAt
+    $dwellFinished = $awayConfirmedAt
+    $dwellMs = 0L
+    if ($null -ne $awayConfirmedAt -and -not $dispatchDied) {
+        Write-Host ("[Reentry] ADB 已确认 target away；从现在开始在外面停留 $DwellSec 秒。" +
+            '期间请不要碰手机。') -ForegroundColor Cyan
+        $dwellWatch = [Diagnostics.Stopwatch]::StartNew()
+        # 首次 away 观察同时是 dwell 的第一个有效样本；之后任一采样重新看到 target，
+        # 就证明“连续离开”已中断，不能继续睡满墙钟后伪装成有效 dwell。
+        $dwellSamples = 1
+        $dwellAwayObserved = 1
+        while ($dwellWatch.Elapsed.TotalSeconds -lt $DwellSec) {
+            if ($DispatchHandle.Process.HasExited) { $dispatchDied = $true; break }
+            $remainingMs = [long]($DwellSec * 1000 - $dwellWatch.ElapsedMilliseconds)
+            Start-Sleep -Milliseconds ([int][Math]::Max(1, [Math]::Min(5000, $remainingMs)))
+            if ($DispatchHandle.Process.HasExited) { $dispatchDied = $true; break }
+            $awaySamples += 1
+            $dwellSamples += 1
+            $foreground = Get-P0ReentryForegroundObservation -Session $Session
+            if (-not $foreground.Known) {
+                $dwellObservationUnknown = $true
+                $unknownSamples += 1
+                break
+            }
+            if (-not $foreground.IsTarget) {
+                $awayObserved += 1
+                $dwellAwayObserved += 1
+            }
+            else {
+                $returnedForegroundEarly = $true
+                break
+            }
+        }
+        $dwellWatch.Stop()
+        $dwellMs = [long]$dwellWatch.ElapsedMilliseconds
+        $dwellFinished = [DateTime]::UtcNow
+    }
+
     $restoreStarted = [DateTime]::UtcNow
     $restored = $false
-    if (-not $dispatchDied) {
+    $continuousAway = $null -ne $awayConfirmedAt -and -not $dispatchDied -and
+        -not $awayObservationUnknown -and -not $dwellObservationUnknown -and
+        -not $returnedForegroundEarly -and $dwellMs -ge ($DwellSec * 1000) -and
+        $dwellSamples -ge 1 -and $dwellAwayObserved -eq $dwellSamples
+    if ($continuousAway) {
         # 拉回来这一下走 runner 自己的通道；Start-P0TargetApp 在微信已在前台时是 no-op。
         Start-P0TargetApp -Session $Session
         $restoreDeadline = $restoreStarted.AddSeconds($RestoreTimeoutSec)
         while ([DateTime]::UtcNow -lt $restoreDeadline) {
-            if (Test-P0TargetAppForeground -Session $Session) { $restored = $true; break }
+            $foreground = Get-P0ReentryForegroundObservation -Session $Session
+            if (-not $foreground.Known) {
+                $restoreObservationUnknown = $true
+                $unknownSamples += 1
+                break
+            }
+            if ($foreground.IsTarget) { $restored = $true; break }
             Start-Sleep -Milliseconds 500
         }
     }
     $result = [ordered]@{
         dwell_sec = $DwellSec
         dwell_ms = $dwellMs
+        observation_started_at = $observationStarted.ToString('o')
+        away_confirmed_at = $(if ($null -eq $awayConfirmedAt) { '' } else { $awayConfirmedAt.ToString('o') })
+        dwell_started_at = $(if ($null -eq $dwellStarted) { '' } else { $dwellStarted.ToString('o') })
+        dwell_finished_at = $(if ($null -eq $dwellFinished) { '' } else { $dwellFinished.ToString('o') })
+        away_wait_ms = [long]($(if ($null -eq $awayConfirmedAt) {
+            ([DateTime]::UtcNow - $observationStarted).TotalMilliseconds
+        } else { ($awayConfirmedAt - $observationStarted).TotalMilliseconds }))
         away_samples = $awaySamples
         away_observed = $awayObserved
-        # 采样一次都没看到"微信不在前台" = 很可能压根没切走。**不在这里抛**：
-        # 这条只读观察不该替判据下结论，它的位置在 manifest 与下面那句黄字里。
-        away_confirmed = ($awaySamples -gt 0 -and $awayObserved -gt 0)
+        away_confirmed = ($null -ne $awayConfirmedAt)
+        dwell_samples = $dwellSamples
+        dwell_away_observed = $dwellAwayObserved
+        away_observation_unknown = $awayObservationUnknown
+        dwell_observation_unknown = $dwellObservationUnknown
+        restore_observation_unknown = $restoreObservationUnknown
+        observation_unknown = ($awayObservationUnknown -or $dwellObservationUnknown -or $restoreObservationUnknown)
+        unknown_samples = $unknownSamples
+        returned_foreground_early = $returnedForegroundEarly
+        continuous_away = $continuousAway
         dispatch_exited_during_dwell = $dispatchDied
         restored = $restored
         restore_ms = [int]([DateTime]::UtcNow - $restoreStarted).TotalMilliseconds
@@ -944,9 +1123,17 @@ function Invoke-P0ReentryInterlude {
         Write-Host ('[Reentry] 派单在停留期内就结束了——这条腿已经终态，' +
             '多半是 debug hook 没等到"已知的非目标 App"。真因看 trace，不是停留时长。') -ForegroundColor Yellow
     }
+    elseif ($result.observation_unknown) {
+        Write-Host '[Reentry] 独立 ADB 前台观察失败或不可解析（unknown）；本腿将判失败。' `
+            -ForegroundColor Yellow
+    }
     elseif (-not $result.away_confirmed) {
-        Write-Host ("[Reentry] 警告：停留期间 $awaySamples 次采样**一次都没看到微信离开前台**，" +
-            '这条腿的语义可能已经落空（切得不彻底）。') -ForegroundColor Yellow
+        Write-Host ("[Reentry] 独立 ADB 观察在 ${AwayTimeoutSec}s 内从未确认 target away；本腿将判失败。") `
+            -ForegroundColor Yellow
+    }
+    elseif ($returnedForegroundEarly) {
+        Write-Host '[Reentry] 独立 ADB 采样发现 target 在 dwell 中提前回到前台；本腿将判失败。' `
+            -ForegroundColor Yellow
     }
     else {
         Write-Host ("[Reentry] 停留结束（$([int]($dwellMs/1000))s，$awayObserved/$awaySamples 次采样确认已离开），" +
@@ -965,9 +1152,8 @@ Reentry 腿唯一真正新增的判据：**证明那段等待确实发生过，�
 （`ForegroundWaitTrace.describe`，离线用例钉住格式）：
 
 - `reads > 1`：只读一次就成了 = 微信压根没离开过前台，这条腿的语义落空。
-- `waited_ms >= 停留时长的大部分`：等待必须覆盖住停留期。取 0.6 倍是给"debug hook 切走"
-  与"runner 开始计时"之间的间隔留量，**不是给判据留余地**——真出现"等了 3 秒就回来"，
-  0.6 倍照样拦得住。
+- `waited_ms >= 独立 ADB 观测到的 dwell_ms`：网关等待必须覆盖独立计时的整段停留，
+  不能拿配置值的比例或 debug hook 的主观起点代替。
 - `result=reached`：等到了才谈得上后面那些"发出去了"的判据。
 
 **字段缺席按失败处理，不按通过**：装的是不带这段可观测性的旧 APK 时，一条本该证明
@@ -1079,10 +1265,85 @@ function Get-P0SurfaceTitleReadRecord {
     }
 }
 
+function Assert-P0ReentryObservation {
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Observation,
+        [Parameter(Mandatory)][int]$DwellSec
+    )
+    if ($DwellSec -lt 60 -or $DwellSec -gt 90) {
+        throw "Reentry 配置停留 ${DwellSec}s 不在硬窗口 60–90s。"
+    }
+    if ($null -eq $Observation -or $Observation.observation_unknown -eq $true -or
+        $Observation.away_observation_unknown -eq $true -or
+        $Observation.dwell_observation_unknown -eq $true -or
+        $Observation.restore_observation_unknown -eq $true) {
+        throw 'Reentry 腿独立 ADB 前台观察出现 unknown，不能证明 away/continuous-away/restored。'
+    }
+    if ($null -eq $Observation -or $Observation.away_confirmed -ne $true -or
+        [int]$Observation.away_observed -lt 1) {
+        throw 'Reentry 腿的独立 ADB 观察从未确认 target away。'
+    }
+    if ($Observation.dispatch_exited_during_dwell -eq $true) {
+        throw 'Reentry 腿 dispatch 在独立 dwell 完成前退出。'
+    }
+    if ($Observation.continuous_away -ne $true -or
+        $Observation.returned_foreground_early -eq $true -or
+        [int]$Observation.dwell_samples -lt 1 -or
+        [int]$Observation.dwell_away_observed -ne [int]$Observation.dwell_samples) {
+        throw 'Reentry 腿未证明 target 在独立 dwell 的每次有效采样中连续 away（可能提前回前台）。'
+    }
+    $dwellMs = [long]$Observation.dwell_ms
+    $targetMs = [long]$DwellSec * 1000
+    # 目标窗口硬限制 60–90s；墙钟调度只允许 1s 尾差，且不得短于配置目标。
+    if ($dwellMs -lt 60000 -or $dwellMs -gt 91000 -or
+        $dwellMs -lt $targetMs -or $dwellMs -gt ($targetMs + 1000)) {
+        throw "Reentry 独立 dwell=${dwellMs}ms 不符合 60–90s 硬窗口或配置目标 ${targetMs}ms。"
+    }
+    if ($Observation.restored -ne $true) {
+        throw 'Reentry 腿独立 dwell 后未能把 target 恢复到前台。'
+    }
+}
+
+function Close-P0DispatchHandle {
+    param(
+        [Parameter(Mandatory)][ref]$Handle,
+        [switch]$Kill
+    )
+    $current = $Handle.Value
+    if ($null -eq $current) { return }
+    $stopFailure = $null
+    try { Stop-P0DispatchProcess -Handle $current -Kill:$Kill }
+    catch { $stopFailure = $_ }
+
+    if ($current.ProcessTreeDrained -eq $true) {
+        # tree ownership 与 output capture 是两个状态：树已退出就必须释放 Process/stream owner
+        # 并清空 handle，让 finally 继续安全净化；capture/Dispose 失败仍作为 verdict error 传播。
+        $streamDisposeFailed = $false
+        foreach ($stream in @($current.StdoutStream, $current.StderrStream)) {
+            if ($null -eq $stream) { continue }
+            try { $stream.Dispose() }
+            catch { $streamDisposeFailed = $true }
+        }
+        $processDisposeFailed = $false
+        try { $current.Process.Dispose() }
+        catch { $processDisposeFailed = $true }
+        $Handle.Value = $null
+
+        if ($null -ne $stopFailure) { throw $stopFailure }
+        if ($streamDisposeFailed) { throw [IO.IOException]::new('dispatch_output_capture_failed') }
+        if ($processDisposeFailed) { throw [IO.IOException]::new('dispatch_handle_dispose_failed') }
+        return
+    }
+
+    # 未正向证明树退出时保留 handle 给最外层 finally 重试；绝不能清空变量掩盖活 child。
+    if ($null -ne $stopFailure) { throw $stopFailure }
+    throw [IO.IOException]::new('dispatch_tree_not_drained')
+}
+
 function Assert-P0ReentryForegroundWait {
     param(
         [Parameter(Mandatory)][AllowNull()]$Wait,
-        [Parameter(Mandatory)][int]$DwellSec
+        [Parameter(Mandatory)][long]$ObservedDwellMs
     )
     if (-not $Wait -or -not $Wait.reported) {
         throw ('Reentry 腿审计里没有 foreground_wait 记录——这条腿的全部意义就是证明' +
@@ -1098,10 +1359,9 @@ function Assert-P0ReentryForegroundWait {
         throw ("Reentry 腿只读了 $reads 次前台就成了：微信没有真正离开过前台，" +
             '这条腿并没有验到"批准后切走再回来"。')
     }
-    $floorMs = [int]($DwellSec * 1000 * 0.6)
-    if ($waitedMs -lt $floorMs) {
-        throw ("Reentry 腿只等了 ${waitedMs}ms，短于停留时长 ${DwellSec}s 的 60%（${floorMs}ms）：" +
-            '等待没有覆盖住停留期，说明微信被过早拉回或压根没切走。')
+    if ($waitedMs -lt $ObservedDwellMs) {
+        throw ("Reentry gateway foreground_wait=${waitedMs}ms，没有覆盖 ADB 独立观测到的 " +
+            "dwell=${ObservedDwellMs}ms；等待与独立停留证据未接上。")
     }
 }
 
@@ -1115,7 +1375,8 @@ function Assert-P0LegSemantics {
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$AuditEntries,
         [Parameter(Mandatory)][int]$ExpectedInputLength,
         [Parameter(Mandatory)][string]$ExpectedInputSha256,
-        [int]$ReentryDwellSec = 0
+        [int]$ReentryDwellSec = 0,
+        [AllowNull()]$ReentryObservation
     )
 
     $calls = @($Trace.Calls)
@@ -1267,7 +1528,9 @@ function Assert-P0LegSemantics {
         }
         if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '成功')) { throw "$Leg 终态报告不是成功。" }
         if ($Leg -ceq 'Reentry') {
-            Assert-P0ReentryForegroundWait -Wait (Get-P0ForegroundWaitRecord -Audit $audit) -DwellSec $ReentryDwellSec
+            Assert-P0ReentryObservation -Observation $ReentryObservation -DwellSec $ReentryDwellSec
+            Assert-P0ReentryForegroundWait -Wait (Get-P0ForegroundWaitRecord -Audit $audit) `
+                -ObservedDwellMs ([long]$ReentryObservation.dwell_ms)
             # 传输层那条心跳有没有真的发出去。**不看这一条的话，"客户端 300s 空闲窗把调用砍了"
             # 与"判据把它挡下了"在现场分不开**——2026-08-08 已经这样烧过一轮真机。
             $beat = Get-P0TransportHeartbeatRecord -Audit $audit
@@ -1314,14 +1577,101 @@ function Assert-P0LegSemantics {
     }
 }
 
-function Write-P0Manifest {
-    param([Parameter(Mandatory)]$Manifest, [Parameter(Mandatory)][string]$Path)
-    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+function Resolve-P0SafePersistentPath {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedRoot,
+        [Parameter(Mandatory)][string]$BoundaryRoot,
+        [ValidateSet('Leaf','Container')][string]$PathKind = 'Leaf',
+        [switch]$AllowMissing
+    )
+
+    # runner 与 standalone dispatch 共用同一个 no-follow/根边界实现，避免同一持久面两套
+    # 判据漂移。对外仍保留 runner 旧函数名，降低其余机械判据的改动面。
+    return Resolve-DispatchSafePersistentPath -Path $Path -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $BoundaryRoot -PathKind $PathKind -AllowMissing:$AllowMissing
+}
+
+function Resolve-P0SensitiveArtifactPath {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$TraceRoot,
+        [Parameter(Mandatory)][string]$EvidenceRoot,
+        [switch]$AllowMissing
+    )
     try {
-        $Manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $temporary -Encoding utf8
-        Move-Item -LiteralPath $temporary -Destination $Path -Force
+        $full = [IO.Path]::GetFullPath($Path)
+        $parent = [IO.Path]::GetDirectoryName($full).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $trace = [IO.Path]::GetFullPath($TraceRoot).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $evidence = [IO.Path]::GetFullPath($EvidenceRoot).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
     }
-    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+    catch { throw [IO.InvalidDataException]::new('unsafe_artifact_path') }
+
+    $comparison = [StringComparison]::OrdinalIgnoreCase
+    $evidencePrefix = $evidence + [IO.Path]::DirectorySeparatorChar
+    $expected = if ($parent.Equals($trace, $comparison)) {
+        $trace
+    }
+    elseif ($parent.Equals($evidence, $comparison) -or $parent.StartsWith($evidencePrefix, $comparison)) {
+        $parent
+    }
+    else { throw [IO.InvalidDataException]::new('unsafe_artifact_path') }
+
+    $safe = Resolve-P0SafePersistentPath -Path $full -ExpectedRoot $expected -BoundaryRoot $RepoRoot `
+        -PathKind Leaf -AllowMissing:$AllowMissing
+    return [pscustomobject]@{ Path = $safe; ExpectedRoot = $expected }
+}
+
+function Add-P0SensitiveArtifactPath {
+    param(
+        [Parameter(Mandatory)]$Paths,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$TraceRoot,
+        [Parameter(Mandatory)][string]$EvidenceRoot,
+        [switch]$AllowMissing
+    )
+    $artifact = Resolve-P0SensitiveArtifactPath -Path $Path -TraceRoot $TraceRoot `
+        -EvidenceRoot $EvidenceRoot -AllowMissing:$AllowMissing
+    if (-not $Paths.Contains($artifact.Path)) { [void]$Paths.Add($artifact.Path) }
+}
+
+function Write-P0Manifest {
+    param(
+        [Parameter(Mandatory)]$Manifest,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedRoot
+    )
+    $safePath = Resolve-P0SafePersistentPath -Path $Path -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+    $temporary = "$safePath.$([guid]::NewGuid().ToString('N')).tmp"
+    $safeTemporary = Resolve-P0SafePersistentPath -Path $temporary -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+    try {
+        $Manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $safeTemporary -Encoding utf8
+        # 写后与 replace 前都重验；目标 leaf 若在间隙被换成 link，绝不让 Move-Item 跟随。
+        $safeTemporary = Resolve-P0SafePersistentPath -Path $safeTemporary -ExpectedRoot $ExpectedRoot `
+            -BoundaryRoot $RepoRoot -PathKind Leaf
+        $safePath = Resolve-P0SafePersistentPath -Path $safePath -ExpectedRoot $ExpectedRoot `
+            -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+        Move-Item -LiteralPath $safeTemporary -Destination $safePath -Force
+        [void](Resolve-P0SafePersistentPath -Path $safePath -ExpectedRoot $ExpectedRoot `
+            -BoundaryRoot $RepoRoot -PathKind Leaf)
+    }
+    finally {
+        try {
+            $safeTemporary = Resolve-P0SafePersistentPath -Path $temporary -ExpectedRoot $ExpectedRoot `
+                -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+            if (Test-Path -LiteralPath $safeTemporary -PathType Leaf) {
+                Remove-Item -LiteralPath $safeTemporary -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+            if ($_.Exception.Message -cne 'unsafe_artifact_path') { throw }
+        }
+    }
 }
 
 function Test-P0ByteSequence {
@@ -1366,18 +1716,16 @@ function Test-P0SensitivePayload {
 function Assert-P0NoSensitiveFiles {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Paths,
-        [Parameter(Mandatory)]$SensitiveValues
+        [Parameter(Mandatory)]$SensitiveValues,
+        [Parameter(Mandatory)][string]$TraceRoot,
+        [Parameter(Mandatory)][string]$EvidenceRoot
     )
     foreach ($path in $Paths) {
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        $bytes = [IO.File]::ReadAllBytes($path)
-        try {
-            if (Test-P0SensitivePayload -Bytes $bytes -SensitiveValues $SensitiveValues) {
-                throw 'sensitive_output_detected'
-            }
-        }
-        finally {
-            if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+        $artifact = Resolve-P0SensitiveArtifactPath -Path $path -TraceRoot $TraceRoot `
+            -EvidenceRoot $EvidenceRoot -AllowMissing
+        if (Test-P0SensitiveFile -Path $artifact.Path -ExpectedRoot $artifact.ExpectedRoot `
+            -SensitiveValues $SensitiveValues) {
+            throw 'sensitive_output_detected'
         }
     }
 }
@@ -1396,6 +1744,207 @@ function Assert-P0NoSensitiveText {
     finally {
         if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
     }
+}
+
+function Add-P0TraceArtifactFamily {
+    param(
+        [Parameter(Mandatory)]$Paths,
+        [Parameter(Mandatory)][string]$TracePath,
+        [Parameter(Mandatory)][string]$TraceRoot
+    )
+    $root = Resolve-P0SafePersistentPath -Path $TraceRoot -ExpectedRoot $TraceRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container
+    $fullTrace = [IO.Path]::GetFullPath($TracePath)
+    if ([IO.Path]::GetDirectoryName($fullTrace).TrimEnd([IO.Path]::DirectorySeparatorChar) -cne $root -or
+        -not $fullTrace.EndsWith('.jsonl', [StringComparison]::OrdinalIgnoreCase)) { return }
+    $stem = $fullTrace.Substring(0, $fullTrace.Length - '.jsonl'.Length)
+    foreach ($candidate in @(
+        $fullTrace, "$stem.err.txt", "$stem.prompt.md", "$stem.pause.md"
+    )) {
+        $candidateItem = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+        if ($null -ne $candidateItem) {
+            Add-P0SensitiveArtifactPath -Paths $Paths -Path $candidate -TraceRoot $root `
+                -EvidenceRoot $evidenceRoot
+        }
+    }
+}
+
+function Add-P0TraceArtifactsForSlug {
+    param(
+        [Parameter(Mandatory)]$Paths,
+        [Parameter(Mandatory)][string]$TraceRoot,
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][string]$ExpectedExecutor,
+        [Parameter(Mandatory)][string]$ExpectedBrain,
+        [Parameter(Mandatory)][int]$ExpectedLeg
+    )
+    if ([string]::IsNullOrWhiteSpace($Slug)) { return }
+    $root = Resolve-P0SafePersistentPath -Path $TraceRoot -ExpectedRoot $TraceRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container -AllowMissing
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue
+    if ($null -eq $rootItem) { return }
+    $pattern = '^\d{8}-\d{6}-' + [regex]::Escape($Slug) + '-' +
+        [regex]::Escape($ExpectedExecutor) + '-' + [regex]::Escape($ExpectedBrain) +
+        '-leg' + $ExpectedLeg + '\.(?:jsonl|err\.txt|prompt\.md|pause\.md)$'
+    foreach ($file in @(Get-ChildItem -LiteralPath $root -File -Force -ErrorAction Stop)) {
+        if ($file.Name -match $pattern) {
+            Add-P0SensitiveArtifactPath -Paths $Paths -Path $file.FullName -TraceRoot $root `
+                -EvidenceRoot $evidenceRoot
+        }
+    }
+}
+
+function Test-P0SensitiveFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedRoot,
+        [Parameter(Mandatory)]$SensitiveValues
+    )
+    $safePath = Resolve-P0SafePersistentPath -Path $Path -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+    if (-not (Test-Path -LiteralPath $safePath -PathType Leaf)) { return $false }
+    $safePath = Resolve-P0SafePersistentPath -Path $safePath -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf
+    $bytes = [IO.File]::ReadAllBytes($safePath)
+    try { return Test-P0SensitivePayload -Bytes $bytes -SensitiveValues $SensitiveValues }
+    finally {
+        if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+}
+
+function Set-P0SensitiveTombstone {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedRoot
+    )
+    $safePath = Resolve-P0SafePersistentPath -Path $Path -ExpectedRoot $ExpectedRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf
+    # 固定正文不能包含原内容、路径或 token；FileMode.Create 会把原文件不可逆截断。
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(
+        '{"status":"removed","reason":"sensitive_output_detected"}' + "`n"
+    )
+    $stream = $null
+    try {
+        $stream = [IO.FileStream]::new($safePath, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Remove-P0SensitiveLedgerRows {
+    param(
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [Parameter(Mandatory)]$SensitiveValues
+    )
+    $ledgerRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($LedgerPath))
+    $safeLedger = Resolve-P0SafePersistentPath -Path $LedgerPath -ExpectedRoot $ledgerRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
+    if (-not (Test-Path -LiteralPath $safeLedger -PathType Leaf)) { return }
+    $safeLedger = Resolve-P0SafePersistentPath -Path $safeLedger -ExpectedRoot $ledgerRoot `
+        -BoundaryRoot $RepoRoot -PathKind Leaf
+    $lines = [IO.File]::ReadAllLines($safeLedger, [Text.Encoding]::UTF8)
+    $safeLines = [Collections.Generic.List[string]]::new()
+    $removed = $false
+    try {
+        foreach ($line in $lines) {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($line)
+            try {
+                if (Test-P0SensitivePayload -Bytes $bytes -SensitiveValues $SensitiveValues) {
+                    $removed = $true
+                }
+                else { [void]$safeLines.Add($line) }
+            }
+            finally {
+                if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+            }
+        }
+        if (-not $removed) { return }
+
+        # 不生成含原 secret 的临时副本；独占打开原路径并直接截断，只回写安全行。
+        $stream = $null
+        $writer = $null
+        try {
+            $safeLedger = Resolve-P0SafePersistentPath -Path $safeLedger -ExpectedRoot $ledgerRoot `
+                -BoundaryRoot $RepoRoot -PathKind Leaf
+            $stream = [IO.FileStream]::new(
+                $safeLedger, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 1024, $true)
+            foreach ($safeLine in $safeLines) { $writer.WriteLine($safeLine) }
+            $writer.Flush()
+            $stream.Flush($true)
+        }
+        finally {
+            if ($null -ne $writer) { $writer.Dispose() }
+            if ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+    finally {
+        $lines = $null
+        $safeLines.Clear()
+    }
+}
+
+function Protect-P0SensitivePersistentFiles {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Paths,
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [Parameter(Mandatory)]$SensitiveValues,
+        [Parameter(Mandatory)][string]$TraceRoot,
+        [Parameter(Mandatory)][string]$EvidenceRoot
+    )
+    $issues = [Collections.Generic.List[string]]::new()
+    $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $Paths) {
+        if (-not [string]::IsNullOrWhiteSpace($path)) { [void]$uniquePaths.Add([IO.Path]::GetFullPath($path)) }
+    }
+
+    foreach ($path in $uniquePaths) {
+        try {
+            $artifact = Resolve-P0SensitiveArtifactPath -Path $path -TraceRoot $TraceRoot `
+                -EvidenceRoot $EvidenceRoot -AllowMissing
+            if (Test-P0SensitiveFile -Path $artifact.Path -ExpectedRoot $artifact.ExpectedRoot `
+                -SensitiveValues $SensitiveValues) {
+                Set-P0SensitiveTombstone -Path $artifact.Path -ExpectedRoot $artifact.ExpectedRoot
+            }
+        }
+        catch {
+            if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+                [void]$issues.Add('unsafe_artifact_path')
+                continue
+            }
+            # 截断失败时退到删除；两者都失败才允许留下一个显式 cleanup issue。
+            try {
+                $artifact = Resolve-P0SensitiveArtifactPath -Path $path -TraceRoot $TraceRoot `
+                    -EvidenceRoot $EvidenceRoot -AllowMissing
+                if (Test-Path -LiteralPath $artifact.Path -PathType Leaf) {
+                    $safePath = Resolve-P0SafePersistentPath -Path $artifact.Path `
+                        -ExpectedRoot $artifact.ExpectedRoot -BoundaryRoot $RepoRoot -PathKind Leaf
+                    Remove-Item -LiteralPath $safePath -Force -ErrorAction Stop
+                }
+            }
+            catch { [void]$issues.Add('sensitive_artifact_removal_failed') }
+        }
+    }
+    try { Remove-P0SensitiveLedgerRows -LedgerPath $LedgerPath -SensitiveValues $SensitiveValues }
+    catch { [void]$issues.Add('sensitive_ledger_rewrite_failed') }
+
+    try {
+        Assert-P0NoSensitiveFiles -Paths ([string[]]@($uniquePaths)) -SensitiveValues $SensitiveValues `
+            -TraceRoot $TraceRoot -EvidenceRoot $EvidenceRoot
+        $ledgerRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($LedgerPath))
+        if (Test-P0SensitiveFile -Path $LedgerPath -ExpectedRoot $ledgerRoot -SensitiveValues $SensitiveValues) {
+            throw 'sensitive_output_detected'
+        }
+    }
+    catch {
+        if ($_.Exception.Message -ceq 'unsafe_artifact_path') { [void]$issues.Add('unsafe_artifact_path') }
+        else { [void]$issues.Add('sensitive_persistence_still_present') }
+    }
+    return @($issues | Select-Object -Unique)
 }
 
 function New-P0SensitiveRedactedManifest {
@@ -1423,80 +1972,25 @@ function New-P0SensitiveRedactedManifest {
     }
 }
 
-function Test-P0RunnerLockActive {
-    param([Parameter(Mandatory)][string]$Path)
+function New-P0DeviceLeaseOwnerToken {
+    $bytes = [byte[]]::new(32)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
     try {
-        $metadata = Get-Content -LiteralPath $Path -Raw -Encoding utf8 | ConvertFrom-Json
-        $pidProperty = $metadata.PSObject.Properties['pid']
-        $runProperty = $metadata.PSObject.Properties['run_id']
-        $startProperty = $metadata.PSObject.Properties['process_start_ticks']
-        if ($null -eq $pidProperty -or $null -eq $runProperty -or $null -eq $startProperty -or
-            [int64]$pidProperty.Value -le 0 -or [string]::IsNullOrWhiteSpace([string]$runProperty.Value) -or
-            [int64]$startProperty.Value -le 0) {
-            throw 'invalid lock metadata'
-        }
-        try { $owner = Get-Process -Id ([int]$pidProperty.Value) -ErrorAction Stop }
-        catch { return $false }
-        return $owner.StartTime.ToUniversalTime().Ticks -eq [int64]$startProperty.Value
+        $rng.GetBytes($bytes)
+        return ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
     }
-    catch {
-        try {
-            $probe = [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-            $probe.Dispose()
-            return $false
-        }
-        catch { return $true }
+    finally {
+        $rng.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
     }
-}
-
-function New-P0RunnerLock {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$RunId
-    )
-    for ($attempt = 0; $attempt -lt 2; $attempt++) {
-        try {
-            $stream = [IO.File]::Open($Path, 'CreateNew', 'ReadWrite', 'Read')
-            try {
-                $owner = Get-Process -Id $PID -ErrorAction Stop
-                $metadata = [ordered]@{
-                    pid = $PID
-                    run_id = $RunId
-                    process_start_ticks = $owner.StartTime.ToUniversalTime().Ticks
-                } | ConvertTo-Json -Compress
-                $bytes = [Text.UTF8Encoding]::new($false).GetBytes($metadata)
-                try {
-                    $stream.Write($bytes, 0, $bytes.Length)
-                    $stream.Flush($true)
-                }
-                finally { [Array]::Clear($bytes, 0, $bytes.Length) }
-                return $stream
-            }
-            catch {
-                $stream.Dispose()
-                try { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop } catch {}
-                throw 'runner 锁元数据写入失败。'
-            }
-        }
-        catch {
-            if ($_.Exception.Message -eq 'runner 锁元数据写入失败。') { throw }
-            if (-not (Test-Path -LiteralPath $Path)) { continue }
-            if (Test-P0RunnerLockActive -Path $Path) { throw '疑似另一次 P0 runner 正在运行。' }
-            try {
-                $probe = [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-                $probe.Dispose()
-                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-            }
-            catch { throw '疑似另一次 P0 runner 正在运行。' }
-        }
-    }
-    throw '无法建立 P0 runner 锁。'
 }
 
 $runId = (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $evidenceRoot = Join-Path $RepoRoot "docs\runs\evidence\$runId"
-$lockPath = Join-Path $RepoRoot 'scripts\.p0-safety-smoke.lock'
+$traceArtifactsRoot = Join-Path $RepoRoot 'docs\runs\traces'
+$lockPath = Join-Path $RepoRoot 'scripts\.dispatch.lock'
 $lockStream = $null
+$deviceLeaseOwnerToken = $null
 $session = $null
 $dispatchHandle = $null
 $activeLegRecord = $null
@@ -1519,8 +2013,30 @@ $manifest = [ordered]@{
 }
 
 try {
-    $lockStream = New-P0RunnerLock -Path $lockPath -RunId $runId
+    # 唯一设备 lease 从 provision 前持有到 finally 中 teardown/环境恢复完成；普通 dispatch
+    # 无论在腿间还是清理期都无法插入。子 dispatch 只读继承同一 token，不重入写锁。
+    $deviceLeaseOwnerToken = New-P0DeviceLeaseOwnerToken
+    $lockStream = Open-DispatchLock -Path $lockPath -Owner "p0-runner/$runId/full-lifecycle" `
+        -LeaseOwnerToken $deviceLeaseOwnerToken
+    [void](Resolve-P0SafePersistentPath -Path $evidenceRoot -ExpectedRoot $evidenceRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container -AllowMissing)
     New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
+    [void](Resolve-P0SafePersistentPath -Path $evidenceRoot -ExpectedRoot $evidenceRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container)
+    # 固定持久面也属于设备 lease 的保护范围。必须在任何 provision/dispatch/ledger 写入前
+    # 验证预存对象：否则 traces junction 或 ledger hardlink 会先把真实派单写到仓库外，
+    # 后验敏感扫描即使拒绝也已经太晚。缺失 traces 容器只允许在验证后创建，并立即重验。
+    [void](Resolve-P0SafePersistentPath -Path $traceArtifactsRoot -ExpectedRoot $traceArtifactsRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container -AllowMissing)
+    if (-not (Test-Path -LiteralPath $traceArtifactsRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $traceArtifactsRoot -Force | Out-Null
+    }
+    [void](Resolve-P0SafePersistentPath -Path $traceArtifactsRoot -ExpectedRoot $traceArtifactsRoot `
+        -BoundaryRoot $RepoRoot -PathKind Container)
+    $ledgerPathForFirstUse = Join-Path $RepoRoot 'docs\runs\ledger.csv'
+    $ledgerRootForFirstUse = Split-Path $ledgerPathForFirstUse -Parent
+    [void](Resolve-P0SafePersistentPath -Path $ledgerPathForFirstUse -ExpectedRoot $ledgerRootForFirstUse `
+        -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing)
     $session = Start-P0DeviceProvision -RepoRoot $RepoRoot -AdbPath $AdbPath -Provision:$Provision `
         -HealthProbePath $HealthProbePath -A11yBindTimeoutSec $A11yBindTimeoutSec
 
@@ -1554,7 +2070,11 @@ try {
         $slug = "p0-safety-$legLower-$runId"
         $currentScanSlug = $slug
         $legDir = Join-Path $evidenceRoot $legLower
+        [void](Resolve-P0SafePersistentPath -Path $legDir -ExpectedRoot $legDir `
+            -BoundaryRoot $RepoRoot -PathKind Container -AllowMissing)
         New-Item -ItemType Directory -Force -Path $legDir | Out-Null
+        [void](Resolve-P0SafePersistentPath -Path $legDir -ExpectedRoot $legDir `
+            -BoundaryRoot $RepoRoot -PathKind Container)
         $activeLegRecord = [ordered]@{
             leg = $legLower
             slug = $slug
@@ -1578,7 +2098,8 @@ try {
 
         $auditCursor = Get-P0AuditCursor -Session $session
         $auditAfter = Join-Path $legDir 'audit.jsonl'
-        [void]$sensitiveArtifactPaths.Add($auditAfter)
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $auditAfter `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
         $control = @{
             run_id = $runId
             leg = $legLower
@@ -1595,13 +2116,22 @@ try {
 
         $stdoutPath = Join-Path $legDir 'dispatch.stdout.txt'
         $stderrPath = Join-Path $legDir 'dispatch.stderr.txt'
-        [void]$sensitiveArtifactPaths.Add($stdoutPath)
-        [void]$sensitiveArtifactPaths.Add($stderrPath)
-        $dispatchHandle = New-P0DispatchProcess -ScriptPath $DispatchPath -TaskFile $taskFile -Slug $slug `
-            -StdoutPath $stdoutPath -StderrPath $stderrPath
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $stdoutPath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $stderrPath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        New-P0DispatchProcess -ScriptPath $DispatchPath -TaskFile $taskFile -Slug $slug `
+            -StdoutPath $stdoutPath -StderrPath $stderrPath `
+            -Handle ([ref]$dispatchHandle) `
+            -DeviceLeaseOwnerToken $deviceLeaseOwnerToken
         $deadline = [DateTime]::UtcNow.AddSeconds($ConfirmationTimeoutSec)
         $confirmation = $null
         $screenshotPath = Join-Path $legDir 'confirmation.png'
+        $safeScreenshot = Resolve-P0SensitiveArtifactPath -Path $screenshotPath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        $screenshotPath = $safeScreenshot.Path
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $screenshotPath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
         $prompted = $false
         $notificationState = $null
         while ([DateTime]::UtcNow -lt $deadline) {
@@ -1610,11 +2140,26 @@ try {
                 $lastConfirmationState = $state
                 if ([string]$state.run_id -cne $runId) { throw "$leg 腿确认状态 run_id 不匹配。" }
                 if ([string]$state.tool -cne 'press_key') { throw "$leg 腿确认状态工具不匹配。" }
+                $expectedState = $LegExpectedConfirmation[$leg]
+                $isTerminalState = [string]$state.state -in @(
+                    'allowed','denied','timed_out','error','dismissed'
+                )
+                $terminalMismatch = $isTerminalState -and [string]$state.state -cne $expectedState
+                if ($terminalMismatch) {
+                    # run/tool 关联一验完，冲突终态就已撤销 child 的全部授权。先整树停止并等待，
+                    # 再保存已有截图/通知与补 ledger；慢取证本身绝不能成为动作继续窗口。
+                    Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill
+                }
                 # evidence_file 只在证据就绪后才出现在状态文件里（app 侧 evidenceFile?.let），
                 # 而 Set-StrictMode 3.0 会把"读不存在的属性"变成硬错误——早期状态必须先探属性。
                 $evidenceFile = Get-P0OptionalProperty -Object $state -Name 'evidence_file'
                 if ($evidenceFile -and -not (Test-Path -LiteralPath $screenshotPath)) {
+                    $safeScreenshot = Resolve-P0SensitiveArtifactPath -Path $screenshotPath `
+                        -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+                    $screenshotPath = $safeScreenshot.Path
                     Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$evidenceFile) -Destination $screenshotPath
+                    [void](Resolve-P0SensitiveArtifactPath -Path $screenshotPath `
+                        -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot)
                 }
                 if ([string]$state.state -in @('evidence_ready','allowed','denied') -and -not $prompted) {
                     Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow
@@ -1629,9 +2174,10 @@ try {
                     # 零 token、走 runner 自己的 adb 通道。2026-08-01 锁屏上看不到通知，
                     # 而"为什么"当时只能靠猜；这一份 dump 让下一轮不必再猜。
                     $notificationDump = Join-Path $legDir 'approval-notification.txt'
+                    Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $notificationDump `
+                        -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
                     $notificationState = Save-P0ApprovalNotificationState -Session $session `
-                        -Destination $notificationDump
-                    [void]$sensitiveArtifactPaths.Add($notificationDump)
+                        -Destination $notificationDump -ExpectedRoot $legDir
                     # 这份取证空着也没人吭声，正是「判据看不见的东西就会烂掉」——现在它当场说话。
                     switch ([string]$notificationState.status) {
                         'ok' {
@@ -1651,29 +2197,33 @@ try {
                         }
                     }
                 }
-                # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
-                # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
-                $expectedState = $LegExpectedConfirmation[$leg]
-                if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
-                if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
+                if ($terminalMismatch) {
                     # 人已经花了时间，dispatch 却要被掐掉、来不及写自己那行台账。
                     # 不补这一行，这一轮在台账上就是**零留痕**——烧掉的东西必须可见。
                     Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState `
                         -Actual ([string]$state.state)
                     throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
                 }
+                # 本腿期望的那个终态才算拿到决定。对 Deny 来说 denied 是期望值、allowed
+                # 反而是重大失败；冲突终态已在任何慢取证之前完成 kill。
+                if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
             }
             if ($dispatchHandle.Process.HasExited) { break }
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
-            # 同上：没等到任何决定也是烧掉了真人时间，台账要留痕。
+            # 没等到任何决定时同样先撤销 child 的执行能力，再补烧掉的真人时间。
+            Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill
             Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
-            Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
-            $dispatchHandle = $null
             throw "$leg 腿确认超时或派单在真人决定前结束。"
         }
-        if (-not (Test-Path -LiteralPath $screenshotPath -PathType Leaf)) { throw "$leg 腿缺少确认截图证据。" }
+        $safeScreenshot = Resolve-P0SensitiveArtifactPath -Path $screenshotPath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        if (-not (Test-Path -LiteralPath $safeScreenshot.Path -PathType Leaf)) {
+            throw "$leg 腿缺少确认截图证据。"
+        }
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $safeScreenshot.Path `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot
 
         # Reentry 腿：批准已经拿到，debug hook 此刻正把微信切走，网关在等前台恢复。
         # 现在由 runner 在外面待够时间，再经自己的 adb 通道把微信拉回来。
@@ -1692,31 +2242,41 @@ try {
             Start-Sleep -Milliseconds ([Math]::Min(200, $PollIntervalMs))
         }
         if (-not $dispatchHandle.Process.HasExited) {
-            Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
-            $dispatchHandle = $null
+            Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill
             throw "$leg 腿 dispatch 超时。"
         }
         $dispatchExit = $dispatchHandle.Process.ExitCode
-        Stop-P0DispatchProcess -Handle $dispatchHandle
-        $dispatchHandle.Process.Dispose()
-        $dispatchHandle = $null
+        Close-P0DispatchHandle -Handle ([ref]$dispatchHandle)
         Assert-P0NoSensitiveFiles -Paths @($stdoutPath,$stderrPath) `
-            -SensitiveValues $session.SensitiveValues
+            -SensitiveValues $session.SensitiveValues -TraceRoot $traceArtifactsRoot `
+            -EvidenceRoot $evidenceRoot
 
+        $safeAudit = Resolve-P0SensitiveArtifactPath -Path $auditAfter -TraceRoot $traceArtifactsRoot `
+            -EvidenceRoot $evidenceRoot -AllowMissing
+        $auditAfter = $safeAudit.Path
         Save-P0AuditIncrement -Session $session -Cursor $auditCursor -Destination $auditAfter
+        [void](Resolve-P0SensitiveArtifactPath -Path $auditAfter -TraceRoot $traceArtifactsRoot `
+            -EvidenceRoot $evidenceRoot)
         $ledger = Get-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') -Slug $slug
-        $traceRoot = Join-Path $RepoRoot 'docs\runs\traces'
+        $traceRoot = Resolve-P0SafePersistentPath -Path (Join-Path $RepoRoot 'docs\runs\traces') `
+            -ExpectedRoot (Join-Path $RepoRoot 'docs\runs\traces') -BoundaryRoot $RepoRoot -PathKind Container
         $traceSource = Resolve-P0TraceSource -TraceRoot $traceRoot -Ledger $ledger -Slug $slug `
             -ExpectedExecutor $Executor -ExpectedBrain $Brain -ExpectedLeg 1
         if (Get-ChildItem -LiteralPath $traceRoot -Filter "*$slug*.pause.md" -ErrorAction SilentlyContinue) {
             throw "$leg 腿错误地产生了 pause/Confirm 第二腿。"
         }
         $traceEvidencePath = Join-Path $legDir 'dispatch-trace.jsonl'
-        Copy-Item -LiteralPath $traceSource -Destination $traceEvidencePath
-        [void]$sensitiveArtifactPaths.Add($traceSource)
-        [void]$sensitiveArtifactPaths.Add($traceEvidencePath)
-        Assert-P0NoSensitiveFiles -Paths @($traceSource,$traceEvidencePath,$auditAfter) `
-            -SensitiveValues $session.SensitiveValues
+        $safeTraceEvidence = Resolve-P0SensitiveArtifactPath -Path $traceEvidencePath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $traceEvidencePath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        Copy-Item -LiteralPath $traceSource -Destination $safeTraceEvidence.Path
+        [void](Resolve-P0SensitiveArtifactPath -Path $traceEvidencePath `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot)
+        Add-P0TraceArtifactFamily -Paths $sensitiveArtifactPaths -TracePath $traceSource -TraceRoot $traceRoot
+        Assert-P0NoSensitiveFiles -Paths ([string[]]@($sensitiveArtifactPaths)) `
+            -SensitiveValues $session.SensitiveValues -TraceRoot $traceArtifactsRoot `
+            -EvidenceRoot $evidenceRoot
         $ledgerScanText = $ledger | ConvertTo-Json -Compress -Depth 8
         [void]$sensitiveLedgerPayloads.Add($ledgerScanText)
         Assert-P0NoSensitiveText -Text $ledgerScanText -SensitiveValues $session.SensitiveValues
@@ -1724,9 +2284,11 @@ try {
         # 取设备自报的输入栏候选区上边界，供"marker 在消息区"判据在 a11y 焦点几何缺失时划线。
         # 走 runner 自己的只读通道，不经执行器、不进 trace，因此不影响严格调用序列。
         $inputBarTop = Get-P0InputBarTop -PrecheckPath $ProbeRegionPrecheckPath -Session $session
-        $trace = Read-P0TraceEvidence -TracePath $traceEvidencePath -ExpectedText $marker `
+        $trace = Read-P0TraceEvidence -TracePath $safeTraceEvidence.Path -ExpectedText $marker `
             -InputBarTop $inputBarTop
-        $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
+        $safeAudit = Resolve-P0SensitiveArtifactPath -Path $auditAfter -TraceRoot $traceArtifactsRoot `
+            -EvidenceRoot $evidenceRoot
+        $audit = @(Read-P0AuditEvidence -AuditPath $safeAudit.Path)
         # 同上：**判据之前先落证据**。批次 4 新腿正是死在下面那句 Assert 上，于是等前台那段
         # 数字一个都没进 manifest——而它恰恰是那一腿唯一有价值的产出。
         $auditHead = if ($audit.Count -gt 0) { $audit[0] } else { $null }
@@ -1741,14 +2303,15 @@ try {
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256 `
-            -ReentryDwellSec $ReentryDwellSec
+            -ReentryDwellSec $ReentryDwellSec -ReentryObservation $reentry
 
         # Deny 腿带外验证：**必须排在 teardown 之前**——teardown 会清空输入框，而"marker
         # 原封不动留在框里"正是这条验证唯一的强证据。先清框就是先毁证。
         $oob = $null
         if ($leg -ceq 'Deny') {
             $oobShot = Join-Path $legDir 'oob-after.png'
-            [void]$sensitiveArtifactPaths.Add($oobShot)
+            Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $oobShot `
+                -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
             $oob = Invoke-P0DenyOutOfBandCheck -Session $session -Marker $marker `
                 -ScreenshotPath $oobShot -InputBarTop $inputBarTop -OcrHelperPath $OobOcrHelperPath
             switch ($oob.verdict) {
@@ -1933,20 +2496,40 @@ try {
     $exitCode = 0
 }
 catch {
-    if ($_.Exception.Message -ceq 'sensitive_output_detected') { $sensitiveDetected = $true }
+    $runFailure = $_
+    # 任意 child-start 后异常都先撤销执行能力。trace 扫描、失败截图、teardown 最长可耗数十秒，
+    # 这些诊断不能成为未授权 child 继续碰设备的窗口。
+    if ($null -ne $dispatchHandle) {
+        try { Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill }
+        catch {
+            if ($cleanupErrors -notcontains 'dispatch_tree_not_drained') {
+                $cleanupErrors += 'dispatch_tree_not_drained'
+            }
+            throw
+        }
+    }
+    if ($runFailure.Exception.Message -ceq 'sensitive_output_detected') { $sensitiveDetected = $true }
+    if ($runFailure.Exception.Message -ceq 'unsafe_artifact_path' -and
+        $cleanupErrors -notcontains 'unsafe_artifact_path') {
+        $cleanupErrors += 'unsafe_artifact_path'
+    }
     $manifest.status = 'failed'
-    $manifest.failure = $_.Exception.Message
-    if ($_.Exception.Data.Contains('P0CleanupIssues')) {
-        $cleanupErrors += @([string]$_.Exception.Data['P0CleanupIssues'] -split ',' | Where-Object { $_ })
+    $manifest.failure = $runFailure.Exception.Message
+    if ($runFailure.Exception.Data.Contains('P0CleanupIssues')) {
+        $cleanupErrors += @([string]$runFailure.Exception.Data['P0CleanupIssues'] -split ',' | Where-Object { $_ })
     }
     # 完整语义审计只在腿走到确认卡之后才跑；"执行器有没有碰 gateway 以外的工具"
     # 必须无论怎么失败都查一遍，否则越权调用会随着提前抛错一起被吞掉。
     if ($currentScanSlug) {
         try {
-            $scanTrace = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'docs\runs\traces') `
+            $scanTraceRoot = Resolve-P0SafePersistentPath -Path (Join-Path $RepoRoot 'docs\runs\traces') `
+                -ExpectedRoot (Join-Path $RepoRoot 'docs\runs\traces') -BoundaryRoot $RepoRoot -PathKind Container
+            $scanTrace = @(Get-ChildItem -LiteralPath $scanTraceRoot `
                 -Filter "*$currentScanSlug*.jsonl" -File -ErrorAction Stop |
                 Sort-Object LastWriteTimeUtc) | Select-Object -Last 1
             if ($null -ne $scanTrace) {
+                Add-P0TraceArtifactFamily -Paths $sensitiveArtifactPaths -TracePath $scanTrace.FullName `
+                    -TraceRoot (Join-Path $RepoRoot 'docs\runs\traces')
                 $offenders = @(Get-P0NonGatewayToolUses -TracePath $scanTrace.FullName | Select-Object -Unique)
                 if ($offenders.Count -gt 0) {
                     $offenderText = $offenders -join ','
@@ -1956,12 +2539,17 @@ catch {
                 }
             }
         }
-        catch { $cleanupErrors += 'trace 工具越权扫描失败' }
+        catch {
+            if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+                $cleanupErrors += 'unsafe_artifact_path'
+            }
+            else { $cleanupErrors += 'trace 工具越权扫描失败' }
+        }
     }
     if ($null -ne $activeLegRecord) {
         $activeLegRecord['finished_at'] = [DateTime]::UtcNow.ToString('o')
         $activeLegRecord['verdict'] = 'failed'
-        $activeLegRecord['failure'] = $_.Exception.Message
+        $activeLegRecord['failure'] = $runFailure.Exception.Message
         # 失败腿也有真人决定与取证——2026-08-02 那条 E_CHANNEL_DOWN 的腿，审计里
         # `decided_via=notification` 明明在，manifest 却什么都没记。**证据链是好的，
         # 坏的是"腿终止时不落盘"**，于是那一次真人的时间在 manifest 上等于没花。
@@ -1990,6 +2578,11 @@ catch {
         # 先经 runner 自己的 adb 通道把当前屏幕拍下来（零 token、不经执行器），再清。
         if ($null -ne $session -and -not $legTeardownDone) {
             $failureScreen = Join-Path (Join-Path $evidenceRoot $activeLegRecord.leg) 'failure-screen.png'
+            $safeFailureScreen = Resolve-P0SensitiveArtifactPath -Path $failureScreen `
+                -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+            $failureScreen = $safeFailureScreen.Path
+            Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $failureScreen `
+                -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
             # **留屏这件事本身要记，成不成都记**：只在成功时写字段，等于"没截到"与"没试过"
             # 长成同一个样子——本轮 approval_notification 正是栽在这个形态上。
             $failureScreenRecord = [ordered]@{
@@ -2003,7 +2596,10 @@ catch {
                     -Destination $failureScreen -Operation '失败腿留屏' -TimeoutSec 60
                 $failureScreenRecord.captured = (Test-Path -LiteralPath $failureScreen -PathType Leaf) -and
                     (Get-Item -LiteralPath $failureScreen).Length -gt 0
-                if ($failureScreenRecord.captured) { [void]$sensitiveArtifactPaths.Add($failureScreen) }
+                if ($failureScreenRecord.captured) {
+                    Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $failureScreen `
+                        -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot
+                }
                 else { $failureScreenRecord.detail = '截屏为空' }
             }
             catch {
@@ -2038,35 +2634,65 @@ catch {
             }
         }
         $failedScreenshot = Join-Path (Join-Path $evidenceRoot $activeLegRecord.leg) 'confirmation.png'
-        if (Test-Path -LiteralPath $failedScreenshot -PathType Leaf) {
+        $safeFailedScreenshot = Resolve-P0SensitiveArtifactPath -Path $failedScreenshot `
+            -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
+        if (Test-Path -LiteralPath $safeFailedScreenshot.Path -PathType Leaf) {
+            $safeFailedScreenshot = Resolve-P0SensitiveArtifactPath -Path $safeFailedScreenshot.Path `
+                -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot
             $activeLegRecord['screenshot'] = [ordered]@{
                 file = "$($activeLegRecord.leg)/confirmation.png"
-                sha256 = (Get-FileHash -LiteralPath $failedScreenshot -Algorithm SHA256).Hash.ToLowerInvariant()
+                sha256 = (Get-FileHash -LiteralPath $safeFailedScreenshot.Path -Algorithm SHA256).Hash.ToLowerInvariant()
             }
         }
         $manifest.legs.Add($activeLegRecord)
         $activeLegRecord = $null
     }
-    Write-Host "P0 监督式 runner 失败：$($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "P0 监督式 runner 失败：$($runFailure.Exception.Message)" -ForegroundColor Red
 }
 finally {
+    try {
+    # Close-P0DispatchHandle 只在整树退出已被正向证明后清空引用；stdout/stderr capture fault
+    # 会另行抛错使 verdict 失败，但不能把 dead tree 冒充 active tree。空引用是后续可碰设备/
+    # 可净化持久文件/可放 lease 的机械前置证明。
+    $dispatchTreeDrained = $null -eq $dispatchHandle
     if ($null -ne $dispatchHandle) {
-        try { Stop-P0DispatchProcess -Handle $dispatchHandle -Kill } catch { $cleanupErrors += '终止 dispatch 子进程失败' }
-        try { $dispatchHandle.Process.Dispose() } catch {}
+        try { Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill }
+        catch {
+            if ($cleanupErrors -notcontains 'dispatch_tree_not_drained') {
+                $cleanupErrors += 'dispatch_tree_not_drained'
+            }
+        }
+        $dispatchTreeDrained = $null -eq $dispatchHandle
     }
-    if ($null -ne $session) {
+    if ($dispatchTreeDrained -and $null -ne $session) {
         try { $cleanupErrors += @(Stop-P0DeviceProvision -Session $session) }
         catch { $cleanupErrors += '设备环境恢复失败' }
     }
+    elseif (-not $dispatchTreeDrained -and $null -ne $session -and
+        $cleanupErrors -notcontains 'device_teardown_skipped_dispatch_tree_active') {
+        # 活 child 与 runner 的 adb teardown 并发会再次碰设备；宁可留下失败环境，也不能
+        # 一边仍有执行器，一边恢复配置/端口/前台。由现场在确认 child 已死后人工恢复。
+        $cleanupErrors += 'device_teardown_skipped_dispatch_tree_active'
+    }
+    if ($dispatchTreeDrained) {
+    # 本地 task/trace/ledger/manifest 与活 child 共享写面。整树未收口时任何“清理/复验”都只能
+    # 证明一个瞬时快照，child 随后仍可重写 secret；因此整个持久化 cleanup 必须一起跳过。
     foreach ($taskPath in $temporaryTaskFiles) {
         try { Remove-Item -LiteralPath $taskPath -Force -ErrorAction Stop }
         catch { $cleanupErrors += 'remove_local_task_file' }
     }
-    if ($null -ne $lockStream) {
-        try { $lockStream.Dispose() } catch { $cleanupErrors += '释放 runner 锁句柄失败' }
-        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { $cleanupErrors += '删除 runner 锁失败' }
-    }
     if ($null -ne $session) {
+        $traceRootForScan = Join-Path $RepoRoot 'docs\runs\traces'
+        try {
+            Add-P0TraceArtifactsForSlug -Paths $sensitiveArtifactPaths -TraceRoot $traceRootForScan `
+                -Slug $currentScanSlug -ExpectedExecutor $Executor -ExpectedBrain $Brain -ExpectedLeg 1
+        }
+        catch {
+            if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+                $cleanupErrors += 'unsafe_artifact_path'
+            }
+            else { $cleanupErrors += 'sensitive_output_scan_failed' }
+        }
         $ledgerPathForScan = Join-Path $RepoRoot 'docs\runs\ledger.csv'
         if (-not [string]::IsNullOrWhiteSpace($currentScanSlug) -and
             (Test-Path -LiteralPath $ledgerPathForScan -PathType Leaf)) {
@@ -2075,22 +2701,43 @@ finally {
                 $ledgerPayloadForScan = $ledgerForScan | ConvertTo-Json -Compress -Depth 8
                 [void]$sensitiveLedgerPayloads.Add($ledgerPayloadForScan)
                 $traceForScan = Resolve-P0TraceSource `
-                    -TraceRoot (Join-Path $RepoRoot 'docs\runs\traces') `
+                    -TraceRoot $traceRootForScan `
                     -Ledger $ledgerForScan -Slug $currentScanSlug `
                     -ExpectedExecutor $Executor -ExpectedBrain $Brain -ExpectedLeg 1
-                if (-not $sensitiveArtifactPaths.Contains($traceForScan)) {
-                    [void]$sensitiveArtifactPaths.Add($traceForScan)
-                }
+                Add-P0TraceArtifactFamily -Paths $sensitiveArtifactPaths -TracePath $traceForScan `
+                    -TraceRoot $traceRootForScan
             }
             catch {
                 if ($_.Exception.Message -ceq 'sensitive_output_detected') {
                     $sensitiveDetected = $true
                 }
+                elseif ($_.Exception.Message -ceq 'unsafe_artifact_path' -or
+                    $_.Exception.Message -match 'symlink/reparse/越界') {
+                    $cleanupErrors += 'unsafe_artifact_path'
+                }
             }
+        }
+        # 不能把 Get-P0LedgerRow(current slug) 当成 ledger 的敏感扫描：partial 行、没有
+        # 本腿行，或另一个 slug 的附加行都不会进入那个对象。先经同一 no-follow 根边界门，
+        # 再逐字节扫描整个固定 ledger；任一命中都必须进入统一净化与原路径复验。
+        $ledgerRootForScan = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ledgerPathForScan))
+        try {
+            if (Test-P0SensitiveFile -Path $ledgerPathForScan -ExpectedRoot $ledgerRootForScan `
+                -SensitiveValues $session.SensitiveValues) {
+                $sensitiveDetected = $true
+            }
+        }
+        catch {
+            if ($_.Exception.Message -ceq 'unsafe_artifact_path' -or
+                $_.Exception.Message -match 'symlink/reparse/越界') {
+                $cleanupErrors += 'unsafe_artifact_path'
+            }
+            else { $cleanupErrors += 'sensitive_output_scan_failed' }
         }
         try {
             Assert-P0NoSensitiveFiles -Paths ([string[]]@($sensitiveArtifactPaths)) `
-                -SensitiveValues $session.SensitiveValues
+                -SensitiveValues $session.SensitiveValues -TraceRoot $traceArtifactsRoot `
+                -EvidenceRoot $evidenceRoot
             foreach ($payload in @($sensitiveLedgerPayloads)) {
                 Assert-P0NoSensitiveText -Text ([string]$payload) `
                     -SensitiveValues $session.SensitiveValues
@@ -2101,8 +2748,19 @@ finally {
                 $sensitiveDetected = $true
             }
             else {
-                $cleanupErrors += 'sensitive_output_scan_failed'
+                if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+                    $cleanupErrors += 'unsafe_artifact_path'
+                }
+                else { $cleanupErrors += 'sensitive_output_scan_failed' }
             }
+        }
+        if ($sensitiveDetected) {
+            # 检出不能只改变 verdict/manifest：stdout、stderr、trace、audit 与 ledger 都是持久
+            # 泄漏面。teardown 完成、路径收齐后统一截断/改写，再从原路径复验。
+            $cleanupErrors += @(Protect-P0SensitivePersistentFiles `
+                -Paths ([string[]]@($sensitiveArtifactPaths)) `
+                -LedgerPath $ledgerPathForScan -SensitiveValues $session.SensitiveValues `
+                -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot)
         }
     }
     $manifest.finished_at = [DateTime]::UtcNow.ToString('o')
@@ -2118,8 +2776,20 @@ finally {
         $manifest.failure = 'sensitive_output_detected'
         $exitCode = 1
     }
-    try {
-        if (Test-Path -LiteralPath $evidenceRoot -PathType Container) {
+        $safeEvidenceRoot = $null
+        try {
+            $safeEvidenceRoot = Resolve-P0SafePersistentPath -Path $evidenceRoot -ExpectedRoot $evidenceRoot `
+                -BoundaryRoot $RepoRoot -PathKind Container
+        }
+        catch {
+            if ($_.Exception.Message -ceq 'unsafe_artifact_path') {
+                if ($cleanupErrors -notcontains 'unsafe_artifact_path') { $cleanupErrors += 'unsafe_artifact_path' }
+                $exitCode = 1
+                Write-Host '清理失败：unsafe_artifact_path' -ForegroundColor Red
+            }
+            else { throw }
+        }
+        if ($null -ne $safeEvidenceRoot) {
             $manifestPath = Join-Path $evidenceRoot 'run-manifest.json'
             $sensitiveValuesForScan = [Collections.Generic.List[string]]::new()
             if ($null -ne $session) { $sensitiveValuesForScan = $session.SensitiveValues }
@@ -2141,10 +2811,11 @@ finally {
                     -CleanupOk ($cleanupErrors.Count -eq 0)
                 $exitCode = 1
             }
-            Write-P0Manifest -Manifest $manifest -Path $manifestPath
+            Write-P0Manifest -Manifest $manifest -Path $manifestPath -ExpectedRoot $evidenceRoot
             try {
                 Assert-P0NoSensitiveFiles -Paths @($manifestPath) `
-                    -SensitiveValues $sensitiveValuesForScan
+                    -SensitiveValues $sensitiveValuesForScan -TraceRoot $traceArtifactsRoot `
+                    -EvidenceRoot $evidenceRoot
             }
             catch {
                 if ($_.Exception.Message -cne 'sensitive_output_detected') { throw }
@@ -2153,9 +2824,10 @@ finally {
                     -StartedAt $manifestStartedAt `
                     -RequestedLegs ([string[]]@($orderedLegs | ForEach-Object { $_.ToLowerInvariant() })) `
                     -CleanupOk ($cleanupErrors.Count -eq 0)
-                Write-P0Manifest -Manifest $manifest -Path $manifestPath
+                Write-P0Manifest -Manifest $manifest -Path $manifestPath -ExpectedRoot $evidenceRoot
                 Assert-P0NoSensitiveFiles -Paths @($manifestPath) `
-                    -SensitiveValues $sensitiveValuesForScan
+                    -SensitiveValues $sensitiveValuesForScan -TraceRoot $traceArtifactsRoot `
+                    -EvidenceRoot $evidenceRoot
                 $exitCode = 1
             }
             if ($sensitiveDetected) {
@@ -2164,11 +2836,33 @@ finally {
             Write-Host "证据：$evidenceRoot"
         }
     }
+    }
     finally {
-        if ($null -ne $session -and $null -ne $session.SensitiveValues) {
-            $session.SensitiveValues.Clear()
+        # lease 是持久证据的并发边界：直到 trace/ledger 净化、manifest 写入与最终敏感复验
+        # 全部结束才释放。最外层 finally 保证上面任一清理步骤抛错也不会留下永久活锁。
+        try {
+            if ($null -ne $lockStream -and $dispatchTreeDrained) {
+                try { Close-DispatchLock -Stream $lockStream -Path $lockPath }
+                catch {
+                    $exitCode = 1
+                    Write-Host '清理失败：释放统一设备 lease 失败' -ForegroundColor Red
+                }
+            }
+            elseif ($null -ne $lockStream) {
+                # 不 Dispose、不 Remove：保留 owner handle 到 runner 进程退出；真实 dispatch 的
+                # inherited handle 会继续排斥普通 writer。显式放锁会制造“child 仍活、设备却空闲”的假象。
+                $exitCode = 1
+                Write-Host '清理失败：dispatch_tree_not_drained，保留统一设备 lease 到进程退出' `
+                    -ForegroundColor Red
+            }
         }
-        $sensitiveLedgerPayloads.Clear()
+        finally {
+            $deviceLeaseOwnerToken = $null
+            if ($null -ne $session -and $null -ne $session.SensitiveValues) {
+                $session.SensitiveValues.Clear()
+            }
+            $sensitiveLedgerPayloads.Clear()
+        }
     }
 }
 

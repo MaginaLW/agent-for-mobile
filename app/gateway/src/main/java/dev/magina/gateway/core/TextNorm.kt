@@ -17,53 +17,59 @@ object TextNorm {
      *
      * 逐字符规则与 2026-07 起 `OcrEngine.norm` 的实现**逐字等价**，搬过来时没有改动任何一条。
      */
-    fun ocr(value: String): String {
+    fun ocr(value: String): String = canonical(value, foldLetterOToZero = true)
+
+    /**
+     * OCR marker 与收件人标签只共享无歧义的字符规则；`O`/`0` 折叠必须由调用域显式选择。
+     * marker 有真机 OCR 误识证据，收件人则可能真的分别叫 `AO` 与 `A0`，不能共享该容差。
+     */
+    private fun canonical(value: String, foldLetterOToZero: Boolean): String {
         val sb = StringBuilder(value.length)
         for (raw in value) {
             var c = raw
             if (c in '！'..'～') c -= 0xFEE0
             if (c == '　' || c.isWhitespace()) continue
             c = c.lowercaseChar()
-            if (c == 'o') c = '0'
+            if (foldLetterOToZero && c == 'o') c = '0'
             sb.append(c)
         }
         return sb.toString()
     }
 
     /**
-     * 短标签（会话页标题这类）比对用的归一：[ocr] 之上再去掉分隔类标点。
+     * 短标签（会话页标题这类）比对用的归一：全角→半角、去空白、小写、去分隔类标点。
      *
      * 多去掉的那几个字符来自 P0 宏原先的 `normalized`（`[\s：:·•]+`）——标题带里 OCR 常把
      * 分隔符识进来。合并之后对 `文件传输助手` 这个实际标签的结果与原实现**完全相同**，
-     * 多出来的只是"更能容忍噪声"的方向。
+     * 但这里故意不复用 marker 专属的 `O`→`0` 容差：真实收件人 `AO` 与 `A0` 必须不同。
      */
-    fun label(value: String): String = ocr(value).replace(LABEL_PUNCTUATION, "")
+    fun label(value: String): String =
+        canonical(value, foldLetterOToZero = false).replace(LABEL_PUNCTUATION, "")
 
     private val LABEL_PUNCTUATION = Regex("[:·•]")
 }
 
 /**
- * 短标签的宽松比对，**三态**。
+ * 短标签的 fail-closed 比对，**只有归一后精确相等才是正匹配**。
  *
- * 为什么不是布尔：OCR 读回的标题与"人批准的那个会话"对不上时，有两种物理上分得开的处境——
+ * 收件人标题不是普通搜索串：`张三` 既可能是单聊，也可能只是 `张三、李四群` 或
+ * `张三备份` 的前缀。没有额外、可机械验证的会话身份时，任何无界 `contains` 都可能把另一个
+ * 真实会话当成已批准会话。可容忍的边界只限 [TextNorm.label] 明列的字符等价（空白、全角、
+ * 大小写与三种分隔符）；归一后多一个、少一个或 `O`/`0` 不同都不放行。
  *
- * - **读回是批准标签的一部分**（`文件传输` ⊂ `文件传输助手`）：这是**漏识**。本仓实测
- *   「低对比度短文本漏识近四成」，把它判成"你换了会话"就是诬告。
- * - **读回与批准标签互不包含**（`微信` vs `文件传输助手`）：这是**能确证不同的正证据**。
- *
- * 与 `EvidenceRebuildPolicy` 里内容比对的形状刻意一致：`Mismatch` 只留给正证据，
- * 分不开的处境一律落到"判不了"。
+ * 三态仍保留，只为让调用方区分“像漏识”与“其他不相等”，从而给出准确的 Unverified 原因；
+ * [MATCH] 本身不再宽松。
  */
 internal object LabelMatchPolicy {
 
     enum class Verdict {
-        /** 读回包含已批准的标签（含逐位相同）。 */
+        /** 归一后逐位相同。 */
         MATCH,
 
-        /** 读回是已批准标签的一部分——像漏识，分不开，不许当成"不符"。 */
+        /** 读回是已批准标签的严格子串——像漏识，但绝不构成正匹配。 */
         PARTIAL,
 
-        /** 互不包含：能确证是另一个标签。 */
+        /** 其他所有不相等（包括“已批准标签 + 尾缀”）；危险发送一律不匹配。 */
         DIFFERENT,
     }
 
@@ -72,7 +78,7 @@ internal object LabelMatchPolicy {
         val have = TextNorm.label(got)
         // 空的一侧不构成任何正证据。调用方按"读不回来"处理，别在这里替它下结论。
         if (want.isEmpty() || have.isEmpty()) return Verdict.PARTIAL
-        if (have.contains(want)) return Verdict.MATCH
+        if (have == want) return Verdict.MATCH
         if (want.contains(have)) return Verdict.PARTIAL
         return Verdict.DIFFERENT
     }

@@ -25,6 +25,11 @@ android {
     packaging {
         resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -39,4 +44,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Android 自带 org.json 在本地 JVM 测试中只有桩实现；测试侧使用真实实现，不进入生产 APK。
     testImplementation("org.json:json:20240303")
+    // 只给 JVM 契约测试提供真实 Android Intent/PendingIntent 语义，不进入生产 APK。
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

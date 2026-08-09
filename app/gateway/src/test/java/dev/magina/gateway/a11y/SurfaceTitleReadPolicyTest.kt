@@ -26,10 +26,18 @@ class SurfaceTitleReadPolicyTest {
         fgElements: Int = 0,
         note: String? = null,
         elements: List<JSONObject> = emptyList(),
+        blockingOverlay: Boolean = false,
     ): JSONObject {
         val raw = JSONObject()
             .put("fusion", fusion)
             .put("fg_elements", fgElements)
+            .put("revision", 41L)
+            .put("capture_revision", 41L)
+            .put("vision_generation", 7L)
+            .put("foreground_window_id", 9)
+            .put("foreground_known", true)
+            .put("foreground_package", "com.tencent.mm")
+            .put("blocking_overlay", blockingOverlay)
             .put("elements", JSONArray().also { array -> elements.forEach(array::put) })
         note?.let { raw.put("note", it) }
         return raw
@@ -123,6 +131,53 @@ class SurfaceTitleReadPolicyTest {
             SurfaceFrame.of(raw, screenWidth, screenHeight),
         )
         assertEquals(viaPolicy, attempt.title)
+    }
+
+    @Test
+    fun `blocking overlay makes an otherwise matching OCR title unresolved`() {
+        val attempt = classify(
+            snapshot(
+                fusion = "ocr",
+                elements = listOf(element(text = "张三")),
+                blockingOverlay = true,
+            ),
+        )
+
+        assertFalse("blocking overlays must be unresolved", attempt.outcome == SurfaceTitleOutcome.RESOLVED)
+        assertNull("overlay text must never rebuild the underlying conversation", attempt.title)
+        assertTrue("the blocking fact must survive classification", attempt.capture?.blockingOverlay == true)
+        assertNull(SurfaceTitleRead(listOf(attempt), waitedMs = 0).bundle)
+        assertFalse(
+            "a later clear frame must not erase the fact that this rebuild observed an overlay",
+            SurfaceTitleReadPolicy.shouldRetry(attempt, attemptsSoFar = 1, elapsedMs = 0),
+        )
+    }
+
+    @Test
+    fun `resolved title cannot form a rebuild bundle without same capture input proof`() {
+        val attempt = classify(snapshot(fusion = "ocr", elements = listOf(element(text = "张三"))))
+        assertNull(SurfaceTitleRead(listOf(attempt), waitedMs = 0).bundle)
+
+        val capture = requireNotNull(attempt.capture)
+        val inputProof = FreshPreparedInputProof(
+            captureRevision = capture.captureRevision,
+            foregroundWindowId = capture.foregroundWindowId,
+            visionGeneration = capture.visionGeneration,
+            nodePresent = false,
+            nodeId = null,
+            imeSessionId = "ime|0123456789abcdef01234567",
+            focused = false,
+            editable = false,
+            left = 0,
+            top = 0,
+            right = 0,
+            bottom = 0,
+        )
+        val bundle = SurfaceTitleRead(listOf(attempt.copy(inputProof = inputProof)), waitedMs = 0).bundle
+
+        assertNotNull(bundle)
+        assertEquals(capture.visionGeneration, bundle!!.input.visionGeneration)
+        assertEquals("张三", bundle.surface.canonicalLabel)
     }
 
     // —— 重试：有界，且只重试"读" ——

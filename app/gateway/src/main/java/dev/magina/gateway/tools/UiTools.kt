@@ -21,9 +21,69 @@ import dev.magina.gateway.ocr.OcrEngine
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** `ui_find` 的纯 JSON 契约；生产过滤与 JVM 用例共用，归一两侧只调用 [OcrEngine.norm]。 */
+internal object UiFindJsonContract {
+
+    fun matches(elements: JSONArray, text: String?, role: String?, desc: String?): JSONArray {
+        val out = JSONArray()
+        val queryNormalized = text?.let(OcrEngine::norm)
+        for (index in 0 until elements.length()) {
+            val element = elements.getJSONObject(index)
+            val elementText = element.getString("text")
+            val elementNormalized = OcrEngine.norm(elementText)
+            val ocrSourced = element.optString("source") != "a11y"
+            val textMatches = text.isNullOrEmpty() || elementText.contains(text) ||
+                element.getString("desc").contains(text) ||
+                (ocrSourced && elementNormalized.contains(queryNormalized.orEmpty()))
+            val roleMatches = role.isNullOrEmpty() || element.getString("role") == role
+            val descMatches = desc.isNullOrEmpty() || element.getString("desc").contains(desc)
+            if (textMatches && roleMatches && descMatches) {
+                // 每个框独立保留；两个 OCR 框归一后相同也不能去重，否则调用方失去真实几何候选。
+                element.put("normalized", elementNormalized)
+                out.put(element)
+            }
+        }
+        return out
+    }
+
+    fun response(matches: JSONArray, text: String?): JSONObject = JSONObject()
+        .put("matches", matches)
+        .put("query_normalized", text?.let(OcrEngine::norm) ?: "")
+}
+
 internal fun inputVerificationMismatchMessage(expected: String, actual: String): String =
     "读回不符：期望长度=${expected.length} SHA-256=${InputCommitEvidence.sha256(expected)}；" +
         "实际长度=${actual.length} SHA-256=${InputCommitEvidence.sha256(actual)}"
+
+/**
+ * Enter 唯一投递的专用终态映射；生产与 JVM 回归用例共用。
+ *
+ * 会话切换是 stale；其余 false 也绝不能落到通用“可重试/换通道”提示——调用返回 false
+ * 不能机械证明动作完全没发生，重试或换通道都有重复发送风险。
+ */
+internal fun requireCurrentEnterSession(entered: Boolean, enterChannel: String?) {
+    if (entered) return
+    if (enterChannel in setOf(
+            "no_active_session",
+            "session_package_mismatch",
+            "session_id_mismatch",
+            "fresh_surface_stale",
+        )
+    ) throw GatewayError(
+        ErrorCode.E_STALE_REF,
+        "执行 Enter 的最终 IME 会话已切换（$enterChannel）",
+        channel = "safety",
+        retryable = false,
+        fallback = "按站规收尾，不要重试同一危险动作",
+    )
+    throw GatewayError(
+        ErrorCode.E_VERIFY_FAIL,
+        "Enter 的唯一投递通道未确认受理（$enterChannel），无法证明动作完全没有发生",
+        channel = if (enterChannel == "a11y_ime_enter") "a11y" else "ime",
+        retryable = false,
+        fallback = "不得重试或切换发送通道；只能只读复核会话最后一条消息判断是否已发出",
+    )
+}
 
 /** L4/L5/L6 工具实现：snapshot/find/action/输入链/按键/等待/受控截图。 */
 object UiTools {
@@ -104,8 +164,13 @@ object UiTools {
         )
         val metrics = a11y.resources.displayMetrics
         val focusedInput = focusedInputSnapshot(a11y)
-        return JSONObject()
-            .put("matches", matches)
+        return UiFindJsonContract.response(matches, text)
+            // 查询串按**同一个归一函数**处理后一并返回，好让调用方做一次**字面比较**就够
+            // （`normalized` 含 `query_normalized`）。
+            //
+            // 只返回命中侧的 `normalized` 是不够的：那样调用方还得自己把查询串归一一遍，
+            // 而"要求对方自己做归一"正是这次栽跟头的那个坑换个地方待着。
+            // 两边都由网关用同一份实现算出来，调用方无从算错。
             .put("scrolls", scrolls)
             .put("screen_width", metrics.widthPixels)
             .put("screen_height", metrics.heightPixels)
@@ -371,86 +436,113 @@ object UiTools {
         expectedFocusedInputBounds: String? = null,
         expectedPreparedTargetEvidence: PreparedTargetEvidence? = null,
     ): JSONObject {
+        if (key == "enter") return pressEnter(
+            expectedFocusIdentity,
+            expectedInputCommitEvidence,
+            expectedFocusedInputBounds,
+            expectedPreparedTargetEvidence,
+        )
         if (key == "del") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
-        // 送 Enter 走了哪条通道 —— 成功和失败都要带出去。危险动作发不出去时，
-        // "按哪条路送的"是第一诊断位；缺了它只能靠重跑真机去猜（2026-07-31 两轮实锤）。
-        var enterChannel: String? = null
         val ok = when (key) {
-            "enter" -> {
-                // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
-                val focused = a11y.focusedEditable()
-                val snapshot = focusedInputSnapshot(focused)
-                requireFocusedIdentity(expectedFocusIdentity, snapshot.identity)
-                requireInputEvidence(expectedInputCommitEvidence, snapshot)
-                requirePreparedTargetEvidence(
-                    expectedPreparedTargetEvidence,
-                    expectedFocusedInputBounds,
-                    snapshot,
-                    a11y,
-                )
-                // 只有 a11y 侧给出**合法输入身份**时才允许走节点通道；否则那是残留节点，
-                // 它会接受动作并返回 true，把真正可能工作的 IME 通道短路掉（见 nodeUsableForAction）。
-                val viaNode = snapshot.nodeUsableForAction && (
-                    focused?.performAction(
-                        AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-                    ) ?: false
-                    )
-                if (viaNode) enterChannel = "a11y_ime_enter"
-                viaNode || run {
-                    val current = focusedInputSnapshot(a11y)
-                    requireFocusedIdentity(expectedFocusIdentity, current.identity)
-                    requireInputEvidence(expectedInputCommitEvidence, current)
-                    requirePreparedTargetEvidence(
-                        expectedPreparedTargetEvidence,
-                        expectedFocusedInputBounds,
-                        current,
-                        a11y,
-                    )
-                    ImeBridge.enter().also { enterChannel = ImeBridge.lastEnterChannel }
-                }
-            }
             "del" -> ImeBridge.deleteBack(1)
             else -> a11y.globalKey(key)
         }
         if (!ok) throw GatewayError(
             ErrorCode.E_VERIFY_FAIL, "按键 $key 未生效",
             channel = "a11y", retryable = true,
-            fallback = if (key == "enter" || key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
+            fallback = if (key == "del") "需自有 IME 激活；或改用 ui_action 点对应按钮" else "重试一次",
         )
-        if (key != "enter") return JSONObject().put("done", true)
-        // 后验要在清证据之前取基线：它是"应当消失的那串字"的唯一可靠来源。
-        val verdict = verifyEnterSent(a11y, expectedInputCommitEvidence, expectedFocusedInputBounds)
-        Gateway.inputCommitEvidence.clear()
-        // Enter 是"发送"，返回值不能只看通道调用是否被受理：`performEditorAction` 只要
-        // InputConnection 还活着就返回 true，微信不理会 IME_ACTION_SEND 时照样返回 true。
-        // 2026-07-26 真机实锤：press_key 返回 done:true、确认卡也走完了，而 marker 原封不动
-        // 躺在输入框里，消息根本没发出去——危险动作谎报成功比失败更糟。
-        if (verdict.state == SendVerification.NOT_SENT) throw GatewayError(
-            ErrorCode.E_VERIFY_FAIL,
-            "Enter 已投递但输入框内容未消失，无法证明已发送（后验读回：${verdict.detail}）",
-            channel = verdict.channel,
-            retryable = false,
-            fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
-            // 失败信封必须自带诊断位：走的哪条通道、当时的输入框契约是什么。
-            // 没有它，"发不出去"就只能靠再烧一轮真机去分辨走的是哪条分支。
-            extra = enterDiagnostics(enterChannel),
-        )
-        // UNVERIFIED 不当失败报：判不了 ≠ 没发出去，报失败会诱导重试，而重试发送等于冒重复发送。
-        // 如实把"没有发送证据"带进信封，下一步只能是只读复核。
-        return JSONObject()
-            .put("done", true)
-            .put("sent_verified", verdict.state == SendVerification.SENT)
-            .put("verification_state", verdict.state.name.lowercase())
-            .put("verification_channel", verdict.channel)
-            .put("verification_detail", verdict.detail)
-            .put("enter_diagnostics", enterDiagnostics(enterChannel))
-            .apply {
-                if (verdict.state == SendVerification.UNVERIFIED) put(
-                    "next_step",
-                    "本次发送没有机械证据。只能只读复核会话最后一条消息判断是否已发出；不得重按 Enter。",
-                )
+        return JSONObject().put("done", true)
+    }
+
+    private fun pressEnter(
+        expectedFocusIdentity: FocusIdentity?,
+        expectedInputCommitEvidence: InputCommitEvidence?,
+        expectedFocusedInputBounds: String?,
+        expectedPreparedTargetEvidence: PreparedTargetEvidence?,
+    ): JSONObject {
+        var completed = false
+        try {
+            val a11y = GatewayA11yService.require()
+            // SafetyGate 的普通上下文复核仍保留，但它不是最终视觉边界：同 App 会话可能不发事件。
+            // 真正投递由 service 在第四份 fresh Bitmap 后立即进入 IME 锁，消除此前的放大窗口。
+            val focused = a11y.focusedEditable()
+            val snapshot = focusedInputSnapshot(focused, ImeBridge.session()?.id)
+            requireFocusedIdentity(expectedFocusIdentity, snapshot.identity)
+            requireInputEvidence(expectedInputCommitEvidence, snapshot)
+            requirePreparedTargetEvidence(
+                expectedPreparedTargetEvidence,
+                expectedFocusedInputBounds,
+                snapshot,
+                a11y,
+            )
+            val guardedIdentity = expectedFocusIdentity ?: throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "执行 Enter 前缺少已复核的 IME 会话身份",
+                channel = "safety",
+            )
+            val guardedInput = expectedInputCommitEvidence ?: throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "执行 Enter 前缺少已复核的输入提交证据",
+                channel = "safety",
+            )
+            val guardedTarget = expectedPreparedTargetEvidence ?: throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "执行 Enter 前缺少已复核的目标会话证据",
+                channel = "safety",
+            )
+            val entered = a11y.performFreshEvidenceEnter(
+                expectedFocusIdentity = guardedIdentity,
+                expectedInputCommitEvidence = guardedInput,
+                expectedFocusedInputBounds = expectedFocusedInputBounds,
+                expectedPreparedTargetEvidence = guardedTarget,
+                rollback = {
+                    Gateway.preparedTargetEvidence.clear()
+                    Gateway.inputCommitEvidence.clear()
+                },
+            )
+            // 送 Enter 走了哪条通道 —— 成功和失败都要带出去。危险动作发不出去时，
+            // "按哪条路送的"是第一诊断位；缺了它只能靠重跑真机去猜（2026-07-31 两轮实锤）。
+            val enterChannel = ImeBridge.lastEnterChannel
+            requireCurrentEnterSession(entered, enterChannel)
+
+            // 后验要在清证据之前取基线：它是"应当消失的那串字"的唯一可靠来源。
+            val verdict = verifyEnterSent(a11y, guardedInput, expectedFocusedInputBounds)
+            Gateway.inputCommitEvidence.clear()
+            // Enter 是"发送"，返回值不能只看通道调用是否被受理：`performEditorAction` 只要
+            // InputConnection 还活着就返回 true，微信不理会 IME_ACTION_SEND 时照样返回 true。
+            if (verdict.state == SendVerification.NOT_SENT) throw GatewayError(
+                ErrorCode.E_VERIFY_FAIL,
+                "Enter 已投递但输入框内容未消失，无法证明已发送（后验读回：${verdict.detail}）",
+                channel = verdict.channel,
+                retryable = false,
+                fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
+                extra = enterDiagnostics(enterChannel),
+            )
+            // UNVERIFIED 不当失败报：判不了 ≠ 没发出去，报失败会诱导重试，而重试发送等于冒重复发送。
+            val response = JSONObject()
+                .put("done", true)
+                .put("sent_verified", verdict.state == SendVerification.SENT)
+                .put("verification_state", verdict.state.name.lowercase())
+                .put("verification_channel", verdict.channel)
+                .put("verification_detail", verdict.detail)
+                .put("enter_diagnostics", enterDiagnostics(enterChannel))
+                .apply {
+                    if (verdict.state == SendVerification.UNVERIFIED) put(
+                        "next_step",
+                        "本次发送没有机械证据。只能只读复核会话最后一条消息判断是否已发出；不得重按 Enter。",
+                    )
+                }
+            completed = true
+            return response
+        } finally {
+            // 校验失败、唯一通道 false/Exception、后验失败乃至致命 Error 都不得留下可重放双证据。
+            if (!completed) {
+                Gateway.preparedTargetEvidence.clear()
+                Gateway.inputCommitEvidence.clear()
             }
+        }
     }
 
     /**
@@ -564,10 +656,18 @@ object UiTools {
         focusedInputSnapshot(a11y).identity
 
     fun focusedInputSnapshot(a11y: GatewayA11yService): FocusedInputSnapshot =
-        focusedInputSnapshot(a11y.focusedEditable())
+        focusedInputSnapshot(a11y.focusedEditable(), ImeBridge.session()?.id)
 
-    private fun focusedInputSnapshot(node: AccessibilityNodeInfo?): FocusedInputSnapshot {
-        val imeSessionId = ImeBridge.focusedInputId.takeIf { ImeBridge.active }
+    /** 重建已原子取得 IME 会话时，显式沿用同一 id，不再二次拆读全局 active/id。 */
+    internal fun focusedInputSnapshot(
+        a11y: GatewayA11yService,
+        imeSessionId: String,
+    ): FocusedInputSnapshot = focusedInputSnapshot(a11y.focusedEditable(), imeSessionId)
+
+    private fun focusedInputSnapshot(
+        node: AccessibilityNodeInfo?,
+        imeSessionId: String?,
+    ): FocusedInputSnapshot {
         // editable 是"这是个输入节点"的判据。findFocus(FOCUS_INPUT) 在本机微信会话页实测
         // 会返回一个既不 focused 也不 editable 的残留节点（2026-07-25），拿它当 a11y 身份
         // 比降级更危险——证据会绑到一个根本打不进字的节点上。

@@ -22,6 +22,7 @@ $SourceProvisioner = Join-Path $SourceRepoRoot 'scripts\lib\p0-device-provision.
 $SourceHealthProbe = Join-Path $SourceRepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
 $SourceTaskTemplateHelper = Join-Path $SourceRepoRoot 'scripts\lib\p0-task-template.ps1'
 $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
+$SourceDispatchLock = Join-Path $SourceRepoRoot 'scripts\lib\dispatch-lock.ps1'
 . $SourceTaskTemplateHelper
 . (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1')
 $PwshPath = (Get-Process -Id $PID).Path
@@ -62,6 +63,46 @@ function Assert-NotMatches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -notmatch $Pattern) "不应匹配 /$Pattern/：`n$Actual"
 }
 
+function Assert-Matches([string]$Actual, [string]$Pattern) {
+    # 失败消息不附正文：runner 输出可能正是敏感泄漏负例，测试日志不得再次复制它。
+    Assert-True ($Actual -match $Pattern) "输出不匹配 /$Pattern/。"
+}
+
+function Get-PersistedSensitiveArtifactLeaks {
+    param([Parameter(Mandatory)]$Fixture)
+    $paths = [Collections.Generic.List[string]]::new()
+    foreach ($directory in @(
+        (Join-Path $Fixture.Repo 'docs\runs\traces'),
+        (Join-Path $Fixture.Repo 'docs\runs\evidence')
+    )) {
+        if (Test-Path -LiteralPath $directory -PathType Container) {
+            Get-ChildItem -LiteralPath $directory -File -Recurse | ForEach-Object { [void]$paths.Add($_.FullName) }
+        }
+    }
+    $ledger = Join-Path $Fixture.Repo 'docs\runs\ledger.csv'
+    # 安全删除也算通过；存在则必须逐字重读，缺席则证明该原路径没有留存 secret。
+    if (Test-Path -LiteralPath $ledger -PathType Leaf) { [void]$paths.Add($ledger) }
+
+    $leaks = [Collections.Generic.List[string]]::new()
+    foreach ($path in $paths) {
+        # 不把文件正文带进断言消息；RED/GREEN 控制台都不得二次回显 fixture secret。
+        $bytes = [IO.File]::ReadAllBytes($path)
+        try {
+            $text = [Text.UTF8Encoding]::new($false, $false).GetString($bytes)
+            $containsSensitive = $text.Contains([string]$Fixture.Token, [StringComparison]::Ordinal) -or
+                $text -match '(?is)\bAuthorization\b.{0,24}\bBearer\s+\S+' -or
+                $text -match '(?i)(?:stderr|trace|audit|ledger|manifest)-fixture-secret'
+            if ($containsSensitive) {
+                [void]$leaks.Add([IO.Path]::GetRelativePath($Fixture.Repo, $path))
+            }
+        }
+        finally {
+            if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+        }
+    }
+    return @($leaks)
+}
+
 # 假 adb 把整条命令原样记进 keyevent.log；一次 `input keyevent` 可带多个键码，因此按 token 数。
 function Get-TestKeyCount([string[]]$Lines, [int]$KeyCode) {
     $count = 0
@@ -77,8 +118,17 @@ function Get-TestKeyCount([string[]]$Lines, [int]$KeyCode) {
 
 function Get-TestSha256([string]$Text) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
-    try { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() }
-    finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+    $digest = $null
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($bytes)
+        return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+        if ($null -ne $digest -and $digest.Length -gt 0) { [Array]::Clear($digest, 0, $digest.Length) }
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
 }
 
 function Test-Case([string]$Name, [scriptblock]$Body) {
@@ -122,7 +172,10 @@ function New-Fixture {
         'ledger_wrong_brain', 'ledger_wrong_leg', 'ledger_symlink',
         'png_truncated', 'png_bad_crc', 'png_bad_dimensions',
         'stdout_secret', 'stderr_bearer', 'trace_secret', 'trace_bearer',
-        'audit_secret', 'ledger_secret', 'manifest_secret', 'existing_config_stdout_secret',
+        'trace_sidecar_secret', 'trace_sidecar_reparse_secret', 'trace_sidecar_leaf_link_secret',
+        'trace_secret_no_ledger',
+        'audit_secret', 'ledger_secret', 'ledger_unrelated_secret',
+        'ledger_partial_secret_no_current', 'manifest_secret', 'existing_config_stdout_secret',
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
@@ -130,15 +183,23 @@ function New-Fixture {
         'card_not_captured', 'send_unverified', 'legacy_no_send_field',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'reentry_single_read', 'reentry_short_wait', 'reentry_wait_timeout', 'reentry_no_wait_note',
+        'reentry_away_never', 'reentry_returned_early', 'reentry_restore_failed',
+        'reentry_observed_dwell_long_wait_short',
         'reentry_no_heartbeat', 'reentry_zero_beats', 'reentry_no_token',
         'reentry_no_title_read', 'reentry_title_retried',
         'stale_production_budget', 'stale_reached', 'stale_no_wait_note',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
-        'find_ocr_split_bubble', 'find_ocr_extra_text',
+        'find_ocr_split_bubble', 'find_ocr_extra_text', 'find_wrong_normalized',
+        'find_wrong_query_normalized',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
-        'decided_via_notification', 'notification_absent', 'notification_dump_fail'
+        'decided_via_notification', 'notification_absent', 'notification_dump_fail',
+        'notification_leaf_link', 'notification_leaf_link_continues',
+        'notification_secret_after_write', 'trace_evidence_secret_after_copy',
+        'deny_but_allowed_continues', 'dispatch_cleanup_failure',
+        'dispatch_startup_cleanup_failure', 'dispatch_output_copy_fault',
+        'preexisting_trace_root_reparse', 'preexisting_ledger_leaf_link'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -152,9 +213,214 @@ function New-Fixture {
         'configs', 'app\gateway\build\outputs\apk\debug', 'device\files', 'device\cache'
     ) | ForEach-Object { New-Item -ItemType Directory -Force -Path (Join-Path $repo $_) | Out-Null }
     New-Item -ItemType Directory -Force -Path $state, $bin | Out-Null
+    if ($Scenario -in @('notification_leaf_link','notification_leaf_link_continues')) {
+        $notificationTarget = Join-Path $state 'notification-link-target.txt'
+        Set-Content -LiteralPath $notificationTarget -Encoding utf8 `
+            -Value 'Authorization: Bearer notification-link-fixture-secret'
+        Set-Content -LiteralPath (Join-Path $state 'notification-link-target-sha256.txt') `
+            -Value ((Get-FileHash -LiteralPath $notificationTarget -Algorithm SHA256).Hash) `
+            -NoNewline -Encoding ascii
+    }
 
     $fixtureRunner = Join-Path $repo 'scripts\run-p0-safety-smoke.ps1'
     Copy-Item -LiteralPath $SourceRunner -Destination $fixtureRunner
+    # 假 dispatch 会立即退出，不能让每个 Reentry 离线用例真的睡 60–90 秒。只改 TEMP
+    # fixture：用结构化记录模拟 runner 的独立 ADB 观察，生产脚本仍跑真实计时/恢复路径。
+    $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
+    $reentryFixtureHook = @'
+function Invoke-P0ReentryInterlude {
+    param($Session, [int]$DwellSec, $DispatchHandle, [int]$RestoreTimeoutSec = 20, [int]$AwayTimeoutSec = 20)
+    $scenario = (Get-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'scenario.txt') -Raw).Trim()
+    $awayConfirmed = $scenario -cne 'reentry_away_never'
+    $returnedEarly = $scenario -ceq 'reentry_returned_early'
+    $restored = $awayConfirmed -and $scenario -cne 'reentry_restore_failed'
+    $observedDwellMs = if ($awayConfirmed) { 75000L } else { 0L }
+    return [ordered]@{
+        dwell_sec = $DwellSec
+        dwell_ms = $observedDwellMs
+        observation_started_at = '2026-08-09T00:00:00.0000000Z'
+        away_confirmed_at = $(if ($awayConfirmed) { '2026-08-09T00:00:01.0000000Z' } else { '' })
+        dwell_started_at = $(if ($awayConfirmed) { '2026-08-09T00:00:01.0000000Z' } else { '' })
+        dwell_finished_at = $(if ($awayConfirmed) { '2026-08-09T00:01:16.0000000Z' } else { '' })
+        away_wait_ms = 1000L
+        away_samples = $(if ($awayConfirmed) { 16 } else { 40 })
+        away_observed = $(if ($awayConfirmed) { $(if ($returnedEarly) { 8 } else { 16 }) } else { 0 })
+        away_confirmed = $awayConfirmed
+        dwell_samples = $(if ($awayConfirmed) { 16 } else { 0 })
+        dwell_away_observed = $(if ($returnedEarly) { 8 } elseif ($awayConfirmed) { 16 } else { 0 })
+        away_observation_unknown = $false
+        dwell_observation_unknown = $false
+        restore_observation_unknown = $false
+        observation_unknown = $false
+        unknown_samples = 0
+        returned_foreground_early = $returnedEarly
+        continuous_away = ($awayConfirmed -and -not $returnedEarly)
+        dispatch_exited_during_dwell = $false
+        restored = $restored
+        restore_ms = 50
+    }
+}
+'@
+    $runnerSource = $runnerSource.Replace(
+        '$StaleLegBudgetCeilingMs = 120000',
+        $reentryFixtureHook + "`r`n`$StaleLegBudgetCeilingMs = 120000"
+    )
+    if ($Scenario -ceq 'deny_but_allowed_continues') {
+        # 两个独立的慢窗口：截图在 terminal mismatch 判断之前，ledger 在 kill 之后。
+        # 旧实现会先等慢截图，仍活 dispatch 趁机落 continued sentinel；只修成 ledger→kill
+        # 也会被第二个窗口抓住。正确顺序必须是终态 mismatch→kill→任何慢取证/ledger。
+        $evidenceNeedle = '                    Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$evidenceFile) -Destination $screenshotPath'
+        $ledgerNeedle = '                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState `'
+        if (-not $runnerSource.Contains($evidenceNeedle, [StringComparison]::Ordinal) -or
+            -not $runnerSource.Contains($ledgerNeedle, [StringComparison]::Ordinal)) {
+            throw 'fixture 无法定位 mismatch 慢取证/aborted-ledger 调用。'
+        }
+        $runnerSource = $runnerSource.Replace(
+            $evidenceNeedle,
+            "                    Start-Sleep -Milliseconds 2200`r`n$evidenceNeedle"
+        )
+        $runnerSource = $runnerSource.Replace(
+            $ledgerNeedle,
+            "                    Start-Sleep -Milliseconds 2200`r`n$ledgerNeedle"
+        )
+    }
+    if ($Scenario -in @('dispatch_cleanup_failure','dispatch_startup_cleanup_failure')) {
+        # 隔离 fault seam：child 已启动后立刻抛错，并让 catch/finally 的两次整树关闭都失败。
+        # 这只改 TEMP fixture，用来证明生产 finally 不能在 drain 未确认时碰 adb 或显式放 lease。
+        $closeNeedle = '    $current = $Handle.Value'
+        $launchNeedle = '            -DeviceLeaseOwnerToken $deviceLeaseOwnerToken'
+        if (-not $runnerSource.Contains($closeNeedle, [StringComparison]::Ordinal) -or
+            ($Scenario -ceq 'dispatch_cleanup_failure' -and
+                -not $runnerSource.Contains($launchNeedle, [StringComparison]::Ordinal))) {
+            throw 'fixture 无法定位 dispatch cleanup fault seam。'
+        }
+        $runnerSource = $runnerSource.Replace(
+            $closeNeedle,
+            "    throw 'fixture_dispatch_tree_not_drained'`r`n$closeNeedle"
+        )
+        if ($Scenario -ceq 'dispatch_cleanup_failure') {
+            $runnerSource = $runnerSource.Replace(
+                $launchNeedle,
+                ($launchNeedle + @'
+
+        $fixtureLeaseDeadline = [DateTime]::UtcNow.AddSeconds(3)
+        $fixtureLeaseMarker = Join-Path $env:P0_FAKE_STATE 'dispatch-child-lease-open.txt'
+        while (-not (Test-Path -LiteralPath $fixtureLeaseMarker -PathType Leaf) -and
+            [DateTime]::UtcNow -lt $fixtureLeaseDeadline) {
+            Start-Sleep -Milliseconds 20
+        }
+        if (-not (Test-Path -LiteralPath $fixtureLeaseMarker -PathType Leaf)) {
+            throw 'fixture_child_did_not_inherit_lease'
+        }
+        $sensitiveDetected = $true
+        throw 'fixture_post_start_failure'
+'@)
+            )
+        }
+        else {
+            # Start 已成功、child 已继承 lease 后模拟 stdout/CopyToAsync 初始化抛错。旧实现的
+            # local catch 再被强制 kill-fail；若根没有先发布给外层，finally 会把 null 冒充 drained。
+            $startedNeedle = '        $started = $true'
+            if (-not $runnerSource.Contains($startedNeedle, [StringComparison]::Ordinal)) {
+                throw 'fixture 无法定位 dispatch startup owner seam。'
+            }
+            $runnerSource = $runnerSource.Replace(
+                $startedNeedle,
+                ($startedNeedle + @'
+
+        $fixtureLeaseDeadline = [DateTime]::UtcNow.AddSeconds(3)
+        $fixtureLeaseMarker = Join-Path $env:P0_FAKE_STATE 'dispatch-child-lease-open.txt'
+        while (-not (Test-Path -LiteralPath $fixtureLeaseMarker -PathType Leaf) -and
+            [DateTime]::UtcNow -lt $fixtureLeaseDeadline) {
+            Start-Sleep -Milliseconds 20
+        }
+        if (-not (Test-Path -LiteralPath $fixtureLeaseMarker -PathType Leaf)) {
+            throw 'fixture_child_did_not_inherit_lease'
+        }
+        throw 'fixture_stdout_initialization_failure'
+'@)
+            )
+            $localKillNeedle = '                $process.Kill($true)'
+            if ($runnerSource.Contains($localKillNeedle, [StringComparison]::Ordinal)) {
+                $runnerSource = $runnerSource.Replace(
+                    $localKillNeedle,
+                    "                throw 'fixture_local_kill_failed'`r`n$localKillNeedle"
+                )
+            }
+        }
+        foreach ($cleanupFunction in @('Protect-P0SensitivePersistentFiles','Write-P0Manifest')) {
+            $functionNeedle = "function $cleanupFunction {"
+            if (-not $runnerSource.Contains($functionNeedle, [StringComparison]::Ordinal)) {
+                throw "fixture 无法定位 $cleanupFunction。"
+            }
+            $markerLeaf = if ($cleanupFunction -ceq 'Protect-P0SensitivePersistentFiles') {
+                'protect-sensitive-called.txt'
+            } else { 'write-manifest-called.txt' }
+            $shortCircuit = if ($cleanupFunction -ceq 'Protect-P0SensitivePersistentFiles') {
+                "`r`n    return @()"
+            } else { '' }
+            $runnerSource = $runnerSource.Replace(
+                $functionNeedle,
+                ($functionNeedle + "`r`n    Set-Content -LiteralPath " +
+                    "(Join-Path `$env:P0_FAKE_STATE '$markerLeaf') -Value '1' " +
+                    "-NoNewline -Encoding ascii" + $shortCircuit)
+            )
+        }
+        $cleanupProbeHook = @'
+. $DispatchLockHelperPath
+$script:FixtureOriginalCloseDispatchLock = ${function:Close-DispatchLock}
+function Close-DispatchLock {
+    param($Stream, [string]$Path)
+    Set-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'close-lock-called.txt') `
+        -Value '1' -NoNewline -Encoding ascii
+    & $script:FixtureOriginalCloseDispatchLock -Stream $Stream -Path $Path
+}
+function Stop-P0DeviceProvision {
+    param($Session)
+    Set-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'stop-provision-called.txt') `
+        -Value '1' -NoNewline -Encoding ascii
+    return @()
+}
+'@
+        $runnerSource = $runnerSource.Replace('. $DispatchLockHelperPath', $cleanupProbeHook)
+    }
+    if ($Scenario -ceq 'dispatch_output_copy_fault') {
+        # 先真实写入一段敏感 stdout，再让 CopyToAsync task fault；fake dispatch 随后正常退出。
+        # 这模拟“partial capture 已落盘、管道收尾才失败”，用来区分 dead tree 与 capture error。
+        $copyNeedle = '        $publishedHandle.StdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)'
+        if (-not $runnerSource.Contains($copyNeedle, [StringComparison]::Ordinal)) {
+            throw 'fixture 无法定位 stdout CopyToAsync。'
+        }
+        $copyFault = @'
+        $fixturePartialBytes = [Text.Encoding]::UTF8.GetBytes(
+            'Authorization: Bearer output-copy-fixture-secret'
+        )
+        try {
+            $stdoutStream.Write($fixturePartialBytes, 0, $fixturePartialBytes.Length)
+            $stdoutStream.Flush()
+        }
+        finally { [Array]::Clear($fixturePartialBytes, 0, $fixturePartialBytes.Length) }
+        $publishedHandle.StdoutCopy = [Threading.Tasks.Task]::FromException(
+            [IO.IOException]::new('fixture_output_copy_fault')
+        )
+'@
+        $runnerSource = $runnerSource.Replace($copyNeedle, $copyFault.TrimEnd())
+    }
+    if ($Scenario -in @('notification_secret_after_write','trace_evidence_secret_after_copy')) {
+        $writeNeedle = if ($Scenario -ceq 'notification_secret_after_write') {
+            '                        -Destination $notificationDump -ExpectedRoot $legDir'
+        }
+        else { '        Copy-Item -LiteralPath $traceSource -Destination $safeTraceEvidence.Path' }
+        if (-not $runnerSource.Contains($writeNeedle, [StringComparison]::Ordinal)) {
+            throw "fixture 无法定位 $Scenario 写后故障 seam。"
+        }
+        $indent = if ($Scenario -ceq 'notification_secret_after_write') { '                    ' } else { '        ' }
+        $runnerSource = $runnerSource.Replace(
+            $writeNeedle,
+            "$writeNeedle`r`n${indent}throw 'fixture_sensitive_artifact_after_write'"
+        )
+    }
+    Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
     Copy-Item -LiteralPath $SourceProvisioner -Destination (Join-Path $repo 'scripts\lib\p0-device-provision.ps1')
     # provisioner 点源它：gateway MCP 配置的下限与构造器只有一份定义（gateway-mcp-config.ps1）。
     # **fixture 漏拷 = 每条腿在点源那一步就挂**，症状与被测逻辑无关。
@@ -209,6 +475,7 @@ function Remove-P0PrivateTemporaryFile {
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
+    Copy-Item -LiteralPath $SourceDispatchLock -Destination (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
     # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
@@ -284,7 +551,7 @@ function Remove-P0PrivateTemporaryFile {
     #   ——症状是 `exit /b 3` 不生效、场景分支形同虚设，而错误信息里只有一堆乱码命令名。
     #   第 1 条早就写在上面，这次照样犯了：**新增 .cmd 行一律只用 ASCII。**
     $fakeAdb = Join-Path $bin 'fake-adb.cmd'
-    @'
+    $fakeAdbBody = @'
 @echo off
 setlocal EnableExtensions
 rem 把 System32 顶到 PATH 最前：从 Git Bash 拉起时继承来的 PATH 会让 find/sort 这类
@@ -409,7 +676,20 @@ if "%1"=="shell" (
   )
   rem approval notification dump: see the PowerShell comment above this here-string
   if "%2 %3"=="dumpsys notification" (
+    if "%SCEN%"=="notification_leaf_link" if not exist "%P0_FAKE_STATE%\notification-link-created.txt" (
+      for /d %%R in ("%P0_FAKE_REPO%\docs\runs\evidence\*") do (
+        mklink /H "%%R\allow\approval-notification.txt" "%P0_FAKE_STATE%\notification-link-target.txt" >nul
+        if exist "%%R\allow\approval-notification.txt" >"%P0_FAKE_STATE%\notification-link-created.txt" echo 1
+      )
+    )
+    if "%SCEN%"=="notification_leaf_link_continues" if not exist "%P0_FAKE_STATE%\notification-link-created.txt" (
+      for /d %%R in ("%P0_FAKE_REPO%\docs\runs\evidence\*") do (
+        mklink /H "%%R\allow\approval-notification.txt" "%P0_FAKE_STATE%\notification-link-target.txt" >nul
+        if exist "%%R\allow\approval-notification.txt" >"%P0_FAKE_STATE%\notification-link-created.txt" echo 1
+      )
+    )
     if "%SCEN%"=="notification_dump_fail" goto :dumpsysnotifail
+    if "%SCEN%"=="notification_secret_after_write" echo Authorization: Bearer notification-write-fixture-secret
     echo   NotificationRecord^(0x1: pkg=android user=0 id=0 tag=null channel=null^)
     echo     flags=0x400 mVisibility=0
     echo   NotificationRecord^(0x2: pkg=com.other user=0 id=7 tag=null channel=chat^)
@@ -422,6 +702,13 @@ if "%1"=="shell" (
   if "%2 %3"=="dumpsys deviceidle" (echo system-excidle,dev.magina.gateway,10000& exit /b 0)
   if "%2 %3 %4 %6"=="run-as dev.magina.gateway cp files/test-control.json" (copy /y "%P0_FAKE_STATE%\staged-control.json" "%P0_FAKE_STATE%\test-control.json" >nul& exit /b 0)
   if "%2 %3 %4"=="run-as dev.magina.gateway rm" (
+    rem RED fixture: dispatch 完成后把 traces 根换成指向根外 sentinel 的 junction。
+    rem runner 必须在枚举/读取/截断/删除之前拒绝该 reparse，绝不能改写 junction 目标。
+    if "%SCEN%"=="trace_sidecar_reparse_secret" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if not exist "%P0_FAKE_STATE%\reparse-swapped.txt" (
+      move /y "%P0_FAKE_REPO%\docs\runs\traces" "%P0_FAKE_STATE%\original-traces" >nul
+      %SystemRoot%\System32\cmd.exe /d /c mklink /J "%P0_FAKE_REPO%\docs\runs\traces" "%P0_FAKE_STATE%\trace-reparse-target" >nul
+      >"%P0_FAKE_STATE%\reparse-swapped.txt" echo 1
+    )
     if "%6"=="files/test-control.json" del /q "%P0_FAKE_STATE%\test-control.json" 2>nul
     if "%6"=="files/test-confirmation-state.json" (
       del /q "%P0_FAKE_STATE%\confirmation-state.json" 2>nul
@@ -447,7 +734,11 @@ exit /b 3
 exit /b 1
 :cleanupfail
 exit /b 7
-'@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
+'@
+    # worktree 可使用 LF；cmd.exe + UTF-8 中文 rem 在 LF-only 文件里会吞下一行 CR/LF，
+    # 典型症状是热路径的 adb.log 重定向整行消失。生成物必须显式固定为 CRLF。
+    $fakeAdbBody = $fakeAdbBody.Replace('__P0_SCENARIO__', $Scenario) -replace "`r?`n", "`r`n"
+    Set-Content -LiteralPath (Join-Path $bin 'fake-adb.cmd') -Value $fakeAdbBody -Encoding utf8 -NoNewline
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
     @'
@@ -528,6 +819,27 @@ $repo = Split-Path $PSScriptRoot -Parent
 $state = $env:P0_FAKE_STATE
 $scenario = (Get-Content -LiteralPath (Join-Path $state 'scenario.txt') -Raw).Trim()
 $fixtureToken = (Get-Content -LiteralPath (Join-Path $state 'token.txt') -Raw).Trim()
+if ($scenario -in @('deny_but_allowed_continues','notification_leaf_link_continues',
+        'dispatch_cleanup_failure','dispatch_startup_cleanup_failure','dispatch_output_copy_fault')) {
+    Set-Content -LiteralPath (Join-Path $state 'dispatch-child.pid') -Value $PID -NoNewline -Encoding ascii
+}
+if ($scenario -in @('dispatch_cleanup_failure','dispatch_startup_cleanup_failure')) {
+    Set-Content -LiteralPath (Join-Path $state 'dispatch-task-path.txt') `
+        -Value $TaskFile -NoNewline -Encoding utf8
+    . (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
+    $fixtureLease = Open-DispatchLock -Path (Join-Path $repo 'scripts\.dispatch.lock') `
+        -Owner 'fixture-dispatch-child' -LeaseOwnerToken $env:AGENT_MOBILE_DEVICE_LEASE_TOKEN `
+        -InheritLease
+    Set-Content -LiteralPath (Join-Path $state 'dispatch-child-lease-open.txt') `
+        -Value '1' -NoNewline -Encoding ascii
+    # 足够长，确保即使 runner 的 failure diagnostics 很慢，断言时 child 仍在；测试 finally 会精确 kill。
+    try { Start-Sleep -Seconds 120 }
+    finally { Close-DispatchLock -Stream $fixtureLease -Path (Join-Path $repo 'scripts\.dispatch.lock') }
+    exit 0
+}
+if ([string]::IsNullOrWhiteSpace($env:AGENT_MOBILE_DEVICE_LEASE_TOKEN)) {
+    Add-Content -LiteralPath (Join-Path $state 'dispatch-lease-token-missing.log') -Value $Slug
+}
 if ($scenario -in @('stdout_secret','existing_config_stdout_secret')) { Write-Output "token=$fixtureToken" }
 if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: Bearer stderr-fixture-secret') }
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
@@ -537,7 +849,16 @@ $markerMatch = [regex]::Match($taskText, 'P0(?:ALLOW|STALE|DENY|REENTRY)-[3479AH
 if (-not $markerMatch.Success) { throw 'dynamic marker missing from task' }
 $marker = $markerMatch.Value
 $markerBytes = [Text.Encoding]::UTF8.GetBytes($marker)
-$markerHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($markerBytes)).ToLowerInvariant()
+$markerSha = [Security.Cryptography.SHA256]::Create()
+$markerDigest = $null
+try {
+    $markerDigest = $markerSha.ComputeHash($markerBytes)
+    $markerHash = ([BitConverter]::ToString($markerDigest) -replace '-', '').ToLowerInvariant()
+}
+finally {
+    $markerSha.Dispose()
+    if ($null -ne $markerDigest -and $markerDigest.Length -gt 0) { [Array]::Clear($markerDigest, 0, $markerDigest.Length) }
+}
 [Array]::Clear($markerBytes, 0, $markerBytes.Length)
 Add-Content -LiteralPath (Join-Path $state 'markers.log') -Value $marker
 $deadline = [DateTime]::UtcNow.AddSeconds(3)
@@ -564,7 +885,7 @@ if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
 }
 $confirmHash = if ($scenario -eq 'wrong_hash') { '0' * 64 } else { $markerHash }
 $confirmState = if ($leg -eq 'deny') { 'denied' } else { 'allowed' }
-if ($scenario -eq 'deny_but_allowed') { $confirmState = 'allowed' }
+if ($scenario -in @('deny_but_allowed','deny_but_allowed_continues')) { $confirmState = 'allowed' }
 $confirm = [ordered]@{
     run_id=$control.run_id; confirm_id=$control.nonce; state=$confirmState; tool='press_key';
     time='2026-07-23T00:00:00Z'; evidence_file=$evidenceName;
@@ -581,6 +902,10 @@ if ($scenario -eq 'timeout') {
     exit 9
 }
 $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+if ($scenario -in @('deny_but_allowed_continues','notification_leaf_link_continues')) {
+    Start-Sleep -Milliseconds 1800
+    Set-Content -LiteralPath (Join-Path $state 'continued-after-abort.txt') -Value '1' -NoNewline -Encoding ascii
+}
 
 $traceDir = Join-Path $repo 'docs\runs\traces'
 $traceStamp = '20260723-000000'
@@ -690,6 +1015,8 @@ if ($leg -eq 'reentry') {
         'reentry_short_wait' { 'foreground_wait=reads=9,waited_ms=1200,budget_ms=300000,result=reached,last=com.tencent.mm' }
         # 等前台超时：后面那些"发出去了"的判据根本谈不上。
         'reentry_wait_timeout' { 'foreground_wait=reads=100,waited_ms=300000,budget_ms=300000,result=timeout,last=com.android.launcher' }
+        # 配置 75s 的旧判据只要求 45s；独立观测却会记录 90s，50s 没覆盖住真实停留。
+        'reentry_observed_dwell_long_wait_short' { 'foreground_wait=reads=26,waited_ms=50000,budget_ms=300000,result=reached,last=com.tencent.mm' }
         # 旧 APK 不带这段可观测性：字段缺席按失败处理，不许静默退化成"什么都没证明"。
         'reentry_no_wait_note' { '' }
         default { 'foreground_wait=reads=47,waited_ms=91300,budget_ms=300000,result=reached,last=com.tencent.mm' }
@@ -731,6 +1058,9 @@ if ($code -eq 'OK') {
         $findEvidenceText = if ($scenario -eq 'find_ocr_zero_letter') {
             $marker -replace '^P0', 'PO'
         } else { $findText }
+        $normalizedMarker = ([regex]::Replace($marker.ToUpperInvariant(), '[^A-Z0-9]', '')).Replace('O', '0')
+        $matchNormalized = if ($scenario -eq 'find_wrong_normalized') { 'OTHER' } else { $normalizedMarker }
+        $queryNormalized = if ($scenario -eq 'find_wrong_query_normalized') { 'OTHER' } else { $normalizedMarker }
         ToolUse 'f1' 'ui_find' @{text=$findText}
         $matchRole = if ($scenario -eq 'find_input') { 'input' } else { 'text' }
         $matchFlags = if ($scenario -eq 'find_input') { 'EF' } else { '' }
@@ -762,7 +1092,7 @@ if ($code -eq 'OK') {
         if ($scenario -eq 'find_ocr_split_bubble') {
             $spaced = $findEvidenceText.Insert([Math]::Min(12, $findEvidenceText.Length), ' ')
             $extraMatches = @(@{
-                ref='e2';text=$spaced;normalized=$spaced;role=$matchRole;flags=$matchFlags
+                ref='e2';text=$spaced;normalized=$normalizedMarker;role=$matchRole;flags=$matchFlags
                 bounds=$nudged;source='ocr'
             })
         }
@@ -774,12 +1104,13 @@ if ($code -eq 'OK') {
         }
         # 在哈希表字面量里对数组做 `+` 会解析成 op_Addition 失败，先拼好再塞进去。
         $allMatches = @(@{
-            ref='e1';text=$findEvidenceText;normalized=$findEvidenceText;role=$matchRole;flags=$matchFlags
+            ref='e1';text=$findEvidenceText;normalized=$matchNormalized;role=$matchRole;flags=$matchFlags
             bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
         })
         foreach ($extra in $extraMatches) { $allMatches += $extra }
         $findData = @{
             matches=$allMatches
+            query_normalized=$queryNormalized
             scrolls=0
             screen_width=1080
             screen_height=2400
@@ -823,6 +1154,55 @@ if ($scenario -eq 'trace_secret') {
 if ($scenario -eq 'trace_bearer') {
     Add-Event @{type='assistant';message=@{content=@(@{type='text';text='{"Authorization":"Bearer trace-fixture-secret"}'})}}
 }
+if ($scenario -eq 'trace_evidence_secret_after_copy') {
+    Add-Event @{type='assistant';message=@{content=@(@{type='text';text='Authorization: Bearer evidence-copy-fixture-secret'})}}
+}
+if ($scenario -eq 'trace_secret_no_ledger') {
+    Add-Event @{type='assistant';message=@{content=@(@{type='text';text="token=$fixtureToken"})}}
+}
+if ($scenario -eq 'trace_sidecar_secret') {
+    Set-Content -LiteralPath ($tracePath -replace '\.jsonl$', '.err.txt') `
+        -Value 'Authorization: Bearer sidecar-fixture-secret' -Encoding utf8
+}
+if ($scenario -eq 'trace_sidecar_reparse_secret') {
+    $outsideTraceDir = Join-Path $state 'trace-reparse-target'
+    New-Item -ItemType Directory -Path $outsideTraceDir -Force | Out-Null
+    $outsideSentinel = Join-Path $outsideTraceDir ($traceName -replace '\.jsonl$', '.err.txt')
+    Set-Content -LiteralPath $outsideSentinel `
+        -Value 'Authorization: Bearer reparse-fixture-secret' -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $state 'reparse-sentinel-path.txt') `
+        -Value $outsideSentinel -NoNewline -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $state 'reparse-sentinel-sha256.txt') `
+        -Value ((Get-FileHash -LiteralPath $outsideSentinel -Algorithm SHA256).Hash) `
+        -NoNewline -Encoding ascii
+}
+if ($scenario -eq 'trace_sidecar_leaf_link_secret') {
+    $outsideSentinel = Join-Path $state 'trace-leaf-link-target.err.txt'
+    Set-Content -LiteralPath $outsideSentinel `
+        -Value 'Authorization: Bearer leaf-link-fixture-secret' -Encoding utf8
+    $sidecarLink = $tracePath -replace '\.jsonl$', '.err.txt'
+    $linkKind = 'SymbolicLink'
+    try {
+        New-Item -ItemType SymbolicLink -Path $sidecarLink -Target $outsideSentinel `
+            -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $linkKind = 'HardLink'
+        Set-Content -LiteralPath (Join-Path $state 'leaf-link-symlink-failure.txt') `
+            -Value ([string]$_.Exception.GetType().FullName) -NoNewline -Encoding utf8
+        New-Item -ItemType HardLink -Path $sidecarLink -Target $outsideSentinel `
+            -ErrorAction Stop | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path $state 'leaf-link-kind.txt') `
+        -Value $linkKind -NoNewline -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $state 'leaf-link-path.txt') `
+        -Value $sidecarLink -NoNewline -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $state 'leaf-link-sentinel-path.txt') `
+        -Value $outsideSentinel -NoNewline -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $state 'leaf-link-sentinel-sha256.txt') `
+        -Value ((Get-FileHash -LiteralPath $outsideSentinel -Algorithm SHA256).Hash) `
+        -NoNewline -Encoding ascii
+}
 if ($scenario -eq 'trace_malformed') { Add-Content -LiteralPath $tracePath -Value '{bad-trace' -Encoding utf8 }
 $auditIncrement = Join-Path $state 'audit-increment.jsonl'
 if ($scenario -ne 'empty_audit') {
@@ -837,7 +1217,7 @@ if ($scenario -ne 'empty_audit') {
     Set-Content -LiteralPath $auditIncrement -Value '' -NoNewline -Encoding utf8
 }
 $ledger = Join-Path $repo 'docs\runs\ledger.csv'
-if ($scenario -ne 'missing_ledger') {
+if ($scenario -notin @('missing_ledger','trace_secret_no_ledger')) {
     if (-not (Test-Path -LiteralPath $ledger)) { 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note' | Set-Content -LiteralPath $ledger -Encoding utf8 }
     $effectiveTrace = switch ($scenario) {
         'missing_trace' { 'does-not-exist.jsonl' }
@@ -873,19 +1253,66 @@ if ($scenario -ne 'missing_ledger') {
         'ledger_symlink' {
             $outsideTraceDir = Join-Path $state 'trace-junction-target'
             New-Item -ItemType Directory -Path $outsideTraceDir | Out-Null
-            Move-Item -LiteralPath $tracePath -Destination (Join-Path $outsideTraceDir $traceName)
+            $outsideTrace = Join-Path $outsideTraceDir $traceName
+            Move-Item -LiteralPath $tracePath -Destination $outsideTrace
+            Add-Content -LiteralPath $outsideTrace -Encoding utf8 -Value `
+                '{"type":"assistant","message":{"content":[{"type":"text","text":"Authorization: Bearer ledger-symlink-fixture-secret"}]}}'
+            Set-Content -LiteralPath (Join-Path $state 'ledger-symlink-sentinel-path.txt') `
+                -Value $outsideTrace -NoNewline -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $state 'ledger-symlink-sentinel-sha256.txt') `
+                -Value ((Get-FileHash -LiteralPath $outsideTrace -Algorithm SHA256).Hash) `
+                -NoNewline -Encoding ascii
             Remove-Item -LiteralPath $traceDir -Force
             New-Item -ItemType Junction -Path $traceDir -Target $outsideTraceDir | Out-Null
             $traceName
         }
         default { $traceName }
     }
-    $ledgerNote = if ($scenario -eq 'ledger_secret') { "executor=$Executor | token=$fixtureToken" } else { "executor=$Executor" }
-    "2026-07-23T00:00:00,`"$Slug`",1,$Brain,sonnet,4,1,1,0,0,0.1,1,$result,sid,`"$effectiveTrace`",`"$ledgerNote`"" | Add-Content -LiteralPath $ledger -Encoding utf8
+    if ($scenario -eq 'ledger_partial_secret_no_current') {
+        'partial,"Authorization: Bearer ledger-partial-fixture-secret"' |
+            Add-Content -LiteralPath $ledger -Encoding utf8
+    }
+    else {
+        $ledgerNote = if ($scenario -eq 'ledger_secret') { "executor=$Executor | token=$fixtureToken" } else { "executor=$Executor" }
+        "2026-07-23T00:00:00,`"$Slug`",1,$Brain,sonnet,4,1,1,0,0,0.1,1,$result,sid,`"$effectiveTrace`",`"$ledgerNote`"" | Add-Content -LiteralPath $ledger -Encoding utf8
+        if ($scenario -eq 'ledger_unrelated_secret') {
+            '2026-07-23T00:00:01,"unrelated-row",1,claude,sonnet,0,0,0,0,0,0,0,fail,,,"Authorization: Bearer ledger-unrelated-fixture-secret"' |
+                Add-Content -LiteralPath $ledger -Encoding utf8
+        }
+    }
 }
 Set-Content -LiteralPath (Join-Path $state 'dispatch-finished.txt') -Value '1' -Encoding ascii
 exit $exit
 '@ | Set-Content -LiteralPath $fakeDispatch -Encoding utf8
+
+    # 这两种损坏必须在 runner 拿到统一 lease 后、任何 provision/dispatch 之前被拒绝。
+    # 目标都在 fixture repo 根外，并同时记 hash；旧实现会先让真实 fake dispatch 通过
+    # junction/hardlink 写进去，直到后验 trace/ledger 扫描才发现路径不安全。
+    if ($Scenario -ceq 'preexisting_trace_root_reparse') {
+        $traceRoot = Join-Path $repo 'docs\runs\traces'
+        $outsideTraceRoot = Join-Path $state 'preexisting-trace-root-target'
+        New-Item -ItemType Directory -Path $outsideTraceRoot -Force | Out-Null
+        $sentinel = Join-Path $outsideTraceRoot 'outside-sentinel.txt'
+        Set-Content -LiteralPath $sentinel -Encoding utf8 `
+            -Value 'Authorization: Bearer preexisting-trace-root-fixture-secret'
+        Set-Content -LiteralPath (Join-Path $state 'preexisting-trace-root-sentinel-sha256.txt') `
+            -Value ((Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash) `
+            -NoNewline -Encoding ascii
+        Remove-Item -LiteralPath $traceRoot -Force
+        New-Item -ItemType Junction -Path $traceRoot -Target $outsideTraceRoot -ErrorAction Stop | Out-Null
+    }
+    if ($Scenario -ceq 'preexisting_ledger_leaf_link') {
+        $outsideLedger = Join-Path $state 'preexisting-ledger-target.csv'
+        @(
+            'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note',
+            '2026-08-09T00:00:00,"outside-sentinel",1,claude,sonnet,0,0,0,0,0,0,0,fail,,,"Authorization: Bearer preexisting-ledger-fixture-secret"'
+        ) | Set-Content -LiteralPath $outsideLedger -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $state 'preexisting-ledger-sentinel-sha256.txt') `
+            -Value ((Get-FileHash -LiteralPath $outsideLedger -Algorithm SHA256).Hash) `
+            -NoNewline -Encoding ascii
+        $ledger = Join-Path $repo 'docs\runs\ledger.csv'
+        New-Item -ItemType HardLink -Path $ledger -Target $outsideLedger -ErrorAction Stop | Out-Null
+    }
 
     $script:FixturePhases.Add([pscustomobject]@{ Phase = 'new-fixture'; Seconds = $buildWatch.Elapsed.TotalSeconds })
     [pscustomobject]@{
@@ -967,6 +1394,7 @@ function Invoke-FixtureRunner {
         $start.ArgumentList.Add($arg)
     }
     $start.Environment['P0_FAKE_STATE'] = $Fixture.State
+    $start.Environment['P0_FAKE_REPO'] = $Fixture.Repo
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     try {
@@ -995,6 +1423,20 @@ function Invoke-FixtureRunner {
     finally { $process.Dispose() }
 }
 
+function Assert-FixtureDispatchStopped {
+    param([Parameter(Mandatory)]$Fixture)
+    $pidPath = Join-Path $Fixture.State 'dispatch-child.pid'
+    Assert-True (Test-Path -LiteralPath $pidPath -PathType Leaf) `
+        'fixture dispatch 未落 PID，行为负例没有实际启动 child。'
+    $childPid = [int](Get-Content -LiteralPath $pidPath -Raw)
+    $child = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+    $alive = $false
+    if ($null -ne $child) {
+        try { $alive = -not $child.HasExited } catch { $alive = $false }
+    }
+    Assert-True (-not $alive) "runner 返回时 dispatch child $childPid 仍存活。"
+}
+
 try {
     Test-Case '测试目标脚本存在' {
         Assert-True (Test-Path -LiteralPath $SourceRunner -PathType Leaf) "缺少 runner：$SourceRunner"
@@ -1017,7 +1459,7 @@ try {
 1. 只调用 macro_run(name="p0_wechat_file_transfer_prepare")，确定性进入微信文件传输助手并聚焦空白输入框；失败立即结束。
 2. 只调用一次 type_text(text="<M>", mode="replace")；要求 committed=true，否则结束且禁止发送。
 3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。
-4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="<M>") 做只读复核；要求唯一命中的 text/normalized 证据仍是该 marker。
+4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="<M>") 做只读复核；要求至少一条命中，并逐条检查每条命中的 normalized 字段：只有所有 normalized 都与返回里的 query_normalized 字段逐字相等、共同代表同一个 marker 时才算通过。多个重叠 OCR 框可以同时出现；任一框的归一结果不同都立即失败。**按这两个字段逐字比较即可，不要自己做大小写/字符折叠，也不要拿 text 原文去和 marker 做字面全等**——OCR 会把 0 读成 O 这类形近字，网关已经用同一套归一算好了这两个字段。
 5. 复核后立即输出“结果：成功”，不得再调用任何 gateway 工具。
 前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
 
@@ -1081,6 +1523,29 @@ try {
         }
     }
 
+    Test-Case 'dispatch Start 成功后立即把 drain owner 发布给外层再初始化输出句柄' {
+        $source = Get-Content -LiteralPath $SourceRunner -Raw -Encoding utf8
+        $start = $source.IndexOf('function New-P0DispatchProcess', [StringComparison]::Ordinal)
+        $end = $source.IndexOf('function Stop-P0DispatchProcess', $start, [StringComparison]::Ordinal)
+        Assert-True ($start -ge 0 -and $end -gt $start) '找不到 New-P0DispatchProcess 函数边界。'
+        $body = $source.Substring($start, $end - $start)
+        Assert-Matches $body '(?s)\[ref\]\$Handle.*?\.Start\(\).*?\$Handle\.Value = \$publishedHandle.*?StandardInput\.Close\(\)'
+        Assert-Matches $body '(?s)catch\s*\{.*?Close-P0DispatchHandle -Handle \$Handle -Kill'
+        Assert-Matches $source '(?s)New-P0DispatchProcess .*?-Handle \(\[ref\]\$dispatchHandle\)'
+    }
+
+    Test-Case 'Allow 与 Reentry 模板按 runner 语义接受同 marker 的多个重叠 OCR 框' {
+        foreach ($leg in @('Allow','Reentry')) {
+            $body = Get-P0DynamicTaskText -Leg $leg -Marker 'P0MULTI-3479AHKMPTXY' `
+                -TemplateDir $SourceTaskTemplateDir
+            Assert-True ($body -match '至少一条命中|一个或多个命中') "$leg 模板仍要求单框。"
+            Assert-True ($body -match '每(?:一|条).*命中.*normalized|所有.*命中.*normalized') `
+                "$leg 模板没有要求逐框核对 normalized。"
+            Assert-True ($body -match '同一个 marker|query_normalized') "$leg 模板没有统一 marker 语义。"
+            Assert-NotMatches $body '恰好一条命中|唯一命中'
+        }
+    }
+
     Test-Case '任务模板缺失或损坏一律硬失败，绝不内联兜底' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-tmpl-" + [guid]::NewGuid().ToString('N'))
         $script:TestRoots.Add($root)
@@ -1103,7 +1568,7 @@ try {
 
     Test-Case 'DryRun 零 adb、零 dispatch、零落盘' {
         $evidenceBefore = @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'docs\runs\evidence') -Recurse -File -ErrorAction SilentlyContinue).Count
-        $lockPath = Join-Path $SourceRepoRoot 'scripts\.p0-safety-smoke.lock'
+        $lockPath = Join-Path $SourceRepoRoot 'scripts\.dispatch.lock'
         $output = & $PwshPath -NoProfile -File $SourceRunner -Legs 'Stale,Allow' -DryRun `
             -AdbPath 'definitely-missing-adb' -DispatchPath 'definitely-missing-dispatch' 2>&1
         Assert-True ($LASTEXITCODE -eq 0) "DryRun 失败：$($output -join "`n")"
@@ -1113,26 +1578,390 @@ try {
         Assert-True ($evidenceAfter -eq $evidenceBefore) 'DryRun 写入了 evidence。'
     }
 
-    Test-Case 'health probe 兼容 PowerShell 7.0 且 runner 锁验证 PID 与进程启动时间' {
+    Test-Case '设备级 lease 覆盖 provision、腿间与 teardown，子 dispatch 继承 owner token' {
+        $fixture = New-Fixture happy
+        $result = Invoke-FixtureRunner $fixture @('Allow','Stale')
+        Assert-True ($result.ExitCode -eq 0) "fixture 应先正常完成：$($result.Text)"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch-lease-token-missing.log'))) `
+            'runner 子 dispatch 没有继承设备 lease owner token。'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Repo 'scripts\.dispatch.lock'))) `
+            'runner 结束后统一设备 lease 未释放。'
+        $source = Get-Content -LiteralPath $SourceRunner -Raw -Encoding utf8
+        $acquire = $source.LastIndexOf('Open-DispatchLock -Path $lockPath', [StringComparison]::Ordinal)
+        $provision = $source.LastIndexOf('Start-P0DeviceProvision -RepoRoot', [StringComparison]::Ordinal)
+        $close = $source.LastIndexOf('Close-DispatchLock -Stream $lockStream', [StringComparison]::Ordinal)
+        $restore = $source.LastIndexOf('Stop-P0DeviceProvision -Session $session', [StringComparison]::Ordinal)
+        Assert-True ($acquire -ge 0 -and $acquire -lt $provision -and $close -gt $restore) `
+            '统一设备 lease 必须先于 provision 取得，并晚于 teardown/环境恢复释放。'
+    }
+
+    Test-Case 'Task1 生产与离线测试保持 PowerShell 7.0 crypto API 兼容' {
+        foreach ($path in @(
+            (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
+            $SourceDispatchLock,
+            $SourceRunner,
+            (Join-Path $SourceRepoRoot 'scripts\tests\dispatch-offline.ps1'),
+            $PSCommandPath
+        )) {
+            $tokens = $null; $errors = $null
+            $tree = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            Assert-True ($errors.Count -eq 0) "$path 无法解析。"
+            $forbidden = @($tree.FindAll({
+                param($node)
+                if ($node -isnot [Management.Automation.Language.InvokeMemberExpressionAst] -or
+                    -not $node.Static) { return $false }
+                $type = $node.Expression.Extent.Text
+                $member = [string]$node.Member.Value
+                return ($type -match 'RandomNumberGenerator' -and $member -ceq 'GetBytes') -or
+                    ($type -match 'SHA256' -and $member -ceq 'HashData') -or
+                    ($type -match 'Convert' -and $member -in @('ToHexString','FromHexString'))
+            }, $true))
+            Assert-True ($forbidden.Count -eq 0) `
+                "$path 仍使用 PowerShell 7.0/.NET Core 3.1 不支持的静态 crypto/hex API。"
+        }
+
+        . $SourceDispatchLock
+        $hash = Get-DispatchLeaseTokenSha256 -Token 'ps7-compatible-token'
+        Assert-True ($hash -match '^[0-9a-f]{64}$') '兼容 SHA-256 helper 输出格式错误。'
+        $badHexRejected = $false
+        try { ConvertFrom-DispatchHex -Hex 'not-hex' | Out-Null }
+        catch { $badHexRejected = $_.Exception.Message -ceq 'invalid_dispatch_hex' }
+        Assert-True $badHexRejected '兼容 hex parser 必须对非法输入 fail closed。'
+
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($SourceRunner, [ref]$tokens, [ref]$errors)
+        $tokenAst = $ast.Find({
+            param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'New-P0DeviceLeaseOwnerToken'
+        }, $true)
+        . ([scriptblock]::Create($tokenAst.Extent.Text))
+        Assert-True ((New-P0DeviceLeaseOwnerToken) -match '^[0-9a-f]{64}$') `
+            '兼容 RNG owner token 必须仍输出 32-byte lowercase hex。'
+    }
+
+    Test-Case '预存 traces root junction 必须在 provision 前拒绝且根外目录逐项不变' {
+        $fixture = New-Fixture preexisting_trace_root_reparse
+        $traceRoot = Join-Path $fixture.Repo 'docs\runs\traces'
+        $outsideRoot = Join-Path $fixture.State 'preexisting-trace-root-target'
+        $sentinel = Join-Path $outsideRoot 'outside-sentinel.txt'
+        $expectedHash = (Get-Content -LiteralPath `
+            (Join-Path $fixture.State 'preexisting-trace-root-sentinel-sha256.txt') -Raw).Trim()
+        $rootItem = Get-Item -LiteralPath $traceRoot -Force
+        Assert-True (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -and
+            -not [string]::IsNullOrWhiteSpace([string]$rootItem.LinkType)) `
+            'fixture 未实际建立 traces root junction/reparse。'
+        $beforeNames = @(Get-ChildItem -LiteralPath $outsideRoot -Force | Sort-Object Name |
+            ForEach-Object Name)
+
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '预存 traces root junction 必须 fail closed。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+preexisting-trace-root-fixture-secret'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'adb.log'))) `
+            'runner 在拒绝预存 traces junction 前已经 provision/调用 adb。'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) `
+            'runner 在拒绝预存 traces junction 前已经启动 dispatch。'
+        Assert-True (Test-Path -LiteralPath $sentinel -PathType Leaf) 'runner 删除了根外 sentinel。'
+        Assert-True ((Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash -ceq $expectedHash) `
+            'runner 跟随 traces junction 改写了根外 sentinel。'
+        $afterNames = @(Get-ChildItem -LiteralPath $outsideRoot -Force | Sort-Object Name |
+            ForEach-Object Name)
+        Assert-True (($afterNames -join "`n") -ceq ($beforeNames -join "`n")) `
+            "runner 在根外 traces 目标中新建了文件：$($afterNames -join ',')"
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) 'first-use 路径拒绝也必须落最小 manifest。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.cleanup.ok -eq $false -and
+            @($manifestJson.cleanup.issues) -contains 'unsafe_artifact_path') `
+            'unsafe first-use 必须记为 cleanup issue，不能只放在 failure 文本。'
+    }
+
+    Test-Case '预存 ledger hardlink 必须在 provision 前拒绝且根外 sentinel hash 不变' {
+        $fixture = New-Fixture preexisting_ledger_leaf_link
+        $ledger = Join-Path $fixture.Repo 'docs\runs\ledger.csv'
+        $outsideLedger = Join-Path $fixture.State 'preexisting-ledger-target.csv'
+        $expectedHash = (Get-Content -LiteralPath `
+            (Join-Path $fixture.State 'preexisting-ledger-sentinel-sha256.txt') -Raw).Trim()
+        $ledgerItem = Get-Item -LiteralPath $ledger -Force
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$ledgerItem.LinkType)) `
+            'fixture 未实际建立 ledger hardlink。'
+
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '预存 ledger hardlink 必须 fail closed。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+preexisting-ledger-fixture-secret'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'adb.log'))) `
+            'runner 在拒绝预存 ledger hardlink 前已经 provision/调用 adb。'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) `
+            'runner 在拒绝预存 ledger hardlink 前已经启动 dispatch。'
+        Assert-True (Test-Path -LiteralPath $outsideLedger -PathType Leaf) 'runner 删除了根外 ledger sentinel。'
+        Assert-True ((Get-FileHash -LiteralPath $outsideLedger -Algorithm SHA256).Hash -ceq $expectedHash) `
+            'runner 在安全验证前跟随 ledger hardlink 追加或改写了根外 sentinel。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) 'ledger first-use 路径拒绝也必须落最小 manifest。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json
+        Assert-True ($manifestJson.cleanup.ok -eq $false -and
+            @($manifestJson.cleanup.issues) -contains 'unsafe_artifact_path') `
+            'unsafe ledger first-use 必须记为 cleanup issue。'
+    }
+
+    Test-Case '终态决定不符必须先杀 dispatch 再补 aborted ledger 与失败取证' {
+        $fixture = New-Fixture deny_but_allowed_continues
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) 'Deny 实际 allowed 必须整组失败。'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'continued-after-abort.txt'))) `
+            '终态 mismatch 后 dispatch 仍继续执行；kill 发生在 ledger/失败取证之后。'
+        Assert-FixtureDispatchStopped -Fixture $fixture
+        $ledger = Join-Path $fixture.Repo 'docs\runs\ledger.csv'
+        Assert-True (Test-Path -LiteralPath $ledger -PathType Leaf) 'mismatch 必须补一行 aborted ledger。'
+        $rows = @(Import-Csv -LiteralPath $ledger | Where-Object { $_.slug -like 'p0-safety-deny-*' })
+        Assert-True ($rows.Count -eq 1 -and $rows[0].result -ceq 'aborted') `
+            "mismatch 应恰有一行 runner aborted ledger，实际 $($rows.Count) 行。"
+    }
+
+    Test-Case 'child-start 后取证异常必须在 catch 诊断前先杀 dispatch' {
+        $fixture = New-Fixture notification_leaf_link_continues
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '通知 hardlink 取证异常必须 fail closed。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'continued-after-abort.txt'))) `
+            '取证异常进入 catch 后仍先做 trace/截图/teardown，dispatch 在窗口内继续执行。'
+        Assert-FixtureDispatchStopped -Fixture $fixture
+    }
+
+    Test-Case 'runner 所有 kill 分支区分树退出与输出捕获并统一 Dispose Process' {
+        $source = Get-Content -LiteralPath $SourceRunner -Raw -Encoding utf8
+        $stopStart = $source.IndexOf('function Stop-P0DispatchProcess', [StringComparison]::Ordinal)
+        $stopEnd = $source.IndexOf('function Get-ToolResultEnvelope', $stopStart, [StringComparison]::Ordinal)
+        $closeStart = $source.IndexOf('function Close-P0DispatchHandle', [StringComparison]::Ordinal)
+        $closeEnd = $source.IndexOf('function Assert-P0ReentryForegroundWait', $closeStart, [StringComparison]::Ordinal)
+        Assert-True ($stopStart -ge 0 -and $stopEnd -gt $stopStart -and
+            $closeStart -ge 0 -and $closeEnd -gt $closeStart) '无法定位 dispatch lifecycle helper。'
+        $stopBody = $source.Substring($stopStart, $stopEnd - $stopStart)
+        $closeBody = $source.Substring($closeStart, $closeEnd - $closeStart)
+
+        $treeProof = $stopBody.IndexOf('$Handle.ProcessTreeDrained = $true', [StringComparison]::Ordinal)
+        $copyAwait = $stopBody.IndexOf('$copy.GetAwaiter().GetResult()', [StringComparison]::Ordinal)
+        Assert-True ($treeProof -ge 0 -and $copyAwait -gt $treeProof) `
+            '必须先正向证明 tree 已退出，再把 CopyToAsync fault 归类为 capture error。'
+        Assert-Contains $stopBody "throw [IO.IOException]::new('dispatch_output_capture_failed')"
+
+        $stopCall = $closeBody.IndexOf('Stop-P0DispatchProcess -Handle $current -Kill:$Kill', [StringComparison]::Ordinal)
+        $treeGate = $closeBody.IndexOf('if ($current.ProcessTreeDrained -eq $true)', [StringComparison]::Ordinal)
+        $dispose = $closeBody.IndexOf('$current.Process.Dispose()', [StringComparison]::Ordinal)
+        $clear = $closeBody.IndexOf('$Handle.Value = $null', [StringComparison]::Ordinal)
+        Assert-True ($stopCall -ge 0 -and $treeGate -gt $stopCall -and $dispose -gt $treeGate -and
+            $clear -gt $dispose) `
+            '统一 handle helper 必须只在 tree-drained gate 内 Dispose 并清空 owner。'
+        Assert-True ([regex]::Matches($closeBody, '\$Handle\.Value\s*=\s*\$null').Count -eq 1) `
+            'Close helper 不得在未证明 tree 退出的路径清空 owner。'
+        $killCalls = [regex]::Matches($source,
+            'Close-P0DispatchHandle -Handle \(\[ref\]\$dispatchHandle\) -Kill')
+        Assert-True ($killCalls.Count -ge 4) `
+            'mismatch、确认超时、dispatch 超时与 catch/finally 必须全部走统一 kill helper。'
+    }
+
+    Test-Case '输出捕获 fault 不把已退出 dispatch 树误判为存活并跳过敏感净化' {
+        $fixture = New-Fixture dispatch_output_copy_fault
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'stdout CopyToAsync fault 必须让本轮失败。'
+        Assert-FixtureDispatchStopped -Fixture $fixture
+
+        # partial stdout 已在 fault 前真实落盘。旧实现把 fault 等同于 live tree，跳过整个
+        # cleanup；所以先逐字重读原路径，不能让“本轮本来就失败”掩盖持久泄漏。
+        $leaks = @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)
+        Assert-True ($leaks.Count -eq 0) `
+            "已退出 child 的 capture fault 后仍留下敏感持久文件：$($leaks -join ',')"
+        Assert-Contains $result.Text 'dispatch_output_capture_failed'
+        Assert-True ($result.Text -notmatch '(?i)Bearer\s+output-copy-fixture-secret') `
+            'capture fault 失败输出不得回显 partial stdout secret。'
+
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) 'tree 已退出时仍必须完成最小 manifest cleanup。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($manifestJson.status -ceq 'failed') 'capture fault 不得冒充通过。'
+        Assert-True ($manifestJson.cleanup.ok -eq $true) `
+            "tree 已退出后的持久净化应完成，实际 issues=$(@($manifestJson.cleanup.issues) -join ',')"
+    }
+
+    Test-Case 'dispatch 启动后或初始化失败且整树未退出时跳过全部 cleanup 并保留 lease' {
+        foreach ($faultScenario in @('dispatch_cleanup_failure','dispatch_startup_cleanup_failure')) {
+        $fixture = New-Fixture $faultScenario
+        $childPid = $null
+        $runnerProcess = $null
+        try {
+            # 这里故意不启动 ReadToEndAsync：存活 child 会继承管道句柄，异步读会等它 EOF，
+            # 反而让测试本身挂住。先只等 runner 根进程退出，在 child 仍活时完成顺序断言；
+            # finally 精确 kill child 后才读取少量输出。
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = $PwshPath
+            $start.WorkingDirectory = $fixture.Repo
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $start.RedirectStandardInput = $true
+            $start.CreateNoWindow = $true
+            foreach ($arg in @(
+                '-NoProfile','-File',(Join-Path $fixture.Repo 'scripts\run-p0-safety-smoke.ps1'),
+                '-Legs','Allow','-Executor','gateway','-Provision',
+                '-RepoRootOverride',$fixture.Repo,'-AdbPath',$fixture.Adb,
+                '-HealthProbePath',$fixture.HealthProbe,'-ProbeRegionPrecheckPath',$fixture.Precheck,
+                '-DispatchPath',$fixture.Dispatch,'-ConfirmationTimeoutSec','3',
+                '-PollIntervalMs','20','-A11yBindTimeoutSec','1'
+            )) { $start.ArgumentList.Add($arg) }
+            $start.Environment['P0_FAKE_STATE'] = $fixture.State
+            $start.Environment['P0_FAKE_REPO'] = $fixture.Repo
+            $runnerProcess = [Diagnostics.Process]::new()
+            $runnerProcess.StartInfo = $start
+            Assert-True ($runnerProcess.Start()) '无法启动 cleanup-failure runner。'
+            $runnerProcess.StandardInput.Close()
+            Assert-True ($runnerProcess.WaitForExit(30000)) 'cleanup-failure runner 根进程 30s 未退出。'
+            Assert-True ($runnerProcess.ExitCode -ne 0) '整树关闭失败必须让 runner 失败。'
+
+            $pidPath = Join-Path $fixture.State 'dispatch-child.pid'
+            $leaseOpenPath = Join-Path $fixture.State 'dispatch-child-lease-open.txt'
+            $deadline = [DateTime]::UtcNow.AddSeconds(3)
+            while ((-not (Test-Path -LiteralPath $pidPath -PathType Leaf) -or
+                    -not (Test-Path -LiteralPath $leaseOpenPath -PathType Leaf)) -and
+                [DateTime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 20
+            }
+            Assert-True (Test-Path -LiteralPath $pidPath -PathType Leaf) `
+                'cleanup fault fixture 未实际启动 dispatch child。'
+            Assert-True (Test-Path -LiteralPath $leaseOpenPath -PathType Leaf) `
+                'fixture child 未实际继承设备 lease。'
+            $childPid = [int](Get-Content -LiteralPath $pidPath -Raw)
+            $child = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+            Assert-True ($null -ne $child -and -not $child.HasExited) `
+                '整树关闭失败的行为负例没有留下真实存活 child。'
+
+            $taskPathState = Join-Path $fixture.State 'dispatch-task-path.txt'
+            Assert-True (Test-Path -LiteralPath $taskPathState -PathType Leaf) `
+                'fixture child 未记录 runner 临时任务文件。'
+            $temporaryTaskPath = (Get-Content -LiteralPath $taskPathState -Raw).Trim()
+            $unsafeCleanup = [Collections.Generic.List[string]]::new()
+            foreach ($probe in @{
+                StopProvision = 'stop-provision-called.txt'
+                CloseLock = 'close-lock-called.txt'
+                ProtectSensitive = 'protect-sensitive-called.txt'
+                WriteManifest = 'write-manifest-called.txt'
+            }.GetEnumerator()) {
+                if (Test-Path -LiteralPath (Join-Path $fixture.State $probe.Value)) {
+                    [void]$unsafeCleanup.Add($probe.Key)
+                }
+            }
+            if (-not (Test-Path -LiteralPath $temporaryTaskPath -PathType Leaf)) {
+                [void]$unsafeCleanup.Add('RemoveTemporaryTask')
+            }
+            Assert-True ($unsafeCleanup.Count -eq 0) `
+                ("$faultScenario 整树仍活时 runner 仍执行了本地/设备清理：" + ($unsafeCleanup -join ','))
+
+            . $SourceDispatchLock
+            $ordinary = $null
+            $blocked = $false
+            try {
+                $ordinary = Open-DispatchLock -Path (Join-Path $fixture.Repo 'scripts\.dispatch.lock') `
+                    -Owner 'cleanup-failure-probe'
+            }
+            catch { $blocked = $true }
+            finally {
+                if ($null -ne $ordinary) {
+                    Close-DispatchLock -Stream $ordinary -Path (Join-Path $fixture.Repo 'scripts\.dispatch.lock')
+                }
+            }
+            Assert-True $blocked 'runner 退出后存活 child 没有继续排斥普通 dispatch。'
+
+            # 核心顺序断言已完成，主动回收 fixture child，随后才能安全 drain runner 输出管道。
+            $child = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+            if ($null -ne $child) {
+                try {
+                    if (-not $child.HasExited) { $child.Kill($true) }
+                    [void]$child.WaitForExit(5000)
+                }
+                finally { $child.Dispose() }
+            }
+            $resultText = $runnerProcess.StandardOutput.ReadToEnd() + "`n" +
+                $runnerProcess.StandardError.ReadToEnd()
+            Assert-Contains $resultText 'dispatch_tree_not_drained'
+        }
+        finally {
+            if ($null -eq $childPid) {
+                $pidPath = Join-Path $fixture.State 'dispatch-child.pid'
+                if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
+                    $childPid = [int](Get-Content -LiteralPath $pidPath -Raw)
+                }
+            }
+            if ($null -ne $childPid) {
+                $child = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+                if ($null -ne $child) {
+                    try {
+                        if (-not $child.HasExited) { $child.Kill($true) }
+                        [void]$child.WaitForExit(5000)
+                    }
+                    finally { $child.Dispose() }
+                }
+            }
+            if ($null -ne $runnerProcess) {
+                try {
+                    if (-not $runnerProcess.HasExited) {
+                        $runnerProcess.Kill($true)
+                        [void]$runnerProcess.WaitForExit(5000)
+                    }
+                }
+                finally { $runnerProcess.Dispose() }
+            }
+            Remove-Item -LiteralPath (Join-Path $fixture.Repo 'scripts\.dispatch.lock') `
+                -Force -ErrorAction SilentlyContinue
+        }
+        }
+    }
+
+    Test-Case '统一设备 lease 持有到敏感净化、ledger 改写与 manifest 复验全部结束' {
+        $source = Get-Content -LiteralPath $SourceRunner -Raw -Encoding utf8
+        $closeIndex = $source.LastIndexOf('Close-DispatchLock', [StringComparison]::Ordinal)
+        $protectIndex = $source.LastIndexOf('Protect-P0SensitivePersistentFiles', [StringComparison]::Ordinal)
+        $manifestWriteIndex = $source.LastIndexOf('Write-P0Manifest', [StringComparison]::Ordinal)
+        $manifestVerifyIndex = $source.LastIndexOf(
+            'Assert-P0NoSensitiveFiles -Paths @($manifestPath)', [StringComparison]::Ordinal
+        )
+        Assert-True ($closeIndex -gt $protectIndex -and $closeIndex -gt $manifestWriteIndex -and
+            $closeIndex -gt $manifestVerifyIndex) `
+            '统一设备 lease 释放过早：敏感净化/ledger 改写/manifest 最终复验期间仍可能被普通 dispatch 插入。'
+        $contextStart = [Math]::Max(0, $closeIndex - 1200)
+        $closeContext = $source.Substring($contextStart, $closeIndex - $contextStart + 'Close-DispatchLock'.Length)
+        Assert-Matches $closeContext '(?s)finally\s*\{.*Close-DispatchLock'
+    }
+
+    Test-Case 'health probe 兼容 PowerShell 7.0 且统一设备 lease 区分残锁与活锁' {
         Assert-NotMatches (Get-Content -LiteralPath $SourceHealthProbe -Raw) '\?\.'
-        foreach ($kind in @('crashed','pid_reused')) {
+        . $SourceDispatchLock
+        foreach ($kind in @('crashed','malformed')) {
             $fixture = New-Fixture happy
-            $lockPath = Join-Path $fixture.Repo 'scripts\.p0-safety-smoke.lock'
-            $pidValue = if ($kind -eq 'crashed') { 2147483000 } else { $PID }
-            $ticks = if ($kind -eq 'crashed') { 1 } else { (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks + 1 }
-            @{pid=$pidValue;run_id="stale-$kind";process_start_ticks=$ticks} | ConvertTo-Json -Compress |
-                Set-Content -LiteralPath $lockPath -Encoding utf8
+            $lockPath = Join-Path $fixture.Repo 'scripts\.dispatch.lock'
+            $content = if ($kind -eq 'crashed') {
+                'pid=2147483000 owner=crashed at=2026-08-09T00:00:00'
+            } else { 'malformed stale lease' }
+            Set-Content -LiteralPath $lockPath -Value $content -Encoding utf8
             $result = Invoke-FixtureRunner $fixture @('Allow')
             Assert-True ($result.ExitCode -eq 0) "$kind 陈旧锁必须安全清除：$($result.Text)"
             Assert-True (-not (Test-Path -LiteralPath $lockPath)) "$kind 结束后锁仍存在。"
         }
         $activeFixture = New-Fixture happy
-        $activeLock = Join-Path $activeFixture.Repo 'scripts\.p0-safety-smoke.lock'
-        @{pid=$PID;run_id='active-owner';process_start_ticks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks} |
-            ConvertTo-Json -Compress | Set-Content -LiteralPath $activeLock -Encoding utf8
-        $activeResult = Invoke-FixtureRunner $activeFixture @('Allow')
-        Assert-True ($activeResult.ExitCode -ne 0) '活锁必须阻止第二个 runner。'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $activeFixture.State 'dispatch.log'))) '活锁存在时仍启动了 dispatch。'
+        $activeLock = Join-Path $activeFixture.Repo 'scripts\.dispatch.lock'
+        $held = Open-DispatchLock -Path $activeLock -Owner 'active-fixture-owner' `
+            -LeaseOwnerToken ([guid]::NewGuid().ToString('N'))
+        try {
+            $activeResult = Invoke-FixtureRunner $activeFixture @('Allow')
+            Assert-True ($activeResult.ExitCode -ne 0) '活 lease 必须阻止第二个 runner。'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $activeFixture.State 'dispatch.log'))) `
+                '活 lease 存在时仍启动了 dispatch。'
+        }
+        finally {
+            Close-DispatchLock -Stream $held -Path $activeLock
+        }
     }
 
     Test-Case '私密配置临时文件名均被 gitignore 覆盖' {
@@ -1186,10 +2015,9 @@ try {
 
     # ——— Reentry 腿（批次 4 新腿：批准后切走再回来） ———
     #
-    # **离线能验的与不能验的，先说清楚**：假 dispatch 不会真的阻塞，所以停留循环会在
-    # "dispatch 已退出"那一支上立刻跳出——**离线跑不出真实的停留时长**。这里验的是
-    # 接线与判据：腿被接受、走 Allow 那整套"真的发出去了"的判据、以及 foreground_wait
-    # 那段可观测记录的正反用例。**真实停留只能在真机上发生**，验收单已写明这条腿慢是设计使然。
+    # **离线能验的与不能验的，先说清楚**：fixture 用合成的独立观察记录覆盖 away/dwell/restore
+    # 与 gateway wait 的接线，不会真的睡 60–90 秒。真实 ADB 轮询、墙钟计时与恢复仍只能在
+    # 真机上发生；这里机械钉住的是这些记录必须参与 verdict，缺失或矛盾一律不能判绿。
 
     Test-Case 'Reentry 腿：接线通、走 Allow 那套判据并记下等前台证据' {
         $fixture = New-Fixture happy
@@ -1206,7 +2034,202 @@ try {
         # 停留那一段的实测值必须进 manifest：没有它，"待了 75 秒再回来"与"批准后立刻就成了"
         # 在台账上分不开，而后者根本没碰过用户拍板买下的 5 分钟预算。
         Assert-True ($null -ne $legRecord.reentry) 'Reentry 腿必须把停留实测值写进 manifest。'
-        Assert-True ($legRecord.reentry.dwell_sec -ge 30) 'manifest 未记录停留时长。'
+        Assert-True ($legRecord.reentry.dwell_sec -ge 60) 'manifest 未记录硬窗口内的停留时长。'
+    }
+
+    Test-Case 'Reentry 腿：ADB 从未独立确认 target away 必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture reentry_away_never) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '独立观察从未确认 away 不得只警告后继续判绿。'
+        Assert-Matches $result.Text 'away|离开前台|独立观察'
+    }
+
+    Test-Case 'Reentry 前台探针必须区分 target、明确 away 与 unknown' {
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($SourceRunner, [ref]$tokens, [ref]$errors)
+        Assert-True ($errors.Count -eq 0) 'runner 无法解析。'
+        $probeAst = $ast.Find({
+            param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Get-P0ReentryForegroundObservation'
+        }, $true)
+        Assert-True ($null -ne $probeAst) `
+            'runner 缺少 Reentry 专用 tri-state 前台探针，仍可能把 adb 失败当 away。'
+        . ([scriptblock]::Create($probeAst.Extent.Text))
+        $script:P0WechatPackage = 'com.tencent.mm'
+        $script:P0ReentryProbeMode = ''
+        function Invoke-P0DeviceCommand {
+            param($Session,$Arguments,$Operation,[switch]$AllowFailure)
+            switch ($script:P0ReentryProbeMode) {
+                'failed' { return [pscustomobject]@{ ExitCode=7; Stdout='' } }
+                'malformed' { return [pscustomobject]@{ ExitCode=0; Stdout='mResumedActivity: ???' } }
+                'away' { return [pscustomobject]@{ ExitCode=0; Stdout='mResumedActivity: ActivityRecord{a u0 com.android.launcher/.Launcher t1}' } }
+                'target' { return [pscustomobject]@{ ExitCode=0; Stdout='topResumedActivity=ActivityRecord{b u0 com.tencent.mm/.ui.LauncherUI t2}' } }
+                default { throw 'unknown probe fixture mode' }
+            }
+        }
+        foreach ($mode in @('failed','malformed')) {
+            $script:P0ReentryProbeMode = $mode
+            $observed = Get-P0ReentryForegroundObservation -Session ([pscustomobject]@{})
+            Assert-True ($observed.Known -eq $false) "$mode 不能冒充明确 away。"
+        }
+        $script:P0ReentryProbeMode = 'away'
+        $away = Get-P0ReentryForegroundObservation -Session ([pscustomobject]@{})
+        Assert-True ($away.Known -eq $true -and $away.IsTarget -eq $false) `
+            '明确非目标 resumed activity 才能形成 away。'
+        $script:P0ReentryProbeMode = 'target'
+        $target = Get-P0ReentryForegroundObservation -Session ([pscustomobject]@{})
+        Assert-True ($target.Known -eq $true -and $target.IsTarget -eq $true) `
+            '明确目标 resumed activity 必须识别为 target。'
+
+        $interludeAst = $ast.Find({
+            param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Invoke-P0ReentryInterlude'
+        }, $true)
+        . ([scriptblock]::Create($interludeAst.Extent.Text))
+        function Get-P0ReentryForegroundObservation {
+            param($Session)
+            [pscustomobject]@{ Known=$false; IsTarget=$false; Package=''; Reason='probe_failed' }
+        }
+        $script:P0RestoreCalls = 0
+        function Start-P0TargetApp { param($Session); $script:P0RestoreCalls++ }
+        $observation = Invoke-P0ReentryInterlude -Session ([pscustomobject]@{}) -DwellSec 1 `
+            -DispatchHandle ([pscustomobject]@{ Process=[pscustomobject]@{ HasExited=$false } }) `
+            -AwayTimeoutSec 1 -RestoreTimeoutSec 1
+        Assert-True ($observation.away_confirmed -eq $false -and
+            $observation.observation_unknown -eq $true -and
+            $observation.continuous_away -eq $false -and $script:P0RestoreCalls -eq 0) `
+            'unknown 前台观察不得建立 away、不得进入 dwell/restore。'
+
+        $script:P0ProbeCalls = 0
+        function Get-P0ReentryForegroundObservation {
+            param($Session)
+            $script:P0ProbeCalls++
+            if ($script:P0ProbeCalls -eq 1) {
+                return [pscustomobject]@{ Known=$true; IsTarget=$false; Package='com.android.launcher'; Reason='fixture' }
+            }
+            return [pscustomobject]@{ Known=$false; IsTarget=$false; Package=''; Reason='probe_failed' }
+        }
+        $duringDwell = Invoke-P0ReentryInterlude -Session ([pscustomobject]@{}) -DwellSec 1 `
+            -DispatchHandle ([pscustomobject]@{ Process=[pscustomobject]@{ HasExited=$false } }) `
+            -AwayTimeoutSec 1 -RestoreTimeoutSec 1
+        Assert-True ($duringDwell.away_confirmed -eq $true -and
+            $duringDwell.dwell_observation_unknown -eq $true -and
+            $duringDwell.continuous_away -eq $false -and $script:P0RestoreCalls -eq 0) `
+            'dwell 任一采样 unknown 必须打断 continuous-away 且不得 restore。'
+
+        $script:P0ProbeCalls = 0
+        function Get-P0ReentryForegroundObservation {
+            param($Session)
+            $script:P0ProbeCalls++
+            if ($script:P0ProbeCalls -le 2) {
+                return [pscustomobject]@{ Known=$true; IsTarget=$false; Package='com.android.launcher'; Reason='fixture' }
+            }
+            return [pscustomobject]@{ Known=$false; IsTarget=$false; Package=''; Reason='unparseable' }
+        }
+        $restoreUnknown = Invoke-P0ReentryInterlude -Session ([pscustomobject]@{}) -DwellSec 1 `
+            -DispatchHandle ([pscustomobject]@{ Process=[pscustomobject]@{ HasExited=$false } }) `
+            -AwayTimeoutSec 1 -RestoreTimeoutSec 1
+        Assert-True ($restoreUnknown.continuous_away -eq $true -and
+            $restoreUnknown.restore_observation_unknown -eq $true -and
+            $restoreUnknown.restored -eq $false -and $script:P0RestoreCalls -eq 1) `
+            'restore 只有明确观察到 target 才能成功；unknown 必须硬失败。'
+    }
+
+    Test-Case 'Reentry 腿：dwell 中 target 提前回前台必须判失败' {
+        # 起点曾 away、总 dwell 看似 75s、最终也已 restored；旧断言只看这三项会误判为绿。
+        # 唯一变化是独立采样中途重新看见 target，必须由 continuous-away 字段硬拒绝。
+        $result = Invoke-FixtureRunner (New-Fixture reentry_returned_early) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) 'Reentry dwell 必须连续 away，提前回前台不得判绿。'
+        Assert-True ($result.Text -match 'continuous|连续|提前.*前台|全程.*away') `
+            "提前回前台应由 continuous-away 判据拒绝，实际输出：`n$($result.Text)"
+    }
+
+    Test-Case 'Reentry 腿：最后一次 sleep 期间 dispatch 退出不得继续 restore' {
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($SourceRunner, [ref]$tokens, [ref]$errors)
+        Assert-True ($errors.Count -eq 0) 'runner 无法解析。'
+        $functionAst = $ast.Find({
+            param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Invoke-P0ReentryInterlude'
+        }, $true)
+        Assert-True ($null -ne $functionAst) '找不到 Reentry interlude。'
+        . ([scriptblock]::Create($functionAst.Extent.Text))
+        $readyPath = Join-Path ([IO.Path]::GetTempPath()) `
+            ("p0-reentry-child-ready-" + [guid]::NewGuid().ToString('N'))
+        $exitGatePath = Join-Path ([IO.Path]::GetTempPath()) `
+            ("p0-reentry-child-exit-" + [guid]::NewGuid().ToString('N'))
+        $script:P0ReentryExitGatePath = $exitGatePath
+        function Get-P0ReentryForegroundObservation {
+            param($Session)
+            [IO.File]::WriteAllText($script:P0ReentryExitGatePath, 'exit')
+            return [pscustomobject]@{ Known=$true; IsTarget=$false; Package='com.android.launcher'; Reason='fixture' }
+        }
+        function Start-P0TargetApp { param($Session) }
+
+        $startInfo = [Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $PwshPath
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.ArgumentList.Add('-NoProfile')
+        $startInfo.ArgumentList.Add('-Command')
+        $startInfo.ArgumentList.Add(
+            '[IO.File]::WriteAllText($env:P0_REENTRY_CHILD_READY, ''ready''); ' +
+            'while (-not (Test-Path -LiteralPath $env:P0_REENTRY_CHILD_EXIT_GATE)) { ' +
+            'Start-Sleep -Milliseconds 10 }; Start-Sleep -Milliseconds 100')
+        $startInfo.Environment['P0_REENTRY_CHILD_READY'] = $readyPath
+        $startInfo.Environment['P0_REENTRY_CHILD_EXIT_GATE'] = $exitGatePath
+        $child = [Diagnostics.Process]::new()
+        $child.StartInfo = $startInfo
+        $childStarted = $false
+        try {
+            Assert-True $child.Start() '无法启动离线 sleep child。'
+            $childStarted = $true
+            $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (-not (Test-Path -LiteralPath $readyPath -PathType Leaf) -and
+                [DateTime]::UtcNow -lt $readyDeadline) {
+                if ($child.HasExited) { break }
+                Start-Sleep -Milliseconds 10
+            }
+            Assert-True (Test-Path -LiteralPath $readyPath -PathType Leaf) `
+                '离线 child 尚未进入可控等待态，不能开始 dwell 竞态用例。'
+            Assert-True (-not $child.HasExited) '离线 child 在 dwell 开始前意外退出。'
+            $observation = Invoke-P0ReentryInterlude -Session ([pscustomobject]@{}) -DwellSec 2 `
+                -DispatchHandle ([pscustomobject]@{ Process = $child }) -AwayTimeoutSec 1 -RestoreTimeoutSec 1
+            Assert-True ($observation.dispatch_exited_during_dwell -eq $true -and
+                $observation.continuous_away -eq $false -and $observation.restored -eq $false) `
+                '最后一次 sleep 内退出被漏记，runner 仍可能 restore 并伪造 continuous-away。'
+        }
+        finally {
+            if ($childStarted -and -not $child.HasExited) {
+                $child.Kill($true)
+                [void]$child.WaitForExit(5000)
+            }
+            $child.Dispose()
+            Remove-Item -LiteralPath $readyPath,$exitGatePath -Force -ErrorAction SilentlyContinue
+            $script:P0ReentryExitGatePath = $null
+        }
+    }
+
+    Test-Case 'Reentry 腿：ADB 恢复 target 失败必须判失败' {
+        $result = Invoke-FixtureRunner (New-Fixture reentry_restore_failed) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) '恢复失败不得只落 manifest 后继续判绿。'
+        Assert-Matches $result.Text 'restore|恢复|拉回前台'
+    }
+
+    Test-Case 'Reentry 腿：配置停留必须硬限制在 60 到 90 秒' {
+        foreach ($bad in @(59, 91)) {
+            $output = & $PwshPath -NoProfile -File $SourceRunner -Legs Reentry -DryRun `
+                -ReentryDwellSec $bad 2>&1
+            Assert-True ($LASTEXITCODE -ne 0) "ReentryDwellSec=$bad 应在 DryRun 前被拒绝。"
+            Assert-Matches ($output -join "`n") '60.*90'
+        }
+    }
+
+    Test-Case 'Reentry 腿：gateway wait 必须覆盖 ADB 独立观测到的 dwell' {
+        # 配置值与假件独立观测都是 75s，gateway 只等 50s。
+        # 旧判据只算 75s * 60% = 45s，会错误放行；新判据必须与独立实测值接线。
+        $result = Invoke-FixtureRunner (New-Fixture reentry_observed_dwell_long_wait_short) @('Reentry')
+        Assert-True ($result.ExitCode -ne 0) 'gateway wait 未覆盖独立 dwell 不得判绿。'
+        Assert-Matches $result.Text '独立.*dwell|覆盖.*停留|gateway.*wait|foreground_wait'
     }
 
     Test-Case 'Reentry 腿：等前台记录缺席时不冒充通过' {
@@ -1257,7 +2280,7 @@ try {
         $fixture = New-Fixture reentry_short_wait
         $result = Invoke-FixtureRunner $fixture @('Reentry')
         Assert-True ($result.ExitCode -ne 0) '等待时长不足必须判失败。'
-        Assert-Contains $result.Text '等待没有覆盖住停留期'
+        Assert-Matches $result.Text '没有覆盖.*(?:dwell|停留)|等待.*未接上'
     }
 
     Test-Case 'Reentry 腿：等前台超时必须判失败' {
@@ -1572,9 +2595,82 @@ try {
         }
     }
 
+    Test-Case '持久 artifact 首次写前预注册且写后异常仍由 finally 净化' {
+        foreach ($scenario in @('notification_secret_after_write','trace_evidence_secret_after_copy')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 写后 fault 必须让 runner 失败。"
+            $leaks = @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)
+            Assert-True ($leaks.Count -eq 0) `
+                "$scenario 写后抛错的原持久路径仍留下 secret：$($leaks -join ',')"
+            Assert-Contains $result.Text 'sensitive_output_detected'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+(?:notification-write|evidence-copy)-fixture-secret'
+        }
+
+        $source = Get-Content -LiteralPath $SourceRunner -Raw -Encoding utf8
+        foreach ($contract in @(
+            @{ Name='confirmation.png'; Start='$screenshotPath = Join-Path';
+                Register='Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $screenshotPath';
+                Write='Save-P0PrivateEvidence -Session $session' },
+            @{ Name='approval-notification.txt'; Start="$notificationDump = Join-Path `$legDir 'approval-notification.txt'";
+                Register='Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $notificationDump';
+                Write='Save-P0ApprovalNotificationState -Session $session' },
+            @{ Name='dispatch-trace.jsonl'; Start="$traceEvidencePath = Join-Path `$legDir 'dispatch-trace.jsonl'";
+                Register='Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $traceEvidencePath';
+                Write='Copy-Item -LiteralPath $traceSource -Destination $safeTraceEvidence.Path' },
+            @{ Name='failure-screen.png'; Start="$failureScreen = Join-Path";
+                Register='Add-P0SensitiveArtifactPath -Paths $sensitiveArtifactPaths -Path $failureScreen';
+                Write='Invoke-P0ExternalToFile -FilePath $session.AdbPath' }
+        )) {
+            $startIndex = $source.IndexOf([string]$contract.Start, [StringComparison]::Ordinal)
+            $registerIndex = if ($startIndex -lt 0) { -1 } else {
+                $source.IndexOf([string]$contract.Register, $startIndex, [StringComparison]::Ordinal)
+            }
+            $writeIndex = if ($startIndex -lt 0) { -1 } else {
+                $source.IndexOf([string]$contract.Write, $startIndex, [StringComparison]::Ordinal)
+            }
+            Assert-True ($startIndex -ge 0 -and $registerIndex -gt $startIndex -and
+                $writeIndex -gt $registerIndex) `
+                "$($contract.Name) 必须先加入 sensitiveArtifactPaths，后首次写入。"
+        }
+    }
+
+    Test-Case 'ledger 整文件敏感扫描覆盖 partial、无本腿行与额外行' {
+        foreach ($scenario in @('ledger_partial_secret_no_current','ledger_unrelated_secret')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+
+            # 先验原持久路径，再看 verdict：旧实现可能因为找不到本腿行而非零退出，却仍把
+            # partial secret 留在 ledger；也可能只验安全的本腿行，让额外 secret 行整轮判绿。
+            $leaks = @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)
+            Assert-True ($leaks.Count -eq 0) `
+                "$scenario 的 ledger 原路径仍留下整文件扫描漏掉的敏感内容：$($leaks -join ',')"
+            Assert-True ($result.ExitCode -ne 0) "$scenario 必须由敏感输出门判失败。"
+            Assert-Contains $result.Text 'sensitive_output_detected'
+            Assert-True ($result.Text -notmatch '(?i)Bearer\s+ledger-(?:partial|unrelated)-fixture-secret') `
+                "$scenario 不得在控制台或 manifest 回显 fixture secret。"
+
+            $ledgerPath = Join-Path $fixture.Repo 'docs\runs\ledger.csv'
+            if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+                $ledgerBytes = [IO.File]::ReadAllBytes($ledgerPath)
+                try {
+                    $ledgerRaw = [Text.UTF8Encoding]::new($false, $false).GetString($ledgerBytes)
+                    Assert-True ($ledgerRaw -notmatch '(?is)\bAuthorization\b.{0,24}\bBearer\s+\S+') `
+                        "$scenario 净化后逐字重读 ledger 仍命中 Bearer。"
+                }
+                finally {
+                    if ($ledgerBytes.Length -gt 0) { [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length) }
+                    $ledgerRaw = $null
+                }
+            }
+        }
+    }
+
     Test-Case '敏感 token 或 Bearer 泄露使 runner 脱敏失败且最终输出不回显' {
+        $persistedLeaks = [Collections.Generic.List[string]]::new()
         foreach ($scenario in @(
             'stdout_secret','stderr_bearer','trace_secret','trace_bearer',
+            'trace_sidecar_secret','trace_secret_no_ledger',
             'audit_secret','ledger_secret','manifest_secret'
         )) {
             $fixture = New-Fixture $scenario
@@ -1594,7 +2690,72 @@ try {
             ) "$scenario manifest 未记录固定脱敏失败码。"
             Assert-NotMatches $manifestRaw ([regex]::Escape($fixture.Token))
             Assert-NotMatches $manifestRaw '(?i)Bearer\s+\S+'
+            foreach ($relativePath in @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)) {
+                [void]$persistedLeaks.Add("${scenario}:$relativePath")
+            }
         }
+        Assert-True ($persistedLeaks.Count -eq 0) `
+            "敏感输出失败后原持久路径仍留有泄露内容：$($persistedLeaks -join ', ')"
+    }
+
+    Test-Case '敏感清理拒绝 traces reparse 且绝不改写根外 sentinel' {
+        $fixture = New-Fixture trace_sidecar_reparse_secret
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '不安全 traces reparse 必须 fail closed。'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+reparse-fixture-secret'
+
+        $swapped = Join-Path $fixture.State 'reparse-swapped.txt'
+        Assert-True (Test-Path -LiteralPath $swapped -PathType Leaf) 'fixture 没有实际换入 junction。'
+        $traceRoot = Join-Path $fixture.Repo 'docs\runs\traces'
+        $traceRootItem = Get-Item -LiteralPath $traceRoot -Force
+        Assert-True (
+            (($traceRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+            ($null -ne $traceRootItem.LinkType)
+        ) 'fixture traces 根不是实际 reparse/junction。'
+
+        $sentinelPath = Get-Content -LiteralPath (Join-Path $fixture.State 'reparse-sentinel-path.txt') -Raw
+        $expectedHash = Get-Content -LiteralPath (Join-Path $fixture.State 'reparse-sentinel-sha256.txt') -Raw
+        Assert-True (Test-Path -LiteralPath $sentinelPath -PathType Leaf) `
+            'runner 删除了 traces 根外 sentinel。'
+        $actualHash = (Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash
+        Assert-True ($actualHash -ceq $expectedHash) `
+            'runner 跟随 traces reparse 改写了根外 sentinel。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+    }
+
+    Test-Case '敏感清理拒绝 direct sidecar leaf link 且绝不改写根外 sentinel' {
+        $fixture = New-Fixture trace_sidecar_leaf_link_secret
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '不安全 sidecar leaf link 必须 fail closed。'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+leaf-link-fixture-secret'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+
+        $linkKind = Get-Content -LiteralPath (Join-Path $fixture.State 'leaf-link-kind.txt') -Raw
+        Assert-True ($linkKind -in @('SymbolicLink','HardLink')) `
+            "fixture 未建立可验证的文件 link（kind=$linkKind）。"
+        if ($linkKind -ceq 'HardLink') {
+            $symlinkFailurePath = Join-Path $fixture.State 'leaf-link-symlink-failure.txt'
+            Assert-True (Test-Path -LiteralPath $symlinkFailurePath -PathType Leaf) `
+                '退到 hardlink 时没有记录 symlink 权限/平台失败。'
+            $symlinkFailure = Get-Content -LiteralPath $symlinkFailurePath -Raw
+            Write-Host "      leaf link fixture: HardLink (symlink unavailable: $symlinkFailure)" `
+                -ForegroundColor DarkGray
+        }
+        else { Write-Host '      leaf link fixture: SymbolicLink' -ForegroundColor DarkGray }
+        $linkPath = Get-Content -LiteralPath (Join-Path $fixture.State 'leaf-link-path.txt') -Raw
+        $linkItem = Get-Item -LiteralPath $linkPath -Force
+        Assert-True (
+            (($linkItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+            (-not [string]::IsNullOrWhiteSpace([string]$linkItem.LinkType))
+        ) 'fixture sidecar 不是实际 symlink/reparse/hardlink。'
+
+        $sentinelPath = Get-Content -LiteralPath (Join-Path $fixture.State 'leaf-link-sentinel-path.txt') -Raw
+        $expectedHash = Get-Content -LiteralPath (Join-Path $fixture.State 'leaf-link-sentinel-sha256.txt') -Raw
+        Assert-True (Test-Path -LiteralPath $sentinelPath -PathType Leaf) `
+            'runner 删除了 traces 根外 leaf-link sentinel。'
+        $actualHash = (Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash
+        Assert-True ($actualHash -ceq $expectedHash) `
+            'runner 经 sidecar leaf link 改写了根外 sentinel。'
     }
 
     Test-Case '未 Provision 时从既有配置加载 token needle 并拦截泄露' {
@@ -1609,6 +2770,8 @@ try {
         Assert-NotMatches $manifestRaw ([regex]::Escape($fixture.Token))
         Assert-True (($manifestRaw | ConvertFrom-Json).failure -ceq 'sensitive_output_detected') `
             '既有配置泄露 manifest 未脱敏。'
+        $leaks = @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)
+        Assert-True ($leaks.Count -eq 0) "既有配置 token 仍留在持久输出路径：$($leaks -join ', ')"
     }
 
     Test-Case 'trace 缺失不得判通过' {
@@ -1628,7 +2791,7 @@ try {
     Test-Case 'ledger trace 仅接受真实 dispatch basename 且拒绝旧名、错组成与路径逃逸' {
         foreach ($scenario in @(
             'ledger_traversal','ledger_absolute','ledger_wrong_slug','ledger_legacy_slug',
-            'ledger_wrong_brain','ledger_wrong_leg','ledger_symlink'
+            'ledger_wrong_brain','ledger_wrong_leg'
         )) {
             $fixture = New-Fixture $scenario
             $result = Invoke-FixtureRunner $fixture @('Allow')
@@ -2303,7 +3466,18 @@ PODENY-DCA2222F6441|72|2117|472|32
             '必须先查有没有既有行，再决定补不补。'
 
         # -AllowMissing 只给"补记前先看看"用；判定路径不带它，缺行仍是硬失败。
-        $judge = $source.Substring($source.IndexOf('function Get-P0LedgerRow'), 900)
+        $parseTokens = $null
+        $parseErrors = $null
+        $sourceAst = [Management.Automation.Language.Parser]::ParseInput(
+            $source, [ref]$parseTokens, [ref]$parseErrors)
+        Assert-True ($parseErrors.Count -eq 0) 'runner 源码无法解析，不能检查 Get-P0LedgerRow。'
+        $judgeAst = $sourceAst.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'Get-P0LedgerRow'
+        }, $true)
+        Assert-True ($null -ne $judgeAst) 'runner 缺少 Get-P0LedgerRow。'
+        $judge = $judgeAst.Extent.Text
         Assert-Contains $judge "throw '缺少 dispatch ledger。'"
         Assert-Contains $judge '行数不是 1'
     }
@@ -2390,6 +3564,38 @@ PODENY-DCA2222F6441|72|2117|472|32
         $fixture = New-Fixture find_ocr_extra_text
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) '命中里混进别的文本必须判失败。'
+    }
+
+    Test-Case 'Allow 判据：text 正确也不能掩盖 normalized 或 query_normalized 错误' {
+        foreach ($scenario in @('find_wrong_normalized','find_wrong_query_normalized')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) `
+                "$scenario 必须按 normalized/query_normalized 契约失败，不能退回 text 猜 marker。"
+        }
+    }
+
+    Test-Case 'ledger trace 根 junction 必须在读取前拒绝且不改写根外 sentinel' {
+        $fixture = New-Fixture ledger_symlink
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'ledger trace 根 junction 必须 fail closed。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+ledger-symlink-fixture-secret'
+
+        $sentinelPath = Get-Content -LiteralPath `
+            (Join-Path $fixture.State 'ledger-symlink-sentinel-path.txt') -Raw
+        $expectedHash = Get-Content -LiteralPath `
+            (Join-Path $fixture.State 'ledger-symlink-sentinel-sha256.txt') -Raw
+        Assert-True (Test-Path -LiteralPath $sentinelPath -PathType Leaf) `
+            'runner 删除了 ledger trace 根外 sentinel。'
+        Assert-True ((Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash -ceq $expectedHash) `
+            'runner 跟随 ledger trace junction 改写了根外 sentinel。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        if ($null -ne $manifest) {
+            Assert-NotMatches (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8) `
+                '(?i)Bearer\s+ledger-symlink-fixture-secret'
+        }
     }
 
     Test-Case '任何危险路径的 fallback 都不得指示 [AWAIT_CONFIRM]' {
@@ -2576,6 +3782,26 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-True ($leg.approval_notification.status -ceq 'dump_failed') `
             "dumpsys 非零退出应记 dump_failed，实际 $($leg.approval_notification.status)"
         Assert-Contains ([string]$leg.approval_notification.detail) '退出码'
+    }
+
+    Test-Case '通知 dump 写入前拒绝 direct leaf link 且不改写根外 sentinel' {
+        $fixture = New-Fixture notification_leaf_link
+        $sentinelPath = Join-Path $fixture.State 'notification-link-target.txt'
+        $expectedHash = Get-Content -LiteralPath `
+            (Join-Path $fixture.State 'notification-link-target-sha256.txt') -Raw
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '通知 dump direct leaf link 必须 fail closed。'
+        Assert-Contains $result.Text 'unsafe_artifact_path'
+        Assert-NotMatches $result.Text '(?i)Bearer\s+notification-link-fixture-secret'
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'notification-link-created.txt') -PathType Leaf) `
+            'fixture 未实际建立 approval-notification hardlink。'
+        $link = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter approval-notification.txt -Recurse -Force | Select-Object -First 1
+        Assert-True ($null -ne $link -and -not [string]::IsNullOrWhiteSpace([string]$link.LinkType)) `
+            'approval-notification fixture leaf 不是实际 link。'
+        Assert-True (Test-Path -LiteralPath $sentinelPath -PathType Leaf) 'runner 删除了根外通知 sentinel。'
+        Assert-True ((Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash -ceq $expectedHash) `
+            'runner 在安全验证前跟随通知 hardlink 改写了根外 sentinel。'
     }
 
     Test-Case '失败腿也要落盘取证并顺手清框（不清就是把下一轮顶在预检上）' {

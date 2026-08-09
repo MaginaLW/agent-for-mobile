@@ -20,12 +20,13 @@ class EvidenceRebuildPolicyTest {
         sha256: String? = InputCommitEvidence.sha256(text),
         length: Int? = text.length,
         normalized: String? = text.lowercase(),
+        targetLabel: String = "文件传输助手",
     ) = ApprovalIntent(
         intentId = "intent-1",
         riskTier = RiskTier.RETRACTABLE,
         actionKind = "发送消息",
         targetPackage = "com.tencent.mm",
-        targetLabel = "文件传输助手",
+        targetLabel = targetLabel,
         contentSha256 = sha256,
         contentLength = length,
         contentNormalized = normalized,
@@ -59,6 +60,18 @@ class EvidenceRebuildPolicyTest {
         val result = judge(readback = text, surfaceLabel = "")
 
         assertTrue(result is EvidenceRebuild.Unverified)
+    }
+
+    @Test
+    fun `letter O and digit zero identify different approved conversations`() {
+        val result = judge(
+            intent = intent(targetLabel = "AO"),
+            readback = text,
+            surfaceLabel = "A0",
+            surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR,
+        )
+
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
     }
 
     @Test
@@ -235,12 +248,13 @@ class EvidenceRebuildPolicyTest {
     )
 
     @Test
-    fun `ocr title with tail noise still counts as the approved conversation`() {
-        // 2026-07-24 真机实锤：标题被识别成「文件传输助手8」，置信度完全正常。
-        // 拿逐位相等去要求它，台账上会写「会话在人批准之后被换过」——那是对用户的诬告。
+    fun `ocr title with ambiguous tail noise is unverified rather than approved`() {
+        // 「文件传输助手8」可能是 OCR 尾噪，也可能是真实的另一个会话；没有独立正证据时
+        // 不能机械区分。Unverified 既不放行，也不诬告用户换了会话。
         val result = judgeTitleOcr("文件传输助手8")
 
-        assertTrue(result.toString(), result is EvidenceRebuild.Rebuilt)
+        assertTrue(result.toString(), result is EvidenceRebuild.Unverified)
+        assertTrue((result as EvidenceRebuild.Unverified).reason.contains("不精确相同"))
     }
 
     @Test
@@ -270,11 +284,11 @@ class EvidenceRebuildPolicyTest {
             intent = intent(),
             readback = text.replace("A", ""),
             channel = EvidenceRebuildPolicy.CHANNEL_A11Y,
-            surfaceLabel = "文件传输助手8",
+            surfaceLabel = "文 件·传输助手",
             normalize = norm,
             surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR,
         )
-        // 标题这一关按 OCR 过了，内容这一关仍按 a11y 的逐位相等判——所以是 Mismatch 而不是 Rebuilt。
+        // 标题只用了明列的字符归一且精确相等；内容仍按 a11y 的逐位相等判。
         assertTrue(looseTitleStrictContent.toString(), looseTitleStrictContent is EvidenceRebuild.Mismatch)
         assertTrue(
             (looseTitleStrictContent as EvidenceRebuild.Mismatch).reason.contains("内容摘要"),
@@ -283,14 +297,18 @@ class EvidenceRebuildPolicyTest {
 
     @Test
     fun `surface channel defaults to the content channel`() {
-        // 不传 surfaceChannel 时跟随内容通道：这里内容是 a11y，所以标题也按 a11y 的
-        // 逐位相等要求——「文件传输助手8」过不了，于是判不了（不是 Mismatch，见上面那两条）。
-        // 反过来若默认跟成了 OCR，这个尾随噪声会被宽松匹配放过去，两者差别就在这一条上。
-        val strict = judge(readback = text, surfaceLabel = "文件传输助手8")
+        // 不传 surfaceChannel 时跟随内容通道：a11y 对原文逐位相等；OCR 则允许明列的字符归一，
+        // 但归一之后仍必须逐位相同。两档差别用空白/分隔符构造，不再靠无界尾噪 tolerance。
+        val normalizedEquivalent = "文 件·传输助手"
+        val strict = judge(readback = text, surfaceLabel = normalizedEquivalent)
         assertTrue(strict.toString(), strict is EvidenceRebuild.Unverified)
 
-        val loose = judge(readback = text, surfaceLabel = "文件传输助手8", surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR)
-        assertTrue(loose.toString(), loose is EvidenceRebuild.Rebuilt)
+        val normalizedExact = judge(
+            readback = text,
+            surfaceLabel = normalizedEquivalent,
+            surfaceChannel = EvidenceRebuildPolicy.CHANNEL_OCR,
+        )
+        assertTrue(normalizedExact.toString(), normalizedExact is EvidenceRebuild.Rebuilt)
     }
 
     @Test

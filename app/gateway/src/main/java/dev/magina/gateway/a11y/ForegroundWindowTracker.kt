@@ -16,6 +16,16 @@ internal data class ForegroundWindow(
 internal sealed interface ForegroundIdentity {
     data object Unknown : ForegroundIdentity
 
+    /**
+     * 已接受身份被同一 windowId 的实时非空 root 包名证伪。这个状态不能退回 [Unknown]：
+     * [Unknown] 允许冷启动自举，而冲突后的任何自举都会把刚被证伪的旧身份重新放行。
+     */
+    data class Invalidated(
+        val windowId: Int,
+        val acceptedPackageName: String,
+        val conflictingPackageName: String,
+    ) : ForegroundIdentity
+
     data class Known(
         val windowId: Int,
         val packageName: String,
@@ -41,6 +51,9 @@ internal enum class ForegroundUnknownReason {
 
     /** 已接受身份的 windowId 与当前活动应用窗口不一致（窗口换了但没等到可接受的事件）。 */
     WINDOW_ID_MISMATCH,
+
+    /** windowId 相同，但当前活动应用窗口 root 自报的非空包名与已接受身份不一致。 */
+    PACKAGE_MISMATCH,
 }
 
 internal data class ResolvedForeground(
@@ -52,30 +65,43 @@ internal data class ResolvedForeground(
     val bootstrapped: Boolean = false,
 )
 
-/** 将事件身份与当前应用窗口绑定；窗口不一致时只暴露 package-only 尽力后备。 */
+/** 将事件身份与当前应用窗口绑定；窗口或可用 root 包名不一致时只暴露 package-only 诊断。 */
 internal fun resolveForeground(
     identity: ForegroundIdentity,
     applicationWindowId: Int?,
     applicationWindowPackageName: String?,
-): ResolvedForeground = when {
-    identity is ForegroundIdentity.Known && identity.windowId == applicationWindowId ->
-        ResolvedForeground(
-            known = true,
-            packageName = identity.packageName,
-            activityName = identity.activityName,
-            bootstrapped = identity.bootstrapped,
-        )
+): ResolvedForeground {
+    val observedPackage = applicationWindowPackageName.orEmpty()
+    val packageMismatch = identity is ForegroundIdentity.Known &&
+        identity.windowId == applicationWindowId &&
+        observedPackage.isNotEmpty() &&
+        observedPackage != identity.packageName
+    return when {
+        identity is ForegroundIdentity.Known &&
+            identity.windowId == applicationWindowId &&
+            !packageMismatch ->
+            ResolvedForeground(
+                known = true,
+                packageName = identity.packageName,
+                activityName = identity.activityName,
+                bootstrapped = identity.bootstrapped,
+            )
 
-    else -> ResolvedForeground(
-        known = false,
-        packageName = if (applicationWindowId != null) applicationWindowPackageName.orEmpty() else "",
-        activityName = "",
-        reason = when {
-            applicationWindowId == null -> ForegroundUnknownReason.NO_APPLICATION_WINDOW
-            identity is ForegroundIdentity.Known -> ForegroundUnknownReason.WINDOW_ID_MISMATCH
-            else -> ForegroundUnknownReason.IDENTITY_UNSET
-        },
-    )
+        else -> ResolvedForeground(
+            known = false,
+            packageName = if (applicationWindowId != null) observedPackage else "",
+            activityName = "",
+            reason = when {
+                applicationWindowId == null -> ForegroundUnknownReason.NO_APPLICATION_WINDOW
+                packageMismatch -> ForegroundUnknownReason.PACKAGE_MISMATCH
+                identity is ForegroundIdentity.Invalidated &&
+                    identity.windowId == applicationWindowId -> ForegroundUnknownReason.PACKAGE_MISMATCH
+                identity is ForegroundIdentity.Invalidated -> ForegroundUnknownReason.WINDOW_ID_MISMATCH
+                identity is ForegroundIdentity.Known -> ForegroundUnknownReason.WINDOW_ID_MISMATCH
+                else -> ForegroundUnknownReason.IDENTITY_UNSET
+            },
+        )
+    }
 }
 
 /** 单条前台事件的处置结果；进环形缓冲供 `foreground_app` 只读取证。 */
@@ -126,6 +152,42 @@ internal class ForegroundWindowTracker(
     private var seq = 0L
 
     fun current(): ForegroundIdentity = identity
+
+    /**
+     * 用实时活动应用窗口解析 tracker 当前身份。包名冲突的返回值与 invalidation 在同一把锁内
+     * 原子发布，避免调用方拿到 unknown、tracker 却仍保存旧 [ForegroundIdentity.Known]。
+     */
+    @Synchronized
+    fun resolveForeground(
+        applicationWindowId: Int?,
+        applicationWindowPackageName: String?,
+    ): ResolvedForeground = resolveForegroundLocked(
+        applicationWindowId = applicationWindowId,
+        applicationWindowPackageName = applicationWindowPackageName,
+    )
+
+    /**
+     * 服务读路径的原子入口：仅真正的 [ForegroundIdentity.Unknown] 可以冷启动自举；随后在同一
+     * 临界区完成 root-package 复核。已 invalidated 的身份不会被 bootstrap 复活。
+     */
+    @Synchronized
+    fun resolveForegroundOrBootstrap(
+        applicationWindowId: Int?,
+        applicationWindowPackageName: String?,
+        windows: List<ForegroundWindow>,
+    ): ResolvedForeground {
+        if (applicationWindowId != null && !applicationWindowPackageName.isNullOrEmpty()) {
+            bootstrapFromWindowLocked(
+                applicationWindowId = applicationWindowId,
+                packageName = applicationWindowPackageName,
+                windows = windows,
+            )
+        }
+        return resolveForegroundLocked(
+            applicationWindowId = applicationWindowId,
+            applicationWindowPackageName = applicationWindowPackageName,
+        )
+    }
 
     /** 最近若干条前台事件处置记录，旧在前。 */
     @Synchronized
@@ -205,6 +267,12 @@ internal class ForegroundWindowTracker(
         applicationWindowId: Int,
         packageName: String,
         windows: List<ForegroundWindow>,
+    ): Boolean = bootstrapFromWindowLocked(applicationWindowId, packageName, windows)
+
+    private fun bootstrapFromWindowLocked(
+        applicationWindowId: Int,
+        packageName: String,
+        windows: List<ForegroundWindow>,
     ): Boolean {
         if (identity !is ForegroundIdentity.Unknown) return false
         if (packageName.isEmpty()) return false
@@ -226,6 +294,30 @@ internal class ForegroundWindowTracker(
             windows = windows,
         )
         return true
+    }
+
+    private fun resolveForegroundLocked(
+        applicationWindowId: Int?,
+        applicationWindowPackageName: String?,
+    ): ResolvedForeground {
+        val before = identity
+        val resolved = resolveForeground(
+            identity = before,
+            applicationWindowId = applicationWindowId,
+            applicationWindowPackageName = applicationWindowPackageName,
+        )
+        if (before is ForegroundIdentity.Known &&
+            resolved.reason == ForegroundUnknownReason.PACKAGE_MISMATCH
+        ) {
+            identity = ForegroundIdentity.Invalidated(
+                windowId = before.windowId,
+                acceptedPackageName = before.packageName,
+                conflictingPackageName = applicationWindowPackageName.orEmpty(),
+            )
+            // 冲突意味着 windowId/包身份世代已不可信；冲突前缓存的候选也不能跨世代发布。
+            pendingCandidates.clear()
+        }
+        return resolved
     }
 
     /**

@@ -495,6 +495,122 @@ class ForegroundWindowTrackerTest {
     }
 
     @Test
+    fun `same window id with a conflicting current root package is unknown`() {
+        val resolved = resolveForeground(
+            identity = wechatIdentity,
+            applicationWindowId = wechat.id,
+            applicationWindowPackageName = "com.android.settings",
+        )
+
+        assertFalse(resolved.known)
+        assertEquals("com.android.settings", resolved.packageName)
+        assertEquals("", resolved.activityName)
+        assertEquals(ForegroundUnknownReason.PACKAGE_MISMATCH, resolved.reason)
+    }
+
+    @Test
+    fun `package mismatch stays invalidated until a new accepted window event`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+
+        val mismatch = tracker.resolveForeground(
+            applicationWindowId = wechat.id,
+            applicationWindowPackageName = "com.android.settings",
+        )
+        assertFalse(mismatch.known)
+        assertEquals(ForegroundUnknownReason.PACKAGE_MISMATCH, mismatch.reason)
+        assertEquals(
+            ForegroundIdentity.Invalidated(
+                windowId = wechat.id,
+                acceptedPackageName = "com.tencent.mm",
+                conflictingPackageName = "com.android.settings",
+            ),
+            tracker.current(),
+        )
+
+        // 同一个 windowId 的 root 暂时读不到包名时，不能让刚才被冲突证伪的旧身份复活。
+        val missingRoot = tracker.resolveForeground(
+            applicationWindowId = wechat.id,
+            applicationWindowPackageName = null,
+        )
+        assertFalse(missingRoot.known)
+        assertEquals(ForegroundUnknownReason.PACKAGE_MISMATCH, missingRoot.reason)
+        assertFalse(tracker.bootstrapFromWindow(wechat.id, "com.tencent.mm", listOf(wechat)))
+
+        // 只有一条重新通过窗口归属校验的 WINDOW_STATE_CHANGED 才能建立新身份。
+        assertTrue(tracker.onWindowStateChanged(
+            eventWindowId = wechat.id,
+            packageName = "com.tencent.mm",
+            activityName = "com.tencent.mm.ui.LauncherUI",
+            windows = listOf(wechat),
+        ))
+        assertTrue(
+            tracker.resolveForeground(
+                applicationWindowId = wechat.id,
+                applicationWindowPackageName = "com.tencent.mm",
+            ).known
+        )
+    }
+
+    @Test
+    fun `published pending candidate can rebuild an invalidated identity`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+        tracker.resolveForeground(wechat.id, "com.android.settings")
+        val settings = ForegroundWindow(
+            id = 509,
+            type = ForegroundWindowType.APPLICATION,
+            isActive = true,
+            isFocused = true,
+        )
+
+        assertFalse(tracker.onWindowStateChanged(
+            eventWindowId = settings.id,
+            packageName = "com.android.settings",
+            activityName = "com.android.settings.Settings",
+            windows = listOf(wechat),
+        ))
+        assertFalse(tracker.resolveForeground(wechat.id, null).known)
+
+        assertTrue(tracker.onWindowsChanged(listOf(settings)))
+        assertEquals(
+            ResolvedForeground(
+                known = true,
+                packageName = "com.android.settings",
+                activityName = "com.android.settings.Settings",
+            ),
+            tracker.resolveForeground(settings.id, "com.android.settings"),
+        )
+    }
+
+    @Test
+    fun `service resolve or bootstrap entry never bootstraps an invalidated identity`() {
+        val tracker = ForegroundWindowTracker()
+        assertTrue(
+            tracker.resolveForegroundOrBootstrap(
+                applicationWindowId = wechat.id,
+                applicationWindowPackageName = "com.tencent.mm",
+                windows = listOf(wechat),
+            ).known
+        )
+
+        assertEquals(
+            ForegroundUnknownReason.PACKAGE_MISMATCH,
+            tracker.resolveForegroundOrBootstrap(
+                applicationWindowId = wechat.id,
+                applicationWindowPackageName = "com.android.settings",
+                windows = listOf(wechat),
+            ).reason,
+        )
+        val wouldBeBootstrap = tracker.resolveForegroundOrBootstrap(
+            applicationWindowId = wechat.id,
+            applicationWindowPackageName = "com.tencent.mm",
+            windows = listOf(wechat),
+        )
+        assertFalse(wouldBeBootstrap.known)
+        assertEquals(ForegroundUnknownReason.PACKAGE_MISMATCH, wouldBeBootstrap.reason)
+        assertTrue(tracker.current() is ForegroundIdentity.Invalidated)
+    }
+
+    @Test
     fun `unknown reason distinguishes missing application window from stale identity`() {
         assertEquals(
             ForegroundUnknownReason.NO_APPLICATION_WINDOW,

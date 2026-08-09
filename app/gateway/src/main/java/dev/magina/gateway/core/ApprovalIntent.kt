@@ -246,9 +246,10 @@ object EvidenceRebuildPolicy {
                     "（channel=$surfaceChannel）",
             )
         } else {
-            // —— OCR 通道：标题同样从来不逐位相同（2026-07-24 真机实锤把标题识别成
-            // 「文件传输助手8」），拿相等去要求它是同一个诬告，形状与内容那处一模一样。
-            // 与识别侧共用 LabelMatchPolicy 那一条规则，不在这里另写一份。
+            // —— OCR 通道：只接受 LabelMatchPolicy 明列的字符归一后精确相等。——
+            // `文件传输助手8` 这类尾噪与 `张三备份` 这类真实会话在字符串层面同形；没有独立
+            // 会话身份就无法机械区分，故两者都只能 Unverified，不能再用无界 contains 放行。
+            // 与识别侧共用同一条规则，不在这里另写一份。
             when (LabelMatchPolicy.verdict(expected = intent.targetLabel, got = surfaceLabel)) {
                 LabelMatchPolicy.Verdict.MATCH -> Unit
                 // 读回是已批准标签的一部分 = 漏识的形态。
@@ -257,8 +258,8 @@ object EvidenceRebuildPolicy {
                         "——像漏识，读不准不敢放行；这不是「换了会话」（channel=$surfaceChannel）",
                 )
                 LabelMatchPolicy.Verdict.DIFFERENT -> return EvidenceRebuild.Unverified(
-                    "标题读回「$surfaceLabel」，与已批准会话「${intent.targetLabel}」毫无关系——" +
-                        "带里混进别的东西比「人换了会话」更可能，读不准不敢放行；" +
+                    "标题读回「$surfaceLabel」，与已批准会话「${intent.targetLabel}」归一后不精确相同——" +
+                        "可能是 OCR 噪声，也可能是真实的另一个会话，无法机械区分，读不准不敢放行；" +
                         "**这不等于你换了会话**（channel=$surfaceChannel）",
                 )
             }

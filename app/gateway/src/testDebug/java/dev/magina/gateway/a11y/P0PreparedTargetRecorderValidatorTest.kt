@@ -88,6 +88,24 @@ class P0PreparedTargetRecorderValidatorTest {
         assertEquals(bounds, validated.bounds)
     }
 
+    @Test
+    fun `normalized exact title still reaches the prepared evidence recorder`() {
+        var records = 0
+
+        val validated = P0PreparedTargetRecorderValidator.validateAndRecord(
+            result,
+            state.copy(
+                snapshot = snapshot.copy(
+                    elements = snapshot.elements.map { it.copy(text = "文 件·传输助手") },
+                ),
+            ),
+            sensitiveSurfaceWords = emptyList(),
+        ) { records++ }
+
+        assertEquals(1, records)
+        assertEquals(P0_FILE_TRANSFER_ASSISTANT, validated.label)
+    }
+
     /** IME-only 降级链：a11y 侧一致缺失时可成链，但几何必须一并缺失。 */
     @Test
     fun `ime only state records a degraded identity without bounds`() {
@@ -238,6 +256,58 @@ class P0PreparedTargetRecorderValidatorTest {
             }
             assertEquals("case $index", 0, records)
         }
+    }
+
+    @Test
+    fun `prefix lookalike conversation titles never reach the prepared evidence recorder`() {
+        val wrongRecipients = listOf(
+            "文件传输助手备份",
+            "文件传输助手、工作群",
+        )
+
+        wrongRecipients.forEach { wrongRecipient ->
+            var records = 0
+            try {
+                P0PreparedTargetRecorderValidator.validateAndRecord(
+                    result,
+                    state.copy(
+                        snapshot = snapshot.copy(
+                            elements = snapshot.elements.map { it.copy(text = wrongRecipient) },
+                        ),
+                    ),
+                    sensitiveSurfaceWords = emptyList(),
+                ) { records++ }
+                fail("$wrongRecipient must fail closed")
+            } catch (error: GatewayError) {
+                assertEquals(ErrorCode.E_STALE_REF, error.code)
+            }
+            assertEquals("$wrongRecipient must not persist prepared evidence", 0, records)
+        }
+    }
+
+    @Test
+    fun `letter O and digit zero wrong recipient never reaches the prepared evidence recorder`() {
+        val approvedRecipient = "文件传输助手AO"
+        val observedRecipient = "文件传输助手A0"
+        var records = 0
+
+        try {
+            P0PreparedTargetRecorderValidator.validateAndRecord(
+                result.copy(conversation = approvedRecipient),
+                state.copy(
+                    snapshot = snapshot.copy(
+                        elements = snapshot.elements.map { it.copy(text = observedRecipient) },
+                    ),
+                ),
+                sensitiveSurfaceWords = emptyList(),
+                expectedLabel = approvedRecipient,
+            ) { records++ }
+            fail("O/0 不同的真实收件人必须 fail closed")
+        } catch (error: GatewayError) {
+            assertEquals(ErrorCode.E_STALE_REF, error.code)
+        }
+
+        assertEquals("wrong-recipient evidence must never be persisted", 0, records)
     }
 
     @Test

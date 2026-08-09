@@ -31,21 +31,29 @@ class TextNormTest {
     }
 
     @Test
+    fun `label normalization never aliases letter O with digit zero`() {
+        assertEquals("ao", TextNorm.label("ＡＯ"))
+        assertEquals("a0", TextNorm.label("A0"))
+    }
+
+    @Test
     fun `label normalization agrees with ocr normalization on the P0 label`() {
         // 合并两套归一时唯一要保证的事：实际在用的那个标签结果不变。
         assertEquals(TextNorm.ocr("文件传输助手"), TextNorm.label("文件传输助手"))
     }
 
     @Test
-    fun `a longer readback containing the approved label matches`() {
-        // 2026-07-24 真机实锤：OCR 把标题识别成「文件传输助手8」，置信度完全正常。
+    fun `a longer readback containing the approved label is not a positive match`() {
+        // 尾噪「文件传输助手8」与真实会话「张三备份」在字符串层面同形；没有独立会话身份时
+        // 不能机械证明前者只是 OCR 噪声，所以必须 fail-closed，而不是用 contains 放行。
         assertEquals(
-            LabelMatchPolicy.Verdict.MATCH,
+            LabelMatchPolicy.Verdict.DIFFERENT,
             LabelMatchPolicy.verdict("文件传输助手", "文件传输助手8"),
         )
+        // 正匹配的边界是归一后逐位相同。
         assertEquals(
             LabelMatchPolicy.Verdict.MATCH,
-            LabelMatchPolicy.verdict("文件传输助手", "文件传输助手"),
+            LabelMatchPolicy.verdict("文件传输助手", "文 件·传输助手"),
         )
     }
 

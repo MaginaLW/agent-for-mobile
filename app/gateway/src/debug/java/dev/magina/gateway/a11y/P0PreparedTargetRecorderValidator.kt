@@ -37,37 +37,37 @@ internal object P0PreparedTargetRecorderValidator {
         result: P0WeChatPrepareResult,
         state: P0PreparedTargetFinalState,
         sensitiveSurfaceWords: List<String>,
+        expectedLabel: String = P0_FILE_TRANSFER_ASSISTANT,
     ): P0ValidatedPreparedTarget {
         val snapshot = state.snapshot
         val w = snapshot.screenWidth
         val h = snapshot.screenHeight
-        // 同 P0FocusProbeValidator / GatewayA11yService.performValidatedFocusProbe：这里的标题
-        // 只用于"证明身处文件传输助手会话"这一识别判断，不是点击目标，故用 contains + 识别级
-        // 门槛。真机实锤两个毛病都会各自独立卡死本校验：OCR 把标题识别成"文件传输助手8"
-        // （尾随多字符、置信度正常）使严格 == 永远不成立；置信度实测 0.59 亦过不了 0.65。
-        // 属 knowledge #15 同类的"改动遗漏"（contains 与识别级门槛两项决定均已获同意，
-        // 此处当时未同步），非新的设计取舍。目标身份的真正保障在于：确认卡向真人展示目标会话，
-        // 且下方 stableFreshProof/focusValid 仍逐项强校验 revision/窗口/焦点/bounds。
-        val exactTitle = snapshot.elements.any { element ->
-            val exact = element.text.trim().contains(P0_FILE_TRANSFER_ASSISTANT) ||
-                element.description.trim().contains(P0_FILE_TRANSFER_ASSISTANT)
-            val trusted = element.source == "a11y" ||
-                (element.source in setOf("ocr", "fused") &&
-                    element.confidence?.let {
-                        it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
-                    } == true)
-            exact && trusted && element.stage == P0ElementStage.TOOLBAR &&
-                validBounds(element.bounds, w, h) &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
-        }
+        // 持久化 prepared evidence 前不再另写 contains：与语义重建共用同一个 canonical label
+        // 与归一后精确策略。尾噪和真实更长会话机械不可分，必须一并 fail-closed。
+        val exactTitle = ConversationSurfacePolicy.conversationTitle(
+            elements = snapshot.elements,
+            frame = snapshot.frame,
+            expectedLabel = expectedLabel,
+        ) != null
         val focusedId = state.uiFocusedInputId
         val imeSessionId = state.imeFocusedInputId
-        val stableFreshProof = snapshot.captureRevision == snapshot.revision &&
+        // 与 Release 重建共用 capture 判据：尤其是 blocking_overlay 不能在 debug/release
+        // 两套源集里各写一份、以后只收紧一边。
+        val capture = FreshEvidenceCapture(
+            revision = snapshot.revision,
+            captureRevision = snapshot.captureRevision,
+            visionGeneration = snapshot.visionGeneration,
+            foregroundWindowId = snapshot.foregroundWindowId,
+            foregroundKnown = state.foreground.known,
+            foregroundPackage = state.foreground.packageName,
+            blockingOverlay = snapshot.blockingOverlay,
+        )
+        val stableFreshProof = FreshEvidenceRebuildGuard.captureProblems(
+            capture,
+            P0_WECHAT_PACKAGE,
+        ).isEmpty() &&
             snapshot.captureRevision == state.inputProofRevision &&
-            snapshot.foregroundWindowId >= 0 &&
-            snapshot.foregroundWindowId == state.inputProofWindowId &&
-            snapshot.visionGeneration > 0
+            snapshot.foregroundWindowId == state.inputProofWindowId
         // 身份来源在这里一次定死：a11y 侧给得出节点身份就必须走严格链，不允许降级。
         val identity = FocusIdentity.of(focusedId, imeSessionId)
         val imeIdentityValid = identity != null &&
@@ -99,12 +99,11 @@ internal object P0PreparedTargetRecorderValidator {
         }
         val identityValid = result.ready &&
             result.packageName == P0_WECHAT_PACKAGE &&
-            result.conversation == P0_FILE_TRANSFER_ASSISTANT &&
+            result.conversation == expectedLabel &&
             state.foreground.known && state.foreground.packageName == P0_WECHAT_PACKAGE &&
             imeIdentityValid && sourceValid
         if (
             !stableFreshProof || !identityValid || !exactTitle ||
-            snapshot.blockingOverlay ||
             P0FocusProbeValidator.hasSensitiveOrBlockingSurface(snapshot, sensitiveSurfaceWords)
         ) throw GatewayError(
             ErrorCode.E_STALE_REF,
@@ -113,7 +112,7 @@ internal object P0PreparedTargetRecorderValidator {
             retryable = false,
         )
         return P0ValidatedPreparedTarget(
-            label = P0_FILE_TRANSFER_ASSISTANT,
+            label = expectedLabel,
             packageName = P0_WECHAT_PACKAGE,
             identity = identity!!,
             bounds = state.focusedBounds.takeIf { identity.source == IdentitySource.A11Y },
@@ -124,8 +123,10 @@ internal object P0PreparedTargetRecorderValidator {
         result: P0WeChatPrepareResult,
         state: P0PreparedTargetFinalState,
         sensitiveSurfaceWords: List<String>,
+        expectedLabel: String = P0_FILE_TRANSFER_ASSISTANT,
         record: (P0ValidatedPreparedTarget) -> Unit,
-    ): P0ValidatedPreparedTarget = validate(result, state, sensitiveSurfaceWords).also(record)
+    ): P0ValidatedPreparedTarget =
+        validate(result, state, sensitiveSurfaceWords, expectedLabel).also(record)
 
     private fun validBounds(bounds: P0MacroRect, width: Int, height: Int): Boolean =
         width > 0 && height > 0 &&

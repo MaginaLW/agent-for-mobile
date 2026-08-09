@@ -164,42 +164,55 @@ data class ImeEditorContract(
 /** 网关进程内的 IME 桥：工具实现经它注入文本。 */
 object ImeBridge {
     private val sessionLock = Any()
-    @Volatile var active: Boolean = false
-        private set
-    @Volatile private var connection: (() -> InputConnection?)? = null
-    @Volatile var focusedInputId: String? = null
-        private set
+
+    /**
+     * 一次 `onStartInput` 的完整世代。元数据、契约与**当时那一个真实连接**只作为整体发布；
+     * 不能保存一个稍后再读 `currentInputConnection` 的 supplier，否则身份校验通过后可能取到
+     * 下一世代的连接，把动作送进另一个输入框。
+     */
+    private data class ActiveSession(
+        val focusedInputId: String?,
+        val packageName: String?,
+        val editorContract: ImeEditorContract?,
+        val connection: InputConnection?,
+    )
+
+    @Volatile
+    private var currentSession: ActiveSession? = null
+
+    val active: Boolean get() = currentSession != null
+    val focusedInputId: String? get() = currentSession?.focusedInputId
 
     /** 当前输入会话所属的 App 包名（来自 `EditorInfo.packageName`）。 */
-    @Volatile var sessionPackage: String? = null
-        private set
+    val sessionPackage: String? get() = currentSession?.packageName
 
     /** 当前输入框声明的 IME 契约；只读诊断用，决定 Enter 通道该怎么选。 */
-    @Volatile var editorContract: ImeEditorContract? = null
-        private set
+    val editorContract: ImeEditorContract? get() = currentSession?.editorContract
 
     internal fun startSession(
         focusedInputId: String?,
         sessionPackage: String?,
         editorContract: ImeEditorContract?,
-        connection: () -> InputConnection?,
+        connectionAtStart: () -> InputConnection?,
     ) {
         synchronized(sessionLock) {
-            this.connection = connection
-            this.focusedInputId = focusedInputId
-            this.sessionPackage = sessionPackage
-            this.editorContract = editorContract
-            active = true
+            // 新世代尚未完整捕获前，旧世代必须先失效。若 provider 抛错而保留旧会话，
+            // 后续 Enter 会把旧连接误当成当前输入框继续投递。
+            currentSession = null
+            // provider 只在建会话这一刻求值一次；快照里保存的是对象本身，不保存动态读取器。
+            val connection = connectionAtStart()
+            currentSession = ActiveSession(
+                focusedInputId = focusedInputId,
+                packageName = sessionPackage,
+                editorContract = editorContract,
+                connection = connection,
+            )
         }
     }
 
     internal fun finishSession() {
         synchronized(sessionLock) {
-            active = false
-            focusedInputId = null
-            sessionPackage = null
-            editorContract = null
-            connection = null
+            currentSession = null
         }
     }
 
@@ -208,20 +221,20 @@ object ImeBridge {
      * 返回 null 表示当前没有活的输入会话。
      */
     fun session(): ImeSessionIdentity? = synchronized(sessionLock) {
-        if (!active) return null
-        val id = focusedInputId ?: return null
-        ImeSessionIdentity(id, sessionPackage, connection?.invoke() != null)
+        val session = currentSession ?: return null
+        val id = session.focusedInputId ?: return null
+        ImeSessionIdentity(id, session.packageName, session.connection != null)
     }
 
-    private fun ic(): InputConnection? = if (active) connection?.invoke() else null
-
     /** 只暴露连接是否仍可用，不暴露 InputConnection 给宏状态机执行任意编辑动作。 */
-    fun hasInputConnection(): Boolean = ic() != null
+    fun hasInputConnection(): Boolean = synchronized(sessionLock) {
+        currentSession?.connection != null
+    }
 
     /** mode=append 追加；mode=replace 全选后覆盖。返回是否注入成功（不含内容验证——由调用方读回）。 */
     fun commit(text: String, mode: String): Boolean {
         synchronized(sessionLock) {
-            val c = ic() ?: return false
+            val c = currentSession?.connection ?: return false
             c.beginBatchEdit()
             try {
                 if (mode == "replace") {
@@ -240,8 +253,9 @@ object ImeBridge {
         text: String,
         fastPrecondition: () -> Boolean,
     ): Boolean = synchronized(sessionLock) {
-        if (!active || focusedInputId != expectedFocusedId || !fastPrecondition()) return false
-        val c = connection?.invoke() ?: return false
+        val session = currentSession ?: return false
+        if (session.focusedInputId != expectedFocusedId || !fastPrecondition()) return false
+        val c = session.connection ?: return false
         c.beginBatchEdit()
         try {
             c.performContextMenuAction(android.R.id.selectAll)
@@ -274,37 +288,94 @@ object ImeBridge {
     var lastEnterChannel: String? = null
         private set
 
-    fun enter(): Boolean {
+    /**
+     * 危险 Enter 的最终原子边界。
+     *
+     * 调用方完成页面/内容证据复核后，IME 仍可能在真正取得 [InputConnection] 前切到另一个 App
+     * 或另一个输入框。包名、会话 id、活性与连接必须在 [sessionLock] 内一起校验，并在同一临界区
+     * 完成唯一一次投递；否则就是 check/use 竞态。
+     */
+    fun enterIfCurrentSession(
+        expectedPackage: String,
+        expectedSessionId: String,
+        /** 非 null 就**只**走 a11y；返回 false 也不换 IME 再投，避免假阴性导致双发送。 */
+        a11yAction: (() -> Boolean)? = null,
+        /**
+         * 最终 fresh capture 后的 lock-free 快检；在 sessionLock 内、任何通道投递前只调用一次。
+         * 不得截图/OCR，也不得取得 service monitor，避免与 service → sessionLock 锁序形成 ABBA。
+         */
+        fastPrecondition: () -> Boolean,
+    ): Boolean =
         synchronized(sessionLock) {
-            val c = ic() ?: run { lastEnterChannel = "no_input_connection"; return false }
-            val contract = editorContract
-            // 契约缺失时只能退到裸按键；有契约就按它的宣告走（见 ImeEditorContract.enterStrategy）。
-            if (contract != null && contract.enterStrategy == EnterStrategy.EDITOR_ACTION) {
-                lastEnterChannel = "editor_action:${contract.actionName()}"
-                return c.performEditorAction(contract.actionCode)
+            val session = currentSession
+            if (session == null) {
+                lastEnterChannel = "no_active_session"
+                return@synchronized false
             }
-            lastEnterChannel = if (contract == null) "key_event:no_contract" else "key_event"
-            // 规范的**软键盘**按键事件：deviceId 用 VIRTUAL_KEYBOARD，并置 FLAG_SOFT_KEYBOARD |
-            // FLAG_KEEP_TOUCH_MODE。旧实现用 5 参构造，deviceId=0、flags=0、source 未知——
-            // 那不是软键盘该有的形态，接收方按 flags 或来源过滤时会当噪声丢掉。
-            // 这是 AOSP 输入法（LatinIME.sendDownUpKeyEvent）的标准写法。
-            val now = SystemClock.uptimeMillis()
-            fun enterKey(action: Int) = KeyEvent(
-                now, now, action, KeyEvent.KEYCODE_ENTER, 0, 0,
-                KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
-                KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE,
-            )
-            return c.sendKeyEvent(enterKey(KeyEvent.ACTION_DOWN)) &&
-                c.sendKeyEvent(enterKey(KeyEvent.ACTION_UP))
+            if (session.packageName != expectedPackage) {
+                lastEnterChannel = "session_package_mismatch"
+                return@synchronized false
+            }
+            if (session.focusedInputId != expectedSessionId) {
+                lastEnterChannel = "session_id_mismatch"
+                return@synchronized false
+            }
+            val c = session.connection ?: run {
+                lastEnterChannel = "no_input_connection"
+                return@synchronized false
+            }
+            val current = try {
+                fastPrecondition()
+            } catch (_: Exception) {
+                false
+            }
+            if (!current) {
+                lastEnterChannel = "fresh_surface_stale"
+                return@synchronized false
+            }
+            // 选中的唯一通道可能“动作已被对端消费、返回路径却抛错”。这种异常绝不能外泄到
+            // 通用 E_INTERNAL（可重试），也不能触发第二通道；统一返回 false，由 UiTools 映射为
+            // non-retryable E_VERIFY_FAIL，只允许只读复核。
+            try {
+                if (a11yAction != null) {
+                    lastEnterChannel = "a11y_ime_enter"
+                    a11yAction()
+                } else {
+                    sendEnterLocked(c, session.editorContract)
+                }
+            } catch (_: Exception) {
+                false
+            }
         }
+
+    /** [sessionLock] 已由调用方持有；按当前会话同时锁住的编辑器契约只投递一次。 */
+    private fun sendEnterLocked(c: InputConnection, contract: ImeEditorContract?): Boolean {
+        // 契约缺失时只能退到裸按键；有契约就按它的宣告走（见 ImeEditorContract.enterStrategy）。
+        if (contract != null && contract.enterStrategy == EnterStrategy.EDITOR_ACTION) {
+            lastEnterChannel = "editor_action:${contract.actionName()}"
+            return c.performEditorAction(contract.actionCode)
+        }
+        lastEnterChannel = if (contract == null) "key_event:no_contract" else "key_event"
+        // 规范的**软键盘**按键事件：deviceId 用 VIRTUAL_KEYBOARD，并置 FLAG_SOFT_KEYBOARD |
+        // FLAG_KEEP_TOUCH_MODE。旧实现用 5 参构造，deviceId=0、flags=0、source 未知——
+        // 那不是软键盘该有的形态，接收方按 flags 或来源过滤时会当噪声丢掉。
+        // 这是 AOSP 输入法（LatinIME.sendDownUpKeyEvent）的标准写法。
+        val now = SystemClock.uptimeMillis()
+        fun enterKey(action: Int) = KeyEvent(
+            now, now, action, KeyEvent.KEYCODE_ENTER, 0, 0,
+            KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+            KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE,
+        )
+        return c.sendKeyEvent(enterKey(KeyEvent.ACTION_DOWN)) &&
+            c.sendKeyEvent(enterKey(KeyEvent.ACTION_UP))
     }
 
     /** 当前输入框契约的一行摘要；无会话时为 null。供危险动作的失败信封带诊断位。 */
-    fun editorContractSummary(): String? = editorContract?.describe()
+    fun editorContractSummary(): String? = currentSession?.editorContract?.describe()
 
     fun deleteBack(count: Int): Boolean {
         synchronized(sessionLock) {
-            val c = ic() ?: return false
+            val c = currentSession?.connection ?: return false
             return c.deleteSurroundingText(count, 0)
         }
     }

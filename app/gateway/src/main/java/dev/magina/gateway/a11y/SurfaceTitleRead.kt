@@ -1,5 +1,6 @@
 package dev.magina.gateway.a11y
 
+import dev.magina.gateway.core.TextNorm
 import org.json.JSONObject
 
 /**
@@ -40,6 +41,12 @@ internal enum class SurfaceTitleOutcome {
 
     /** 标题带里有元素，但没有一个过得了识别门槛。 */
     ALL_REJECTED,
+
+    /** fresh snapshot 明确报告有遮挡；遮挡上的 OCR 即使命中也不能证明底层会话。 */
+    BLOCKING_OVERLAY,
+
+    /** 截图 revision / 窗口 / 前台包 / vision generation 任一 proof 缺失或自相矛盾。 */
+    INVALID_PROOF,
     ;
 
     /** 审计 note 里用的短名。**不含 `;` `,` `=`**——它要拼进 `safetyNote` 那条分号串。 */
@@ -64,6 +71,12 @@ internal data class SurfaceTitleAttempt(
     val bestRejectedConfidence: Double?,
     /** `snapshot()` 自己写的降级说明（融合失败原因）。**可能含任意异常文本，不进 note。** */
     val note: String,
+    /** 这一帧的完整 fresh identity；即使无效/有遮挡也保留给诊断，不能只把标题文字拿走。 */
+    val capture: FreshEvidenceCapture?,
+    /** 与 [capture] 同一 active fresh-capture 临界区内读取的 focused input proof。 */
+    val inputProof: FreshPreparedInputProof? = null,
+    /** 同一张 capture Bitmap 上的输入栏 OCR；a11y 文本可读时不需要，保持 null。 */
+    val inputOcrReadback: String? = null,
     val title: SurfaceElement?,
     /**
      * 标题带里的全部候选，逐个带"为什么"。**含界面文本，只进错误信息，不进审计 note。**
@@ -106,6 +119,24 @@ internal data class SurfaceTitleRead(
     val waitedMs: Long,
 ) {
     val title: SurfaceElement? get() = attempts.lastOrNull()?.title
+
+    /** 只有完整 RESOLVED 才产出不可拆开的「标题 + capture proof」束。 */
+    val surface: FreshEvidenceSurface?
+        get() {
+            val last = attempts.lastOrNull()?.takeIf { it.outcome == SurfaceTitleOutcome.RESOLVED } ?: return null
+            val title = last.title ?: return null
+            val capture = last.capture ?: return null
+            val canonical = TextNorm.label(title.text).ifEmpty { TextNorm.label(title.description) }
+            return FreshEvidenceSurface(capture, canonical, title.source)
+        }
+
+    val bundle: FreshEvidenceReadBundle?
+        get() {
+            val surface = surface ?: return null
+            val last = attempts.lastOrNull() ?: return null
+            val input = last.inputProof ?: return null
+            return FreshEvidenceReadBundle(surface, input, last.inputOcrReadback)
+        }
 
     /** 第几次读到的（1 起）；没读到是 0。 */
     val resolvedAt: Int get() = attempts.indexOfFirst { it.outcome == SurfaceTitleOutcome.RESOLVED } + 1
@@ -151,6 +182,8 @@ internal data class SurfaceTitleRead(
             SurfaceTitleOutcome.ALL_REJECTED ->
                 "标题带里有 ${last.bandElements} 个元素，但都没过识别门槛" +
                     (last.bestRejectedConfidence?.let { "（最高置信度 $it）" } ?: "")
+            SurfaceTitleOutcome.BLOCKING_OVERLAY -> "fresh 截图存在遮挡浮层，标题不可用于重建"
+            SurfaceTitleOutcome.INVALID_PROOF -> "fresh 截图的 revision、窗口、前台包或截图世代 proof 无效"
             SurfaceTitleOutcome.RESOLVED -> "读到了"
         }
         val trend = if (sameAll) "${attempts.size} 次尝试结论相同，不是时机问题" else "各次结论不同，像时机问题"
@@ -210,7 +243,11 @@ internal object SurfaceTitleReadPolicy {
     }
 
     fun shouldRetry(attempt: SurfaceTitleAttempt, attemptsSoFar: Int, elapsedMs: Long): Boolean =
-        attempt.outcome != SurfaceTitleOutcome.RESOLVED &&
+        attempt.outcome !in setOf(
+            SurfaceTitleOutcome.RESOLVED,
+            SurfaceTitleOutcome.BLOCKING_OVERLAY,
+            SurfaceTitleOutcome.INVALID_PROOF,
+        ) &&
             attemptsSoFar < MAX_ATTEMPTS &&
             elapsedMs + RETRY_INTERVAL_MS < BUDGET_MS
 
@@ -234,6 +271,25 @@ internal object SurfaceTitleReadPolicy {
             bandElements = 0,
             bestRejectedConfidence = null,
             note = "",
+            capture = null,
+            title = null,
+        )
+        val capture = captureOf(raw)
+        val proofProblems = FreshEvidenceRebuildGuard.captureProblems(capture)
+        if (capture.blockingOverlay || proofProblems.isNotEmpty()) return SurfaceTitleAttempt(
+            outcome = if (capture.blockingOverlay) {
+                SurfaceTitleOutcome.BLOCKING_OVERLAY
+            } else {
+                SurfaceTitleOutcome.INVALID_PROOF
+            },
+            elapsedMs = elapsedMs,
+            fusion = raw.optString("fusion"),
+            fgElements = raw.optInt("fg_elements", -1),
+            bandElements = 0,
+            bestRejectedConfidence = null,
+            note = raw.optString("note"),
+            capture = capture,
+            // 遮挡上的文字既不参与标题选择，也不进候选日志，避免它给底层会话背书。
             title = null,
         )
         val frame = SurfaceFrame.of(raw, screenWidth, screenHeight)
@@ -260,11 +316,23 @@ internal object SurfaceTitleReadPolicy {
             bandElements = candidates.size,
             bestRejectedConfidence = rejectedConfidence,
             note = raw.optString("note"),
+            capture = capture,
             title = title,
             candidates = candidates,
             topCut = ConversationSurfacePolicy.topCutCandidates(elements, frame),
         )
     }
+
+    fun captureOf(raw: JSONObject): FreshEvidenceCapture = FreshEvidenceCapture(
+        revision = raw.optLong("revision", Long.MIN_VALUE),
+        captureRevision = raw.optLong("capture_revision", Long.MIN_VALUE),
+        visionGeneration = raw.optLong("vision_generation", 0),
+        foregroundWindowId = raw.optInt("foreground_window_id", -1),
+        foregroundKnown = raw.optBoolean("foreground_known", false),
+        foregroundPackage = raw.optString("foreground_package"),
+        // 字段缺失也必须 fail closed；旧快照不能冒充「明确没有遮挡」。
+        blockingOverlay = raw.optBoolean("blocking_overlay", true),
+    )
 
     /** `snapshot()` 里那个 `fusion` 字段表示"这一帧跑过识别"的取值。 */
     const val FUSION_OCR = "ocr"

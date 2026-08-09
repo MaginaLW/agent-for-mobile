@@ -3,6 +3,7 @@ package dev.magina.gateway.mcp
 import android.graphics.Bitmap
 import android.os.SystemClock
 import dev.magina.gateway.Gateway
+import dev.magina.gateway.a11y.FreshEvidenceRebuildGuard
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ApprovalIntent
@@ -14,6 +15,7 @@ import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.ForegroundWaitTrace
 import dev.magina.gateway.core.IntentApproval
 import dev.magina.gateway.core.IntentApprovalClocks
+import dev.magina.gateway.core.InputCommitEvidenceStore
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
@@ -21,6 +23,7 @@ import dev.magina.gateway.core.Level
 import dev.magina.gateway.core.SafetyContext
 import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.RiskTier
+import dev.magina.gateway.core.PreparedTargetEvidenceStore
 import dev.magina.gateway.core.SafetyDecision
 import dev.magina.gateway.core.StaleReconfirmGuard
 import dev.magina.gateway.overlay.ConfirmNotificationRequest
@@ -37,6 +40,8 @@ import dev.magina.gateway.overlay.ConfirmCardTarget
 import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
 import dev.magina.gateway.ocr.OcrEngine
+import dev.magina.gateway.ime.ImeBridge
+import dev.magina.gateway.ime.ImeSessionIdentity
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
@@ -60,6 +65,33 @@ class ToolSpec(
 
 /** 调用结果：文本信封 + 可选图片（screen_capture 用 MCP image content 回图，不塞 JSON）。 */
 class ToolResult(val envelope: JSONObject, val imageBase64: String? = null, val imageMime: String = "image/png")
+
+/** 重建入口的纯会话归属检查；null 表示可继续，非 null 必须 fail-closed。 */
+internal fun rebuildImeSessionFailure(
+    intent: ApprovalIntent,
+    session: ImeSessionIdentity?,
+    expectedSessionId: String? = null,
+): EvidenceRebuild.Unverified? = when {
+    session == null -> EvidenceRebuild.Unverified("重建时没有活的 IME 输入会话")
+    !session.connected -> EvidenceRebuild.Unverified("重建时 IME 输入会话连接已断")
+    !session.belongsTo(intent.targetPackage) -> EvidenceRebuild.Unverified(
+        "重建时 IME 输入会话不属于意图目标包：${intent.targetPackage} → " +
+            (session.packageName ?: "未知"),
+    )
+    expectedSessionId != null && session.id != expectedSessionId -> EvidenceRebuild.Unverified(
+        "重建期间 IME 输入会话已切换：$expectedSessionId → ${session.id}",
+    )
+    else -> null
+}
+
+/** 重建有任一入口早退时也不能让确认前的旧双证据继续存活。 */
+internal fun clearEvidenceAtRebuildEntry(
+    prepared: PreparedTargetEvidenceStore,
+    input: InputCommitEvidenceStore,
+) {
+    prepared.clear()
+    input.clear()
+}
 
 object ToolRegistry {
 
@@ -463,75 +495,89 @@ object ToolRegistry {
      * 而那条失败与今天长得一模一样，最难发现。
      */
     private fun rebuildApprovedEvidence(call: CallScope, intent: ApprovalIntent): EvidenceRebuild {
+        // 必须在 a11y/IME/title 的所有早退之前清：intent 已是确认时的不可变副本，后续只允许
+        // 成功事务重新发布两份新证据，任何失败都应留下零份。
+        clearEvidenceAtRebuildEntry(Gateway.preparedTargetEvidence, Gateway.inputCommitEvidence)
         val a11y = GatewayA11yService.instance
             ?: return EvidenceRebuild.Unverified("a11y 未开启，证据重建通道不可用")
+        // 一次原子读取同时取得 active/package/id/connection 状态；包含 IME 身份的重建必须先证明
+        // 会话属于意图目标包，并从此沿用这一份 session.id，不能再拆读全局字段拼另一个世代。
+        val imeSession = ImeBridge.session()
+        rebuildImeSessionFailure(intent, imeSession)?.let { return it }
         // **读成功也要落痕**：只在失败时记的话，"第一次就读到"与"重试三次才读到"分不开，
         // 下一次它抖起来照样两眼一抹黑（`foreground_wait` 已经上过这一课）。
         val read = a11y.readSurfaceTitle()
         call.safetyNote += ";title_read=${read.describe()}"
-        val title = read.title
-        val focused = UiTools.focusedInputSnapshot(a11y)
-        val identity = focused.identity
-            ?: return EvidenceRebuild.Unverified("重建时拿不到焦点输入身份，无法把证据落回")
-        // 内容通道：a11y 能读到精确文本就按精确文本比；微信这条链读不到，退 OCR 输入栏读回。
-        val a11yText = focused.readableText
-        val contentChannel = if (a11yText != null) {
-            EvidenceRebuildPolicy.CHANNEL_A11Y
-        } else {
-            EvidenceRebuildPolicy.CHANNEL_OCR
-        }
-        val readback = a11yText ?: runCatching {
-            a11y.ocrReadInputBarRegion(focused.bounds).text
-        }.getOrNull()
-        // 标题通道：`fused` 一律按 OCR 算——它的文字有可能来自识别侧，按 a11y 的逐位相等去要求
-        // 它会诬告；反过来只是把这一项比得松一点，而"是不是同一个会话"还有包名与内容两道。
-        val surfaceChannel = if (title?.source == "a11y") {
-            EvidenceRebuildPolicy.CHANNEL_A11Y
-        } else {
-            EvidenceRebuildPolicy.CHANNEL_OCR
-        }
-        val verdict = EvidenceRebuildPolicy.judge(
-            intent = intent,
-            readback = readback,
-            channel = contentChannel,
-            surfaceLabel = title?.let { it.text.ifBlank { it.description } },
-            normalize = OcrEngine::norm,
-            surfaceChannel = surfaceChannel,
-        )
-        // 标题没读回来时，**把为什么读不回来接在那句话后面**。判据本身一个字不动：
-        // 这里只补事实，不改结论。接的条件严格限定在"确实是标题没读到"，否则内容侧的
-        // Unverified 会被扣上一顶跟它无关的帽子——那是另一种形态的误导。
-        if (title == null && verdict is EvidenceRebuild.Unverified) {
-            return EvidenceRebuild.Unverified("${verdict.reason}｜标题读取：${read.detail()}")
-        }
-        if (verdict !is EvidenceRebuild.Rebuilt) return verdict
+        val initialBundle = read.bundle
+            ?: return EvidenceRebuild.Unverified("目标会话标题读不回来｜标题读取：${read.detail()}")
 
-        val sha256 = intent.contentSha256
-            ?: return EvidenceRebuild.Unverified("意图没有锁定内容，无从落回输入证据")
-        val bounds = focused.bounds?.let(::boundsString)
-        if (!FocusIdentity.boundsConsistent(identity.source, bounds)) {
-            return EvidenceRebuild.Unverified(
-                "重建时几何与身份来源不一致（${identity.describe()}），拒绝落证据",
-            )
-        }
-        return runCatching {
-            Gateway.preparedTargetEvidence.record(
-                label = intent.targetLabel,
-                packageName = intent.targetPackage,
-                identity = identity,
-                bounds = bounds,
-            )
-            Gateway.inputCommitEvidence.rebindApproved(
-                sha256 = sha256,
-                length = intent.contentLength ?: verdict.length,
-                preview = intent.contentPreview.orEmpty(),
-                normalizedText = intent.contentNormalized.orEmpty(),
-                identity = identity,
-            )
-            verdict
-        }.getOrElse { error ->
-            EvidenceRebuild.Unverified("重建判过了但证据落不回去：${error.message.orEmpty()}")
-        }
+        return a11y.rebuildEvidenceWithFreshGuard(
+            initialBundle = initialBundle,
+            expectedPackage = intent.targetPackage,
+            expectedSessionId = imeSession!!.id,
+            readEvidence = { bundle ->
+                val surface = bundle.surface
+                val inputProof = bundle.input
+                val identity = FreshEvidenceRebuildGuard.identityOf(inputProof)
+                    ?: return@rebuildEvidenceWithFreshGuard EvidenceRebuild.Unverified(
+                        "重建时拿不到焦点输入身份，无法把证据落回",
+                    )
+                val bounds = FreshEvidenceRebuildGuard.boundsStringOf(inputProof)
+                if (!FocusIdentity.boundsConsistent(identity.source, bounds)) {
+                    return@rebuildEvidenceWithFreshGuard EvidenceRebuild.Unverified(
+                        "重建时几何与身份来源不一致（${identity.describe()}），拒绝落证据",
+                    )
+                }
+
+                // 内容与最终标题来自同一 fresh bundle/Bitmap；a11y 精确文本不可得才用同图输入栏 OCR。
+                val a11yText = inputProof.readableText
+                val contentChannel = if (a11yText != null) {
+                    EvidenceRebuildPolicy.CHANNEL_A11Y
+                } else {
+                    EvidenceRebuildPolicy.CHANNEL_OCR
+                }
+                val readback = a11yText ?: bundle.inputOcrReadback
+                val surfaceChannel = if (surface.source == "a11y") {
+                    EvidenceRebuildPolicy.CHANNEL_A11Y
+                } else {
+                    EvidenceRebuildPolicy.CHANNEL_OCR
+                }
+                val verdict = EvidenceRebuildPolicy.judge(
+                    intent = intent,
+                    readback = readback,
+                    channel = contentChannel,
+                    surfaceLabel = surface.label,
+                    normalize = OcrEngine::norm,
+                    surfaceChannel = surfaceChannel,
+                )
+                if (verdict is EvidenceRebuild.Rebuilt && intent.contentSha256 == null) {
+                    EvidenceRebuild.Unverified("意图没有锁定内容，无从落回输入证据")
+                } else {
+                    verdict
+                }
+            },
+            publish = { verdict, inputProof ->
+                val identity = requireNotNull(FreshEvidenceRebuildGuard.identityOf(inputProof))
+                val bounds = FreshEvidenceRebuildGuard.boundsStringOf(inputProof)
+                Gateway.preparedTargetEvidence.record(
+                    label = intent.targetLabel,
+                    packageName = intent.targetPackage,
+                    identity = identity,
+                    bounds = bounds,
+                )
+                Gateway.inputCommitEvidence.rebindApproved(
+                    sha256 = requireNotNull(intent.contentSha256),
+                    length = intent.contentLength ?: verdict.length,
+                    preview = intent.contentPreview.orEmpty(),
+                    normalizedText = intent.contentNormalized.orEmpty(),
+                    identity = identity,
+                )
+            },
+            rollback = {
+                Gateway.preparedTargetEvidence.clear()
+                Gateway.inputCommitEvidence.clear()
+            },
+        )
     }
 
     /** 锁屏那一行里的动作短语；不含任何输入内容。 */

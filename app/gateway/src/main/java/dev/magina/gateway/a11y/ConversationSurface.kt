@@ -241,9 +241,9 @@ internal object ConversationSurfacePolicy {
      * "现在是不是 [expectedLabel] 这个会话页"。宏原来的 `conversationTitle` 就是它，
      * 只是把写死的 `文件传输助手` 换成参数——生产要比的是意图里那份 `targetLabel`。
      *
-     * 宽松匹配的理由原样保留：2026-07-24 真机实锤 OCR 把标题识别成「文件传输助手8」
-     * （尾随多识别出一个字符，置信度完全正常），严格相等在这类场景下永远漏判。
-     * 现在这条宽松规则由 [LabelMatchPolicy] 提供，**与执行前重建时用的是同一条**。
+     * 字符归一由 [LabelMatchPolicy] 提供，**与执行前重建时用的是同一条**。归一之后必须精确
+     * 相等：`文件传输助手8` 可能是 OCR 尾噪，也可能是真实的更长会话名；没有独立会话身份时
+     * 无法机械区分，故识别失败而不是用无界 `contains` 放行。
      */
     fun conversationTitle(
         elements: List<SurfaceElement>,
@@ -252,7 +252,7 @@ internal object ConversationSurfacePolicy {
     ): SurfaceElement? {
         if (frame.screenWidth <= 0 || frame.screenHeight <= 0) return null
         return elements.firstOrNull { element ->
-            looselyLabeled(element, expectedLabel) &&
+            canonicalLabelMatches(element, expectedLabel) &&
                 trustedForRecognition(element, frame) &&
                 element.stage == SurfaceStage.TOOLBAR &&
                 inTitleBand(element, frame)
@@ -317,9 +317,9 @@ internal object ConversationSurfacePolicy {
         }
     }
 
-    private fun looselyLabeled(element: SurfaceElement, expectedLabel: String): Boolean =
-        LabelMatchPolicy.matches(expectedLabel, element.text) ||
-            LabelMatchPolicy.matches(expectedLabel, element.description)
+    /** text 非空就独占标题身份；只有 text 归一后为空才退 description，冲突不能相互“救活”。 */
+    private fun canonicalLabelMatches(element: SurfaceElement, expectedLabel: String): Boolean =
+        LabelMatchPolicy.matches(expectedLabel, labelTextOf(element))
 
     /**
      * 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%，**且整体在状态栏下沿之下**。

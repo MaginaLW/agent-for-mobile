@@ -29,6 +29,7 @@ class ConversationSurfacePolicyTest {
 
     private fun element(
         text: String = "文件传输助手",
+        description: String = "",
         source: String = "ocr",
         confidence: Double? = 0.55,
         centerX: Int = screenWidth / 2,
@@ -43,7 +44,7 @@ class ConversationSurfacePolicyTest {
             ref = "e1",
             role = role,
             text = text,
-            description = "",
+            description = description,
             bounds = bounds,
             source = source,
             confidence = confidence,
@@ -131,11 +132,12 @@ class ConversationSurfacePolicyTest {
         assertNull(ConversationSurfacePolicy.toolbarTitle(listOf(element()), zeroFrame))
     }
 
-    // —— 宽松匹配：这是宏那条真机实锤的规则，下沉之后一字未改 ——
+    // —— 收件人标签：只接受明列字符归一后的精确匹配 ——
 
     @Test
-    fun `ocr noise on the tail still recognizes the conversation`() {
-        assertNotNull(
+    fun `ambiguous OCR tail never recognizes a conversation`() {
+        // 尾噪与真实的更长会话名无法机械区分；识别侧必须和执行前重建一起 fail-closed。
+        assertNull(
             ConversationSurfacePolicy.conversationTitle(
                 listOf(element(text = "文件传输助手8")), frame, "文件传输助手",
             ),
@@ -147,6 +149,43 @@ class ConversationSurfacePolicyTest {
         assertNull(
             ConversationSurfacePolicy.conversationTitle(
                 listOf(element(text = "微信")), frame, "文件传输助手",
+            ),
+        )
+    }
+
+    @Test
+    fun `letter O and digit zero conversation titles never alias`() {
+        assertNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(element(text = "A0")), frame, "AO",
+            ),
+        )
+        assertNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(element(text = "AO")), frame, "A0",
+            ),
+        )
+    }
+
+    @Test
+    fun `non empty text is canonical and an exact description cannot rescue its conflict`() {
+        val conflicting = element(
+            text = "张三备份",
+            description = "张三",
+        )
+
+        assertNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(conflicting), frame, "张三",
+            ),
+        )
+    }
+
+    @Test
+    fun `empty normalized text falls back to the description as the canonical label`() {
+        assertNotNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(element(text = " · ", description = "张 三")), frame, "张三",
             ),
         )
     }
@@ -164,7 +203,7 @@ class ConversationSurfacePolicyTest {
 
     @Test
     fun `both entries agree because they share one implementation`() {
-        val elements = listOf(element(text = "文件传输助手8"))
+        val elements = listOf(element(text = "文 件·传输助手"))
         val recognized =
             ConversationSurfacePolicy.conversationTitle(elements, frame, "文件传输助手")
         val read = ConversationSurfacePolicy.toolbarTitle(elements, frame)

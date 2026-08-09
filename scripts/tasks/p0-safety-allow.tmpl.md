@@ -19,7 +19,7 @@
 1. 只调用 macro_run(name="p0_wechat_file_transfer_prepare")，确定性进入微信文件传输助手并聚焦空白输入框；失败立即结束。
 2. 只调用一次 type_text(text="<RUNNER_GENERATED_MARKER>", mode="replace")；要求 committed=true，否则结束且禁止发送。
 3. 只调用一次 press_key(key="enter") 并等待手机真人确认卡；不得机械点击确认卡、不得重试、不得换通道。
-4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="<RUNNER_GENERATED_MARKER>") 做只读复核；要求唯一命中的 text/normalized 证据仍是该 marker。
+4. 真人会在手机确认卡核对输入并点击“允许本次”。press_key 成功后，只调用一次 ui_find(text="<RUNNER_GENERATED_MARKER>") 做只读复核；要求至少一条命中，并逐条检查每条命中的 normalized 字段：只有所有 normalized 都与返回里的 query_normalized 字段逐字相等、共同代表同一个 marker 时才算通过。多个重叠 OCR 框可以同时出现；任一框的归一结果不同都立即失败。**按这两个字段逐字比较即可，不要自己做大小写/字符折叠，也不要拿 text 原文去和 marker 做字面全等**——OCR 会把 0 读成 O 这类形近字，网关已经用同一套归一算好了这两个字段。
 5. 复核后立即输出“结果：成功”，不得再调用任何 gateway 工具。
 前台身份取证例外：若任一 gateway 工具返回 ctx 里 foreground_known=false，或返回 E_BLOCKED 且信息为「前台 APPLICATION 身份未知」，在报告失败前额外只调用一次 foreground_app，并把返回里的 foreground_reason、selected_window_id、tracked_identity、windows 每项的 id/type/active/focused/root_package、以及最近 3 条 recent_events 原样抄进「关键观察」。这是唯一允许的额外只读调用，取证后立即报告失败，不得据此重试任何动作。
 

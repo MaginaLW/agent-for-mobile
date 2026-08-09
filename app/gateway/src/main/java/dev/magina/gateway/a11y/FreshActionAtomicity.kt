@@ -155,4 +155,14 @@ internal data class FreshPreparedInputProof(
     val top: Int,
     val right: Int,
     val bottom: Int,
-)
+    /** 该输入 proof 绑定的真实截图世代；不能拿另一次截图的标题给它背书。 */
+    val visionGeneration: Long = 0,
+    /** null = a11y 不可读；空串 = 明确读到空输入。只驻留内存，不进入日志/信封。 */
+    val readableText: String? = null,
+) {
+    override fun toString(): String =
+        "FreshPreparedInputProof(captureRevision=$captureRevision, foregroundWindowId=$foregroundWindowId, " +
+            "visionGeneration=$visionGeneration, nodePresent=$nodePresent, nodeId=$nodeId, " +
+            "imeSessionId=$imeSessionId, focused=$focused, editable=$editable, " +
+            "bounds=[$left,$top][$right,$bottom], readable=<${readableText?.length ?: -1}字符>)"
+}
