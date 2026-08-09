@@ -307,6 +307,35 @@ class ConversationSurfacePolicyTest {
     }
 
     @Test
+    fun `a cut element and an element that was never produced are different facts`() {
+        // 2026-08-09 第五跑卡在这里：`band` 少一个时，"被状态栏那一刀切掉了"与
+        // "这一帧压根没识出它"**在落盘证据上分不开**——而前者说明闸门在干活、
+        // 后者说明闸门根本没被考到。**一条判据以"跑绿了"的姿态挂着却从没被考到**，
+        // 正是本仓吃亏最多的形态。
+        val cutFrame = frame.copy(systemTopInset = 120)
+        val speedAbove = statusBarSpeed().copy(foregroundWindow = true)
+
+        // ① 上面确实有东西，被切掉了。
+        val cut = ConversationSurfacePolicy.topCutCandidates(listOf(speedAbove), cutFrame)
+        assertEquals(1, cut.size)
+        assertEquals(SurfaceCandidate.REJECT_TOP_CUT, cut[0].rejectedBy)
+        // **它不在候选表里**：几何那一刀发生在候选枚举之前，所以两张表必须分开看。
+        assertEquals(0, ConversationSurfacePolicy.titleBandCandidates(listOf(speedAbove), cutFrame).size)
+
+        // ② 什么都没有：两张表都空。这才是"这一帧没产出它"。
+        assertEquals(0, ConversationSurfacePolicy.topCutCandidates(emptyList(), cutFrame).size)
+        assertEquals(0, ConversationSurfacePolicy.titleBandCandidates(emptyList(), cutFrame).size)
+    }
+
+    @Test
+    fun `the real title is never counted as cut`() {
+        // 切掉那一栏只能收"本来会是候选、只差状态栏这一刀"的元素。把正常标题也算进去，
+        // 这一栏就会永远非零，于是它作为信号的价值当场归零（恒真判据同族）。
+        val title = element(text = "文件传输助手")
+        assertEquals(0, ConversationSurfacePolicy.topCutCandidates(listOf(title), frame.copy(systemTopInset = 40)).size)
+    }
+
+    @Test
     fun `a snapshot without the new fields keeps a11y elements out rather than trusting them`() {
         // 旧 APK 的快照没有 fg_window：缺字段一律按"不属于前台应用窗口"处理。
         // **方向必须是 fail-closed**——反过来就等于让旧快照冒充可信，而那正是今天这个伤害。

@@ -551,7 +551,14 @@ class GatewayA11yService : AccessibilityService() {
             attempts += attempt
             val elapsed = SystemClock.elapsedRealtime() - started
             if (!SurfaceTitleReadPolicy.shouldRetry(attempt, attempts.size, elapsed)) {
-                return SurfaceTitleRead(attempts, elapsed)
+                val read = SurfaceTitleRead(attempts, elapsed)
+                // **成功路径也要留下候选清单**（2026-08-09 第五跑逼出来的）：清单原先只随
+                // 失败信息产出，于是一条"读到了、带里只剩 1 个候选"的成功跑**分不出**
+                // 那个状态栏元素是被几何切掉了、还是这一帧压根没识出它。
+                // 计数（`sysrej` / `topcut`）走审计 note 进 manifest；文本清单只落 logcat
+                // ——它含界面文字，不该混进那条分号串，也不该进大脑看得到的信封。
+                Log.i(TAG, "surface title read: ${read.describe()}${read.candidateDump()}")
+                return read
             }
             Thread.sleep(SurfaceTitleReadPolicy.RETRY_INTERVAL_MS)
         }

@@ -180,7 +180,7 @@ class SurfaceTitleReadPolicyTest {
         )
         assertEquals(
             "attempts=2,waited_ms=1420,result=resolved,resolved_at=2," +
-                "trail=no_ocr+resolved,fg=0+0,band=0+1,sysrej=0+0,picked=ocr",
+                "trail=no_ocr+resolved,fg=0+0,band=0+1,sysrej=0+0,topcut=0+0,picked=ocr",
             read.describe(),
         )
     }

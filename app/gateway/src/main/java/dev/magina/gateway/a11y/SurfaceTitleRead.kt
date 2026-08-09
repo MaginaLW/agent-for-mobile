@@ -70,6 +70,11 @@ internal data class SurfaceTitleAttempt(
      * 存在的理由见 [ConversationSurfacePolicy.titleBandCandidates]。
      */
     val candidates: List<SurfaceCandidate> = emptyList(),
+    /**
+     * 被状态栏下沿切掉的那些（见 [ConversationSurfacePolicy.topCutCandidates]）。
+     * **它们不在 [candidates] 里**——几何那一刀发生在候选枚举之前。
+     */
+    val topCut: List<SurfaceCandidate> = emptyList(),
 ) {
     /**
      * 带内**因为不属于前台应用窗口**而被挡掉的候选数——也就是"状态栏挤进标题带了吗"。
@@ -79,6 +84,15 @@ internal data class SurfaceTitleAttempt(
      */
     val systemWindowRejects: Int
         get() = candidates.count { it.rejectedBy == SurfaceCandidate.REJECT_WINDOW }
+
+    /**
+     * **上面本来有东西、被状态栏那一刀切掉了**的个数。
+     *
+     * 这一栏与 [systemWindowRejects] 各自对应一道闸门，**而它解决的是另一种分不开**：
+     * `band` 少一个时，`topcut>0` = 切掉了，`topcut=0` = 这一帧根本没产出它。
+     * 2026-08-09 第五跑就卡在这个分不开上——**判据以"跑绿了"的姿态挂着，却从没被考到**。
+     */
+    val topCutRejects: Int get() = topCut.size
 }
 
 /**
@@ -111,6 +125,9 @@ internal data class SurfaceTitleRead(
         // "带里混进了几个别的窗口的元素"。纯数字，可以进 note；而它正是第四跑那一帧
         // 唯一需要看的数——**问题不在识别质量，在带里站着状态栏**。
         append(",sysrej=").append(attempts.joinToString("+") { it.systemWindowRejects.toString() })
+        // "上面本来有东西、被状态栏那一刀切掉了几个"。**它与 sysrej 分别对应两道闸门**，
+        // 而它解决的是另一种分不开：band 少一个时，切掉了 vs 这一帧根本没产出它。
+        append(",topcut=").append(attempts.joinToString("+") { it.topCutRejects.toString() })
         // 最后被选中的那个来自哪条通道。它决定后面按 a11y 严格比还是按 OCR 宽松比，
         // 而这两档在现场读起来完全不同，不落盘就只能猜。
         append(",picked=").append(title?.source?.ifBlank { "-" } ?: "-")
@@ -147,10 +164,13 @@ internal data class SurfaceTitleRead(
      * 看不见状态栏（它只抓前台应用窗口）——**跨窗口的东西只有网关自己看得见**。
      */
     fun candidateDump(): String {
-        val candidates = attempts.lastOrNull()?.candidates.orEmpty()
-        if (candidates.isEmpty()) return ""
-        return candidates.joinToString(
-            prefix = "｜标题带候选 ${candidates.size} 个：",
+        val last = attempts.lastOrNull() ?: return ""
+        // **被切掉的那些也要列出来**：它们不在候选表里，而"上面有没有东西"恰恰是要看的。
+        val all = last.candidates + last.topCut
+        if (all.isEmpty()) return "｜标题带候选 0 个，状态栏下沿之上也没有"
+        return all.joinToString(
+            prefix = "｜标题带候选 ${last.candidates.size} 个" +
+                (if (last.topCut.isEmpty()) "" else "、切掉 ${last.topCut.size} 个") + "：",
             separator = "；",
         ) { it.describe() }
     }
@@ -242,6 +262,7 @@ internal object SurfaceTitleReadPolicy {
             note = raw.optString("note"),
             title = title,
             candidates = candidates,
+            topCut = ConversationSurfacePolicy.topCutCandidates(elements, frame),
         )
     }
 

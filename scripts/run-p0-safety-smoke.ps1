@@ -1055,7 +1055,7 @@ function Get-P0SurfaceTitleReadRecord {
     # 每一段都排除分隔符，**不靠"它现在是最后一个"**——`band=` 一周前还是串尾，
     # 这次加 `sysrej`/`picked` 就把它变成了串中的（同一形态见 harness.md 那张三次对照表）。
     $matched = [regex]::Match(
-        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*),sysrej=(?<sysrej>[^;,\s]*),picked=(?<picked>[^;,\s]*)')
+        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*),sysrej=(?<sysrej>[^;,\s]*),topcut=(?<topcut>[^;,\s]*),picked=(?<picked>[^;,\s]*)')
     if (-not $matched.Success) {
         return [ordered]@{ reported = $false; detail = '审计 note 里没有 title_read 记录' }
     }
@@ -1070,6 +1070,10 @@ function Get-P0SurfaceTitleReadRecord {
         band_elements = [string]$matched.Groups['band'].Value
         # 逐次的"被别的窗口占了几个候选"。非零 → 标题带里混进了系统窗口。
         system_window_rejects = [string]$matched.Groups['sysrej'].Value
+        # 逐次的"上面本来有东西、被状态栏那一刀切掉了几个"。**它回答的是另一种分不开**：
+        # band 少一个时，topcut>0 = 确实切掉了；topcut=0 且带内也没有 = 这一帧根本没产出它。
+        # 2026-08-09 第五跑就卡在这个分不开上（状态栏像素上在，却看不出是切掉还是没识出）。
+        top_cut_rejects = [string]$matched.Groups['topcut'].Value
         # 最终选中的那个来自哪条通道，决定后面按 a11y 严格比还是 OCR 宽松比。
         picked_source = [string]$matched.Groups['picked'].Value
     }

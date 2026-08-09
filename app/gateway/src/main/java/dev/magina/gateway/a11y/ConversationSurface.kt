@@ -111,6 +111,7 @@ internal data class SurfaceCandidate(
         const val REJECT_CONFIDENCE = "识别置信度不够"
         const val REJECT_BOUNDS = "几何非法"
         const val REJECT_EMPTY = "归一后没有可读文字"
+        const val REJECT_TOP_CUT = "在状态栏下沿之上，被切掉"
     }
 }
 
@@ -186,6 +187,38 @@ internal object ConversationSurfacePolicy {
                         ?: SurfaceCandidate.REJECT_EMPTY.takeIf { labelTextOf(element).isEmpty() },
                 )
             }
+
+    /**
+     * **被状态栏下沿那一刀切掉的**那些元素——它们"本来会是候选"。
+     *
+     * 为什么单列：几何那一刀发生在 [inTitleBand] 里，也就是**在候选枚举之前**，
+     * 于是被它切掉的元素连候选表都进不去。2026-08-09 第五跑现场因此卡住：
+     * `band=0+1`、状态栏像素上确实显示着 `1.10 KB/s`，而**"被几何切掉了"与
+     * "OCR 这次压根没识出它"在落盘证据上分不开**——两者都只表现为"带里少一个"。
+     *
+     * 这一栏就是那个差别：`topcut>0` = 上面确实有东西、被切掉了；
+     * `topcut=0` 且带内也没有 = 这一帧根本没产出那个元素。
+     */
+    fun topCutCandidates(elements: List<SurfaceElement>, frame: SurfaceFrame): List<SurfaceCandidate> =
+        elements.filter { element ->
+            element.stage == SurfaceStage.TOOLBAR &&
+                validBounds(element.bounds, frame) &&
+                // 只差状态栏那一刀：横纵都在带里，唯独整体没落到 inset 之下。
+                element.bounds.top < frame.systemTopInset &&
+                element.bounds.centerY in
+                (frame.screenHeight * 0.02).toInt()..(frame.screenHeight * 0.12).toInt() &&
+                element.bounds.centerX in
+                (frame.screenWidth * 0.3).toInt()..(frame.screenWidth * 0.7).toInt()
+        }.map { element ->
+            SurfaceCandidate(
+                text = element.text.ifBlank { element.description },
+                bounds = element.bounds,
+                source = element.source,
+                windowId = element.windowId,
+                foregroundWindow = element.foregroundWindow,
+                rejectedBy = SurfaceCandidate.REJECT_TOP_CUT,
+            )
+        }
 
     /**
      * 标题带里那个可信的文字元素——**不看它写的是什么**。

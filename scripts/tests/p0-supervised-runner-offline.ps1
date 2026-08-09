@@ -700,8 +700,8 @@ if ($leg -eq 'reentry') {
     $noteTitle = switch ($scenario) {
         'reentry_no_title_read' { '' }
         # 重试第 3 次才读到：**各次结论不同 = 时机问题**，正是有界重试要救的那种。
-        'reentry_title_retried' { 'title_read=attempts=3,waited_ms=1480,result=resolved,resolved_at=3,trail=no_ocr+no_ocr+resolved,fg=0+0+0,band=0+0+1,sysrej=0+0+0,picked=ocr' }
-        default { 'title_read=attempts=1,waited_ms=210,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1,sysrej=0,picked=ocr' }
+        'reentry_title_retried' { 'title_read=attempts=3,waited_ms=1480,result=resolved,resolved_at=3,trail=no_ocr+no_ocr+resolved,fg=0+0+0,band=0+0+1,sysrej=0+0+0,topcut=0+0+0,picked=ocr' }
+        default { 'title_read=attempts=1,waited_ms=210,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1,sysrej=0,topcut=0,picked=ocr' }
     }
     $noteBeat = switch ($scenario) {
         'reentry_no_heartbeat' { '' }
@@ -1354,6 +1354,11 @@ try {
             "带内被别的窗口占掉几个候选没落盘：$($legRecord.title_read.system_window_rejects)"
         Assert-True ($legRecord.title_read.picked_source -ceq 'ocr') `
             "选中的通道没落盘：$($legRecord.title_read.picked_source)"
+        # 两道闸门各有各的计数：`sysrej` 是"带里混进别的窗口"，`topcut` 是"上面本来有东西
+        # 被切掉了"。**少了 topcut，`band` 少一个时就分不出是切掉了还是这一帧没产出**
+        # ——2026-08-09 第五跑正是卡在这个分不开上。
+        Assert-True ($legRecord.title_read.top_cut_rejects -ceq '0+0+0') `
+            "被状态栏下沿切掉的个数没落盘：$($legRecord.title_read.top_cut_rejects)"
         Assert-True ($legRecord.title_read.band_elements -ceq '0+0+1') `
             "band 被后面新增的字段吞了：$($legRecord.title_read.band_elements)"
     }
