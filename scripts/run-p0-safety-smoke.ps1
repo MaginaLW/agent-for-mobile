@@ -53,6 +53,7 @@ $TaskTemplateHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-task-template.ps1'
 # 终态报告的匹配模式与 dispatch 共用一份，避免两边对"什么算成功"的判据漂移。
 $LedgerHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-ledger.ps1'
 $DispatchLockHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
+$DispatchBrainHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1'
 $TaskTemplateDir = Join-Path $RepoRoot 'scripts\tasks'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
@@ -126,6 +127,35 @@ if (-not (Test-Path -LiteralPath $DispatchLockHelperPath -PathType Leaf)) {
     throw "缺少设备 lease helper：$DispatchLockHelperPath"
 }
 . $DispatchLockHelperPath
+if (-not (Test-Path -LiteralPath $DispatchBrainHelperPath -PathType Leaf)) {
+    throw "缺少共享 dispatch transcript helper：$DispatchBrainHelperPath"
+}
+. $DispatchBrainHelperPath
+
+function New-P0InfrastructureException {
+    param(
+        [Parameter(Mandatory)][string]$Code,
+        [AllowEmptyString()][string]$TerminalType = '',
+        [AllowEmptyString()][string]$TerminalCode = '',
+        [AllowEmptyString()][string]$HumanDecision = '',
+        [Nullable[int]]$DispatchExitCode = $null
+    )
+    $exception = [IO.InvalidDataException]::new($Code)
+    $exception.Data['P0FailureKind'] = 'infrastructure'
+    if (-not [string]::IsNullOrWhiteSpace($TerminalType)) {
+        $exception.Data['P0ExecutorTerminal'] = $TerminalType
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TerminalCode)) {
+        $exception.Data['P0ExecutorTerminalCode'] = $TerminalCode
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HumanDecision)) {
+        $exception.Data['P0HumanDecision'] = $HumanDecision
+    }
+    if ($null -ne $DispatchExitCode) {
+        $exception.Data['P0DispatchExitCode'] = [int]$DispatchExitCode
+    }
+    return $exception
+}
 
 function New-P0DispatchProcess {
     param(
@@ -379,19 +409,23 @@ $script:P0InfrastructureTools = @('ToolSearch')
 一次本机 Bash，而完整审计因为提前抛错压根没看这份 trace）。返回越权工具名数组。
 #>
 function Get-P0NonGatewayToolUses {
-    param([Parameter(Mandatory)][string]$TracePath)
-
+    param(
+        [Parameter(Mandatory)][string]$TracePath,
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain
+    )
     $offenders = [Collections.Generic.List[string]]::new()
-    foreach ($line in Get-Content -LiteralPath $TracePath -Encoding utf8) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $event = $line | ConvertFrom-Json -Depth 30 }
-        catch { continue }
-        if ([string]$event.type -cne 'assistant') { continue }
-        foreach ($content in @($event.message.content)) {
-            if ([string]$content.type -cne 'tool_use') { continue }
-            $name = [string]$content.name
-            if ($name -cin $script:P0InfrastructureTools) { continue }
-            if ($name -notmatch '^mcp__gateway__') { [void]$offenders.Add($name) }
+    try { $transcript = Read-DispatchTraceTranscript -TracePath $TracePath -Brain $Brain }
+    catch {
+        # 不把 parser 的原始诊断或未知 item/tool 名写进 console/manifest：这些字段来自模型 trace，
+        # 可能含 token。完整判定路径会另报固定 trace_transcript_invalid。
+        return @('trace_transcript_invalid')
+    }
+    foreach ($call in @($transcript.Calls)) {
+        $rawName = [string]$call.RawName
+        if ($rawName -cin $script:P0InfrastructureTools) { continue }
+        if ([string]$call.Server -cne 'gateway') {
+            # 保留既有 Bash 行为证据；其它未知名字统一折叠，避免把攻击者控制的 tool 名回显。
+            [void]$offenders.Add($(if ($rawName -ceq 'Bash') { 'Bash' } else { 'non_gateway_tool' }))
         }
     }
     return $offenders.ToArray()
@@ -659,89 +693,49 @@ function Read-P0TraceEvidence {
     param(
         [Parameter(Mandatory)][string]$TracePath,
         [Parameter(Mandatory)][string]$ExpectedText,
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
         # 设备自报的输入栏候选区上边界；a11y 焦点几何缺失时（微信）用它划消息区的线。
         [int]$InputBarTop = 0
     )
 
-    $calls = [Collections.Generic.List[object]]::new()
-    $results = @{}
-    $infrastructureCallIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $final = ''
-    $finalOrdinal = [int]::MaxValue
-    $timelineOrdinal = 0
-
-    foreach ($line in Get-Content -LiteralPath $TracePath -Encoding utf8) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $event = $line | ConvertFrom-Json -Depth 30 }
-        catch { throw 'trace 包含非空但无法解析的 JSON 行。' }
-        if ($event.type -eq 'assistant') {
-            foreach ($content in @($event.message.content)) {
-                if ($content.type -ne 'tool_use') { continue }
-                $timelineOrdinal++
-                $rawName = [string]$content.name
-                # schema 加载工具不产生副作用，也不算一次执行动作，从调用序列里整条略过。
-                if ($rawName -cin $script:P0InfrastructureTools) {
-                    [void]$infrastructureCallIds.Add([string]$content.id)
-                    continue
-                }
-                $toolNameMatch = [regex]::Match($rawName, '^mcp__gateway__(.+)$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-                if (-not $toolNameMatch.Success) {
-                    throw "trace 包含非 gateway 或未知 channel 的 tool_use：$rawName"
-                }
-                $calls.Add([pscustomobject]@{
-                    RawName = $rawName
-                    Name = $toolNameMatch.Groups[1].Value
-                    Id = [string]$content.id
-                    Input = $content.input
-                    TimelineOrdinal = $timelineOrdinal
-                })
-            }
-        }
-        elseif ($event.type -eq 'user') {
-            foreach ($content in @($event.message.content)) {
-                if ($content.type -ne 'tool_result') { continue }
-                $timelineOrdinal++
-                $id = [string]$content.tool_use_id
-                # schema 加载工具的结果是纯文本，既不该被当作证据信封解析，也不算孤儿。
-                if ($infrastructureCallIds.Contains($id)) { continue }
-                $envelope = Get-ToolResultEnvelope -Content $content.content
-                if ($null -eq $envelope) { throw 'trace 包含无法唯一解析的 tool_result。' }
-                if ([string]::IsNullOrWhiteSpace($id)) { throw 'trace 包含缺失 id 的 tool_result。' }
-                if (-not $results.ContainsKey($id)) { $results[$id] = [Collections.Generic.List[object]]::new() }
-                $results[$id].Add([pscustomobject]@{ TimelineOrdinal=$timelineOrdinal; Envelope=$envelope })
-            }
-        }
-        elseif ($event.type -eq 'result' -and $event.result -is [string]) {
-            $timelineOrdinal++
-            $finalOrdinal = $timelineOrdinal
-            $final = $event.result
-        }
+    try { $transcript = Read-DispatchTraceTranscript -TracePath $TracePath -Brain $Brain }
+    catch {
+        # shared helper 的诊断可能引用模型可控字段；runner 对外只给固定码，原 trace 仍由
+        # 敏感扫描/净化覆盖，既 fail closed 也不把 secret 二次复制到 console/manifest。
+        throw (New-P0InfrastructureException -Code 'trace_transcript_invalid')
     }
-
-    $callIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($call in $calls) {
-        if (-not [string]::IsNullOrWhiteSpace($call.Id)) { [void]$callIds.Add($call.Id) }
-    }
-    foreach ($resultId in @($results.Keys)) {
-        if (-not $callIds.Contains([string]$resultId)) { throw 'trace 包含没有对应 tool_use 的孤儿 tool_result。' }
+    if ($null -eq $transcript.Terminal -or $transcript.Terminal.Success -ne $true) {
+        $terminalType = if ($null -ne $transcript.Terminal -and
+            [string]$transcript.Terminal.Type -in @('result','turn.completed','turn.failed')) {
+            [string]$transcript.Terminal.Type
+        } else { 'executor-terminal' }
+        $terminalCode = if ($Brain -ceq 'codex' -and $null -ne $transcript.Terminal -and
+            [string]$transcript.Terminal.Code -in @('codex-error','turn-failed')) {
+            [string]$transcript.Terminal.Code
+        } else { 'executor-failed' }
+        throw (New-P0InfrastructureException -Code 'executor_terminal_failed' `
+            -TerminalType $terminalType -TerminalCode $terminalCode)
     }
 
     $callEvidence = [Collections.Generic.List[object]]::new()
-    for ($index = 0; $index -lt $calls.Count; $index++) {
-        $call = $calls[$index]
-        $resultEntries = if ($results.ContainsKey($call.Id)) { @($results[$call.Id]) } else { @() }
-        $nextBoundary = if ($index + 1 -lt $calls.Count) { $calls[$index + 1].TimelineOrdinal } else { $finalOrdinal }
-        $resultEntry = if ($resultEntries.Count -eq 1) { $resultEntries[0] } else { $null }
+    foreach ($call in @($transcript.Calls)) {
+        # ToolSearch 只加载 schema，不接触本机资源；shared transcript 仍要求它完整配对，
+        # runner 的 P0 gateway 调用序列则整条忽略。
+        if ([string]$call.RawName -cin $script:P0InfrastructureTools) { continue }
+        if ([string]$call.Server -cne 'gateway' -or [string]::IsNullOrWhiteSpace([string]$call.Name) -or
+            [int]$call.ResultCount -ne 1 -or [string]$call.Outcome -cne 'success' -or
+            $call.CompletedBeforeNext -ne $true -or $null -eq $call.ResultEnvelope) {
+            throw (New-P0InfrastructureException -Code 'trace_transcript_invalid')
+        }
         $callEvidence.Add([pscustomobject]@{
-            Name = $call.Name
-            Id = $call.Id
+            RawName = [string]$call.RawName
+            Name = [string]$call.Name
+            Id = [string]$call.Id
             Input = $call.Input
-            TimelineOrdinal = $call.TimelineOrdinal
-            ResultCount = $resultEntries.Count
-            Result = if ($null -ne $resultEntry) { $resultEntry.Envelope } else { $null }
-            CompletedBeforeNext = $null -ne $resultEntry -and
-                $resultEntry.TimelineOrdinal -gt $call.TimelineOrdinal -and
-                $resultEntry.TimelineOrdinal -lt $nextBoundary
+            TimelineOrdinal = [int]$call.StartedOrdinal
+            ResultCount = [int]$call.ResultCount
+            Result = $call.ResultEnvelope
+            CompletedBeforeNext = [bool]$call.CompletedBeforeNext
         })
     }
 
@@ -852,7 +846,58 @@ function Read-P0TraceEvidence {
         FindMessageRegionMatched = $messageRegionEvidence
         OriginalFocusedInputId = $originalFocusedInputId
         CurrentFocusedInputId = $currentFocusedInputId
-        Final = $final
+        Final = [string]$transcript.FinalText
+        Brain = [string]$transcript.Brain
+        Schema = [string]$transcript.Schema
+        SessionId = [string]$transcript.SessionId
+        Usage = $transcript.Usage
+        Turns = $transcript.Turns
+        CostUsd = $transcript.CostUsd
+        ExecutorTerminal = [string]$transcript.Terminal.Type
+        ExecutorTerminalCode = $(
+            $code = Get-P0OptionalProperty -Object $transcript.Terminal -Name 'Code'
+            if ($null -eq $code) { '' } else { [string]$code }
+        )
+    }
+}
+
+<#
+dispatch 在任何真人确认终态出现前自行退出：这是执行基础设施失败，不是“人没点”超时，
+也没有 safety code 可写。dispatch 若已留下自己的失败行，只复验唯一性、不重复补记。
+未知 usage/session/trace 一律留空，绝不拿 0 冒充已测得。
+#>
+function Write-P0InfrastructureLegLedgerRow {
+    param(
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][int]$DispatchExitCode
+    )
+    $ledgerPath = Join-Path $RepoRoot 'docs\runs\ledger.csv'
+    try {
+        $existing = Get-P0LedgerRow -LedgerPath $ledgerPath -Slug $Slug -AllowMissing
+        if ($null -ne $existing) {
+            # -AllowMissing 只判断“有无”；再走严格读取，确保不是两行里随便取第一行。
+            $existing = Get-P0LedgerRow -LedgerPath $ledgerPath -Slug $Slug
+            $allowedFailureResults = @('fail', 'preflight-fail', 'timeout', 'step-cap', 'unparsed')
+            if ([string]$existing.brain -cne $Brain -or
+                [string]$existing.leg -cne '1' -or
+                [string]$existing.result -cnotin $allowedFailureResults) {
+                throw (New-P0InfrastructureException -Code 'infrastructure_ledger_identity_invalid' `
+                    -HumanDecision 'not_observed' -DispatchExitCode $DispatchExitCode)
+            }
+            return $existing
+        }
+        Add-P0LedgerRow -LedgerPath $ledgerPath -Slug $Slug -Leg 1 -Brain $Brain -Model '' `
+            -Result 'fail' `
+            -Note "runner infrastructure failure | human_decision=not_observed | child_exit=$DispatchExitCode" `
+            -FailReason 'executor-exited-before-confirmation'
+        return Get-P0LedgerRow -LedgerPath $ledgerPath -Slug $Slug
+    }
+    catch {
+        if ($_.Exception.Message -ceq 'infrastructure_ledger_identity_invalid') {
+            throw
+        }
+        throw (New-P0InfrastructureException -Code 'infrastructure_ledger_write_failed' `
+            -HumanDecision 'not_observed' -DispatchExitCode $DispatchExitCode)
     }
 }
 
@@ -907,6 +952,61 @@ function Get-P0LedgerRow {
     if ($AllowMissing) { return $(if ($rows.Count -ge 1) { $rows[0] } else { $null }) }
     if ($rows.Count -ne 1) { throw "ledger 中 slug=$Slug 的行数不是 1。" }
     return $rows[0]
+}
+
+function Assert-P0LedgerTranscriptIdentity {
+    param(
+        [Parameter(Mandatory)]$Ledger,
+        [Parameter(Mandatory)]$Trace,
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$ExpectedBrain
+    )
+
+    $mismatch = [string]$Ledger.brain -cne $ExpectedBrain -or
+        [string]$Trace.Brain -cne $ExpectedBrain -or
+        [string]::IsNullOrWhiteSpace([string]$Trace.SessionId) -or
+        [string]$Ledger.session_id -cne [string]$Trace.SessionId
+
+    $numericFields = @(
+        @{ Ledger='turns'; Value=$Trace.Turns; Kind='integer' },
+        @{ Ledger='in_tok'; Value=(Get-P0OptionalProperty -Object $Trace.Usage -Name 'InputTokens'); Kind='integer' },
+        @{ Ledger='out_tok'; Value=(Get-P0OptionalProperty -Object $Trace.Usage -Name 'OutputTokens'); Kind='integer' },
+        @{ Ledger='cache_read'; Value=(Get-P0OptionalProperty -Object $Trace.Usage -Name 'CachedInputTokens'); Kind='integer' },
+        @{ Ledger='cache_write'; Value=(Get-P0OptionalProperty -Object $Trace.Usage -Name 'CacheWriteTokens'); Kind='integer' },
+        @{ Ledger='cost_usd'; Value=$Trace.CostUsd; Kind='decimal' }
+    )
+    foreach ($field in $numericFields) {
+        $ledgerProperty = $Ledger.PSObject.Properties[[string]$field.Ledger]
+        $ledgerText = if ($null -eq $ledgerProperty) { '' } else { [string]$ledgerProperty.Value }
+        if ($null -eq $field.Value) {
+            if (-not [string]::IsNullOrEmpty($ledgerText)) { $mismatch = $true }
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($ledgerText)) { $mismatch = $true; continue }
+        if ($field.Kind -ceq 'integer') {
+            $parsed = 0L
+            if (-not [long]::TryParse($ledgerText, [Globalization.NumberStyles]::Integer,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -or
+                $parsed -lt 0 -or $parsed -ne [long]$field.Value) {
+                $mismatch = $true
+            }
+        }
+        else {
+            $parsed = 0.0
+            # dispatch ledger 的公开契约按 4 位小数落成本（避免把浮点尾噪声写进 CSV）；
+            # transcript 保留原始 double。身份复验必须按同一表示比较，不能要求丢失的尾数重现。
+            $expectedCost = [Math]::Round([double]$field.Value, 4)
+            if (-not [double]::TryParse($ledgerText, [Globalization.NumberStyles]::Float,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -or
+                [double]::IsNaN($parsed) -or [double]::IsInfinity($parsed) -or $parsed -lt 0 -or
+                [double]::IsNaN([double]$field.Value) -or [double]::IsInfinity([double]$field.Value) -or
+                [Math]::Abs($parsed - $expectedCost) -gt 0.000000000001) {
+                $mismatch = $true
+            }
+        }
+    }
+    if ($mismatch) {
+        throw (New-P0InfrastructureException -Code 'ledger_transcript_identity_mismatch')
+    }
 }
 
 function Resolve-P0TraceSource {
@@ -2088,6 +2188,7 @@ try {
         $notificationState = $null
         $reentry = $null
         $foregroundWait = $null
+        $dispatchExit = $null
         $legTeardownDone = $false
         # 最后一次**看到**的确认状态。腿在"决定与预期不符"时会抛在 $confirmation 赋值之前，
         # 于是失败记录里连"人到底点了什么"都没有——而那正是真人时间花在哪儿的唯一凭据。
@@ -2212,10 +2313,43 @@ try {
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
-            # 没等到任何决定时同样先撤销 child 的执行能力，再补烧掉的真人时间。
+            if ($dispatchHandle.Process.HasExited) {
+                # child 先死、真人终态从未出现：先正向取得退出码并 drain，再留下独立 infra 行。
+                # evidence_ready 只表示卡生成过，不表示任何人点过，不能折成 confirm-timeout/safety。
+                $dispatchExit = [int]$dispatchHandle.Process.ExitCode
+                $captureFailed = $false
+                try { Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) }
+                catch {
+                    # Close helper 只在 tree-drained 后清空 handle；此时的异常只能是 capture/dispose
+                    # 证据失败，不能盖掉“child 已在确认前退出”这个事实。handle 尚在则保留原异常，
+                    # 由外层 kill/drain gate 处理，绝不假称基础设施已经安全退出。
+                    if ($null -ne $dispatchHandle) { throw }
+                    $captureFailed = $true
+                }
+                $activeLegRecord['dispatch_exit_code'] = $dispatchExit
+                $activeLegRecord['failure_kind'] = 'infrastructure'
+                $activeLegRecord['human_decision'] = 'not_observed'
+                $activeLegRecord['confirmation_state'] = $(
+                    if ($null -eq $lastConfirmationState) { 'not_observed' }
+                    else { [string](Get-P0OptionalProperty -Object $lastConfirmationState -Name 'state') }
+                )
+                # 固定 ledger 不含 stdout/stderr，因此先确保基础设施失败留痕，再扫描并净化可能只写了
+                # 一半的 capture。扫描若报敏感值，最终 manifest 会转为 sensitive_output_detected。
+                [void](Write-P0InfrastructureLegLedgerRow -Slug $slug -DispatchExitCode $dispatchExit)
+                Assert-P0NoSensitiveFiles -Paths @($stdoutPath,$stderrPath) `
+                    -SensitiveValues $session.SensitiveValues -TraceRoot $traceArtifactsRoot `
+                    -EvidenceRoot $evidenceRoot
+                if ($captureFailed) {
+                    throw (New-P0InfrastructureException -Code 'dispatch_output_capture_failed' `
+                        -HumanDecision 'not_observed' -DispatchExitCode $dispatchExit)
+                }
+                throw (New-P0InfrastructureException -Code 'dispatch_exited_before_confirmation' `
+                    -HumanDecision 'not_observed' -DispatchExitCode $dispatchExit)
+            }
+            # deadline 到达时 child 仍活，才是“真人没有在预算内作决定”；kill/drain 后补 aborted。
             Close-P0DispatchHandle -Handle ([ref]$dispatchHandle) -Kill
             Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
-            throw "$leg 腿确认超时或派单在真人决定前结束。"
+            throw "$leg 腿确认超时。"
         }
         $safeScreenshot = Resolve-P0SensitiveArtifactPath -Path $screenshotPath `
             -TraceRoot $traceArtifactsRoot -EvidenceRoot $evidenceRoot -AllowMissing
@@ -2285,7 +2419,8 @@ try {
         # 走 runner 自己的只读通道，不经执行器、不进 trace，因此不影响严格调用序列。
         $inputBarTop = Get-P0InputBarTop -PrecheckPath $ProbeRegionPrecheckPath -Session $session
         $trace = Read-P0TraceEvidence -TracePath $safeTraceEvidence.Path -ExpectedText $marker `
-            -InputBarTop $inputBarTop
+            -Brain $Brain -InputBarTop $inputBarTop
+        Assert-P0LedgerTranscriptIdentity -Ledger $ledger -Trace $trace -ExpectedBrain $Brain
         $safeAudit = Resolve-P0SensitiveArtifactPath -Path $auditAfter -TraceRoot $traceArtifactsRoot `
             -EvidenceRoot $evidenceRoot
         $audit = @(Read-P0AuditEvidence -AuditPath $safeAudit.Path)
@@ -2379,8 +2514,23 @@ try {
             finished_at = [DateTime]::UtcNow.ToString('o')
             dispatch_exit_code = $dispatchExit
             ledger_result = [string]$ledger.result
+            brain = [string]$trace.Brain
+            trace_schema = [string]$trace.Schema
+            session_id = [string]$trace.SessionId
+            executor_terminal = [string]$trace.ExecutorTerminal
+            executor_terminal_code = [string]$trace.ExecutorTerminalCode
+            usage = [ordered]@{
+                turns = $trace.Turns
+                input_tokens = Get-P0OptionalProperty -Object $trace.Usage -Name 'InputTokens'
+                cached_input_tokens = Get-P0OptionalProperty -Object $trace.Usage -Name 'CachedInputTokens'
+                output_tokens = Get-P0OptionalProperty -Object $trace.Usage -Name 'OutputTokens'
+                cache_write_tokens = Get-P0OptionalProperty -Object $trace.Usage -Name 'CacheWriteTokens'
+                cost_usd = $trace.CostUsd
+            }
             # 从真实确认状态里取，不写死——写死的字段在 manifest 里读起来像证据，其实什么都没证明。
             confirmation = [string]$confirmation.state
+            confirmation_state = [string]$confirmation.state
+            human_decision = [string]$confirmation.state
             # 真人是在哪条 surface 上作的决定（overlay=悬浮卡，notification=通知栏）。
             # 批次 2 判据 1 靠它才是机械证据而不是真人自报；旧 APK 不报该字段时为 unknown，
             # **不冒充 overlay**——默认成"卡"会让"通知根本没被点过"看起来像验过了。
@@ -2515,6 +2665,25 @@ catch {
     }
     $manifest.status = 'failed'
     $manifest.failure = $runFailure.Exception.Message
+    if ($runFailure.Exception.Data.Contains('P0FailureKind')) {
+        $manifest['failure_kind'] = [string]$runFailure.Exception.Data['P0FailureKind']
+        if ($null -ne $activeLegRecord) {
+            $activeLegRecord['failure_kind'] = [string]$runFailure.Exception.Data['P0FailureKind']
+        }
+    }
+    if ($runFailure.Exception.Data.Contains('P0ExecutorTerminal')) {
+        $terminalType = [string]$runFailure.Exception.Data['P0ExecutorTerminal']
+        $manifest['executor_terminal'] = $terminalType
+        if ($null -ne $activeLegRecord) { $activeLegRecord['executor_terminal'] = $terminalType }
+    }
+    if ($runFailure.Exception.Data.Contains('P0ExecutorTerminalCode')) {
+        $terminalCode = [string]$runFailure.Exception.Data['P0ExecutorTerminalCode']
+        $manifest['executor_terminal_code'] = $terminalCode
+        if ($null -ne $activeLegRecord) { $activeLegRecord['executor_terminal_code'] = $terminalCode }
+    }
+    if ($runFailure.Exception.Data.Contains('P0DispatchExitCode') -and $null -ne $activeLegRecord) {
+        $activeLegRecord['dispatch_exit_code'] = [int]$runFailure.Exception.Data['P0DispatchExitCode']
+    }
     if ($runFailure.Exception.Data.Contains('P0CleanupIssues')) {
         $cleanupErrors += @([string]$runFailure.Exception.Data['P0CleanupIssues'] -split ',' | Where-Object { $_ })
     }
@@ -2530,7 +2699,8 @@ catch {
             if ($null -ne $scanTrace) {
                 Add-P0TraceArtifactFamily -Paths $sensitiveArtifactPaths -TracePath $scanTrace.FullName `
                     -TraceRoot (Join-Path $RepoRoot 'docs\runs\traces')
-                $offenders = @(Get-P0NonGatewayToolUses -TracePath $scanTrace.FullName | Select-Object -Unique)
+                $offenders = @(Get-P0NonGatewayToolUses -TracePath $scanTrace.FullName -Brain $Brain |
+                    Select-Object -Unique)
                 if ($offenders.Count -gt 0) {
                     $offenderText = $offenders -join ','
                     $manifest['tool_policy_violations'] = $offenderText
@@ -2559,9 +2729,22 @@ catch {
         # `Get-P0OptionalProperty` 的 -Object 是 Mandatory，传 $null 会**在绑定阶段就抛**——
         # 而这里是 catch 块，抛出去会把原始失败原因整个盖掉。
         $observedConfirmation = if ($null -ne $confirmation) { $confirmation } else { $lastConfirmationState }
-        $activeLegRecord['confirmation'] = $(
-            if ($null -eq $observedConfirmation) { '' }
+        $forcedHumanDecision = if ($runFailure.Exception.Data.Contains('P0HumanDecision')) {
+            [string]$runFailure.Exception.Data['P0HumanDecision']
+        } else { '' }
+        $observedState = if ($null -eq $observedConfirmation) { '' }
             else { [string](Get-P0OptionalProperty -Object $observedConfirmation -Name 'state') }
+        $humanDecision = if (-not [string]::IsNullOrWhiteSpace($forcedHumanDecision)) {
+            $forcedHumanDecision
+        } elseif ($observedState -in @('allowed','denied','dismissed')) {
+            $observedState
+        } else { 'not_observed' }
+        $activeLegRecord['human_decision'] = $humanDecision
+        $activeLegRecord['confirmation_state'] = $(
+            if ([string]::IsNullOrWhiteSpace($observedState)) { 'not_observed' } else { $observedState }
+        )
+        $activeLegRecord['confirmation'] = $(
+            if ($humanDecision -ceq 'not_observed') { '' } else { $observedState }
         )
         $activeLegRecord['confirmation_channel'] = $(
             $via = if ($null -eq $observedConfirmation) { $null }

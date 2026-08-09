@@ -27,6 +27,8 @@ param(
 )
 
 $ExecutorWasExplicit = $PSBoundParameters.ContainsKey('Executor')
+$BrainWasExplicit = $PSBoundParameters.ContainsKey('Brain')
+$ModelWasExplicit = $PSBoundParameters.ContainsKey('Model')
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding = [Text.Encoding]::UTF8
@@ -50,14 +52,18 @@ $LedgerHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-ledger.ps1'
 . $LedgerHelperPath
 $PauseHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-pause.ps1'
 . $PauseHelperPath
+$BrainHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-brain.ps1'
+. $BrainHelperPath
+$LedgerModel = $(if ($Brain -eq 'codex' -and -not $ModelWasExplicit) { '' } else { $Model })
 
 # Confirm 的 pause/trace 读取发生在设备预检之前；固定 traces 容器必须先做 no-follow
 # 验证。允许目录缺失仅为普通新派单保留，真正写入会在拿到 lease 后创建并重验。
 [void](Resolve-DispatchSafePersistentPath -Path $TracesDir -ExpectedRoot $TracesDir `
     -BoundaryRoot $RepoRoot -PathKind Container -AllowMissing)
 
-function Add-LedgerRow([int]$Turns, [long]$InTok, [long]$OutTok, [long]$CacheRead, [long]$CacheWrite,
-                       [double]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
+function Add-LedgerRow([AllowNull()][object]$Turns, [AllowNull()][object]$InTok, [AllowNull()][object]$OutTok,
+                       [AllowNull()][object]$CacheRead, [AllowNull()][object]$CacheWrite,
+                       [AllowNull()][object]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
                        [string]$Note, [string]$FailReason = '') {
     # 表头与拼行都在 dispatch-ledger.ps1：runner 也要写台账（派单被提前掐掉那种），
     # 各写各的必然漂移，而台账列的语义漂移正是归因失效的开始。
@@ -65,9 +71,10 @@ function Add-LedgerRow([int]$Turns, [long]$InTok, [long]$OutTok, [long]$CacheRea
     $ledgerRoot = Split-Path $LedgerPath -Parent
     $safeLedger = Resolve-DispatchSafePersistentPath -Path $LedgerPath -ExpectedRoot $ledgerRoot `
         -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
-    Add-P0LedgerRow -LedgerPath $safeLedger -Slug $Slug -Leg $Leg -Brain $Brain -Model $Model `
+    $costField = if ($Brain -eq 'codex' -or $null -eq $CostUsd) { '' } else { "$([math]::Round([double]$CostUsd, 4))" }
+    Add-P0LedgerRow -LedgerPath $safeLedger -Slug $Slug -Leg $Leg -Brain $Brain -Model $LedgerModel `
         -Result $Result -Turns "$Turns" -InTok "$InTok" -OutTok "$OutTok" `
-        -CacheRead "$CacheRead" -CacheWrite "$CacheWrite" -CostUsd "$([math]::Round($CostUsd, 4))" `
+        -CacheRead "$CacheRead" -CacheWrite "$CacheWrite" -CostUsd $costField `
         -DurS "$DurS" -SessionId $SessionId -TraceFile $Trace -Note $noteWithExecutor -FailReason $FailReason
     [void](Resolve-DispatchSafePersistentPath -Path $safeLedger -ExpectedRoot $ledgerRoot `
         -BoundaryRoot $RepoRoot -PathKind Leaf)
@@ -89,6 +96,7 @@ function Get-GatewayPauseTraceProof {
         [Parameter(Mandatory)][string]$TraceName,
         [Parameter(Mandatory)][string]$ExpectedSlug,
         [Parameter(Mandatory)][int]$ExpectedLeg,
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$ExpectedBrain,
         [Parameter(Mandatory)][AllowEmptyString()][string]$ExpectedSessionId,
         [Parameter(Mandatory)][string]$ExpectedPauseBody
     )
@@ -105,7 +113,7 @@ function Get-GatewayPauseTraceProof {
         throw 'gateway 暂停件缺少合法的 trace basename，无法证明危险工具尚未调用。'
     }
     $expectedPattern = '^\d{8}-\d{6}-' + [regex]::Escape($ExpectedSlug) +
-        '-gateway-claude-leg' + $ExpectedLeg + '\.jsonl$'
+        '-gateway-' + [regex]::Escape($ExpectedBrain) + '-leg' + $ExpectedLeg + '\.jsonl$'
     if ($TraceName -notmatch $expectedPattern) {
         throw 'gateway 暂停件的 trace 与 slug/executor/brain/leg 不关联，拒绝恢复。'
     }
@@ -126,6 +134,34 @@ function Get-GatewayPauseTraceProof {
         ), [StringComparer]::Ordinal)
     $infrastructureTools = [Collections.Generic.HashSet[string]]::new(
         [string[]]@('ToolSearch'), [StringComparer]::Ordinal)
+    if ($ExpectedBrain -eq 'codex') {
+        $transcript = Read-DispatchTraceTranscript -TracePath $tracePath -Brain codex
+        if (-not $transcript.Terminal.Success -or $transcript.SessionId -cne $ExpectedSessionId -or
+            $transcript.FinalText -cne (($ExpectedPauseBody -replace "`r`n", "`n").Trim())) {
+            throw 'Codex gateway trace 终态与暂停件不关联。'
+        }
+        foreach ($call in @($transcript.Calls)) {
+            if ($call.Server -cne 'gateway' -or -not $readOnlyGatewayTools.Contains([string]$call.Name) -or
+                $call.ResultCount -ne 1 -or $call.Outcome -cne 'success' -or
+                -not $call.CompletedBeforeNext -or $null -eq $call.ResultEnvelope) {
+                throw "Codex gateway trace 不能正向证明工具 $($call.Name) 是完整只读调用。"
+            }
+            if ($call.Name -ceq 'ui_find') {
+                $scroll = $call.Input.PSObject.Properties['scroll_search']
+                if ($null -ne $scroll -and $scroll.Value -eq $true) {
+                    throw 'Codex gateway trace 的 ui_find 启用了 scroll_search。'
+                }
+            }
+        }
+        if ($transcript.FinalText -notmatch $script:P0AwaitConfirmPattern) {
+            throw 'Codex gateway trace 终态不含 AWAIT_CONFIRM。'
+        }
+        return [pscustomobject]@{
+            TraceName=$TraceName; ReadOnlyGatewayCalls=@($transcript.Calls).Count
+            EvidenceVersion='readonly-trace-v1'
+        }
+    }
+
     $toolUses = [Collections.Generic.List[object]]::new()
     $resultCounts = @{}
     $infrastructureIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -215,12 +251,6 @@ function Get-GatewayPauseTraceProof {
     }
 }
 
-# ── codex 接口占位（spec §8，决策点 4：首个真实对照需求再实现）──────────────
-if ($Brain -eq 'codex') {
-    Write-Host 'codex 对照通道：接口已预留，实现推迟至首个对照需求（spec §8）。'
-    exit 2
-}
-
 # ── 输入解析：普通腿 or 确认腿 ──────────────────────────────────────────────
 $Leg = 1
 $TaskText = ''
@@ -262,11 +292,27 @@ if ($Confirm) {
         throw "确认腿 executor 冲突：暂停件要求 $pauseExecutor，显式参数为 $Executor。确认腿必须继承原执行器。"
     }
     $Executor = $pauseExecutor
+    $pauseBrain = if ([string]::IsNullOrWhiteSpace($meta['brain'])) { 'claude' } else { [string]$meta['brain'] }
+    if ($pauseBrain -notin @('claude','codex')) { throw "暂停件 brain 无效：$pauseBrain" }
+    if ($BrainWasExplicit -and $Brain -cne $pauseBrain) {
+        throw "确认腿 brain 冲突：暂停件要求 $pauseBrain，显式参数为 $Brain。确认腿必须继承原大脑。"
+    }
+    $Brain = $pauseBrain
+    $pauseModel = if ($meta.Contains('model')) { [string]$meta['model'] } elseif ($Brain -eq 'claude') { 'sonnet' } else { '' }
+    if ($ModelWasExplicit -and $Model -cne $pauseModel) {
+        throw "确认腿 model 冲突：暂停件要求 $pauseModel，显式参数为 $Model。确认腿必须继承原模型。"
+    }
+    if (-not $ModelWasExplicit -and -not [string]::IsNullOrWhiteSpace($pauseModel)) {
+        $Model = $pauseModel
+        $ModelWasExplicit = $true
+    }
+    $LedgerModel = $(if ($Brain -eq 'codex' -and [string]::IsNullOrWhiteSpace($pauseModel)) { '' } else { $pauseModel })
     if ($Executor -eq 'gateway') {
         $traceName = [string]$(if ($meta.Contains('trace')) { $meta['trace'] } else { '' })
         try {
             $null = Get-GatewayPauseTraceProof -TraceName $traceName -ExpectedSlug $Slug `
-                -ExpectedLeg ([int]$meta['leg']) -ExpectedSessionId ([string]$meta['session_id']) `
+                -ExpectedLeg ([int]$meta['leg']) -ExpectedBrain $Brain `
+                -ExpectedSessionId ([string]$meta['session_id']) `
                 -ExpectedPauseBody $pauseReport
         }
         catch {
@@ -361,7 +407,8 @@ if ($DryRun) {
     $preamble = $preambleTemplate `
         -replace '\{\{BUDGET_USD\}\}', $MaxBudgetUsd -replace '\{\{DEVICE\}\}', '<dry-run-no-device>'
     $prompt = $preamble + "`n`n" + $TaskText
-    Write-Host "[DryRun] executor=$Executor slug=$Slug leg=$Leg model=$Model budget=`$$MaxBudgetUsd timeout=${TimeoutMin}min"
+    $dryModel = if ($Brain -eq 'codex' -and -not $ModelWasExplicit) { '<codex-default>' } else { $Model }
+    Write-Host "[DryRun] executor=$Executor brain=$Brain slug=$Slug leg=$Leg model=$dryModel budget=`$$MaxBudgetUsd timeout=${TimeoutMin}min"
     Write-Host "[DryRun] MCP config：$McpConfig"
     Write-Host "[DryRun] allowed tools：$AllowedTools"
     Write-Host "[DryRun] preamble：$PreamblePath"
@@ -501,13 +548,18 @@ public static class AgentMobileDispatchJob {
 function Start-DispatchJobRoot {
     param(
         [Parameter(Mandatory)][IntPtr]$JobHandle,
-        [Parameter(Mandatory)][string]$ClaudePath,
-        [Parameter(Mandatory)][string[]]$ClaudeArguments,
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][string]$WorkingDirectory,
         [Parameter(Mandatory)][string]$PromptPath,
         [Parameter(Mandatory)][string]$TracePath,
         [Parameter(Mandatory)][string]$ErrorPath,
-        [Parameter(Mandatory)][string]$JobName
+        [Parameter(Mandatory)][string]$JobName,
+        [hashtable]$SensitiveEnvironment = @{},
+        [string[]]$ScrubEnvironmentPatterns = @(),
+        [string[]]$PreserveEnvironmentNames = @(),
+        [string[]]$EnvironmentAllowList = @(),
+        [hashtable]$ChildEnvironmentOverrides = @{}
     )
 
     $gateName = "Local\AgentMobileDispatch-$PID-$([guid]::NewGuid().ToString('N'))"
@@ -519,13 +571,14 @@ function Start-DispatchJobRoot {
         throw '无法建立 dispatch 启动 gate。'
     }
     $payload = [ordered]@{
-        claude = $ClaudePath
-        arguments = @($ClaudeArguments)
+        executable = $ExecutablePath
+        arguments = @($Arguments)
         working_directory = $WorkingDirectory
         prompt = $PromptPath
         trace = $TracePath
         error = $ErrorPath
         job_name = $JobName
+        sensitive_environment_names = @($SensitiveEnvironment.Keys)
     } | ConvertTo-Json -Compress -Depth 4
     $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
     $wrapper = @'
@@ -637,7 +690,8 @@ public static class AgentMobileDispatchSuspendedChild {
     }
 
     public static int Run(string executable, string[] arguments, string workingDirectory,
-        string stdinPath, string stdoutPath, string stderrPath, string jobName) {
+        string stdinPath, string stdoutPath, string stderrPath, string jobName,
+        string[] sensitiveEnvironmentNames) {
         SECURITY_ATTRIBUTES security = new SECURITY_ATTRIBUTES();
         security.nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>();
         security.bInheritHandle = true;
@@ -696,6 +750,11 @@ public static class AgentMobileDispatchSuspendedChild {
                 ref startup, out process)) {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
+            // child 已取得自己的环境快照；wrapper 立刻移除一次性 bearer env，避免父层
+            // 在等待 child/Job 期间继续持有可继承的敏感变量。
+            foreach (string name in sensitiveEnvironmentNames) {
+                Environment.SetEnvironmentVariable(name, null, EnvironmentVariableTarget.Process);
+            }
             bool inTargetJob;
             if (!IsProcessInJob(process.hProcess, job, out inTargetJob)) {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -747,9 +806,10 @@ public static class AgentMobileDispatchSuspendedChild {
 }
 "@
 $childExit = [AgentMobileDispatchSuspendedChild]::Run(
-    [string]$payload.claude, [string[]]@($payload.arguments),
+    [string]$payload.executable, [string[]]@($payload.arguments),
     [string]$payload.working_directory, [string]$payload.prompt,
-    [string]$payload.trace, [string]$payload.error, [string]$payload.job_name)
+    [string]$payload.trace, [string]$payload.error, [string]$payload.job_name,
+    [string[]]@($payload.sensitive_environment_names))
 exit $childExit
 '@
     $wrapperEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
@@ -761,12 +821,45 @@ exit $childExit
     $start.ArgumentList.Add('-NoProfile')
     $start.ArgumentList.Add('-EncodedCommand')
     $start.ArgumentList.Add($wrapperEncoded)
+    $preservedEnvironment = @{}
+    foreach ($name in @($PreserveEnvironmentNames)) {
+        if ($start.Environment.ContainsKey($name)) { $preservedEnvironment[$name] = $start.Environment[$name] }
+    }
+    if ($EnvironmentAllowList.Count -gt 0) {
+        $allowedEnvironment = @{}
+        foreach ($name in $EnvironmentAllowList) {
+            if ($start.Environment.ContainsKey($name)) { $allowedEnvironment[$name] = $start.Environment[$name] }
+        }
+        $start.Environment.Clear()
+        foreach ($entry in $allowedEnvironment.GetEnumerator()) {
+            $start.Environment[[string]$entry.Key] = [string]$entry.Value
+        }
+    }
+    else {
+        foreach ($pattern in @($ScrubEnvironmentPatterns)) {
+            foreach ($key in @($start.Environment.Keys | Where-Object { $_ -like $pattern })) {
+                [void]$start.Environment.Remove($key)
+            }
+        }
+    }
+    foreach ($entry in $preservedEnvironment.GetEnumerator()) {
+        $start.Environment[[string]$entry.Key] = [string]$entry.Value
+    }
+    foreach ($entry in $ChildEnvironmentOverrides.GetEnumerator()) {
+        $start.Environment[[string]$entry.Key] = [string]$entry.Value
+    }
+    foreach ($entry in $SensitiveEnvironment.GetEnumerator()) {
+        $start.Environment[[string]$entry.Key] = [string]$entry.Value
+    }
     $start.Environment['AGENT_MOBILE_DISPATCH_GATE'] = $gateName
     $start.Environment['AGENT_MOBILE_DISPATCH_PAYLOAD'] = $payloadBase64
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     $started = $false
     try {
+        if ($env:DISPATCH_TEST_FORCE_WRAPPER_START_FAILURE -ceq '1') {
+            throw 'fixture_wrapper_start_failure'
+        }
         if (-not $process.Start()) { throw 'dispatch gate wrapper 启动失败。' }
         $started = $true
         # wrapper 此时只能 WaitOne；Assign 成功之前没有任何路径能启动 claude/MCP。
@@ -786,6 +879,14 @@ exit $childExit
             $process.Dispose()
         }
         throw
+    }
+    finally {
+        # Process.Start 成功时 child 已取得环境快照；失败时同样不能让局部 PSI/hashtable
+        # 在异常展开期间继续持有 bearer。值不写日志，只原地断引用。
+        foreach ($key in @($SensitiveEnvironment.Keys)) {
+            [void]$start.Environment.Remove([string]$key)
+            $SensitiveEnvironment[$key] = $null
+        }
     }
 }
 
@@ -810,6 +911,11 @@ $dispatchJobHandle = [IntPtr]::Zero
 $dispatchJobName = ''
 $dispatchJobGate = $null
 $dispatchJobDrained = $false
+$codexWorkspace = ''
+    $codexWorkspaceParent = ''
+$sensitiveChildEnvironment = @{}
+$childEnvironmentOverrides = @{}
+$childEnvironmentAllowList = @()
 try {
     $leaseOwnerToken = [string]$env:AGENT_MOBILE_DEVICE_LEASE_TOKEN
     try {
@@ -864,14 +970,6 @@ $prompt = $preamble + "`n`n" + $TaskText
     Set-Content -LiteralPath $PromptFile -Value $prompt -Encoding utf8
     [void](Resolve-DispatchSafePersistentPath -Path $PromptFile -ExpectedRoot $TracesDir `
         -BoundaryRoot $RepoRoot -PathKind Leaf)
-    $claudeBin = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $claudeBin) { throw '找不到 claude 可执行文件。' }
-
-    # 环境卫生：从 Claude 会话内派单时，子进程须按普通 headless 跑，清掉宿主注入的 CLAUDE* 变量。
-    # ANTHROPIC_BASE_URL 有意保留——它是回落通道的合法开关（主设计 §5）；派单认证异常时先查它。
-    Get-ChildItem Env: | Where-Object { $_.Name -like 'CLAUDE*' } |
-        ForEach-Object { Remove-Item "Env:$($_.Name)" -ErrorAction SilentlyContinue }
-
     # --allowedTools 只是"免确认"名单，不阻止别的工具（2026-07-26 实测执行器在派单里
     # 真的跑起了本机 Bash）。执行器的职责只有驱动手机，本机 shell / 文件 / 网络一律拒绝：
     # 仓库里就放着 gateway 私密 token，让它能读本机文件等于给证据脱敏链开后门。
@@ -900,18 +998,90 @@ $prompt = $preamble + "`n`n" + $TaskText
         'ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger',
         'EnterWorktree', 'ExitWorktree', 'DesignSync'
     ) -join ','
-    $argList = @('-p', '--output-format', 'stream-json', '--verbose',
-                 '--mcp-config', $McpConfig, '--strict-mcp-config',
-                 '--allowedTools', $AllowedTools,
-                 '--disallowedTools', $LocalToolDenyList,
-                 '--max-budget-usd', "$MaxBudgetUsd", '--model', $Model)
-    Write-Host "派单：$Slug · 第 $Leg 腿 · $Executor · $Model · ≤`$$MaxBudgetUsd · ≤${TimeoutMin}min ..."
+    $launchWorkingDirectory = $RepoRoot
+    $scrubEnvironmentPatterns = @()
+    if ($Brain -eq 'claude') {
+        $claudeBin = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $claudeBin) { throw '找不到 claude 可执行文件。' }
+
+        # 保持既有 Claude headless 环境语义；ANTHROPIC_BASE_URL 是回落通道合法开关。
+        Get-ChildItem Env: | Where-Object { $_.Name -like 'CLAUDE*' } |
+            ForEach-Object { Remove-Item "Env:$($_.Name)" -ErrorAction SilentlyContinue }
+        $brainExecutable = [string]$claudeBin.Source
+        $argList = @('-p', '--output-format', 'stream-json', '--verbose',
+                     '--mcp-config', $McpConfig, '--strict-mcp-config',
+                     '--allowedTools', $AllowedTools,
+                     '--disallowedTools', $LocalToolDenyList,
+                     '--max-budget-usd', "$MaxBudgetUsd", '--model', $Model)
+    }
+    else {
+        # Codex 的 cwd 同时决定项目规则/AGENTS 发现边界。用 repo 外、随机、空目录，
+        # 再以 no-follow helper 验证每级容器；绝不把可信 repo 交给 Codex 当 project root。
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $codexWorkspaceParent = Join-Path $tempRoot 'agent-mobile-codex-workspaces'
+        [void](Resolve-DispatchSafePersistentPath -Path $codexWorkspaceParent `
+            -ExpectedRoot $codexWorkspaceParent -BoundaryRoot $tempRoot -PathKind Container -AllowMissing)
+        if (-not (Test-Path -LiteralPath $codexWorkspaceParent -PathType Container)) {
+            New-Item -ItemType Directory -Path $codexWorkspaceParent | Out-Null
+        }
+        [void](Resolve-DispatchSafePersistentPath -Path $codexWorkspaceParent `
+            -ExpectedRoot $codexWorkspaceParent -BoundaryRoot $tempRoot -PathKind Container)
+        $codexWorkspace = Join-Path $codexWorkspaceParent ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $codexWorkspace | Out-Null
+        $codexWorkspace = Resolve-DispatchSafePersistentPath -Path $codexWorkspace `
+            -ExpectedRoot $codexWorkspace -BoundaryRoot $tempRoot -PathKind Container
+        if (@(Get-ChildItem -LiteralPath $codexWorkspace -Force).Count -ne 0) {
+            throw 'Codex 隔离 workspace 创建后非空。'
+        }
+        $launchWorkingDirectory = $codexWorkspace
+        $launchSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $McpConfig `
+            -WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg
+        $brainExecutable = $launchSpec.Executable
+        $argList = $launchSpec.Arguments
+        $sensitiveChildEnvironment = $launchSpec.SensitiveEnvironment
+        $LedgerModel = $launchSpec.LedgerModel
+        $scrubEnvironmentPatterns = @(
+            'OPENAI*','CODEX*','AGENT_MOBILE_DEVICE_LEASE_TOKEN','CLAUDE*','ANTHROPIC*',
+            'RUST_LOG','RUST_BACKTRACE'
+        )
+        $childEnvironmentAllowList = @(
+            'SystemRoot','WINDIR','ComSpec','OS','TEMP','TMP','PATH','PATHEXT',
+            'LOCALAPPDATA','APPDATA','USERPROFILE','HOMEDRIVE','HOMEPATH','USERNAME','USERDOMAIN',
+            'ProgramData','ProgramFiles','ProgramFiles(x86)'
+        )
+        $childEnvironmentOverrides = @{ RUST_LOG = 'error' }
+        if (-not [string]::IsNullOrWhiteSpace([string]$env:CODEX_HOME)) {
+            $codexHome = [IO.Path]::GetFullPath([string]$env:CODEX_HOME)
+            $cursor = $codexHome
+            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+                $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+                if (-not $item.PSIsContainer -or
+                    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                    -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
+                    throw 'CODEX_HOME 路径含 reparse/link，拒绝把认证目录交给 child。'
+                }
+                $parent = [IO.Directory]::GetParent($cursor)
+                if ($null -eq $parent) { break }
+                $cursor = $parent.FullName
+            }
+            $childEnvironmentOverrides['CODEX_HOME'] = $codexHome
+        }
+        if ($Executor -eq 'gateway') {
+            $childEnvironmentOverrides['NO_PROXY'] = '127.0.0.1,localhost'
+            $childEnvironmentOverrides['no_proxy'] = '127.0.0.1,localhost'
+        }
+    }
+    $modelLabel = if ([string]::IsNullOrWhiteSpace($LedgerModel)) { '<codex-default>' } else { $LedgerModel }
+    Write-Host "派单：$Slug · 第 $Leg 腿 · $Executor · $Brain/$modelLabel · ≤`$$MaxBudgetUsd · ≤${TimeoutMin}min ..."
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $dispatchJobName = "AgentMobileDispatchJob-$PID-$([guid]::NewGuid().ToString('N'))"
     $dispatchJobHandle = [AgentMobileDispatchJob]::CreateKillOnClose($dispatchJobName)
-    $jobRoot = Start-DispatchJobRoot -JobHandle $dispatchJobHandle -ClaudePath $claudeBin.Source `
-        -ClaudeArguments $argList -WorkingDirectory $RepoRoot -PromptPath $PromptFile `
-        -TracePath $TraceFile -ErrorPath $ErrFile -JobName $dispatchJobName
+    $jobRoot = Start-DispatchJobRoot -JobHandle $dispatchJobHandle -ExecutablePath $brainExecutable `
+        -Arguments $argList -WorkingDirectory $launchWorkingDirectory -PromptPath $PromptFile `
+        -TracePath $TraceFile -ErrorPath $ErrFile -JobName $dispatchJobName `
+        -SensitiveEnvironment $sensitiveChildEnvironment -ScrubEnvironmentPatterns $scrubEnvironmentPatterns `
+        -EnvironmentAllowList $childEnvironmentAllowList -ChildEnvironmentOverrides $childEnvironmentOverrides
     $proc = $jobRoot.Process
     $dispatchJobGate = $jobRoot.Gate
     $finished = $proc.WaitForExit($TimeoutMin * 60 * 1000)
@@ -930,37 +1100,43 @@ $prompt = $preamble + "`n`n" + $TaskText
         }
     }
 
-    # ── 解析终态（trace 只尾读，不整读；会话纪律 3）───────────────────────
-    $resultEvent = $null
+    # ── 解析终态（逐行流式读取；双 schema 统一 fail closed）────────────────
+    $transcript = $null
+    $traceParseFailure = ''
     $TraceFile = Resolve-DispatchSafePersistentPath -Path $TraceFile -ExpectedRoot $TracesDir `
         -BoundaryRoot $RepoRoot -PathKind Leaf -AllowMissing
     if (Test-Path -LiteralPath $TraceFile -PathType Leaf) {
         $TraceFile = Resolve-DispatchSafePersistentPath -Path $TraceFile -ExpectedRoot $TracesDir `
             -BoundaryRoot $RepoRoot -PathKind Leaf
-        foreach ($line in (Get-Content -LiteralPath $TraceFile -Tail 30 -Encoding utf8)) {
-            try { $evt = $line | ConvertFrom-Json } catch { continue }
-            if ($evt.type -eq 'result') { $resultEvent = $evt }
-        }
+        try { $transcript = Read-DispatchTraceTranscript -TracePath $TraceFile -Brain $Brain }
+        catch { $traceParseFailure = 'trace-invalid-or-incomplete' }
     }
-    $turns = 0; $inTok = 0; $outTok = 0; $cacheRead = 0; $cacheWrite = 0; $cost = 0.0; $sid = ''; $final = ''
-    if ($resultEvent) {
-        $turns = [int]($resultEvent.num_turns ?? 0)
-        $cost = [double]($resultEvent.total_cost_usd ?? 0)
-        $sid = "$($resultEvent.session_id)"
-        if ($resultEvent.usage) {
-            $inTok = [long]($resultEvent.usage.input_tokens ?? 0)
-            $outTok = [long]($resultEvent.usage.output_tokens ?? 0)
-            $cacheRead = [long]($resultEvent.usage.cache_read_input_tokens ?? 0)
-            $cacheWrite = [long]($resultEvent.usage.cache_creation_input_tokens ?? 0)
-        }
-        if ($resultEvent.result -is [string]) { $final = $resultEvent.result }
+    $turns = $null; $inTok = $null; $outTok = $null; $cacheRead = $null; $cacheWrite = $null
+    $cost = $null; $sid = ''; $final = ''; $terminalSubtype = ''
+    if ($null -ne $transcript) {
+        $turns = $transcript.Turns
+        $cost = $transcript.CostUsd
+        $sid = [string]$transcript.SessionId
+        $inTok = $transcript.Usage.InputTokens
+        $outTok = $transcript.Usage.OutputTokens
+        $cacheRead = $transcript.Usage.CachedInputTokens
+        $cacheWrite = $transcript.Usage.CacheWriteTokens
+        $final = [string]$transcript.FinalText
+        $terminalSubtype = [string]$transcript.Terminal.Status
     }
 
     $note = ''
     if (-not $finished) { $verdict = 'timeout'; $note = "超时 ${TimeoutMin}min 被杀" }
-    elseif (-not $resultEvent) { $verdict = 'fail'; $note = '无 result 事件，见 err 文件' }
-    elseif ("$($resultEvent.subtype)" -match 'budget|max_turns') { $verdict = 'step-cap'; $note = $resultEvent.subtype }
-    elseif ("$($resultEvent.subtype)" -ne 'success') { $verdict = 'fail'; $note = $resultEvent.subtype }
+    elseif ($proc.ExitCode -ne 0) { $verdict = 'fail'; $note = "brain-process-exit-$($proc.ExitCode)" }
+    elseif ($null -eq $transcript) { $verdict = 'fail'; $note = $(if ($traceParseFailure) { $traceParseFailure } else { 'trace-missing' }) }
+    elseif (-not $transcript.Terminal.Success) { $verdict = 'fail'; $note = "brain-terminal-$terminalSubtype" }
+    elseif (@($transcript.Calls | Where-Object Server -cne $Executor).Count -gt 0) {
+        $verdict = 'fail'; $note = 'unauthorized-mcp-server'
+    }
+    elseif (@($transcript.Calls | Where-Object Outcome -ne 'success').Count -gt 0) {
+        $verdict = 'fail'; $note = 'mcp-transport-failure'
+    }
+    elseif ($terminalSubtype -match 'budget|max_turns') { $verdict = 'step-cap'; $note = $terminalSubtype }
     else {
         # 全文按行首匹配（模型偶尔在报告前多说一句话）；暂停标记优先——宁可误暂停交人看，不可漏暂停。
         #
@@ -997,7 +1173,8 @@ $prompt = $preamble + "`n`n" + $TaskText
     if ($verdict -eq 'paused' -and $Executor -eq 'gateway') {
         try {
             $gatewayPauseProof = Get-GatewayPauseTraceProof -TraceName "$base.jsonl" `
-                -ExpectedSlug $Slug -ExpectedLeg $Leg -ExpectedSessionId $sid -ExpectedPauseBody $final
+                -ExpectedSlug $Slug -ExpectedLeg $Leg -ExpectedBrain $Brain `
+                -ExpectedSessionId $sid -ExpectedPauseBody $final
         }
         catch {
             # 模型把危险调用后的 safety 终态包装成 AWAIT 时，不能先落一个可恢复暂停件再靠
@@ -1013,7 +1190,8 @@ $prompt = $preamble + "`n`n" + $TaskText
             "gateway_pause_evidence: $($gatewayPauseProof.EvidenceVersion)`n" +
                 "gateway_readonly_calls: $($gatewayPauseProof.ReadOnlyGatewayCalls)`n"
         }
-        $pauseDoc = "slug: $Slug`nleg: $Leg`nexecutor: $Executor`nsession_id: $sid`ntime: $stamp`n" +
+        $pauseDoc = "slug: $Slug`nleg: $Leg`nexecutor: $Executor`nbrain: $Brain`nmodel: $LedgerModel`n" +
+            "session_id: $sid`ntime: $stamp`n" +
             "trace: $base.jsonl`n$proofMeta---`n$final"
         Set-Content -LiteralPath $PauseFile -Value $pauseDoc -Encoding utf8
         [void](Resolve-DispatchSafePersistentPath -Path $PauseFile -ExpectedRoot $TracesDir `
@@ -1021,10 +1199,14 @@ $prompt = $preamble + "`n`n" + $TaskText
     }
 
     # ── 台账 + 摘要 ───────────────────────────────────────────────────────
-    $failReason = Get-FailReason -Verdict $verdict -Subtype "$($resultEvent.subtype)" -TraceFile $TraceFile
+    $failReason = Get-FailReason -Verdict $verdict -Subtype $terminalSubtype -TraceFile $TraceFile
     Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $cost $durS $verdict $sid "$base.jsonl" $note $failReason
     Write-Host ''
-    Write-Host "───── 派单结果：$verdict（$Executor · $turns 轮 · `$$([math]::Round($cost, 4)) · ${durS}s）─────"
+    $usageTurns = if ($null -eq $turns) { '?' } else { $turns }
+    $costSummary = if ($null -eq $cost -or $Brain -eq 'codex') { '订阅通道/无 API cost' } else {
+        "`$$([math]::Round([double]$cost, 4))"
+    }
+    Write-Host "───── 派单结果：$verdict（$Executor · $usageTurns 轮 · $costSummary · ${durS}s）─────"
     if ($final) { Write-Host $final }
     elseif ($lastSay) { Write-Host "（会话被上限截断，以下为末条 assistant 报告）`n$lastSay" }
     if ($note) { Write-Host "note: $note" }
@@ -1061,4 +1243,28 @@ finally {
         $dispatchJobHandle = [IntPtr]::Zero
     }
     if ($lockFs) { Close-DispatchLock -Stream $lockFs -Path $LockFile }
+    foreach ($key in @($sensitiveChildEnvironment.Keys)) {
+        $sensitiveChildEnvironment[$key] = $null
+        [void]$sensitiveChildEnvironment.Remove($key)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($codexWorkspace)) {
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $safeWorkspace = Resolve-DispatchSafePersistentPath -Path $codexWorkspace `
+            -ExpectedRoot $codexWorkspace -BoundaryRoot $tempRoot -PathKind Container
+        $expectedParent = [IO.Path]::GetFullPath($codexWorkspaceParent).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        if ([IO.Path]::GetDirectoryName($safeWorkspace) -cne $expectedParent) {
+            throw 'Codex workspace 清理目标越界。'
+        }
+        $workspaceChildren = @(Get-ChildItem -LiteralPath $safeWorkspace -Force)
+        if ($workspaceChildren.Count -ne 0) {
+            throw 'Codex 隔离 workspace 非空；拒绝递归跟随或删除，保留现场取证。'
+        }
+        Remove-Item -LiteralPath $safeWorkspace -Force
+        if (Test-Path -LiteralPath $codexWorkspaceParent -PathType Container) {
+            $remaining = @(Get-ChildItem -LiteralPath $codexWorkspaceParent -Force)
+            if ($remaining.Count -eq 0) { Remove-Item -LiteralPath $codexWorkspaceParent -Force }
+        }
+    }
 }

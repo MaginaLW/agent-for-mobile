@@ -291,6 +291,7 @@ if /I "%1"=="get-serialno" (
   echo FAKE-DISPATCH-DEVICE
   exit /b 0
 )
+if /I "%1"=="forward" exit /b 0
 exit /b 97
 '@
     Set-Content -LiteralPath (Join-Path $FakeBin 'adb.cmd') -Value $fakeAdb -Encoding ascii
@@ -303,6 +304,130 @@ exit /b 97
 "@
         Set-Content -LiteralPath (Join-Path $FakeBin "$tool.cmd") -Value $fakeTool -Encoding ascii
     }
+
+    # Codex 行为夹具必须像真实 `codex exec --json` 一样从 stdin 取 prompt、向 stdout
+    # 写 JSONL。敏感 token 只在进程内与已知夹具值做恒定比较；落盘只记随机 env 名与
+    # 布尔结果，绝不把值写进 sentinel。
+    $fakeCodexSource = Join-Path $SentinelDir 'fake-codex.cs'
+    $fakeCodexExe = Join-Path $FakeBin 'codex.exe'
+    @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+
+public static class Program {
+    public static int Main(string[] args) {
+        string sentinel = Environment.GetEnvironmentVariable("DISPATCH_TEST_SENTINEL_DIR");
+        if (Array.IndexOf(args, "tools.view_image=false") >= 0) {
+            Console.Error.WriteLine("strict-config fixture: unknown configuration field tools.view_image");
+            return 64;
+        }
+        if (Array.IndexOf(args, "code_mode_host") >= 0) {
+            Console.Error.WriteLine("strict fixture: MCP tool host was disabled");
+            return 65;
+        }
+        File.AppendAllText(Path.Combine(sentinel, "codex-called.txt"), string.Join(" ", args) + "\n", Encoding.UTF8);
+        File.WriteAllLines(Path.Combine(sentinel, "codex-argv.txt"), args, Encoding.UTF8);
+        string cwd = Directory.GetCurrentDirectory();
+        File.WriteAllText(Path.Combine(sentinel, "codex-cwd.txt"), cwd, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(sentinel, "codex-cwd-empty.txt"),
+            (Directory.GetFileSystemEntries(cwd).Length == 0).ToString().ToLowerInvariant(), Encoding.ASCII);
+        File.WriteAllText(Path.Combine(sentinel, "codex-prompt.txt"), Console.In.ReadToEnd(), Encoding.UTF8);
+        List<string> secretNames = new List<string>();
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
+            string name = (string)entry.Key;
+            if (name.StartsWith("AGENT_MOBILE_MCP_", StringComparison.Ordinal)) secretNames.Add(name);
+        }
+        File.WriteAllLines(Path.Combine(sentinel, "codex-secret-env-names.txt"), secretNames, Encoding.ASCII);
+        bool secretOk = secretNames.Count == 1 &&
+            Environment.GetEnvironmentVariable(secretNames[0]) == "fixture-bearer-value-must-never-leak";
+        File.WriteAllText(Path.Combine(sentinel, "codex-secret-ok.txt"),
+            secretOk.ToString().ToLowerInvariant(), Encoding.ASCII);
+        bool environmentOk = Environment.GetEnvironmentVariable("CODEX_ACCESS_TOKEN") == null &&
+            Environment.GetEnvironmentVariable("CODEX_SQLITE_HOME") == null &&
+            Environment.GetEnvironmentVariable("OPENAI_API_KEY") == null &&
+            Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY") == null &&
+            Environment.GetEnvironmentVariable("ARBITRARY_PARENT_SECRET") == null &&
+            Environment.GetEnvironmentVariable("RUST_BACKTRACE") == null &&
+            Environment.GetEnvironmentVariable("RUST_LOG") == "error" &&
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("SystemRoot")) &&
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("TEMP")) &&
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PATH")) &&
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("LOCALAPPDATA")) &&
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("USERPROFILE")) &&
+            Environment.GetEnvironmentVariable("CODEX_HOME") ==
+                Environment.GetEnvironmentVariable("DISPATCH_TEST_EXPECTED_CODEX_HOME") &&
+            Environment.GetEnvironmentVariable("NO_PROXY") == "127.0.0.1,localhost" &&
+            Environment.GetEnvironmentVariable("no_proxy") == "127.0.0.1,localhost";
+        File.WriteAllText(Path.Combine(sentinel, "codex-environment-ok.txt"),
+            environmentOk.ToString().ToLowerInvariant(), Encoding.ASCII);
+        Console.OutputEncoding = new UTF8Encoding(false);
+        string scenario = Environment.GetEnvironmentVariable("DISPATCH_TEST_CODEX_SCENARIO") ?? "paused";
+        if (scenario == "malformed") {
+            Console.WriteLine("{not-json");
+            return 0;
+        }
+        Console.WriteLine("{\"type\":\"thread.started\",\"thread_id\":\"offline-codex-thread\"}");
+        if (scenario == "turn-failed") {
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"error-1\",\"type\":\"error\",\"message\":\"redacted fixture diagnostic\"}}");
+            Console.WriteLine("{\"type\":\"turn.started\"}");
+            Console.WriteLine("{\"type\":\"error\",\"message\":\"redacted fixture diagnostic\"}");
+            Console.WriteLine("{\"type\":\"turn.failed\",\"error\":{\"message\":\"redacted fixture diagnostic\"}}");
+            return 1;
+        }
+        Console.WriteLine("{\"type\":\"turn.started\"}");
+        if (scenario == "success") {
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"Result: success\\nResult line follows.\\n结果：成功\"}}");
+            Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"cached_input_tokens\":0,\"output_tokens\":2}}");
+            return 0;
+        }
+        if (scenario == "other-server") {
+            Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"evil\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"evil\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true}\"}]},\"error\":null,\"status\":\"completed\"}}");
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：成功\"}}");
+            Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"cached_input_tokens\":0,\"output_tokens\":2}}");
+            return 0;
+        }
+        Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"gateway\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
+        if (scenario == "tool-failure") {
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"gateway\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":null,\"error\":{\"message\":\"redacted fixture failure\"},\"status\":\"failed\"}}");
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：失败\"}}");
+            Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"cached_input_tokens\":0,\"output_tokens\":2}}");
+            return 0;
+        }
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"gateway\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"data\\\":{\\\"package\\\":\\\"com.tencent.mm\\\"}}\"}],\"structured_content\":null},\"error\":null,\"status\":\"completed\"}}");
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"[AWAIT_CONFIRM]\\nstate: offline readonly proof.\\naction: wait for human confirmation.\\nremaining: none.\"}}");
+        Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"cached_input_tokens\":2,\"output_tokens\":7,\"cache_write_input_tokens\":3}}");
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $fakeCodexSource -Encoding utf8
+    $cscPath = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    $compilerOutput = & $cscPath /nologo /target:exe "/out:$fakeCodexExe" $fakeCodexSource 2>&1
+    Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $fakeCodexExe -PathType Leaf)) `
+        "测试设施错误：无法编译 fake codex.exe：$compilerOutput"
+    # 生产 resolver 只接受 OpenAI 签名的桌面应用 bundled exe；离线 fake 不得靠 PATH
+    # 冒充。只改 TEMP fixture 的调用点，显式传入测试 override，生产文件没有该入口参数。
+    $fixtureDispatchSource = Get-Content -LiteralPath $DispatchPath -Raw -Encoding utf8
+    $codexSpecNeedle = '-WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit'
+    Assert-True $fixtureDispatchSource.Contains($codexSpecNeedle, [StringComparison]::Ordinal) `
+        '测试设施错误：无法定位 Codex launch spec seam。'
+    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
+        $codexSpecNeedle,
+        "$codexSpecNeedle -CodexExecutableOverride '$($fakeCodexExe -replace "'","''")'"
+    )
+    $environmentSeam = '-EnvironmentAllowList $childEnvironmentAllowList -ChildEnvironmentOverrides'
+    Assert-True $fixtureDispatchSource.Contains($environmentSeam, [StringComparison]::Ordinal) `
+        '测试设施错误：无法定位 Codex environment allowlist seam。'
+    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
+        $environmentSeam,
+        "-PreserveEnvironmentNames @('DISPATCH_TEST_SENTINEL_DIR','DISPATCH_TEST_CODEX_SCENARIO'," +
+            "'DISPATCH_TEST_EXPECTED_CODEX_HOME') $environmentSeam"
+    )
+    Set-Content -LiteralPath $DispatchPath -Value $fixtureDispatchSource -Encoding utf8
 
     # 先显式执行 fake adb，证明隔离设施会记录调用；随后清掉 sentinel 再测 wrapper。
     $adbSentinel = Join-Path $SentinelDir 'adb-called.txt'
@@ -357,6 +482,432 @@ exit /b 97
     Assert-True (Test-Path -LiteralPath $fixtureLedgerHelper -PathType Leaf) `
         '测试设施错误：fixture 缺少 dispatch ledger helper。'
     . $fixtureLedgerHelper
+
+    Test-Case 'Codex 非 DryRun 必须启动官方 CLI、产出 trace/ledger 并进入真人确认窗口' {
+        $privateGatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination $privateGatewayConfig -Force
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        $poisonNames = @(
+            'CODEX_ACCESS_TOKEN','CODEX_SQLITE_HOME','OPENAI_API_KEY','RUST_LOG','RUST_BACKTRACE',
+            'DEEPSEEK_API_KEY','ARBITRARY_PARENT_SECRET','CODEX_HOME','DISPATCH_TEST_EXPECTED_CODEX_HOME'
+        )
+        $oldPoison = @{}
+        foreach ($name in $poisonNames) { $oldPoison[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            $env:CODEX_ACCESS_TOKEN = 'fixture-codex-access-token-must-not-reach-child'
+            $env:CODEX_SQLITE_HOME = 'fixture-codex-sqlite-must-not-reach-child'
+            $env:OPENAI_API_KEY = 'fixture-openai-key-must-not-reach-child'
+            $env:DEEPSEEK_API_KEY = 'fixture-deepseek-key-must-not-reach-child'
+            $env:ARBITRARY_PARENT_SECRET = 'fixture-arbitrary-secret-must-not-reach-child'
+            $env:RUST_LOG = 'trace'
+            $env:RUST_BACKTRACE = 'full'
+            $safeCodexHome = Join-Path $TestRoot 'fixture-codex-home-safe'
+            New-Item -ItemType Directory -Path $safeCodexHome -Force | Out-Null
+            $env:CODEX_HOME = $safeCodexHome
+            $env:DISPATCH_TEST_EXPECTED_CODEX_HOME = $safeCodexHome
+            $result = Invoke-Dispatch @(
+                '-Task','Codex dispatch offline contract','-Slug','offline-codex-channel',
+                '-Brain','codex','-Executor','gateway'
+            )
+            if ($result.ExitCode -ne 0) {
+                $fixtureErr = @(Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                    Where-Object Name -like '*-offline-codex-channel-gateway-codex-leg1.err.txt' |
+                    Select-Object -First 1)
+                if ($fixtureErr.Count -eq 1) {
+                    throw "Codex fixture 启动失败：$((Get-Content -LiteralPath $fixtureErr[0].FullName -Raw) -replace $testBearer,'<redacted>')"
+                }
+            }
+            Assert-ExitCode $result 0
+            Assert-True (@($result.ToolCalls | Where-Object { $_ -match '^codex:' }).Count -eq 1) `
+                'Codex 分支没有实际调用 fake codex。'
+            Assert-NotMatches $result.Text '接口已预留|实现推迟|Bearer\s+fixture'
+            Assert-Matches $result.Text '派单结果：paused|危险动作已暂停'
+
+            $argv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
+            foreach ($required in @(
+                'exec','--json','--ephemeral','--ignore-user-config','--ignore-rules',
+                '--sandbox','read-only','--disable','shell_tool',
+                'tools.web_search=false',
+                'mcp_servers.gateway.required=true','default_tools_approval_mode="approve"',
+                'shell_environment_policy.inherit="none"'
+            )) { Assert-Contains $argv $required }
+            # Codex 0.147 的 strict-config 不认识 tools.view_image；传它会在 MCP/model 前 exit 1。
+            # image_generation feature 仍被关闭，但 view_image 本身没有上游 disable flag，
+            # 不能在这里声称已机械禁用；外部 sandbox 边界由独立真实 smoke 验证。
+            Assert-NotMatches $argv 'tools\.view_image|unknown configuration field'
+            foreach ($disabledCodeFeature in @('code_mode','code_mode_buffered_exec','code_mode_only')) {
+                Assert-Contains $argv $disabledCodeFeature
+            }
+            Assert-NotMatches $argv '(?m)^code_mode_host$|MCP tool host was disabled'
+            Assert-NotMatches $argv '(?m)^--model\s*$|(?m)^sonnet\s*$|dangerously-bypass|approval_policy'
+            $codexCwd = (Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-cwd.txt') -Raw).Trim()
+            Assert-True (-not $codexCwd.StartsWith($RepoRoot, [StringComparison]::OrdinalIgnoreCase)) `
+                'Codex 仍在 repo/project root 内运行。'
+            Assert-Contains $argv $codexCwd
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-cwd-empty.txt') -Raw).Trim() -ceq 'true') `
+                'Codex 启动时的受控 workspace 非空。'
+            Assert-Contains (Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-prompt.txt') -Raw) `
+                'Codex dispatch offline contract'
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-secret-ok.txt') -Raw).Trim() -ceq 'true') `
+                'Codex 子进程没有通过随机 env 名取得 gateway token。'
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-environment-ok.txt') -Raw).Trim() -ceq 'true') `
+                'Codex child env 未完整 scrub token/debug 变量、保留 CODEX_HOME 或固定 loopback no_proxy。'
+            $secretNames = @(Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-secret-env-names.txt'))
+            Assert-True ($secretNames.Count -eq 1 -and $secretNames[0] -match '^AGENT_MOBILE_MCP_[A-F0-9]{32}$') `
+                'gateway token env 名不唯一或不可预测性不足。'
+
+            $trace = @(Get-ChildItem -LiteralPath $TracesDir -File |
+                Where-Object Name -like '*-offline-codex-channel-gateway-codex-leg1.jsonl')
+            $pause = @(Get-ChildItem -LiteralPath $TracesDir -File |
+                Where-Object Name -like '*-offline-codex-channel-gateway-codex-leg1.pause.md')
+            Assert-True ($trace.Count -eq 1) 'Codex JSONL trace 未按 brain basename 落盘。'
+            Assert-True ($pause.Count -eq 1) 'Codex paused 未落真人确认暂停件。'
+            Assert-Matches (Get-Content -LiteralPath $pause[0].FullName -Raw) 'gateway_pause_evidence: readonly-trace-v1'
+            Assert-Matches (Get-Content -LiteralPath $pause[0].FullName -Raw) '(?m)^brain: codex$'
+            $confirmDryRun = Invoke-Dispatch @('-Confirm',$pause[0].FullName,'-DryRun')
+            Assert-ExitCode $confirmDryRun 0
+            Assert-Matches $confirmDryRun.Text 'brain=codex'
+            Assert-NoExternalTools $confirmDryRun
+
+            $brainHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1'
+            Assert-True (Test-Path -LiteralPath $brainHelper -PathType Leaf) `
+                'dispatch 未提供 runner 可复用的双 schema helper。'
+            . $brainHelper
+            $transcript = Read-DispatchTraceTranscript -TracePath $trace[0].FullName -Brain codex
+            Assert-True ($transcript.Brain -ceq 'codex' -and $transcript.Schema -ceq 'codex-jsonl-v1') `
+                'canonical transcript 缺 brain/schema。'
+            Assert-True ($transcript.SessionId -ceq 'offline-codex-thread' -and
+                $transcript.Terminal.Status -ceq 'success' -and $transcript.Terminal.Success) `
+                'Codex session/terminal 未归一。'
+            Assert-True ($transcript.Calls.Count -eq 1 -and $transcript.Calls[0].Name -ceq 'foreground_app' -and
+                $transcript.Calls[0].ResultCount -eq 1 -and $transcript.Calls[0].Outcome -ceq 'success') `
+                'Codex MCP started/completed 未归一。'
+            $ledgerTail = Get-Content -LiteralPath $LedgerPath -Tail 1
+            Assert-Matches $ledgerTail ',codex,,1,11,7,2,3,,.*paused,offline-codex-thread,.*gateway-codex-leg1\.jsonl'
+            Assert-NotMatches ($result.Text + "`n" + (Get-Content -LiteralPath $trace[0].FullName -Raw) + "`n" + $ledgerTail) `
+                'fixture-bearer-value-must-never-leak'
+        }
+        finally {
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-codex-channel-gateway-codex-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) { [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length) }
+            foreach ($name in @(
+                'codex-called.txt','codex-argv.txt','codex-prompt.txt','codex-cwd.txt','codex-cwd-empty.txt',
+                'codex-secret-env-names.txt','codex-secret-ok.txt','codex-environment-ok.txt'
+            )) { Remove-Item -LiteralPath (Join-Path $SentinelDir $name) -Force -ErrorAction SilentlyContinue }
+            foreach ($name in $poisonNames) {
+                [Environment]::SetEnvironmentVariable($name, $oldPoison[$name])
+            }
+        }
+    }
+
+    Test-Case 'Codex JSONL 失败面与非选中 MCP server 必须 fail closed' {
+        Copy-Item -LiteralPath $validGatewayConfig -Destination (Join-Path $RepoRoot 'configs\gateway-mcp.json') -Force
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        $oldScenario = $env:DISPATCH_TEST_CODEX_SCENARIO
+        try {
+            $cases = @(
+                @{ Scenario='success'; Exit=0; Pattern='派单结果：success' },
+                @{ Scenario='malformed'; Exit=1; Pattern='trace-invalid-or-incomplete' },
+                @{ Scenario='tool-failure'; Exit=1; Pattern='mcp-transport-failure' },
+                @{ Scenario='turn-failed'; Exit=1; Pattern='brain-process-exit-1' },
+                @{ Scenario='other-server'; Exit=1; Pattern='unauthorized-mcp-server' }
+            )
+            foreach ($case in $cases) {
+                $env:DISPATCH_TEST_CODEX_SCENARIO = $case.Scenario
+                $slug = "offline-codex-$($case.Scenario)"
+                $result = Invoke-Dispatch @(
+                    '-Task',"Codex $($case.Scenario) contract",'-Slug',$slug,
+                    '-Brain','codex','-Executor','gateway'
+                )
+                Assert-ExitCode $result $case.Exit
+                Assert-Matches $result.Text $case.Pattern
+                Assert-NotMatches $result.Text 'redacted fixture diagnostic|redacted fixture failure|fixture-bearer-value'
+                $ledgerTail = Get-Content -LiteralPath $LedgerPath -Tail 1
+                Assert-NotMatches $ledgerTail 'redacted fixture diagnostic|redacted fixture failure|fixture-bearer-value'
+                Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                    Where-Object Name -like "*-$slug-gateway-codex-leg1.*" |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+                foreach ($name in @(
+                    'codex-called.txt','codex-argv.txt','codex-prompt.txt','codex-cwd.txt','codex-cwd-empty.txt',
+                    'codex-secret-env-names.txt','codex-secret-ok.txt','codex-environment-ok.txt'
+                )) { Remove-Item -LiteralPath (Join-Path $SentinelDir $name) -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        finally {
+            $env:DISPATCH_TEST_CODEX_SCENARIO = $oldScenario
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-codex-*-gateway-codex-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) { [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length) }
+        }
+    }
+
+    Test-Case 'Codex version probe 在启动官方 exe 前清空父环境' {
+        $source = Get-Content -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-brain.ps1') -Raw -Encoding utf8
+        $start = $source.IndexOf('function Resolve-DispatchTrustedCodexExecutable', [StringComparison]::Ordinal)
+        $end = $source.IndexOf('function New-DispatchCodexLaunchSpec', $start, [StringComparison]::Ordinal)
+        Assert-True ($start -ge 0 -and $end -gt $start) '无法定位 Codex version resolver。'
+        $resolver = $source.Substring($start, $end - $start)
+        Assert-Contains $resolver '$start.Environment.Clear()'
+        foreach ($required in @('SystemRoot','WINDIR','ComSpec','TEMP','PATH','PATHEXT')) {
+            Assert-Contains $resolver "'$required'"
+        }
+        Assert-NotMatches $resolver 'CODEX_HOME|ACCESS_TOKEN|API_KEY|DEEPSEEK|PROXY'
+    }
+
+    Test-Case 'shared transcript helper 在 StrictMode 3 下安全读取 Claude 可选字段并保留工具 inventory' {
+        $trace = Join-Path $SentinelDir 'claude-strictmode-transcript.jsonl'
+        try {
+            @(
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"ToolSearch","input":{"query":"gateway"}}]}}',
+                '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"schema loaded"}]}]}}',
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"forbidden fixture"}}]}}',
+                '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"not executed"}]}]}}',
+                '{"type":"result","subtype":"success","session_id":"strict-claude","result":"结果：成功"}'
+            ) | Set-Content -LiteralPath $trace -Encoding utf8
+            $transcript = & {
+                Set-StrictMode -Version 3.0
+                . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                Read-DispatchTraceTranscript -TracePath $trace -Brain claude
+            }
+            Assert-True ($transcript.SessionId -ceq 'strict-claude' -and $transcript.Terminal.Success) `
+                'StrictMode 3 下 Claude terminal/session 未归一。'
+            Assert-True ($null -eq $transcript.Usage.InputTokens -and $null -eq $transcript.Turns -and
+                $null -eq $transcript.CostUsd) '缺省 usage/turns/cost 被伪造成 0 或触发 StrictMode。'
+            Assert-True ($transcript.Calls.Count -eq 2 -and
+                $transcript.Calls[0].RawName -ceq 'ToolSearch' -and
+                $transcript.Calls[1].RawName -ceq 'Bash') 'ToolSearch/Bash inventory 在 shared helper 中丢失。'
+            Assert-True (@($transcript.Calls | Where-Object {
+                $_.Outcome -cne 'success' -or -not $_.CompletedBeforeNext
+            }).Count -eq 0) '缺省 is_error 应按 transport success 处理，且时序必须保留。'
+        }
+        finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'Codex 多条 agent_message 只把最后正文归一为 FinalText' {
+        $trace = Join-Path $SentinelDir 'codex-multiple-agent-messages.jsonl'
+        try {
+            @(
+                '{"type":"thread.started","thread_id":"codex-multi-message"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"intermediate-secret-must-not-escape"}}',
+                '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}',
+                '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}',
+                '{"type":"item.completed","item":{"id":"message-2","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"output_tokens":2}}'
+            ) | Set-Content -LiteralPath $trace -Encoding utf8
+            $transcript = & {
+                Set-StrictMode -Version 3.0
+                . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                Read-DispatchTraceTranscript -TracePath $trace -Brain codex
+            }
+            Assert-True ($transcript.Terminal.Success -and $transcript.FinalText -ceq '结果：成功') `
+                'Codex 多条 agent_message 应以最后一条作为 FinalText。'
+            $canonical = $transcript | ConvertTo-Json -Compress -Depth 20
+            Assert-NotMatches $canonical 'intermediate-secret-must-not-escape'
+            Assert-True ($null -eq $transcript.PSObject.Properties['Messages']) `
+                'canonical transcript 不得额外暴露前序 agent_message 集合。'
+        }
+        finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'Codex 最后 agent_message 早于 MCP completed 必须 fail closed' {
+        $trace = Join-Path $SentinelDir 'codex-message-before-call-completed.jsonl'
+        try {
+            @(
+                '{"type":"thread.started","thread_id":"codex-early-message"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"press_key","arguments":{"key":"enter"}}}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"press_key","arguments":{"key":"enter"},"result":{"content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"E_BLOCKED\"}}"}]},"error":null,"status":"completed"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"output_tokens":2}}'
+            ) | Set-Content -LiteralPath $trace -Encoding utf8
+            $rejected = $false
+            $rejectionMessage = ''
+            try {
+                $null = & {
+                    Set-StrictMode -Version 3.0
+                    . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                    Read-DispatchTraceTranscript -TracePath $trace -Brain codex
+                }
+            }
+            catch {
+                $rejectionMessage = $_.Exception.Message
+                $rejected = $rejectionMessage -match 'agent_message|MCP|completed|时序'
+            }
+            Assert-True $rejected "MCP 结果前的最后正文被错误接受或因错误理由拒绝：$rejectionMessage"
+        }
+        finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'Codex mobile 成功内容仅归一为脱敏 transport marker' {
+        $trace = Join-Path $SentinelDir 'codex-mobile-content.jsonl'
+        try {
+            $validCases = @(
+                @{
+                    Name='text'
+                    Result='{"content":[{"type":"text","text":"mobile-raw-text-secret-must-not-escape"}],"isError":false}'
+                    Type='text'; Sentinel='mobile-raw-text-secret-must-not-escape'
+                },
+                @{
+                    Name='image'
+                    Result='{"content":[{"type":"image","data":"c2VjcmV0LWltYWdlLXBheWxvYWQ=","mimeType":"image/png"}],"isError":false}'
+                    Type='image'; Sentinel='c2VjcmV0LWltYWdlLXBheWxvYWQ='
+                }
+            )
+            foreach ($case in $validCases) {
+                @(
+                    '{"type":"thread.started","thread_id":"codex-mobile-content"}',
+                    '{"type":"turn.started"}',
+                    '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"mobile","tool":"fixture_tool","arguments":{}}}',
+                    ('{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"mobile","tool":"fixture_tool","arguments":{},"result":' + $case.Result + ',"error":null,"status":"completed"}}'),
+                    '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                    '{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"output_tokens":2}}'
+                ) | Set-Content -LiteralPath $trace -Encoding utf8
+                $transcript = & {
+                    Set-StrictMode -Version 3.0
+                    . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                    Read-DispatchTraceTranscript -TracePath $trace -Brain codex
+                }
+                Assert-True ($transcript.Calls.Count -eq 1 -and
+                    $transcript.Calls[0].Outcome -ceq 'success' -and
+                    $transcript.Calls[0].ResultEnvelope.Transport -ceq 'mobile-content' -and
+                    $transcript.Calls[0].ResultEnvelope.ContentCount -eq 1 -and
+                    $transcript.Calls[0].ResultEnvelope.ContentTypes[0] -ceq $case.Type) `
+                    "mobile $($case.Name) 未归一为脱敏 marker。"
+                Assert-NotMatches ($transcript | ConvertTo-Json -Compress -Depth 20) ([regex]::Escape($case.Sentinel))
+            }
+
+            $invalidResults = @(
+                '{"content":[],"isError":false}',
+                '{"content":[{"type":"resource","uri":"file:///forbidden"}],"isError":false}',
+                '{"content":[{"type":"image","data":"not-base64!","mimeType":"image/png"}],"isError":false}',
+                '{"content":[{"type":"text","text":"must-reject"}],"isError":true}'
+            )
+            foreach ($invalidResult in $invalidResults) {
+                @(
+                    '{"type":"thread.started","thread_id":"codex-mobile-invalid"}',
+                    '{"type":"turn.started"}',
+                    '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"mobile","tool":"fixture_tool","arguments":{}}}',
+                    ('{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"mobile","tool":"fixture_tool","arguments":{},"result":' + $invalidResult + ',"error":null,"status":"completed"}}'),
+                    '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                    '{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"output_tokens":2}}'
+                ) | Set-Content -LiteralPath $trace -Encoding utf8
+                $rejected = $false
+                try {
+                    $null = & {
+                        Set-StrictMode -Version 3.0
+                        . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                        Read-DispatchTraceTranscript -TracePath $trace -Brain codex
+                    }
+                }
+                catch { $rejected = $true }
+                Assert-True $rejected "非法 mobile MCP result 被接受：$invalidResult"
+            }
+        }
+        finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'Codex mobile launch spec 固定关闭 telemetry 且拒绝配置注入 env' {
+        $config = Join-Path $SentinelDir 'mobile-codex-config.json'
+        try {
+            . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+            @{
+                mcpServers=@{
+                    mobile=@{ type='stdio'; command='npx'; args=@('-y','@mobilenext/mobile-mcp@0.0.62') }
+                }
+            } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $config -Encoding utf8
+            $spec = & {
+                Set-StrictMode -Version 3.0
+                . (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
+                New-DispatchCodexLaunchSpec -Profile ([pscustomobject]@{Name='mobile'}) `
+                    -ConfigPath $config -WorkspacePath $SentinelDir -Model '' -ModelWasExplicit $false `
+                    -Leg 1 -CodexExecutableOverride $fakeCodexExe
+            }
+            $telemetryArgs = @($spec.Arguments | Where-Object {
+                $_ -like 'mcp_servers.mobile.env=*'
+            })
+            Assert-True ($telemetryArgs.Count -eq 1 -and
+                $telemetryArgs[0] -ceq 'mcp_servers.mobile.env={MOBILEMCP_DISABLE_TELEMETRY="1"}') `
+                'mobile server 未固定 MOBILEMCP_DISABLE_TELEMETRY=1。'
+            $enabledToolArgs = @($spec.Arguments | Where-Object {
+                $_ -like 'mcp_servers.mobile.enabled_tools=*'
+            })
+            Assert-True ($enabledToolArgs.Count -eq 1) 'mobile server 缺少唯一 enabled_tools 白名单。'
+            $enabledTools = @(
+                'mobile_list_available_devices','mobile_list_apps','mobile_launch_app','mobile_terminate_app',
+                'mobile_get_screen_size','mobile_click_on_screen_at_coordinates',
+                'mobile_double_tap_on_screen','mobile_long_press_on_screen_at_coordinates',
+                'mobile_list_elements_on_screen','mobile_press_button','mobile_open_url',
+                'mobile_swipe_on_screen','mobile_type_keys','mobile_take_screenshot','mobile_set_orientation',
+                'mobile_get_orientation','mobile_list_crashes','mobile_get_crash'
+            )
+            $actualEnabledTools = @(($enabledToolArgs[0].Substring(
+                $enabledToolArgs[0].IndexOf('=', [StringComparison]::Ordinal) + 1)) |
+                ConvertFrom-Json -ErrorAction Stop)
+            Assert-True ($actualEnabledTools.Count -eq $enabledTools.Count) `
+                "mobile enabled_tools 数量漂移：expected=$($enabledTools.Count), actual=$($actualEnabledTools.Count)。"
+            $expectedSet = @($enabledTools | Sort-Object) -join "`n"
+            $actualSet = @($actualEnabledTools | ForEach-Object { [string]$_ } | Sort-Object) -join "`n"
+            Assert-True ($actualSet -ceq $expectedSet) `
+                "mobile leg1 enabled_tools 必须与锁定18项 exact set 深等。actual=$($actualEnabledTools -join ',')"
+            foreach ($forbidden in @(
+                'mobile_uninstall_app','mobile_install_app','mobile_save_screenshot',
+                'mobile_start_screen_recording','mobile_stop_screen_recording'
+            )) { Assert-True ($forbidden -notin $actualEnabledTools) "forbidden mobile tool 出现在白名单：$forbidden" }
+            Assert-True ($spec.SensitiveEnvironment.Count -eq 0) 'mobile launch spec 不得携带 gateway bearer。'
+
+            $leg2Spec = New-DispatchCodexLaunchSpec -Profile ([pscustomobject]@{Name='mobile'}) `
+                -ConfigPath $config -WorkspacePath $SentinelDir -Model '' -ModelWasExplicit $false `
+                -Leg 2 -CodexExecutableOverride $fakeCodexExe
+            $leg2Arg = @($leg2Spec.Arguments | Where-Object {
+                $_ -like 'mcp_servers.mobile.enabled_tools=*'
+            })
+            Assert-True ($leg2Arg.Count -eq 1) 'mobile leg2 缺少唯一 enabled_tools 白名单。'
+            $leg2Actual = @(($leg2Arg[0].Substring($leg2Arg[0].IndexOf('=') + 1)) |
+                ConvertFrom-Json -ErrorAction Stop)
+            $leg2Expected = @($enabledTools + 'mobile_uninstall_app' | Sort-Object) -join "`n"
+            Assert-True ($leg2Actual.Count -eq 19 -and
+                (@($leg2Actual | Sort-Object) -join "`n") -ceq $leg2Expected) `
+                'mobile leg2 必须仅比 leg1 多出 uninstall。'
+
+            $dispatchTokens = $null
+            $dispatchParseErrors = $null
+            $dispatchAst = [Management.Automation.Language.Parser]::ParseFile(
+                $SourceDispatchPath, [ref]$dispatchTokens, [ref]$dispatchParseErrors)
+            Assert-True ($dispatchParseErrors.Count -eq 0) 'dispatch.ps1 AST 解析失败。'
+            $publicParameters = @($dispatchAst.ParamBlock.Parameters | ForEach-Object {
+                $_.Name.VariablePath.UserPath
+            })
+            Assert-True ('Leg' -notin $publicParameters) 'dispatch CLI 不得暴露可直达第二腿的 -Leg 参数。'
+
+            @{
+                mcpServers=@{
+                    mobile=@{
+                        type='stdio'; command='npx'; args=@('-y','@mobilenext/mobile-mcp@0.0.62')
+                        env=@{ DEEPSEEK_API_KEY='must-not-enter-mobile-mcp' }
+                    }
+                }
+            } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $config -Encoding utf8
+            $rejected = $false
+            try {
+                $null = New-DispatchCodexLaunchSpec -Profile ([pscustomobject]@{Name='mobile'}) `
+                    -ConfigPath $config -WorkspacePath $SentinelDir -Model '' -ModelWasExplicit $false `
+                    -Leg 1 -CodexExecutableOverride $fakeCodexExe
+            }
+            catch { $rejected = $true }
+            Assert-True $rejected 'mobile 配置内自带 env 被错误接受。'
+        }
+        finally { Remove-Item -LiteralPath $config -Force -ErrorAction SilentlyContinue }
+    }
 
     Test-Case '执行器拒绝名单覆盖本机 shell、派生执行体与汇报类工具' {
         $src = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8

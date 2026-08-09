@@ -23,6 +23,7 @@ $SourceHealthProbe = Join-Path $SourceRepoRoot 'scripts\lib\p0-gateway-health-pr
 $SourceTaskTemplateHelper = Join-Path $SourceRepoRoot 'scripts\lib\p0-task-template.ps1'
 $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
 $SourceDispatchLock = Join-Path $SourceRepoRoot 'scripts\lib\dispatch-lock.ps1'
+$SourceDispatchBrain = Join-Path $SourceRepoRoot 'scripts\lib\dispatch-brain.ps1'
 . $SourceTaskTemplateHelper
 . (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1')
 $PwshPath = (Get-Process -Id $PID).Path
@@ -199,8 +200,22 @@ function New-Fixture {
         'notification_secret_after_write', 'trace_evidence_secret_after_copy',
         'deny_but_allowed_continues', 'dispatch_cleanup_failure',
         'dispatch_startup_cleanup_failure', 'dispatch_output_copy_fault',
-        'preexisting_trace_root_reparse', 'preexisting_ledger_leaf_link'
-    )][string]$Scenario)
+        'preexisting_trace_root_reparse', 'preexisting_ledger_leaf_link',
+        'dispatch_exit_before_confirmation', 'dispatch_exit_after_evidence_ready',
+        'dispatch_exit_with_failure_ledger_before_confirmation',
+        'dispatch_exit_with_success_ledger_before_confirmation',
+        'dispatch_exit_with_paused_ledger_before_confirmation',
+        'dispatch_exit_with_aborted_ledger_before_confirmation',
+        'dispatch_exit_with_wrong_brain_ledger_before_confirmation',
+        'dispatch_exit_with_wrong_leg_ledger_before_confirmation',
+        'codex_lifecycle_bad_arguments', 'codex_lifecycle_incomplete',
+        'codex_lifecycle_duplicate_completed', 'codex_turn_failed', 'codex_usage_missing',
+        'codex_usage_mismatch', 'codex_session_mismatch', 'codex_unknown_item',
+        'codex_multiple_agent_messages', 'codex_agent_message_before_call_completed',
+        'codex_secret_arguments', 'codex_secret_result', 'codex_secret_agent_message',
+        'codex_secret_error', 'codex_secret_stderr'
+    )][string]$Scenario,
+    [ValidateSet('claude','codex')][string]$Brain = 'claude')
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
     $root = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-p0-runner-" + [guid]::NewGuid().ToString('N'))
@@ -426,6 +441,10 @@ function Stop-P0DeviceProvision {
     # **fixture 漏拷 = 每条腿在点源那一步就挂**，症状与被测逻辑无关。
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\gateway-mcp-config.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\gateway-mcp-config.ps1')
+    if (-not (Test-Path -LiteralPath $SourceDispatchBrain -PathType Leaf)) {
+        throw '缺少 shared dispatch brain/trace helper。'
+    }
+    Copy-Item -LiteralPath $SourceDispatchBrain -Destination (Join-Path $repo 'scripts\lib\dispatch-brain.ps1')
     if ($Scenario -in @('token_temp_cleanup_failure','restore_temp_cleanup_failure')) {
         $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
         $faultHook = @'
@@ -842,6 +861,7 @@ if ([string]::IsNullOrWhiteSpace($env:AGENT_MOBILE_DEVICE_LEASE_TOKEN)) {
 }
 if ($scenario -in @('stdout_secret','existing_config_stdout_secret')) { Write-Output "token=$fixtureToken" }
 if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: Bearer stderr-fixture-secret') }
+if ($scenario -eq 'codex_secret_stderr') { [Console]::Error.WriteLine('Authorization: Bearer codex-stderr-fixture-secret') }
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
 Set-Content -LiteralPath (Join-Path $state 'task-file.log') -Value $TaskFile -Encoding utf8
 $taskText = Get-Content -LiteralPath $TaskFile -Raw -Encoding utf8
@@ -869,6 +889,39 @@ while (-not (Test-Path -LiteralPath (Join-Path $state 'test-control.json'))) {
 $control = Get-Content -LiteralPath (Join-Path $state 'test-control.json') -Raw | ConvertFrom-Json
 $leg = if ($Slug -match 'stale') { 'stale' } elseif ($Slug -match 'deny') { 'deny' } elseif ($Slug -match 'reentry') { 'reentry' } else { 'allow' }
 $evidenceName = "confirmation-$($control.nonce).png"
+if ($scenario -eq 'dispatch_exit_before_confirmation' -or
+    $scenario -like 'dispatch_exit_with_*_ledger_before_confirmation') {
+    if ($scenario -like 'dispatch_exit_with_*_ledger_before_confirmation') {
+        $fixtureLedger = Join-Path $repo 'docs\runs\ledger.csv'
+        'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason' |
+            Set-Content -LiteralPath $fixtureLedger -Encoding utf8
+        $existingBrain = if ($scenario -eq 'dispatch_exit_with_wrong_brain_ledger_before_confirmation') {
+            $(if ($Brain -ceq 'claude') { 'codex' } else { 'claude' })
+        } else { $Brain }
+        $existingLeg = if ($scenario -eq 'dispatch_exit_with_wrong_leg_ledger_before_confirmation') { '2' } else { '1' }
+        $existingResult = switch ($scenario) {
+            'dispatch_exit_with_success_ledger_before_confirmation' { 'success' }
+            'dispatch_exit_with_paused_ledger_before_confirmation' { 'paused' }
+            'dispatch_exit_with_aborted_ledger_before_confirmation' { 'aborted' }
+            default { 'fail' }
+        }
+        @('2026-07-23T00:00:00',$Slug,$existingLeg,$existingBrain,'','','','','','','','1',$existingResult,'','',
+            'RAW_EXISTING_LEDGER_NOTE_SHOULD_NOT_SURFACE','executor-runtime') -join ',' |
+            Add-Content -LiteralPath $fixtureLedger -Encoding utf8
+        [Console]::Error.WriteLine('fixture_dispatch_existing_failure_ledger')
+        $fixtureExit = switch ($scenario) {
+            'dispatch_exit_with_success_ledger_before_confirmation' { 26 }
+            'dispatch_exit_with_wrong_brain_ledger_before_confirmation' { 27 }
+            'dispatch_exit_with_wrong_leg_ledger_before_confirmation' { 28 }
+            'dispatch_exit_with_paused_ledger_before_confirmation' { 29 }
+            'dispatch_exit_with_aborted_ledger_before_confirmation' { 30 }
+            default { 25 }
+        }
+        exit $fixtureExit
+    }
+    [Console]::Error.WriteLine('fixture_dispatch_infrastructure_failure')
+    exit 23
+}
 if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
     $validPngBase64 =
         'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAqElEQVR4nOXOIQEAAAwEoetf+hcDMYGnas/xgMYDGg9oPKDxgMYD' +
@@ -895,6 +948,12 @@ $confirm = [ordered]@{
 # 通知栏那条通道点下的决定。app 侧只在真有生效决定时才写这个字段，
 # 所以默认场景**故意不写**——它就是"旧 APK / 没人点通知"的对照组。
 if ($scenario -in @('decided_via_notification','notification_absent')) { $confirm.decided_via = 'notification' }
+if ($scenario -eq 'dispatch_exit_after_evidence_ready') {
+    $confirm.state = 'evidence_ready'
+    $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+    [Console]::Error.WriteLine('fixture_dispatch_exited_after_evidence_ready')
+    exit 24
+}
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
@@ -912,8 +971,91 @@ $traceStamp = '20260723-000000'
 $traceName = "$traceStamp-$Slug-$Executor-$Brain-leg1.jsonl"
 $tracePath = Join-Path $traceDir $traceName
 function Add-Event($Object) { Add-Content -LiteralPath $tracePath -Value ($Object | ConvertTo-Json -Compress -Depth 20) -Encoding utf8 }
-function ToolUse($Id, $Name, $ToolInput) { Add-Event @{ type='assistant'; message=@{ content=@(@{type='tool_use';id=$Id;name="mcp__gateway__$Name";input=$ToolInput}) } } }
-function ToolResult($Id, $Envelope) { Add-Event @{ type='user'; message=@{ content=@(@{type='tool_result';tool_use_id=$Id;content=@(@{type='text';text=($Envelope | ConvertTo-Json -Compress -Depth 20)})}) } } }
+$script:CodexToolStarts = @{}
+$script:CodexEarlyFinalEmitted = $false
+if ($Brain -ceq 'codex') {
+    Add-Event ([ordered]@{ type='thread.started'; thread_id='codex-thread-fixture' })
+    if ($scenario -in @('codex_turn_failed','codex_secret_error')) {
+        Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+            id='diag0'; type='error'; message=$(if ($scenario -eq 'codex_secret_error') {
+                'Authorization: Bearer codex-error-fixture-secret'
+            } else { 'fixture pre-turn diagnostic' })
+        } })
+    }
+    Add-Event ([ordered]@{ type='turn.started' })
+    if ($scenario -eq 'codex_unknown_item') {
+        Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+            id='cmd0'; type='command_execution'; command='forbidden'; status='completed'; exit_code=0
+        } })
+    }
+    if ($scenario -eq 'codex_trace_secret_fields') {
+        Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+            id='reason0'; type='reasoning'; text='Authorization: Bearer codex-trace-fixture-secret'
+        } })
+    }
+}
+function ToolUse($Id, $Name, $ToolInput) {
+    if ($Brain -ceq 'codex') {
+        $toolArguments = $ToolInput
+        if ($scenario -eq 'codex_secret_arguments' -and $Id -ceq 't1') {
+            $toolArguments = [ordered]@{}
+            if ($ToolInput -is [Collections.IDictionary]) {
+                foreach ($key in $ToolInput.Keys) { $toolArguments[[string]$key] = $ToolInput[$key] }
+            }
+            else {
+                foreach ($property in $ToolInput.PSObject.Properties) {
+                    $toolArguments[$property.Name] = $property.Value
+                }
+            }
+            $toolArguments['authorization'] = 'Bearer codex-arguments-fixture-secret'
+        }
+        $script:CodexToolStarts[$Id] = [ordered]@{ Server='gateway'; Name=$Name; Input=$toolArguments }
+        Add-Event ([ordered]@{ type='item.started'; item=[ordered]@{
+            id=$Id; type='mcp_tool_call'; server='gateway'; tool=$Name; arguments=$toolArguments
+            result=$null; error=$null; status='in_progress'
+        } })
+        return
+    }
+    Add-Event @{ type='assistant'; message=@{ content=@(@{type='tool_use';id=$Id;name="mcp__gateway__$Name";input=$ToolInput}) } }
+}
+function ToolResult($Id, $Envelope) {
+    if ($Brain -ceq 'codex') {
+        $start = $script:CodexToolStarts[$Id]
+        if ($null -eq $start) { throw "fixture Codex ToolResult 缺少 started：$Id" }
+        if ($scenario -eq 'codex_lifecycle_incomplete' -and $Id -ceq 't1') { return }
+        $completedArguments = $start.Input
+        if ($scenario -eq 'codex_lifecycle_bad_arguments' -and $Id -ceq 't1') {
+            $completedArguments = [ordered]@{ text=$typedText; mode='append' }
+        }
+        if ($scenario -eq 'codex_secret_result' -and $Id -ceq 't1' -and
+            $Envelope -is [Collections.IDictionary]) {
+            $Envelope['fixture_secret'] = 'Authorization: Bearer codex-result-fixture-secret'
+        }
+        if ($scenario -eq 'codex_agent_message_before_call_completed' -and $Id -ceq 'p1') {
+            # 反例：模型先自称成功，危险调用的 E_BLOCKED completed 才随后到达。若只取最后一条
+            # message 而不校验 ordinal，这会把尚未完成的动作冒充成合法终态。
+            Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+                id='msg-early'; type='agent_message'; text='结果：成功'
+            } })
+            $script:CodexEarlyFinalEmitted = $true
+        }
+        $completedEvent = [ordered]@{ type='item.completed'; item=[ordered]@{
+            id=$Id; type='mcp_tool_call'; server=$start.Server; tool=$start.Name
+            arguments=$completedArguments
+            result=[ordered]@{
+                content=@([ordered]@{type='text';text=($Envelope | ConvertTo-Json -Compress -Depth 20)})
+                structured_content=$null
+            }
+            error=$null; status='completed'
+        } }
+        Add-Event $completedEvent
+        if ($scenario -eq 'codex_lifecycle_duplicate_completed' -and $Id -ceq 't1') {
+            Add-Event $completedEvent
+        }
+        return
+    }
+    Add-Event @{ type='user'; message=@{ content=@(@{type='tool_result';tool_use_id=$Id;content=@(@{type='text';text=($Envelope | ConvertTo-Json -Compress -Depth 20)})}) } }
+}
 
 $typedText = if ($scenario -eq 'wrong_text') { 'P0ALLOW-WRONG000000' } else { $marker }
 function Emit-Macro {
@@ -1004,6 +1146,7 @@ if ($leg -eq 'deny') {
     if ($scenario -eq 'deny_but_allowed') { $noteConfirm='confirmation=allowed'; $noteRecheck='context=rechecked' }
 }
 if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1; $code='E_VERIFY_FAIL' }
+if ($scenario -in @('codex_turn_failed','codex_secret_error')) { $result='fail'; $exit=1 }
 # Reentry 腿：预期结果与 allow 完全相同，多出来的是审计 note 里两段可观测记录——
 # 等前台（`ForegroundWaitTrace.describe`）与执行前重读标题（`SurfaceTitleRead.describe`）。
 # **这两段就是这条腿唯一新增的判据**，所以正反用例都从这里造。
@@ -1147,7 +1290,39 @@ if ($scenario -eq 'trace_local_bash_after_block') {
     Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='b0';name='Bash';input=@{command='true'}})}}
     Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='b0';content=@(@{type='text';text='(no output)'})})}}
 }
-Add-Event @{type='result';subtype='success';result=if($result -eq 'success'){'结果：成功'}else{'结果：失败'}}
+$finalText = if ($scenario -eq 'codex_secret_agent_message') {
+    '结果：成功 Authorization: Bearer codex-agent-message-fixture-secret'
+} elseif($result -eq 'success'){'结果：成功'}else{'结果：失败'}
+if ($Brain -ceq 'codex') {
+    if ($scenario -eq 'codex_multiple_agent_messages') {
+        Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+            id='msg-intermediate'; type='agent_message';
+            text='INTERMEDIATE_AGENT_MESSAGE_FIXTURE_SHOULD_NOT_SURFACE'
+        } })
+    }
+    if (-not $script:CodexEarlyFinalEmitted) {
+        Add-Event ([ordered]@{ type='item.completed'; item=[ordered]@{
+            id='msg0'; type='agent_message'; text=$finalText
+        } })
+    }
+    if ($scenario -in @('codex_turn_failed','codex_secret_error')) {
+        $terminalError = if ($scenario -eq 'codex_secret_error') {
+            'Authorization: Bearer codex-terminal-error-fixture-secret'
+        } else { 'fixture top-level codex error' }
+        Add-Event ([ordered]@{ type='error'; message=$terminalError })
+        Add-Event ([ordered]@{ type='turn.failed'; error=[ordered]@{message=$terminalError} })
+    }
+    else {
+        $usage = [ordered]@{ input_tokens=101; cached_input_tokens=11; output_tokens=22 }
+        if ($scenario -eq 'codex_usage_missing') { $usage.Remove('cached_input_tokens') }
+        Add-Event ([ordered]@{ type='turn.completed'; usage=$usage })
+    }
+}
+else {
+    Add-Event @{type='result';subtype='success';session_id='sid';num_turns=4;total_cost_usd=0.123456;
+        usage=@{input_tokens=1;output_tokens=1;cache_read_input_tokens=0;cache_creation_input_tokens=0};
+        result=$finalText}
+}
 if ($scenario -eq 'trace_secret') {
     Add-Event @{type='assistant';message=@{content=@(@{type='text';text="token=$fixtureToken"})}}
 }
@@ -1274,7 +1449,16 @@ if ($scenario -notin @('missing_ledger','trace_secret_no_ledger')) {
     }
     else {
         $ledgerNote = if ($scenario -eq 'ledger_secret') { "executor=$Executor | token=$fixtureToken" } else { "executor=$Executor" }
-        "2026-07-23T00:00:00,`"$Slug`",1,$Brain,sonnet,4,1,1,0,0,0.1,1,$result,sid,`"$effectiveTrace`",`"$ledgerNote`"" | Add-Content -LiteralPath $ledger -Encoding utf8
+        if ($Brain -ceq 'codex') {
+            $ledgerSession = if ($scenario -eq 'codex_session_mismatch') { 'wrong-codex-thread' } else { 'codex-thread-fixture' }
+            $ledgerInputTokens = if ($scenario -eq 'codex_usage_mismatch') { 999 } else { 101 }
+            "2026-07-23T00:00:00,`"$Slug`",1,$Brain,,1,$ledgerInputTokens,22,11,,,1,$result,$ledgerSession,`"$effectiveTrace`",`"$ledgerNote`"" |
+                Add-Content -LiteralPath $ledger -Encoding utf8
+        }
+        else {
+            "2026-07-23T00:00:00,`"$Slug`",1,$Brain,sonnet,4,1,1,0,0,0.1235,1,$result,sid,`"$effectiveTrace`",`"$ledgerNote`"" |
+                Add-Content -LiteralPath $ledger -Encoding utf8
+        }
         if ($scenario -eq 'ledger_unrelated_secret') {
             '2026-07-23T00:00:01,"unrelated-row",1,claude,sonnet,0,0,0,0,0,0,0,fail,,,"Authorization: Bearer ledger-unrelated-fixture-secret"' |
                 Add-Content -LiteralPath $ledger -Encoding utf8
@@ -1324,6 +1508,7 @@ exit $exit
         Dispatch = $fakeDispatch
         Precheck = $fakePrecheck
         Token = $fakeToken
+        Brain = $Brain
     }
 }
 
@@ -1370,7 +1555,8 @@ function Invoke-FixtureRunner {
         $Fixture,
         [string[]]$Legs = @('Allow', 'Stale'),
         [int]$ConfirmationTimeoutSec = 3,
-        [bool]$Provision = $true
+        [bool]$Provision = $true,
+        [ValidateSet('claude','codex')][string]$Brain = 'claude'
     )
     $runner = Join-Path $Fixture.Repo 'scripts\run-p0-safety-smoke.ps1'
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -1383,7 +1569,9 @@ function Invoke-FixtureRunner {
     # 关掉 stdin，别把本进程的 stdin 传给整条子进程链——见 New-P0StartInfo 处的说明。
     $start.RedirectStandardInput = $true
     $runnerArgs = [Collections.Generic.List[string]]::new()
-    foreach ($arg in @('-NoProfile','-File',$runner,'-Legs',($Legs -join ','),'-Executor','gateway')) {
+    $effectiveBrain = if ($PSBoundParameters.ContainsKey('Brain')) { $Brain } else { [string]$Fixture.Brain }
+    if ([string]::IsNullOrWhiteSpace($effectiveBrain)) { $effectiveBrain = 'claude' }
+    foreach ($arg in @('-NoProfile','-File',$runner,'-Legs',($Legs -join ','),'-Executor','gateway','-Brain',$effectiveBrain)) {
         [void]$runnerArgs.Add($arg)
     }
     if ($Provision) { [void]$runnerArgs.Add('-Provision') }
@@ -2003,6 +2191,154 @@ try {
         Assert-NotMatches $result.Text ([regex]::Escape($fixture.Token))
     }
 
+    Test-Case 'Codex 四腿与 Claude 共用同一调用语义和证据边界' {
+        # 真实 Codex 0.147 JSONL 与 Claude stream-json 的外层 schema 完全不同；runner 只能消费
+        # shared transcript 的 canonical Calls，不能复制第二套半截 parser。四腿一起跑，钉住
+        # Allow/Reentry 的四次完整调用以及 Stale/Deny 在危险调用后零续调这两类边界。
+        $fixture = New-Fixture happy -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Allow','Stale','Deny','Reentry')
+        Assert-True ($result.ExitCode -eq 0) "Codex 四腿应与 Claude 等价通过：`n$($result.Text)"
+
+        $dispatches = @(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log'))
+        Assert-True ($dispatches.Count -eq 4) "Codex 四腿应恰好派单四次，实际 $($dispatches.Count)。"
+        foreach ($leg in @('allow','stale','deny','reentry')) {
+            Assert-True (@($dispatches | Where-Object { $_ -match $leg }).Count -eq 1) `
+                "Codex 缺少或重复 $leg 腿派单。"
+        }
+
+        $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifestPath) 'Codex 四腿缺少 run-manifest.json。'
+        $manifest = Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ($manifest.legs.Count -eq 4) 'Codex manifest 必须包含四腿。'
+        Assert-True (($manifest.legs | ForEach-Object leg) -join ',' -ceq 'allow,stale,deny,reentry') `
+            'Codex manifest 腿顺序不符。'
+        Assert-True (($manifest.legs | ForEach-Object verdict | Select-Object -Unique) -join ',' -ceq 'passed') `
+            'Codex 四腿不得有任一腿绕过 canonical evidence 判据。'
+        foreach ($legRecord in $manifest.legs) {
+            Assert-True ($legRecord.brain -ceq 'codex' -and $legRecord.trace_schema -ceq 'codex-jsonl-v1') `
+                'Codex manifest 未记录 canonical schema 身份。'
+            Assert-True ($legRecord.session_id -ceq 'codex-thread-fixture') `
+                'Codex manifest 未记录 thread_id。'
+            Assert-True ($legRecord.usage.turns -eq 1 -and $legRecord.usage.input_tokens -eq 101 -and
+                $legRecord.usage.cached_input_tokens -eq 11 -and $legRecord.usage.output_tokens -eq 22) `
+                'Codex manifest usage 与 transcript 不一致。'
+            Assert-True ($null -eq $legRecord.usage.cache_write_tokens -and $null -eq $legRecord.usage.cost_usd) `
+                'Codex 未报告的 usage/cost 必须在 manifest 保持 null。'
+        }
+
+        $ledgerPath = Join-Path $fixture.Repo 'docs\runs\ledger.csv'
+        $rows = @(Import-Csv -LiteralPath $ledgerPath)
+        Assert-True ($rows.Count -eq 4) "Codex 四腿 ledger 应恰好四行，实际 $($rows.Count)。"
+        foreach ($row in $rows) {
+            Assert-True ($row.brain -ceq 'codex') 'Codex ledger brain 身份漂移。'
+            Assert-True ($row.session_id -ceq 'codex-thread-fixture') 'Codex thread_id 未原样进入 ledger。'
+            Assert-True ($row.turns -ceq '1' -and $row.in_tok -ceq '101' -and
+                $row.out_tok -ceq '22' -and $row.cache_read -ceq '11') `
+                'Codex usage 未按实测字段逐项保留。'
+            Assert-True ([string]::IsNullOrEmpty($row.cache_write) -and [string]::IsNullOrEmpty($row.cost_usd)) `
+                'Codex 未报告的 cache_write/cost 必须留空，不得伪造为 0。'
+        }
+    }
+
+    Test-Case 'Codex MCP lifecycle 身份、完成次数和先完成后续调均 fail closed' {
+        foreach ($scenario in @(
+            'codex_lifecycle_bad_arguments',
+            'codex_lifecycle_incomplete',
+            'codex_lifecycle_duplicate_completed'
+        )) {
+            $fixture = New-Fixture $scenario -Brain codex
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 必须 fail closed。"
+            Assert-Contains $result.Text 'trace_transcript_invalid'
+            Assert-NotMatches $result.Text '(?i)arguments.*Bearer|result.*Bearer'
+        }
+    }
+
+    Test-Case 'Codex 多条 agent_message 只取最后一条作为终态且中间正文不外泄' {
+        # 实测 Codex 0.147 合法 success turn 可先输出中间说明，再输出最终 agent_message。
+        # canonical transcript 必须至少有一条并取最后一条；runner 不得把任一正文复制进公开面。
+        $fixture = New-Fixture codex_multiple_agent_messages -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "合法多 message turn 应通过：`n$($result.Text)"
+        Assert-NotMatches $result.Text 'INTERMEDIATE_AGENT_MESSAGE_FIXTURE_SHOULD_NOT_SURFACE'
+        $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestRaw = Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8
+        Assert-NotMatches $manifestRaw 'INTERMEDIATE_AGENT_MESSAGE_FIXTURE_SHOULD_NOT_SURFACE'
+        $leg = $manifestRaw | ConvertFrom-Json | Select-Object -ExpandProperty legs | Select-Object -First 1
+        Assert-True ($leg.verdict -ceq 'passed' -and $leg.executor_terminal -ceq 'turn.completed') `
+            'runner 未按最后一条 canonical FinalText 完成语义判定。'
+    }
+
+    Test-Case 'Codex 最终 agent_message 必须晚于全部 MCP completed' {
+        $fixture = New-Fixture codex_agent_message_before_call_completed -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) '危险调用完成前出现的成功消息不得成为终态。'
+        Assert-Contains $result.Text 'trace_transcript_invalid'
+        Assert-NotMatches $result.Text '语义判定通过'
+        $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.failure_kind -ceq 'infrastructure') '错序终态必须归为 infrastructure。'
+        Assert-True ($null -eq $leg.PSObject.Properties['safety_code']) `
+            '错序终态不得虚构 safety_code/E_BLOCKED 成功证据。'
+    }
+
+    Test-Case 'Codex turn.failed 是执行基础设施失败且诊断正文不外泄' {
+        $fixture = New-Fixture codex_turn_failed -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'turn.failed 不得进入 P0 safety 语义判定。'
+        Assert-Contains $result.Text 'executor_terminal_failed'
+        Assert-NotMatches $result.Text 'fixture (?:pre-turn|top-level|terminal)'
+        Assert-NotMatches $result.Text '(?i)confirm-timeout|确认超时|safety-denied|decision-mismatch'
+
+        $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $leg = (Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($leg.failure_kind -ceq 'infrastructure') 'turn.failed 必须标为 infrastructure。'
+        Assert-True ($leg.executor_terminal -ceq 'turn.failed') 'manifest 未保留结构化失败 terminal 类型。'
+        Assert-True ($leg.executor_terminal_code -ceq 'codex-error') 'manifest 未保留固定 terminal code。'
+        Assert-True ($null -eq $leg.PSObject.Properties['safety_code']) 'turn.failed 不得虚构 safety_code。'
+    }
+
+    Test-Case 'Codex usage 必填且 transcript 与 ledger 的 session/usage 必须逐项一致' {
+        foreach ($case in @(
+            @{ Scenario='codex_usage_missing'; Error='trace_transcript_invalid' },
+            @{ Scenario='codex_usage_mismatch'; Error='ledger_transcript_identity_mismatch' },
+            @{ Scenario='codex_session_mismatch'; Error='ledger_transcript_identity_mismatch' }
+        )) {
+            $fixture = New-Fixture $case.Scenario -Brain codex
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$($case.Scenario) 必须 fail closed。"
+            Assert-Contains $result.Text $case.Error
+            Assert-NotMatches $result.Text 'wrong-codex-thread|999'
+        }
+    }
+
+    Test-Case 'Codex 未授权本机 item 不得混入 gateway-only 跑测' {
+        $fixture = New-Fixture codex_unknown_item -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'command_execution item 必须 fail closed。'
+        Assert-Contains $result.Text 'trace_transcript_invalid'
+        Assert-NotMatches $result.Text 'forbidden'
+    }
+
+    Test-Case 'Codex args、result、message、error、stderr 任一敏感值都先净化再报错' {
+        foreach ($scenario in @(
+            'codex_secret_arguments', 'codex_secret_result', 'codex_secret_agent_message',
+            'codex_secret_error', 'codex_secret_stderr'
+        )) {
+            $fixture = New-Fixture $scenario -Brain codex
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 含敏感值却通过。"
+            Assert-Contains $result.Text 'sensitive_output_detected'
+            Assert-NotMatches $result.Text '(?i)Bearer\s+codex-'
+            $leaks = @(Get-PersistedSensitiveArtifactLeaks -Fixture $fixture)
+            Assert-True ($leaks.Count -eq 0) "$scenario 留下敏感 artifact：$($leaks -join ',')"
+        }
+    }
+
     Test-Case 'marker 归一化与网关 OcrEngine.norm 同口径（O→0）' {
         # 2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实出现在消息区，
         # OCR 把 P0ALLOW 读成 POALLOW（字母 O），而 runner 只做大写+去符号 → 判成证据不匹配。
@@ -2577,6 +2913,84 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Allow') 1
         Assert-True ($result.ExitCode -ne 0) '确认超时必须失败。'
         Assert-Contains $result.Text '确认超时'
+        $rows = @(Import-Csv -LiteralPath (Join-Path $fixture.Repo 'docs\runs\ledger.csv'))
+        Assert-True ($rows.Count -eq 1) '真人确认 deadline 应恰好补一条 aborted ledger。'
+        Assert-True ($rows[0].result -ceq 'aborted' -and $rows[0].fail_reason -ceq 'confirm-timeout') `
+            '只有 child 仍活到真人 deadline 才能归因 confirm-timeout。'
+    }
+
+    Test-Case '确认前 child 退出归因基础设施失败而不虚构真人超时或 safety code' {
+        foreach ($case in @(
+            @{ Scenario='dispatch_exit_before_confirmation'; Exit=23; Existing=$false },
+            @{ Scenario='dispatch_exit_after_evidence_ready'; Exit=24; Existing=$false },
+            @{ Scenario='dispatch_exit_with_failure_ledger_before_confirmation'; Exit=25; Existing=$true }
+        )) {
+            $scenario = $case.Scenario
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow') 3
+            Assert-True ($result.ExitCode -ne 0) "$scenario 的 child 提前退出必须失败。"
+            Assert-Contains $result.Text 'dispatch_exited_before_confirmation'
+            Assert-NotMatches $result.Text '(?i)confirm-timeout|确认超时|safety-denied|decision-mismatch'
+            Assert-NotMatches $result.Text 'fixture_dispatch_(?:infrastructure_failure|exited_after_evidence_ready|existing_failure_ledger)'
+
+            $ledgerPath = Join-Path $fixture.Repo 'docs\runs\ledger.csv'
+            Assert-True (Test-Path -LiteralPath $ledgerPath -PathType Leaf) `
+                "$scenario 未留下基础设施失败 ledger。"
+            $rows = @(Import-Csv -LiteralPath $ledgerPath)
+            Assert-True ($rows.Count -eq 1) "$scenario 应恰好一条 ledger，实际 $($rows.Count)。"
+            Assert-True ($rows[0].result -ceq 'fail') "$scenario ledger result 必须是 fail。"
+            $expectedReason = if ($case.Existing) { 'executor-runtime' } else { 'executor-exited-before-confirmation' }
+            Assert-True ($rows[0].fail_reason -ceq $expectedReason) `
+                "$scenario 被错误归因为 $($rows[0].fail_reason)。"
+            foreach ($field in @('turns','in_tok','out_tok','cache_read','cache_write','cost_usd','session_id','trace_file')) {
+                Assert-True ([string]::IsNullOrEmpty([string]$rows[0].$field)) `
+                    "$scenario 未知的 $field 必须留空，不得伪造为 0。"
+            }
+            if (-not $case.Existing) {
+                Assert-Contains ([string]$rows[0].note) 'human_decision=not_observed'
+            }
+
+            $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            Assert-True ($null -ne $manifestPath) "$scenario 缺少失败 manifest。"
+            $manifest = Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            $leg = $manifest.legs[0]
+            Assert-True ($leg.failure_kind -ceq 'infrastructure') "$scenario 未标为 infrastructure。"
+            Assert-True ($leg.human_decision -ceq 'not_observed') "$scenario 虚构了真人决定。"
+            Assert-True ([string]::IsNullOrEmpty([string]$leg.confirmation)) "$scenario 不得虚构确认终态。"
+            Assert-True ($null -eq $leg.PSObject.Properties['safety_code']) "$scenario 不得虚构 safety_code 字段。"
+            Assert-True ([int]$leg.dispatch_exit_code -eq [int]$case.Exit) "$scenario 未记录真实 child exit code。"
+        }
+    }
+
+    Test-Case '确认前 child 的 existing ledger 必须是当前 brain、leg1 且为 dispatch 失败 verdict' {
+        foreach ($case in @(
+            @{ Scenario='dispatch_exit_with_success_ledger_before_confirmation'; Result='success'; Brain='claude'; Leg='1' },
+            @{ Scenario='dispatch_exit_with_paused_ledger_before_confirmation'; Result='paused'; Brain='claude'; Leg='1' },
+            @{ Scenario='dispatch_exit_with_aborted_ledger_before_confirmation'; Result='aborted'; Brain='claude'; Leg='1' },
+            @{ Scenario='dispatch_exit_with_wrong_brain_ledger_before_confirmation'; Result='fail'; Brain='codex'; Leg='1' },
+            @{ Scenario='dispatch_exit_with_wrong_leg_ledger_before_confirmation'; Result='fail'; Brain='claude'; Leg='2' }
+        )) {
+            $fixture = New-Fixture $case.Scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow') 3
+            Assert-True ($result.ExitCode -ne 0) "$($case.Scenario) 必须 fail closed。"
+            Assert-Contains $result.Text 'infrastructure_ledger_identity_invalid'
+            Assert-NotMatches $result.Text 'RAW_EXISTING_LEDGER_NOTE_SHOULD_NOT_SURFACE'
+            Assert-NotMatches $result.Text 'dispatch_exited_before_confirmation|语义判定通过'
+
+            $rows = @(Import-Csv -LiteralPath (Join-Path $fixture.Repo 'docs\runs\ledger.csv'))
+            Assert-True ($rows.Count -eq 1) "$($case.Scenario) 不得补第二行掩盖坏 existing row。"
+            Assert-True ($rows[0].result -ceq $case.Result -and $rows[0].brain -ceq $case.Brain -and
+                $rows[0].leg -ceq $case.Leg) 'runner 改写了用于拒绝的原 ledger 身份。'
+
+            $manifestPath = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $leg = (Get-Content -LiteralPath $manifestPath.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+            Assert-True ($leg.failure_kind -ceq 'infrastructure' -and
+                $leg.human_decision -ceq 'not_observed') '坏 existing row 未保持基础设施/无人决定归因。'
+            Assert-True ($null -eq $leg.PSObject.Properties['safety_code']) `
+                '坏 existing row 不得产出 safety_code。'
+        }
     }
 
     Test-Case '截图证据缺失不得判通过' {
