@@ -120,6 +120,20 @@ worktree 里，每人手上都有一份 backlog.md 副本，在自己分支上�
 "唯一交接面"会被 worktree 隔离切成三份。现在的规矩是队列只由主会话写，工序会话把队列
 变更当结论报告出来；读队列一律 `git show main:docs/backlog.md`，不读自己 worktree 的副本。
 
+### Codex C 证据必须在临时 worktree 回收前持久化（2026-08-12）
+
+批次 4 的两条 Codex C 结束后，临时 worktree 被清理，manifest、trace、截图路径随之失效，
+ledger 也没有自动进入 main；最终只能从 archived session 恢复两行台账。**任务消息里出现过路径，
+不等于证据已经归档。** 后续 C 无论通过还是冻结，都必须在释放 worktree 前完成三件事：
+
+1. 把 ledger 原始行交给 main 单写者，并按 run ID 验证 main 中**恰好一行**；dispatch 成功而
+   runner 后验失败时保留原始 dispatch 状态，不得为了迎合最终结论改写台账。
+2. 将需要长期保留且已经脱敏的 manifest、trace、截图和 cleanup 证据复制到主工作区
+   `docs/runs/evidence/<run-id>/`，逐文件记录 SHA-256。该目录 gitignored、只作本机持久证据；
+   token、私密配置和未脱敏输出不得复制。
+3. 最终回报完整 SHA、task、run、逐腿结论、cleanup、ledger 去重结果与持久证据路径。
+   这些交接完成前，C task 不得宣告完成或允许临时 worktree 被回收。
+
 ## C 道真机验收踩出的三条（2026-08-01，批次 1 连跑两轮验收）
 
 - **新 worktree 首跑必然空转两轮，除非先构建。** ①`run-p0-safety-smoke.ps1` **只装不构建**，

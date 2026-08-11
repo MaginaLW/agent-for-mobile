@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **待钉新 SHA**（当前基线 `d36e3d2`） | `claude/serene-faraday-42d1fb` | **两条 C 已冻结；A 修 runner 假阴性（0/4）** | `3ed077d` 的 fresh-title 阻断已由 `d36e3d2` 修复并在真机证实；第二条 C 的 Allow 已发送，却被 runner/gateway 连字符归一契约漂移误判。修复、全 gate、独立复核后另建 clean C，旧 task/run 均不复用 |
+| **4（最终安全修复 + Codex 通道）** | **`f0a767335e70aa99ed0fc242a1217978600435af`** | `claude/serene-faraday-42d1fb` | **第三条 clean C 已创建、待用户就位（0/4）** | task `019ff195-0fde-7eb2-ac1a-88ee11cc1a2d` 已置顶并固定该 SHA；HEAD/clean/`local.properties` 预热通过。旧 task/run 永久冻结，只能从头 Allow → Stale → Deny → Reentry |
 
 **批次 4 两条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -116,8 +116,15 @@ dispatch 58/58、gateway Debug/Release/assembleDebug、runner 144/144、凭据�
 「文件传输助手」，消息气泡也已在失败截图中出现；但 gateway 的 `normalized` / `query_normalized`
 按唯一生产契约保留连字符，runner 又用自己的 PowerShell 规则去掉连字符后严格比较，因而把成功发送
 判成证据不匹配。该 runner 假阴性后整轮按规则冻结，Stale/Deny/Reentry 未运行，cleanup clean；
-**批次 4 仍是 0/4、未判定。** 下一步只走 A 道：用真实 producer 形态补 RED，移除 `ui_find`
-边界的重复归一，完整 gate 与独立复审通过后提交并钉新 SHA，再创建第三条 clean C 从头四腿。
+**批次 4 仍是 0/4、未判定。** A 道已在 `f0a767335e70aa99ed0fc242a1217978600435af`
+移除 `ui_find` 边界的第三份归一：raw query 仍逐字绑定本腿 marker，非空 `query_normalized` 与全部
+match canonical 只在 gateway 同源字段间逐字比较，消息区几何仍是独立硬门。真实 producer fixture
+先得 RED `101 passed / 45 failed`，修后 runner `146/146`；两路独立复审 Approved，完整 gate 为
+dispatch 58/58、Debug 510/510、Release 407/407、assembleDebug、runner 49+49+48=146/146、凭据扫描 PASS。
+
+第三条 clean C task `019ff195-0fde-7eb2-ac1a-88ee11cc1a2d` 已置顶并固定 `f0a7673`；worktree
+HEAD/clean 与 gitignored `app/local.properties` 预热均已机械核对，当前只等待用户“已就位”。之后只能
+在该任务一次构建/安装/runner，从头按 Allow → Stale → Deny → Reentry（75s）四腿；任一失败即冻结。
 
 **证据留存缺口（与功能修复分开）：** 两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
