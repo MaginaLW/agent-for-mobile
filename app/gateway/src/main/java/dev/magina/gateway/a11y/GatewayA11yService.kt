@@ -927,50 +927,62 @@ class GatewayA11yService : AccessibilityService() {
         expectedInputCommitEvidence: InputCommitEvidence,
         expectedFocusedInputBounds: String?,
         expectedPreparedTargetEvidence: PreparedTargetEvidence,
+        onFinalTitleRead: (SurfaceTitleRead) -> Unit = {},
         rollback: () -> Unit,
     ): Boolean {
         rejectWhileConfirming()
-        return FreshEnterActionExecutor.execute(
-            expectedFocusIdentity = expectedFocusIdentity,
-            expectedFocusedInputBounds = expectedFocusedInputBounds,
-            expectedPrepared = expectedPreparedTargetEvidence,
-            expectedInput = expectedInputCommitEvidence,
-            readFreshBundle = { readSurfaceTitle().bundle },
-            readCurrent = ::readFreshActionState,
-            readSession = ImeBridge::session,
-            prepareAction = { capture ->
-                val node = focusedEditable()
-                val inputProof = readFreshPreparedInputProof(capture, node)
-                val a11yAction = node
-                    ?.takeIf {
-                        inputProof.nodePresent && inputProof.focused && inputProof.editable &&
-                            inputProof.nodeId != null
-                    }
-                    ?.let { current ->
-                        {
-                            current.performAction(
-                                AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id,
-                            )
+        var finalTitleRead: SurfaceTitleRead? = null
+        try {
+            return FreshEnterActionExecutor.execute(
+                expectedFocusIdentity = expectedFocusIdentity,
+                expectedFocusedInputBounds = expectedFocusedInputBounds,
+                expectedPrepared = expectedPreparedTargetEvidence,
+                expectedInput = expectedInputCommitEvidence,
+                readFreshBundle = {
+                    readSurfaceTitle().also {
+                        finalTitleRead = it
+                        onFinalTitleRead(it)
+                    }.bundle
+                },
+                readCurrent = ::readFreshActionState,
+                readSession = ImeBridge::session,
+                prepareAction = { capture ->
+                    val node = focusedEditable()
+                    val inputProof = readFreshPreparedInputProof(capture, node)
+                    val a11yAction = node
+                        ?.takeIf {
+                            inputProof.nodePresent && inputProof.focused && inputProof.editable &&
+                                inputProof.nodeId != null
                         }
+                        ?.let { current ->
+                            {
+                                current.performAction(
+                                    AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id,
+                                )
+                            }
+                        }
+                    FreshEnterPreparedAction(inputProof) {
+                        ImeBridge.enterIfCurrentSession(
+                            expectedPackage = expectedPreparedTargetEvidence.packageName,
+                            expectedSessionId = expectedFocusIdentity.imeSessionId,
+                            fastPrecondition = {
+                                isFreshActionStateCurrent(
+                                    expectedRevision = capture.revision,
+                                    expectedWindowId = capture.foregroundWindowId,
+                                    expectedPackage = expectedPreparedTargetEvidence.packageName,
+                                    imeMustBeHidden = false,
+                                )
+                            },
+                            a11yAction = a11yAction,
+                        )
                     }
-                FreshEnterPreparedAction(inputProof) {
-                    ImeBridge.enterIfCurrentSession(
-                        expectedPackage = expectedPreparedTargetEvidence.packageName,
-                        expectedSessionId = expectedFocusIdentity.imeSessionId,
-                        fastPrecondition = {
-                            isFreshActionStateCurrent(
-                                expectedRevision = capture.revision,
-                                expectedWindowId = capture.foregroundWindowId,
-                                expectedPackage = expectedPreparedTargetEvidence.packageName,
-                                imeMustBeHidden = false,
-                            )
-                        },
-                        a11yAction = a11yAction,
-                    )
-                }
-            },
-            rollback = rollback,
-        )
+                },
+                rollback = rollback,
+            )
+        } catch (error: GatewayError) {
+            // 这份 read 是最终投递边界使用的同一帧；失败时附到错误信封，不能再靠 logcat 猜。
+            throw finalTitleRead?.let { SurfaceTitleEvidence.attach(error, it) } ?: error
+        }
     }
 
     /**

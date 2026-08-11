@@ -6,6 +6,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.a11y.FocusedInputIdentity
+import dev.magina.gateway.a11y.SurfaceTitleEvidence
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
@@ -463,6 +464,7 @@ object UiTools {
         expectedPreparedTargetEvidence: PreparedTargetEvidence?,
     ): JSONObject {
         var completed = false
+        var finalTitleEvidence: SurfaceTitleEvidence? = null
         try {
             val a11y = GatewayA11yService.require()
             // SafetyGate 的普通上下文复核仍保留，但它不是最终视觉边界：同 App 会话可能不发事件。
@@ -497,6 +499,7 @@ object UiTools {
                 expectedInputCommitEvidence = guardedInput,
                 expectedFocusedInputBounds = expectedFocusedInputBounds,
                 expectedPreparedTargetEvidence = guardedTarget,
+                onFinalTitleRead = { read -> finalTitleEvidence = SurfaceTitleEvidence.from(read) },
                 rollback = {
                     Gateway.preparedTargetEvidence.clear()
                     Gateway.inputCommitEvidence.clear()
@@ -518,7 +521,9 @@ object UiTools {
                 channel = verdict.channel,
                 retryable = false,
                 fallback = "不要重试发送（可能已发出）；先只读复核会话最后一条消息再决定",
-                extra = enterDiagnostics(enterChannel),
+                extra = enterDiagnostics(enterChannel).apply {
+                    finalTitleEvidence?.let { put("title_read", it.toJson()) }
+                },
             )
             // UNVERIFIED 不当失败报：判不了 ≠ 没发出去，报失败会诱导重试，而重试发送等于冒重复发送。
             val response = JSONObject()
@@ -529,6 +534,7 @@ object UiTools {
                 .put("verification_detail", verdict.detail)
                 .put("enter_diagnostics", enterDiagnostics(enterChannel))
                 .apply {
+                    finalTitleEvidence?.let { put("title_read", it.toJson()) }
                     if (verdict.state == SendVerification.UNVERIFIED) put(
                         "next_step",
                         "本次发送没有机械证据。只能只读复核会话最后一条消息判断是否已发出；不得重按 Enter。",
@@ -536,6 +542,11 @@ object UiTools {
                 }
             completed = true
             return response
+        } catch (error: GatewayError) {
+            val evidence = finalTitleEvidence
+            if (evidence == null || error.extra?.has("title_read") == true) throw error
+            // 唯一 Enter 通道返回 false / session 终检失败也发生在最终标题读取之后；同样要留证。
+            throw SurfaceTitleEvidence.attach(error, evidence)
         } finally {
             // 校验失败、唯一通道 false/Exception、后验失败乃至致命 Error 都不得留下可重放双证据。
             if (!completed) {

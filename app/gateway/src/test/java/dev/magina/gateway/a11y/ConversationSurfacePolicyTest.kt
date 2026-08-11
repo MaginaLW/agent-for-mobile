@@ -117,6 +117,130 @@ class ConversationSurfacePolicyTest {
     }
 
     @Test
+    fun `the first content timestamp never wins over the real title`() {
+        // 批次 4 C 道真实像素：1260x2800；标题中心约 y=210，首条内容日期中心约 y=328。
+        // 旧标题带下沿是 12%×2800=336，日期因此被当成 TOOLBAR；而 ML Kit 恰好把它排在
+        // 标题前时，firstOrNull 会把「8月5日 20:50」当成会话标题。
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val date = element(text = "|8月5日2050", centerY = 328)
+        val title = element(text = "文件传输助手", centerY = 210)
+
+        assertEquals(
+            "文件传输助手",
+            ConversationSurfacePolicy.toolbarTitle(listOf(date, title), actualFrame)?.text,
+        )
+    }
+
+    @Test
+    fun `title selection is invariant to OCR candidate order`() {
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val date = element(text = "|8月5日2050", centerY = 328)
+        val title = element(text = "文件传输助手", centerY = 210)
+
+        listOf(listOf(date, title), listOf(title, date)).forEach { order ->
+            assertEquals("文件传输助手", ConversationSurfacePolicy.toolbarTitle(order, actualFrame)?.text)
+        }
+    }
+
+    @Test
+    fun `a taller screen does not pull the first content date back into the title band`() {
+        val tallHeight = 3600
+        val tallFrame = SurfaceFrame(screenWidth, tallHeight, systemTopInset = 100)
+        val date = element(text = "|8月5日2050", centerY = 328).copy(
+            stage = ConversationSurfacePolicy.stageOf("text", "|8月5日2050", 328, tallHeight),
+        )
+        val title = element(text = "文件传输助手", centerY = 210).copy(
+            stage = ConversationSurfacePolicy.stageOf("text", "文件传输助手", 210, tallHeight),
+        )
+
+        assertEquals(
+            "文件传输助手",
+            ConversationSurfacePolicy.toolbarTitle(listOf(date, title), tallFrame)?.text,
+        )
+        assertNull(ConversationSurfacePolicy.toolbarTitle(listOf(date), tallFrame))
+    }
+
+    @Test
+    fun `lower toolbar noise cannot win merely because OCR enumerated it first`() {
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val lowerNoise = element(text = "同步中", centerY = 260)
+        val title = element(text = "文件传输助手", centerY = 210)
+
+        assertEquals(
+            "文件传输助手",
+            ConversationSurfacePolicy.toolbarTitle(listOf(lowerNoise, title), actualFrame)?.text,
+        )
+    }
+
+    @Test
+    fun `two different labels on the same top row are ambiguous`() {
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val left = element(text = "文件传输助手", centerX = 560, centerY = 210)
+        val right = element(text = "张三", centerX = 700, centerY = 210)
+
+        assertNull(ConversationSurfacePolicy.toolbarTitle(listOf(left, right), actualFrame))
+        assertNull(ConversationSurfacePolicy.toolbarTitle(listOf(right, left), actualFrame))
+    }
+
+    @Test
+    fun `a narrow off center icon on the title row is not a competing title`() {
+        // 同一张 C 道截图里，标题右侧耳朵图标被带外 OCR 读成了窄的「G」。它与标题同排，
+        // 但不跨屏幕中心；若把同排不同文本一概判歧义，修完日期误选后仍会卡在这里。
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val icon = element(text = "G", centerX = 805, centerY = 208).let {
+            it.copy(bounds = SurfaceRect(791, 187, 820, 229))
+        }
+        val title = element(text = "文件传输助手", centerX = 593, centerY = 210).let {
+            it.copy(bounds = SurfaceRect(433, 183, 752, 236))
+        }
+
+        assertEquals(
+            "文件传输助手",
+            ConversationSurfacePolicy.toolbarTitle(listOf(icon, title), actualFrame)?.text,
+        )
+    }
+
+    @Test
+    fun `centered OCR cannot override a conflicting higher trust a11y title`() {
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val a11yTitle = element(
+            text = "张三",
+            source = "a11y",
+            confidence = null,
+            centerX = 400,
+            centerY = 210,
+        )
+        val centeredOcr = element(text = "文件传输助手", centerX = 630, centerY = 210)
+
+        assertEquals(
+            "张三",
+            ConversationSurfacePolicy.toolbarTitle(listOf(centeredOcr, a11yTitle), actualFrame)?.text,
+        )
+        assertNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(centeredOcr, a11yTitle),
+                actualFrame,
+                "文件传输助手",
+            ),
+        )
+    }
+
+    @Test
+    fun `expected label cannot cherry pick a lower candidate`() {
+        val actualFrame = SurfaceFrame(screenWidth, screenHeight, systemTopInset = 100)
+        val structuralTitle = element(text = "张三", centerY = 210)
+        val approvedTextLowerDown = element(text = "文件传输助手", centerY = 260)
+
+        assertNull(
+            ConversationSurfacePolicy.conversationTitle(
+                listOf(approvedTextLowerDown, structuralTitle),
+                actualFrame,
+                "文件传输助手",
+            ),
+        )
+    }
+
+    @Test
     fun `recognition rejects bounds that fall outside the screen`() {
         val broken = element().let {
             it.copy(bounds = SurfaceRect(-1, it.bounds.top, it.bounds.right, it.bounds.bottom))

@@ -5,6 +5,7 @@ import android.os.SystemClock
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.FreshEvidenceRebuildGuard
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.a11y.SurfaceTitleEvidence
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ApprovalIntent
 import dev.magina.gateway.core.CallHeartbeat
@@ -808,6 +809,12 @@ object ToolRegistry {
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
                 Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
                 val result = executeValidated(spec, frozenArgs, validatedContext)
+                if (name == "press_key" && frozenArgs.optString("key").equals("enter", ignoreCase = true)) {
+                    result.optJSONObject("title_read")?.let { title ->
+                        SurfaceTitleEvidence.auditFields(title)
+                            .forEach { field -> call.safetyNote += ";$field" }
+                    }
+                }
                 runCatching { Gateway.retryGuard.recordSuccess(name, call.argsFingerprint) }
                     .onFailure { error ->
                         call.safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
@@ -824,6 +831,9 @@ object ToolRegistry {
             finish(Envelope.ok(data, ctxSnapshot(), auditId), "OK", channelOf(name), image)
         } catch (e: GatewayError) {
             if (name == "type_text") Gateway.preparedTargetEvidence.clear()
+            // 最终 press_key fresh title 的脱敏摘要来自错误信封里的同一份对象；同时写 audit，
+            // runner 才能在不抓 logcat、不复制 OCR 原文的情况下把它落进 manifest。
+            SurfaceTitleEvidence.auditFields(e).forEach { field -> call.safetyNote += ";$field" }
             finish(Envelope.err(e, runCatching { ctxSnapshot() }.getOrElse { JSONObject() }, auditId), e.code.name, e.channel)
         } catch (e: Exception) {
             if (name == "type_text") Gateway.preparedTargetEvidence.clear()

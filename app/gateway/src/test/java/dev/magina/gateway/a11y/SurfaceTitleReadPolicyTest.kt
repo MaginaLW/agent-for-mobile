@@ -27,6 +27,7 @@ class SurfaceTitleReadPolicyTest {
         note: String? = null,
         elements: List<JSONObject> = emptyList(),
         blockingOverlay: Boolean = false,
+        systemTopInset: Int = 0,
     ): JSONObject {
         val raw = JSONObject()
             .put("fusion", fusion)
@@ -38,6 +39,7 @@ class SurfaceTitleReadPolicyTest {
             .put("foreground_known", true)
             .put("foreground_package", "com.tencent.mm")
             .put("blocking_overlay", blockingOverlay)
+            .put("system_top_inset", systemTopInset)
             .put("elements", JSONArray().also { array -> elements.forEach(array::put) })
         note?.let { raw.put("note", it) }
         return raw
@@ -65,8 +67,8 @@ class SurfaceTitleReadPolicyTest {
         return json
     }
 
-    private fun classify(raw: JSONObject?, elapsedMs: Long = 0L) =
-        SurfaceTitleReadPolicy.classify(raw, screenWidth, screenHeight, elapsedMs)
+    private fun classify(raw: JSONObject?, elapsedMs: Long = 0L, height: Int = screenHeight) =
+        SurfaceTitleReadPolicy.classify(raw, screenWidth, height, elapsedMs)
 
     // —— 四种处境各有各的名字 ——
 
@@ -131,6 +133,35 @@ class SurfaceTitleReadPolicyTest {
             SurfaceFrame.of(raw, screenWidth, screenHeight),
         )
         assertEquals(viaPolicy, attempt.title)
+    }
+
+    @Test
+    fun `a date from the first content row is never a resolved surface title`() {
+        val attempt = classify(
+            snapshot(
+                fusion = "ocr",
+                systemTopInset = 100,
+                elements = listOf(element(text = "|8月5日2050", centerY = 328)),
+            ),
+        )
+
+        assertEquals(SurfaceTitleOutcome.NO_CANDIDATE, attempt.outcome)
+        assertNull(attempt.title)
+    }
+
+    @Test
+    fun `a taller screen still keeps the first content date out of the title`() {
+        val attempt = classify(
+            snapshot(
+                fusion = "ocr",
+                systemTopInset = 100,
+                elements = listOf(element(text = "|8月5日2050", centerY = 328)),
+            ),
+            height = 3600,
+        )
+
+        assertEquals(SurfaceTitleOutcome.NO_CANDIDATE, attempt.outcome)
+        assertNull(attempt.title)
     }
 
     @Test

@@ -163,7 +163,11 @@ function Test-Case([string]$Name, [scriptblock]$Body) {
 
 function New-Fixture {
     param([ValidateSet(
-        'happy', 'fail_allow', 'timeout', 'missing_screenshot', 'missing_trace', 'missing_ledger',
+        'happy', 'fail_allow', 'allow_preaction_title_verify_fail',
+        'allow_success_no_final_title_evidence', 'allow_title_phase_mismatch',
+        'allow_title_token_summary_mismatch', 'allow_title_trace_payload_mismatch',
+        'allow_title_unverified_final', 'allow_title_truncated_selected_missing',
+        'timeout', 'missing_screenshot', 'missing_trace', 'missing_ledger',
         'wrong_text', 'wrong_hash', 'unrelated_find', 'unknown_post_tool', 'stale_read_after',
         'find_input', 'find_bottom', 'find_ocr_input', 'find_focus_missing', 'find_focus_changed',
         'trace_malformed', 'trace_non_gateway', 'trace_tool_search', 'trace_local_bash_after_block',
@@ -1126,6 +1130,7 @@ $noteTitle = ''
 $noteRecheck = 'context=rechecked'
 # 心跳每次工具调用都追加，**不是 Reentry 腿专属**——所以这里默认对每条腿都给。
 $noteBeat = 'sse_heartbeat=beats=6,token=yes'
+$titleEvidence = $null
 if ($leg -eq 'stale') {
     $result='fail'; $exit=1; $code='E_STALE_REF'
     # 开关打开后这条腿必然终止在**等前台**那一步，走不到 context=rechecked，也走不到重建。
@@ -1146,6 +1151,28 @@ if ($leg -eq 'deny') {
     if ($scenario -eq 'deny_but_allowed') { $noteConfirm='confirmation=allowed'; $noteRecheck='context=rechecked' }
 }
 if ($scenario -eq 'fail_allow' -and $leg -eq 'allow') { $result='fail'; $exit=1; $code='E_VERIFY_FAIL' }
+if ($scenario -eq 'allow_preaction_title_verify_fail' -and $leg -eq 'allow') {
+    $result='fail'; $exit=1; $code='E_VERIFY_FAIL'
+    $summary = 'attempts=1,waited_ms=510,result=resolved,resolved_at=1,trail=resolved,fg=0,band=2,sysrej=0,topcut=0,picked=ocr'
+    $candidate0 = [ordered]@{
+        ordinal=0;source='ocr';bounds='430:130:830:190';foreground_window=$false;window_id=$null;
+        normalized_length=9;text_sha256=('a' * 64);decision='selected'
+    }
+    $candidate1 = [ordered]@{
+        ordinal=1;source='ocr';bounds='420:150:840:215';foreground_window=$false;window_id=$null;
+        normalized_length=6;text_sha256=('b' * 64);decision='eligible_not_selected'
+    }
+    $titlePayload = [ordered]@{
+        schema_version=1;summary=$summary;selection_reason='conversation_surface_policy';candidate_count=2;
+        candidates_truncated=$false;selected=$candidate0;candidates=@($candidate0,$candidate1)
+    }
+    $titlePayloadJson = $titlePayload | ConvertTo-Json -Compress -Depth 12
+    $titleToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($titlePayloadJson)).TrimEnd('=').Replace('+','-').Replace('/','_')
+    $titleEvidence = [ordered]@{}
+    foreach ($property in $titlePayload.GetEnumerator()) { $titleEvidence[$property.Key] = $property.Value }
+    $titleEvidence['audit_token'] = $titleToken
+    $noteTitle = "final_title_read=$summary;title_evidence=$titleToken"
+}
 if ($scenario -in @('codex_turn_failed','codex_secret_error')) { $result='fail'; $exit=1 }
 # Reentry 腿：预期结果与 allow 完全相同，多出来的是审计 note 里两段可观测记录——
 # 等前台（`ForegroundWaitTrace.describe`）与执行前重读标题（`SurfaceTitleRead.describe`）。
@@ -1180,6 +1207,52 @@ if ($leg -eq 'reentry') {
         default { 'sse_heartbeat=beats=6,token=yes' }
     }
 }
+if ($code -eq 'OK' -and $scenario -cne 'allow_success_no_final_title_evidence') {
+    $unverifiedFinal = $scenario -ceq 'allow_title_unverified_final'
+    $finalSummary = if ($unverifiedFinal) {
+        'attempts=1,waited_ms=180,result=unverified,resolved_at=0,trail=no_title,fg=0,band=1,sysrej=0,topcut=0,picked=none'
+    } else {
+        'attempts=1,waited_ms=180,result=resolved,resolved_at=1,trail=resolved,fg=0,band=1,sysrej=0,topcut=0,picked=ocr'
+    }
+    $candidate = [ordered]@{
+        ordinal=0;source='ocr';bounds='420:150:840:215';foreground_window=$false;window_id=$null;
+        normalized_length=6;text_sha256=('c' * 64);decision=$(if ($unverifiedFinal) { 'eligible_not_selected' } else { 'selected' })
+    }
+    $titlePayload = [ordered]@{
+        schema_version=1;summary=$finalSummary;
+        selection_reason=$(if ($unverifiedFinal) { 'none' } else { 'conversation_surface_policy' });candidate_count=1;
+        candidates_truncated=$false;selected=$(if ($unverifiedFinal) { $null } else { $candidate });candidates=@($candidate)
+    }
+    if ($scenario -ceq 'allow_title_truncated_selected_missing') {
+        $persisted = @(0..11 | ForEach-Object {
+            [ordered]@{
+                ordinal=$_;source='ocr';bounds="420:$($_ + 150):840:$($_ + 215)";
+                foreground_window=$false;window_id=$null;normalized_length=6;
+                text_sha256=('{0:x64}' -f ($_ + 1));decision='eligible_not_selected'
+            }
+        })
+        $titlePayload.candidate_count = 14
+        $titlePayload.candidates_truncated = $true
+        $titlePayload.selected = [ordered]@{
+            ordinal=13;source='ocr';bounds='420:163:840:228';foreground_window=$false;window_id=$null;
+            normalized_length=6;text_sha256=('e' * 64);decision='selected'
+        }
+        $titlePayload.candidates = $persisted
+    }
+    $titlePayloadJson = $titlePayload | ConvertTo-Json -Compress -Depth 12
+    $titleToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($titlePayloadJson)).TrimEnd('=').Replace('+','-').Replace('/','_')
+    $titleEvidence = [ordered]@{}
+    foreach ($property in $titlePayload.GetEnumerator()) { $titleEvidence[$property.Key] = $property.Value }
+    $titleEvidence['audit_token'] = $titleToken
+    $auditSummary = if ($scenario -ceq 'allow_title_token_summary_mismatch') {
+        $finalSummary.Replace('waited_ms=180', 'waited_ms=181')
+    } else { $finalSummary }
+    $auditPhase = if ($scenario -ceq 'allow_title_phase_mismatch') { 'title_read' } else { 'final_title_read' }
+    $noteTitle = (@($noteTitle, "$auditPhase=$auditSummary", "title_evidence=$titleToken") | Where-Object { $_ }) -join ';'
+    if ($scenario -ceq 'allow_title_trace_payload_mismatch') {
+        $titleEvidence.candidates[0].text_sha256 = 'd' * 64
+    }
+}
 $note = (@($noteConfirm, $noteWait, $noteTitle, $noteRecheck, $noteBeat) |
     Where-Object { $_ }) -join ';'
 if ($code -eq 'OK') {
@@ -1190,6 +1263,7 @@ if ($code -eq 'OK') {
         'legacy_no_send_field' { @{done=$true} }
         default { @{done=$true;sent_verified=$true;verification_state='sent';verification_channel='a11y'} }
     }
+    if ($null -ne $titleEvidence) { $pressData['title_read'] = $titleEvidence }
     ToolResult 'p1' @{ok=$true;data=$pressData}
     if ($scenario -eq 'unknown_post_tool') {
         ToolUse 'u1' 'future_write' @{value='x'}
@@ -1273,6 +1347,9 @@ if ($code -eq 'OK') {
     }
 } else {
     $pressErrorEnvelope = @{ok=$false;error=@{code=$code;channel='safety';retryable=$false}}
+    if ($null -ne $titleEvidence) {
+        $pressErrorEnvelope.error['extra'] = @{title_read=$titleEvidence}
+    }
     if ($scenario -eq 'deny_but_sent') {
         # 有 bug 的网关：一边报 E_BLOCKED，一边带出"发送已验证"。信封形态是畸形的，
         # 但被测组件本来就是我们不敢假设其正确的那个——这条断言就是为这种情况准备的。
@@ -2685,12 +2762,16 @@ try {
                 "$($record.leg) 腿的心跳拍数没如实落盘。"
         }
         $allow = $legs | Where-Object { $_.leg -ceq 'allow' }
-        # Allow 腿不走重建，所以 title_read **本来就该缺席**——"没报告"要如实记成
-        # reported=false，而不是留空长得像数据丢了。
+        # Allow 不走批准后重建，但危险 Enter 自己仍有最终 fresh title 边界；它也必须持久化。
         Assert-True ($allow.title_read.reported -eq $false) `
-            'Allow 腿不走重建，title_read 该如实记为未报告。'
+            'Allow 不走批准后 rebuild，title_read 不得拿 final_enter 冒充。'
+        Assert-True ($allow.final_title_read.reported -eq $true) `
+            'Allow 最终 press_key fresh title 没有独立落 manifest。'
+        Assert-True ($allow.final_title_read.evidence.reported -eq $true) `
+            'Allow 最终候选摘要没有通过 audit/trace 同源校验。'
         $reentry = $legs | Where-Object { $_.leg -ceq 'reentry' }
         Assert-True ($reentry.title_read.reported -eq $true) 'Reentry 腿的 title_read 没落 manifest。'
+        Assert-True ($reentry.final_title_read.reported -eq $true) 'Reentry 最终 Enter 标题读取没落 manifest。'
         Assert-True ($reentry.title_read.trail -ceq 'resolved') `
             "title_read 的 trail 没如实落盘：$($reentry.title_read.trail)"
     }
@@ -2917,6 +2998,41 @@ try {
         Assert-True ($rows.Count -eq 1) '真人确认 deadline 应恰好补一条 aborted ledger。'
         Assert-True ($rows[0].result -ceq 'aborted' -and $rows[0].fail_reason -ceq 'confirm-timeout') `
             '只有 child 仍活到真人 deadline 才能归因 confirm-timeout。'
+    }
+
+    Test-Case 'Allow 与 Reentry 成功硬要求 final_enter 同源标题证据' {
+        foreach ($scenario in @(
+            'allow_success_no_final_title_evidence',
+            'allow_title_phase_mismatch',
+            'allow_title_token_summary_mismatch',
+            'allow_title_trace_payload_mismatch',
+            'allow_title_unverified_final',
+            'allow_title_truncated_selected_missing'
+        )) {
+            $result = Invoke-FixtureRunner (New-Fixture $scenario) @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 缺少或错配 final_enter 证据却冒充成功。"
+            Assert-Matches $result.Text 'final_title_read|同源|逐字段'
+        }
+    }
+
+    Test-Case 'Allow 投递前标题失败持久化脱敏候选且不声称 enter diagnostics' {
+        $fixture = New-Fixture allow_preaction_title_verify_fail
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '投递前标题 E_VERIFY_FAIL 必须让 Allow 失败。'
+        Assert-Contains $result.Text 'fresh title evidence'
+        Assert-NotMatches $result.Text 'enter_diagnostics'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $legRecord = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($legRecord.title_read.reported -eq $false) '投递前失败不得冒充 rebuild title_read。'
+        Assert-True ($legRecord.final_title_read.reported -eq $true) '最终 fresh title 摘要没有进入 manifest。'
+        Assert-True ($legRecord.final_title_read.evidence.reported -eq $true) '候选摘要没有通过 audit/trace 同源校验。'
+        Assert-True ($legRecord.final_title_read.evidence.candidate_count -eq 2) '候选数量未如实持久化。'
+        Assert-True ($legRecord.final_title_read.evidence.candidates[0].decision -ceq 'selected') 'selected 候选丢失。'
+        Assert-True ($legRecord.final_title_read.evidence.candidates[1].decision -ceq 'eligible_not_selected') `
+            '未选候选的理由丢失。'
+        $manifestText = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8
+        Assert-NotMatches $manifestText '文件传输助手|8月5日|secret-token'
     }
 
     Test-Case '确认前 child 退出归因基础设施失败而不虚构真人超时或 safety code' {

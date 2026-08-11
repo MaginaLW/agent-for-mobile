@@ -102,7 +102,23 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`3ed077d`** | `claude/serene-faraday-42d1fb` | **等待 B 道 residual 放行（0/4）** | 旧 C 的占位 exit 2 只算基础设施失败；新通道全 gate：dispatch 58、runner 142、Debug/Release/assembleDebug。用户接受 0.147 `view_image` 有界 residual 后，才新建 clean C 并同一 build 连跑 Allow → Stale → Deny → Reentry |
+| **4（最终安全修复 + Codex 通道）** | **待钉新 SHA**（上一基线 `3ed077d`） | `claude/serene-faraday-42d1fb` | **新 C Allow 阻断；A 修复已全 gate（0/4）** | `3ed077d` 的新 C 在真人允许后被 fresh title 日期误选挡住，正确 fail-closed、未发送；后三腿未跑。修复后 dispatch 58/58、gateway 全项、runner 144/144、凭据扫描、独立复审全过；提交新 SHA 后另建 clean C 四腿，不复用本次 C/run |
+
+**批次 4 新 C 道只记录阻断，不下批次功能结论。** task
+`019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 在 clean detached `3ed077d` 上启动唯一一次 runner，run
+`20260811T202517-0e176d3f08b9`。Allow 的真人确认结果为 `allowed`；`macro_run` 与 `type_text`
+成功，最终 `press_key` 前的 fresh title OCR 却选中日期文本而非已批准的「文件传输助手」，于是返回
+`E_VERIFY_FAIL`。没有 `ui_find`、没有发送，安全门按设计 fail-closed，cleanup clean。Allow 正向验收未满足后，
+Stale/Deny/Reentry 依规则均未启动。本次既不是 setup/dispatch 基础设施失败，也不能截取一腿判批次
+PASS/FAIL；批次 4 仍为 **0/4、未判定**，该 C task/worktree 冻结且不得复用。
+
+**A 道已完成针对性修复与离线闭环，尚待提交。** 标题区域下沿改用屏幕最短边的 24%；候选先按
+来源可信度收敛，再以与输入顺序无关的稳定规则排序，最强候选歧义继续 fail-closed。最终 Enter 前的
+fresh title 证据升级为成功腿硬门；trace、audit token 与 manifest 按 `phase` 逐字段同源，持久化内容
+只含长度、指纹、来源、框与选择理由等脱敏摘要。独立复审结论 Approved；完整 gate 为 dispatch
+58/58、gateway Debug/Release/assembleDebug 通过、runner 144/144、凭据扫描通过。**下一步只有一个：**
+提交并钉住新 SHA，然后创建另一条 clean C，按 Allow → Stale → Deny → Reentry 从头跑完整四腿；
+不得在已冻结 C 上开发或重跑，也不得复用旧 run。
 
 **批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
 `cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
@@ -435,7 +451,7 @@ Deny 带外截屏比对可行。
 
 | 问题 | 收敛到的选项 | 提出时间 |
 |---|---|---|
-| Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **待用户明确决定**：接受“空 cwd + 无 shell/枚举 + 不提供本机路径 + 未知 item fail closed”，或先升级/加 OS 隔离 | 2026-08-09 |
+| Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **已接受**（用户 2026-08-11）：空 cwd、无 shell/文件枚举、prompt/MCP 不提供本机路径、未知 item fail closed | 2026-08-09 |
 | 语义意图审批四题 | **全部按推荐拍定**（用户 08-02），见下 | 2026-08-02 |
 | 锁屏审批与 D1 结构性冲突，走哪条路？ | **先收窄批次 2，再做语义意图**（用户 08-02 拍板） | 2026-08-02 |
 

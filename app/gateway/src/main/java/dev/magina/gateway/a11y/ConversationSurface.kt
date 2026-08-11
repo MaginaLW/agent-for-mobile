@@ -3,6 +3,7 @@ package dev.magina.gateway.a11y
 import dev.magina.gateway.core.LabelMatchPolicy
 import dev.magina.gateway.core.TextNorm
 import org.json.JSONObject
+import kotlin.math.abs
 
 /**
  * 会话页识别（"现在停在哪个会话"）的**唯一一份实现**。
@@ -118,6 +119,17 @@ internal data class SurfaceCandidate(
 internal object ConversationSurfacePolicy {
 
     /**
+     * 顶栏标题中心的纵向范围。
+     *
+     * 这两个比例只做粗 stage 分类；真正标题几何还要经过 [inTitleBand] 的最短边结构下沿。
+     * 不能只按整屏高度收紧：同宽高屏从 2800 拉到 3600 时，固定 y≈328 的内容日期会再次
+     * 落回高度比例带。
+     */
+    private const val TITLE_CENTER_MIN_RATIO = 0.02
+    private const val TITLE_CENTER_MAX_RATIO = 0.10
+    private const val TITLE_BOTTOM_MIN_DIM_RATIO = 0.24
+
+    /**
      * 元素落在哪一段版面。原先是 `DebugMacroRunner` 的 private 方法，一起下沉：
      * 标题判据里那条 `stage == TOOLBAR` 依赖它，**分家就等于判据分家**。
      */
@@ -126,7 +138,9 @@ internal object ConversationSurfacePolicy {
         return when {
             (role == "input" && centerY <= screenHeight * 0.30) ||
                 normalized == "搜索" || normalized == "取消" -> SurfaceStage.SEARCH
-            centerY in (screenHeight * 0.02).toInt()..(screenHeight * 0.12).toInt() -> SurfaceStage.TOOLBAR
+            centerY in
+                (screenHeight * TITLE_CENTER_MIN_RATIO).toInt()..
+                (screenHeight * TITLE_CENTER_MAX_RATIO).toInt() -> SurfaceStage.TOOLBAR
             centerY >= screenHeight * 0.75 -> SurfaceStage.BOTTOM_INPUT
             else -> SurfaceStage.CONTENT
         }
@@ -205,8 +219,7 @@ internal object ConversationSurfacePolicy {
                 validBounds(element.bounds, frame) &&
                 // 只差状态栏那一刀：横纵都在带里，唯独整体没落到 inset 之下。
                 element.bounds.top < frame.systemTopInset &&
-                element.bounds.centerY in
-                (frame.screenHeight * 0.02).toInt()..(frame.screenHeight * 0.12).toInt() &&
+                element.bounds.bottom <= titleBandBottom(frame) &&
                 element.bounds.centerX in
                 (frame.screenWidth * 0.3).toInt()..(frame.screenWidth * 0.7).toInt()
         }.map { element ->
@@ -229,12 +242,39 @@ internal object ConversationSurfacePolicy {
      */
     fun toolbarTitle(elements: List<SurfaceElement>, frame: SurfaceFrame): SurfaceElement? {
         if (frame.screenWidth <= 0 || frame.screenHeight <= 0) return null
-        return elements.firstOrNull { element ->
-            element.stage == SurfaceStage.TOOLBAR &&
-                trustedForRecognition(element, frame) &&
-                inTitleBand(element, frame) &&
-                labelTextOf(element).isNotEmpty()
+        val candidates = elements.asSequence()
+            .filter { element ->
+                element.stage == SurfaceStage.TOOLBAR &&
+                    trustedForRecognition(element, frame) &&
+                    inTitleBand(element, frame) &&
+                    labelTextOf(element).isNotEmpty()
+            }
+            // ML Kit 的 textBlocks/lines 顺序不是页面几何契约；双遍 OCR 合并又会把增强图独有项
+            // 追加到尾部。标题选择不能再取上游碰巧给的 firstOrNull，先按结构位置定序。
+            .sortedWith(titleCandidateOrder(frame))
+            .toList()
+        val first = candidates.firstOrNull() ?: return null
+
+        // 先定最靠上的视觉行，再在该行找跨过屏幕中心的文字。标题旁的窄图标也可能被 OCR
+        // 认成字（本次实图里的耳朵图标被读成「G」），但它不该与真正居中的标题平起平坐。
+        val topRow = candidates.filter { sameVisualRow(first.bounds, it.bounds) }
+        // a11y 是前台窗口精确文本，fused 次之，纯 OCR 最弱。先按来源保留最高可信层，再谈
+        // 居中性；否则一个居中的 OCR approved 串会把不跨中心的冲突 a11y 标题直接过滤掉。
+        val bestSourceRank = topRow.minOf { sourceRank(it.source) }
+        val strongestRow = topRow.filter { sourceRank(it.source) == bestSourceRank }
+        val screenCenter = frame.screenWidth / 2
+        val centered = strongestRow.filter { screenCenter in it.bounds.left..it.bounds.right }
+        val contenders = if (centered.isNotEmpty()) {
+            centered
+        } else {
+            val bestDistance = strongestRow.minOf { abs(it.bounds.centerX - screenCenter) }
+            strongestRow.filter { abs(it.bounds.centerX - screenCenter) == bestDistance }
         }
+
+        // 同一行若仍有两个同样占据中心、但标签不同的候选，结构上无法分出谁是真标题。
+        // 任取一个会把上游枚举顺序重新变成安全判据；这里宁可 Unverified，也不猜。
+        if (contenders.map(::labelTextOf).distinct().size != 1) return null
+        return contenders.minWith(titleWinnerOrder(frame))
     }
 
     /**
@@ -250,13 +290,9 @@ internal object ConversationSurfacePolicy {
         frame: SurfaceFrame,
         expectedLabel: String,
     ): SurfaceElement? {
-        if (frame.screenWidth <= 0 || frame.screenHeight <= 0) return null
-        return elements.firstOrNull { element ->
-            canonicalLabelMatches(element, expectedLabel) &&
-                trustedForRecognition(element, frame) &&
-                element.stage == SurfaceStage.TOOLBAR &&
-                inTitleBand(element, frame)
-        }
+        // 先独立回答「结构上哪个是标题」，再与已批准标签比；禁止拿 expectedLabel 反过来
+        // 从一堆候选里挑中自己想要的那一个。
+        return toolbarTitle(elements, frame)?.takeIf { canonicalLabelMatches(it, expectedLabel) }
     }
 
     fun isConversationSurface(
@@ -322,9 +358,13 @@ internal object ConversationSurfacePolicy {
         LabelMatchPolicy.matches(expectedLabel, labelTextOf(element))
 
     /**
-     * 顶部标题带的几何：纵向 2%~12%、横向居中 30%~70%，**且整体在状态栏下沿之下**。
+     * 顶部标题带的严格几何：候选整体在状态栏下沿之下、底边不超过屏幕最短边的 24%，
+     * 横向中心落在 30%~70%。
      *
-     * 前两条是宏原值，一个数没动；第三条是 2026-08-09 新加的：2% 在 2800px 上是 y=56，
+     * 最短边下沿来自批次 4 内容日期误入：1260x2800 实图标题 bottom≈236、日期
+     * top≈311/bottom≈345，24%×1260≈302 正好落在二者之间；同宽高屏再拉长也不会漂。
+     * 状态栏这一刀是
+     * 2026-08-09 新加的：2% 在 2800px 上是 y=56，
      * 而状态栏文字中心**实测在 65~70px**（C 道从截图量得），**落在带内**——
      * 所以状态栏的字一直是这条带的合法候选，昨晚被选中是运气，不是回归。
      * 用真实窗口几何划线（[SurfaceFrame.systemTopInset]），不按屏幕比例猜一个状态栏高度：
@@ -336,10 +376,50 @@ internal object ConversationSurfacePolicy {
     fun inTitleBand(element: SurfaceElement, frame: SurfaceFrame): Boolean =
         validBounds(element.bounds, frame) &&
             element.bounds.top >= frame.systemTopInset &&
-            element.bounds.centerY in
-            (frame.screenHeight * 0.02).toInt()..(frame.screenHeight * 0.12).toInt() &&
+            element.bounds.bottom <= titleBandBottom(frame) &&
             element.bounds.centerX in
             (frame.screenWidth * 0.3).toInt()..(frame.screenWidth * 0.7).toInt()
+
+    private fun titleBandBottom(frame: SurfaceFrame): Int =
+        (minOf(frame.screenWidth, frame.screenHeight) * TITLE_BOTTOM_MIN_DIM_RATIO).toInt()
+
+    /** 标题是状态栏下方、居中区域里最靠上的可信行；其余字段只负责稳定打破完全相同的平局。 */
+    private fun titleCandidateOrder(frame: SurfaceFrame): Comparator<SurfaceElement> =
+        compareBy<SurfaceElement>(
+            { it.bounds.centerY },
+            { abs(it.bounds.centerX - frame.screenWidth / 2) },
+            { sourceRank(it.source) },
+            { -(it.confidence ?: 0.0) },
+            { it.bounds.top },
+            { it.bounds.left },
+            { labelTextOf(it) },
+        )
+
+    /** 同一结构位置的重复识别优先用精确 a11y，再看 OCR 置信度；其余字段只做稳定 tie-break。 */
+    private fun titleWinnerOrder(frame: SurfaceFrame): Comparator<SurfaceElement> =
+        compareBy<SurfaceElement>(
+            { sourceRank(it.source) },
+            { -(it.confidence ?: 0.0) },
+            { abs(it.bounds.centerX - frame.screenWidth / 2) },
+            { it.bounds.centerY },
+            { it.bounds.top },
+            { it.bounds.left },
+            { labelTextOf(it) },
+        )
+
+    private fun sourceRank(source: String): Int = when (source) {
+        SOURCE_A11Y -> 0
+        SOURCE_FUSED -> 1
+        SOURCE_OCR -> 2
+        else -> 3
+    }
+
+    /** 垂直重叠至少达到较矮元素的一半，才算同一视觉行；轻微擦边不制造假歧义。 */
+    private fun sameVisualRow(a: SurfaceRect, b: SurfaceRect): Boolean {
+        val overlap = (minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)).coerceAtLeast(0)
+        val shorter = minOf(a.height, b.height)
+        return shorter > 0 && overlap * 2 >= shorter
+    }
 
     /** `stageOf` 里那条分隔符规则（与标签归一不同，刻意保持原样）。 */
     private val STAGE_SEPARATORS = Regex("[\\s：:]+")

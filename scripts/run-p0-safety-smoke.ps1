@@ -764,6 +764,20 @@ function Read-P0TraceEvidence {
     $actualText = if ($null -ne $typeTextProperty) { [string]$typeTextProperty.Value } else { '' }
     $typeResult = if ($null -ne $type) { $type.Result } else { $null }
     $pressResult = if ($null -ne $press) { $press.Result } else { $null }
+    $pressError = if ($null -ne $pressResult) {
+        Get-P0OptionalProperty -Object $pressResult -Name 'error'
+    } else { $null }
+    $pressErrorExtra = if ($null -ne $pressError) {
+        Get-P0OptionalProperty -Object $pressError -Name 'extra'
+    } else { $null }
+    $pressDataForEvidence = if ($null -ne $pressResult) {
+        Get-P0OptionalProperty -Object $pressResult -Name 'data'
+    } else { $null }
+    $traceTitleEvidence = if ($null -ne $pressErrorExtra) {
+        Get-P0OptionalProperty -Object $pressErrorExtra -Name 'title_read'
+    } elseif ($null -ne $pressDataForEvidence) {
+        Get-P0OptionalProperty -Object $pressDataForEvidence -Name 'title_read'
+    } else { $null }
     [object[]]$postCalls = @()
     if ($null -ne $press) {
         $postCalls = [object[]]@($callEvidence | Where-Object TimelineOrdinal -gt $press.TimelineOrdinal)
@@ -824,6 +838,13 @@ function Read-P0TraceEvidence {
         Calls = [object[]]@($callEvidence)
         DangerousCalls = $pressCalls.Count
         DangerResult = if ($null -eq $pressResult) { '' } elseif ($pressResult.ok -eq $true) { 'OK' } else { [string]$pressResult.error.code }
+        TitleEvidenceToken = if ($null -ne $traceTitleEvidence) {
+            [string](Get-P0OptionalProperty -Object $traceTitleEvidence -Name 'audit_token')
+        } else { '' }
+        TitleEvidenceReported = $null -ne $traceTitleEvidence
+        TitleEvidence = $traceTitleEvidence
+        EnterDiagnosticsReported = $null -ne $pressErrorExtra -and
+            $null -ne (Get-P0OptionalProperty -Object $pressErrorExtra -Name 'enter_channel')
         # 网关自己的发送后验结论。旧 APK 不报这两个字段时为 ''/unknown，不冒充通过。
         SendVerified = $(
             $data = if ($null -ne $pressResult) { Get-P0OptionalProperty -Object $pressResult -Name 'data' } else { $null }
@@ -1319,7 +1340,7 @@ function Get-P0TransportHeartbeatRecord {
     }
 }
 
-function Get-P0SurfaceTitleReadRecord {
+function Get-P0SurfaceTitleReadRecordForField {
     <#
     执行前重读会话标题那一步的逐次痕迹（`title_read=attempts=..,trail=..`，
     `SurfaceTitleRead.describe`，离线用例钉住格式）。
@@ -1336,17 +1357,27 @@ function Get-P0SurfaceTitleReadRecord {
     "你换了会话"——**而用户全程没动过**。这一栏非零就是"带里站着别的窗口"的直接证据，
     它是个纯数字，所以能进 note（候选清单含界面文本，只进错误信息）。
     #>
-    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Audit,
+        [Parameter(Mandatory)][ValidateSet('title_read','final_title_read')][string]$Field
+    )
     $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
     # 每一段都排除分隔符，**不靠"它现在是最后一个"**——`band=` 一周前还是串尾，
     # 这次加 `sysrej`/`picked` 就把它变成了串中的（同一形态见 harness.md 那张三次对照表）。
-    $matched = [regex]::Match(
-        $note, 'title_read=attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*),sysrej=(?<sysrej>[^;,\s]*),topcut=(?<topcut>[^;,\s]*),picked=(?<picked>[^;,\s]*)')
+    $pattern = 'attempts=(?<attempts>\d+),waited_ms=(?<waited>\d+),result=(?<result>[a-z]+),resolved_at=(?<at>\d+),trail=(?<trail>[^;,\s]*),fg=(?<fg>[^;,\s]*),band=(?<band>[^;,\s]*),sysrej=(?<sysrej>[^;,\s]*),topcut=(?<topcut>[^;,\s]*),picked=(?<picked>[^;,\s]*)'
+    $matched = [regex]::Match($note, "(?:^|;)$Field=$pattern")
     if (-not $matched.Success) {
-        return [ordered]@{ reported = $false; detail = '审计 note 里没有 title_read 记录' }
+        return [ordered]@{ reported = $false; detail = "审计 note 里没有 $Field 记录" }
     }
+    $summary = "attempts=$($matched.Groups['attempts'].Value),waited_ms=$($matched.Groups['waited'].Value)," +
+        "result=$($matched.Groups['result'].Value),resolved_at=$($matched.Groups['at'].Value)," +
+        "trail=$($matched.Groups['trail'].Value),fg=$($matched.Groups['fg'].Value)," +
+        "band=$($matched.Groups['band'].Value),sysrej=$($matched.Groups['sysrej'].Value)," +
+        "topcut=$($matched.Groups['topcut'].Value),picked=$($matched.Groups['picked'].Value)"
     return [ordered]@{
         reported = $true
+        phase = if ($Field -ceq 'title_read') { 'rebuild' } else { 'final_enter' }
+        summary = $summary
         attempts = [int]$matched.Groups['attempts'].Value
         waited_ms = [long]$matched.Groups['waited'].Value
         result = [string]$matched.Groups['result'].Value
@@ -1402,6 +1433,171 @@ function Assert-P0ReentryObservation {
     if ($Observation.restored -ne $true) {
         throw 'Reentry 腿独立 dwell 后未能把 target 恢复到前台。'
     }
+}
+
+function Get-P0SurfaceTitleReadRecord {
+    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    return Get-P0SurfaceTitleReadRecordForField -Audit $Audit -Field 'title_read'
+}
+
+function Get-P0FinalSurfaceTitleReadRecord {
+    param([Parameter(Mandatory)][AllowNull()]$Audit)
+    return Get-P0SurfaceTitleReadRecordForField -Audit $Audit -Field 'final_title_read'
+}
+
+function ConvertTo-P0SafeTitleEvidenceCandidate {
+    param([Parameter(Mandatory)]$Candidate)
+    $expected = @('ordinal','source','bounds','foreground_window','window_id',
+        'normalized_length','text_sha256','decision')
+    if (-not (Test-P0ExactPropertySet -Value $Candidate -Expected $expected)) {
+        throw 'candidate_fields'
+    }
+    $source = [string]$Candidate.source
+    $bounds = [string]$Candidate.bounds
+    $hash = [string]$Candidate.text_sha256
+    $decision = [string]$Candidate.decision
+    $ordinal = [int]$Candidate.ordinal
+    $length = [int]$Candidate.normalized_length
+    if ($ordinal -lt 0 -or $ordinal -gt 999 -or
+        $source -notin @('a11y','ocr','fused','unknown') -or
+        $bounds -notmatch '^\d+:\d+:\d+:\d+$' -or
+        $hash -notmatch '^[0-9a-f]{64}$' -or
+        $decision -notmatch '^(selected|eligible_not_selected|rejected_(window|confidence|bounds|empty|top_cut|other))$' -or
+        $length -lt 0 -or $length -gt 4096 -or
+        $Candidate.foreground_window -isnot [bool]) {
+        throw 'candidate_value'
+    }
+    if ($null -ne $Candidate.window_id -and
+        ([long]$Candidate.window_id -lt 0 -or [long]$Candidate.window_id -gt [int]::MaxValue)) {
+        throw 'candidate_window'
+    }
+    return [ordered]@{
+        ordinal = $ordinal
+        source = $source
+        bounds = $bounds
+        foreground_window = [bool]$Candidate.foreground_window
+        window_id = if ($null -eq $Candidate.window_id) { $null } else { [int]$Candidate.window_id }
+        normalized_length = $length
+        text_sha256 = $hash
+        decision = $decision
+    }
+}
+
+function ConvertTo-P0SafeTitleEvidencePayload {
+    param(
+        [Parameter(Mandatory)]$Payload,
+        [string]$ExpectedToken = ''
+    )
+    $expected = @('schema_version','summary','selection_reason','candidate_count',
+        'candidates_truncated','selected','candidates')
+    if (-not [string]::IsNullOrEmpty($ExpectedToken)) { $expected += 'audit_token' }
+    if (-not (Test-P0ExactPropertySet -Value $Payload -Expected $expected)) { throw 'payload_fields' }
+    if (-not [string]::IsNullOrEmpty($ExpectedToken) -and
+        [string]$Payload.audit_token -cne $ExpectedToken) { throw 'payload_token' }
+
+    $reason = [string]$Payload.selection_reason
+    $candidateCount = [int]$Payload.candidate_count
+    if ([int]$Payload.schema_version -ne 1 -or
+        [string]::IsNullOrEmpty([string]$Payload.summary) -or [string]$Payload.summary -notmatch '^attempts=' -or
+        $reason -notin @('conversation_surface_policy','none') -or
+        $candidateCount -lt 0 -or $candidateCount -gt 1000 -or
+        $Payload.candidates_truncated -isnot [bool]) {
+        throw 'payload_value'
+    }
+
+    $safeCandidates = [Collections.Generic.List[object]]::new()
+    $ordinals = [Collections.Generic.HashSet[int]]::new()
+    foreach ($candidate in @($Payload.candidates)) {
+        if ($safeCandidates.Count -ge 12) { throw 'candidate_cap' }
+        $safe = ConvertTo-P0SafeTitleEvidenceCandidate -Candidate $candidate
+        if (-not $ordinals.Add([int]$safe.ordinal)) { throw 'candidate_ordinal' }
+        $safeCandidates.Add($safe)
+    }
+    $truncated = [bool]$Payload.candidates_truncated
+    if (($truncated -and $candidateCount -le $safeCandidates.Count) -or
+        (-not $truncated -and $candidateCount -ne $safeCandidates.Count)) {
+        throw 'candidate_count'
+    }
+
+    $safeSelected = $null
+    if ($null -ne $Payload.selected) {
+        $safeSelected = ConvertTo-P0SafeTitleEvidenceCandidate -Candidate $Payload.selected
+    }
+    $selectedCandidates = @($safeCandidates | Where-Object { [string]$_.decision -ceq 'selected' })
+    if ($reason -ceq 'conversation_surface_policy') {
+        if ($null -eq $safeSelected -or $selectedCandidates.Count -ne 1) { throw 'selected_missing' }
+        $selectedJson = $safeSelected | ConvertTo-Json -Compress -Depth 8
+        $candidateJson = $selectedCandidates[0] | ConvertTo-Json -Compress -Depth 8
+        if ($selectedJson -cne $candidateJson) { throw 'selected_mismatch' }
+    }
+    elseif ($null -ne $safeSelected -or $selectedCandidates.Count -ne 0) { throw 'selected_unexpected' }
+
+    return [ordered]@{
+        schema_version = 1
+        summary = [string]$Payload.summary
+        selection_reason = $reason
+        candidate_count = $candidateCount
+        candidates_truncated = $truncated
+        selected = $safeSelected
+        candidates = [object[]]$safeCandidates.ToArray()
+    }
+}
+
+function Get-P0SurfaceTitleEvidenceRecord {
+    <#
+    最终 press_key fresh title 候选摘要。audit 只存 base64url 编码的**脱敏白名单 JSON**；
+    trace 错误信封存同一 token。两边必须逐字相同，manifest 只重建白名单字段，未知字段不复制。
+    #>
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Audit,
+        [Parameter(Mandatory)]$Trace,
+        [Parameter(Mandatory)]$FinalTitleRead
+    )
+    $note = if ($null -eq $Audit) { '' } else { [string]$Audit.note }
+    $matched = [regex]::Match($note, '(?:^|;)title_evidence=(?<token>[A-Za-z0-9_-]+)(?:;|$)')
+    if (-not $matched.Success) {
+        return [ordered]@{ reported = $false; detail = '审计 note 里没有 title_evidence 记录' }
+    }
+    $token = [string]$matched.Groups['token'].Value
+    if ($token.Length -gt 32768) {
+        return [ordered]@{ reported = $false; detail = 'title_evidence 编码超过固定上限' }
+    }
+    if ($Trace.TitleEvidenceReported -ne $true -or [string]$Trace.TitleEvidenceToken -cne $token -or
+        $null -eq $Trace.TitleEvidence) {
+        return [ordered]@{ reported = $false; detail = 'audit 与 trace 的 title_evidence 不同源' }
+    }
+
+    try {
+        $base64 = $token.Replace('-', '+').Replace('_', '/')
+        $padding = (4 - ($base64.Length % 4)) % 4
+        if ($padding -gt 0) { $base64 += '=' * $padding }
+        $bytes = [Convert]::FromBase64String($base64)
+        try { $raw = [Text.Encoding]::UTF8.GetString($bytes) }
+        finally { if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) } }
+        $decoded = $raw | ConvertFrom-Json -Depth 12
+    }
+    catch {
+        return [ordered]@{ reported = $false; detail = 'title_evidence 编码无效' }
+    }
+
+    try {
+        $safeDecoded = ConvertTo-P0SafeTitleEvidencePayload -Payload $decoded
+        $safeTrace = ConvertTo-P0SafeTitleEvidencePayload -Payload $Trace.TitleEvidence -ExpectedToken $token
+        if ($FinalTitleRead.reported -ne $true -or [string]$FinalTitleRead.phase -cne 'final_enter' -or
+            [string]$safeDecoded.summary -cne [string]$FinalTitleRead.summary) {
+            return [ordered]@{ reported = $false; detail = 'audit final_title_read 与 token 摘要不同源' }
+        }
+        if (($safeDecoded | ConvertTo-Json -Compress -Depth 12) -cne
+            ($safeTrace | ConvertTo-Json -Compress -Depth 12)) {
+            return [ordered]@{ reported = $false; detail = 'token 与 trace title_read 未逐字段同源' }
+        }
+    }
+    catch {
+        return [ordered]@{ reported = $false; detail = 'title_evidence 白名单契约无效' }
+    }
+
+    $safeDecoded['reported'] = $true
+    return $safeDecoded
 }
 
 function Close-P0DispatchHandle {
@@ -1499,8 +1695,15 @@ function Assert-P0LegSemantics {
         $isPrefix = $actualSignature.Length -lt $expectedSignature.Length -and
             $expectedSignature.StartsWith($actualSignature, [StringComparison]::Ordinal)
         if ($isPrefix -and $Trace.DangerResult -cne 'OK' -and -not [string]::IsNullOrEmpty([string]$Trace.DangerResult)) {
+            $diagnostic = if ($Trace.TitleEvidenceReported -eq $true) {
+                'fresh title evidence'
+            } elseif ($Trace.EnterDiagnosticsReported -eq $true) {
+                'enter_diagnostics'
+            } else {
+                'press_key 错误信封'
+            }
             throw ("$Leg 腿危险动作失败（$($Trace.DangerResult)），执行器按站规停止，因此没有后续调用；" +
-                "真因看 press_key 的错误与 enter_diagnostics，不是调用序列问题。")
+                "真因看 press_key 的错误与 $diagnostic，不是调用序列问题。")
         }
         if ($Leg -cin @('Allow','Reentry')) {
             throw "$Leg gateway 调用序列不严格；只允许 $expectedSignature，实际 $actualSignature。"
@@ -1598,6 +1801,20 @@ function Assert-P0LegSemantics {
     if ($Leg -cin @('Allow','Reentry')) {
         if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw "$Leg 派单不是 success。" }
         if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw "$Leg 危险动作没有真实放行。" }
+        $finalTitle = Get-P0FinalSurfaceTitleReadRecord -Audit $audit
+        if (-not $finalTitle.reported) {
+            throw "$Leg 成功腿缺少 final_title_read：旧 APK 或最终 Enter fresh title 证据未接入，不得通过。"
+        }
+        $finalEvidence = Get-P0SurfaceTitleEvidenceRecord -Audit $audit -Trace $Trace `
+            -FinalTitleRead $finalTitle
+        if (-not $finalEvidence.reported) {
+            throw "$Leg 的 final_title_read 未通过 audit/token/trace 逐字段同源校验：$($finalEvidence.detail)"
+        }
+        if ([string]$finalTitle.result -cne 'resolved' -or [int]$finalTitle.resolved_at -lt 1 -or
+            [string]$finalEvidence.selection_reason -cne 'conversation_surface_policy' -or
+            $null -eq $finalEvidence.selected) {
+            throw "$Leg 的 final_title_read 没有形成 resolved + selected 的最终标题结论，不得通过。"
+        }
         # 网关侧后验与 runner 侧 ui_find 正证据是两套判据：前者判"内容离开了输入框"，
         # 后者判"内容出现在了会话消息区"。**真正的证明是后者**——ui_find 是正证据，而网关侧
         # 只是负证据（"不在输入框里了"）。
@@ -2435,6 +2652,10 @@ try {
         $activeLegRecord['sse_heartbeat'] = $sseHeartbeat
         $titleRead = Get-P0SurfaceTitleReadRecord -Audit $auditHead
         $activeLegRecord['title_read'] = $titleRead
+        $finalTitleRead = Get-P0FinalSurfaceTitleReadRecord -Audit $auditHead
+        $finalTitleRead['evidence'] = Get-P0SurfaceTitleEvidenceRecord -Audit $auditHead -Trace $trace `
+            -FinalTitleRead $finalTitleRead
+        $activeLegRecord['final_title_read'] = $finalTitleRead
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256 `
@@ -2586,6 +2807,9 @@ try {
             # 各次结论不同 = 时机问题；逐次相同 = 通道问题。三跑逐字相同的终态就是因为
             # 这一栏当时不存在，四种完全不同的处境被折成了同一句「读不回来」。
             title_read = $titleRead
+            # 危险 Enter 自己使用的最终 fresh title，独立于 Reentry 才有的批准后 rebuild。
+            # evidence 必须同时绑定 audit summary、audit token 与 trace 白名单对象。
+            final_title_read = $finalTitleRead
             # Deny 腿带外验证（批次 3）。**两条证据分开记，不合并成一个布尔**：
             # input_box_marker=present 是正证据（微信发送后会清空输入栏）；
             # message_area_marker=absent **不是**"没发出去"的证据（消息列表可能已经滚上去），
