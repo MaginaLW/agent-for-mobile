@@ -327,7 +327,7 @@ function ConvertTo-P0RectEvidence {
 function Test-P0MessageRegionMatch {
     param(
         $Match,
-        [Parameter(Mandatory)][string]$ExpectedNormalized,
+        [Parameter(Mandatory)][string]$QueryNormalized,
         [Parameter(Mandatory)][int]$ScreenWidth,
         [Parameter(Mandatory)][int]$ScreenHeight,
         [AllowEmptyString()][string]$OriginalFocusedInputId,
@@ -349,7 +349,10 @@ function Test-P0MessageRegionMatch {
     $matchBounds = ConvertTo-P0RectEvidence -Value $Match.bounds
     $originalInput = ConvertTo-P0RectEvidence -Value $OriginalFocusedInputBounds
     $currentInput = ConvertTo-P0RectEvidence -Value $CurrentFocusedInputBounds
-    if ($null -eq $matchBounds) { return $false }
+    if ($null -eq $matchBounds -or [string]::IsNullOrEmpty($QueryNormalized) -or
+        -not (Test-P0MatchEvidenceContainsMarker -Value $Match -ExpectedNormalized $QueryNormalized)) {
+        return $false
+    }
 
     # a11y 焦点几何缺失时的降级判据。
     #
@@ -388,7 +391,7 @@ function Test-P0MessageRegionMatch {
         $matchBounds.Left -lt $currentInput.Right -and $matchBounds.Right -gt $currentInput.Left -and
         $matchBounds.Top -lt $currentInput.Bottom -and $matchBounds.Bottom -gt $currentInput.Top
     if ($intersectsFocusedInput -or $matchBounds.Bottom -gt $currentInput.Top) { return $false }
-    return Test-P0MatchEvidenceContainsMarker -Value $Match -ExpectedNormalized $ExpectedNormalized
+    return $true
 }
 
 function Test-P0ExactPropertySet {
@@ -809,7 +812,6 @@ function Read-P0TraceEvidence {
         $null -ne $findData.PSObject.Properties['focused_input_bounds']) {
         $findData.focused_input_bounds
     } else { $null }
-    $expectedNormalized = Normalize-P0MarkerText $ExpectedText
     # 判据是「**归一后全部命中同一个 marker**」，不是「恰好返回一个框」。
     #
     # 2026-08-02 真机实锤：OCR 对**同一条气泡**返回了两个重叠框（bounds 相差 3px，文本分别是
@@ -819,13 +821,13 @@ function Read-P0TraceEvidence {
     # 要判的是"有没有别的东西混进来"，**框数是 OCR 的实现细节，不该进判据**。
     # 这与「marker 归一化把一次成功发送判成证据不匹配」是同一族第二次。
     # 严格性一分没少：任何一个框归一后不等于期望 marker，整条判据仍然不成立。
-    $matchedEvidence = $queryNormalized -ceq $expectedNormalized -and $matches.Count -ge 1 -and
+    $matchedEvidence = -not [string]::IsNullOrEmpty($queryNormalized) -and $matches.Count -ge 1 -and
         (@($matches | Where-Object {
             -not (Test-P0MatchEvidenceContainsMarker -Value $_ -ExpectedNormalized $queryNormalized)
         }).Count -eq 0)
     $messageRegionEvidence = $matchedEvidence -and
         (@($matches | Where-Object {
-            Test-P0MessageRegionMatch -Match $_ -ExpectedNormalized $expectedNormalized `
+            Test-P0MessageRegionMatch -Match $_ -QueryNormalized $queryNormalized `
                 -ScreenWidth $screenWidth -ScreenHeight $screenHeight `
                 -OriginalFocusedInputId $originalFocusedInputId `
                 -OriginalFocusedInputBounds $originalFocusedInputBounds `

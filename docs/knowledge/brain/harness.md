@@ -291,6 +291,26 @@ E 只解决第 2 层，第 1 层还得靠 `timeout`。
 而那会悄悄把 300s 空闲窗天花板放回来，失败形态与批次 4 首跑一模一样（约 90s 断开、
 无错误码），最难认。两次正对照分别复刻两种坏法，各让对应方向的那一条单独变红。
 
+### canonical 只能由 producer 单源产出，fixture 不得复用 consumer（2026-08-11，真机实锤）
+
+批次 4 的 Allow 消息已经实际发送，gateway 的 `TextNorm.ocr` 对 marker 产出
+`p0all0w-…`（小写、`o→0`、去空白、**保留连字符**）；runner 却用自己的
+`Normalize-P0MarkerText` 再算第三份值，去掉了连字符，于是把成功发送判成
+`FindEvidenceMatched=false`。旧 fixture 又复用了 consumer 的去连字符形态，producer 与 consumer
+两边同错时套件仍能全绿。把 fixture 改成真实 producer 形态后，旧实现立即得到
+`101 passed / 45 failed`，证明缺的不是更多 consumer 单测，而是跨组件契约的连接性用例。
+
+这类边界按三条处理：
+
+1. **canonical 只由 producer 生成一次。** consumer 不根据原文重算；它要求 producer 给出的
+   `query_normalized` 非空，并逐字核对每个 match 的 `normalized` 都与它相等。
+2. **fixture 复刻 producer，不能调用或照抄被测 consumer 的 normalizer。** 至少固定一条真实
+   producer 样例（本例必须保留 `-`），并用 wrong raw query、wrong normalized 与空 canonical
+   三个反例证明每道门真的会红。否则 fixture 与 consumer 共用一个错误，就是“两边同错仍全绿”。
+3. **同源 canonical 不替代独立安全门。** 原始 `ui_find.text` 仍须逐字等于本腿 marker，消息区几何
+   仍独立判断；Windows OCR、Deny 带外验证与 teardown 使用的本地归一是另一条证据通道，
+   不为表面统一而改它。
+
 ### 加闸门时必须回头看一眼「谁在生成这份文件」（2026-08-08，自己挡住自己）
 
 上面那个 `timeout` 闸门加完当天就把自己的 provisioner 拒掉了，**每轮复现，

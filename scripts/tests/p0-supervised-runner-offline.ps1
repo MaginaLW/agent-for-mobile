@@ -69,6 +69,29 @@ function Assert-Matches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -match $Pattern) "输出不匹配 /$Pattern/。"
 }
 
+function Get-ClaudeFixtureUiFindData {
+    param([Parameter(Mandatory)]$Fixture)
+    $tracePaths = @(Get-ChildItem -LiteralPath (Join-Path $Fixture.Repo 'docs\runs\traces') `
+        -Filter '*.jsonl' -File)
+    Assert-True ($tracePaths.Count -eq 1) "fixture 应恰有一份 Claude trace，实际 $($tracePaths.Count)。"
+    $findResults = [Collections.Generic.List[object]]::new()
+    foreach ($line in Get-Content -LiteralPath $tracePaths[0].FullName -Encoding utf8) {
+        $event = $line | ConvertFrom-Json
+        if ($event.type -cne 'user' -or $null -eq $event.message) { continue }
+        foreach ($block in @($event.message.content)) {
+            if ($block.type -cne 'tool_result' -or $block.tool_use_id -cne 'f1') { continue }
+            $texts = @($block.content | Where-Object { $_.type -ceq 'text' -and $_.text -is [string] })
+            Assert-True ($texts.Count -eq 1) 'fixture ui_find tool_result 必须恰有一个 text envelope。'
+            $envelope = [string]$texts[0].text | ConvertFrom-Json
+            Assert-True ($envelope.ok -eq $true -and $null -ne $envelope.data) `
+                'fixture ui_find 必须返回成功 data envelope。'
+            [void]$findResults.Add($envelope.data)
+        }
+    }
+    Assert-True ($findResults.Count -eq 1) "fixture trace 应恰有一个 ui_find 结果，实际 $($findResults.Count)。"
+    return $findResults[0]
+}
+
 function Get-PersistedSensitiveArtifactLeaks {
     param([Parameter(Mandatory)]$Fixture)
     $paths = [Collections.Generic.List[string]]::new()
@@ -194,8 +217,8 @@ function New-Fixture {
         'reentry_no_title_read', 'reentry_title_retried',
         'stale_production_budget', 'stale_reached', 'stale_no_wait_note',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
-        'find_ocr_split_bubble', 'find_ocr_extra_text', 'find_wrong_normalized',
-        'find_wrong_query_normalized',
+        'find_ocr_split_bubble', 'find_ocr_extra_text', 'find_wrong_raw_query',
+        'find_wrong_normalized', 'find_wrong_query_normalized', 'find_empty_normalized',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
@@ -1271,13 +1294,30 @@ if ($code -eq 'OK') {
     } else {
         # find_ocr_zero_letter：复刻 ML Kit 把数字 0 读成字母 O 的实测抖动（2026-07-31 真机）。
         # 查询参数仍是真 marker（执行器照抄任务卡），命中证据里的文本才带抖动。
-        $findText = if ($scenario -eq 'unrelated_find') { 'UNRELATED' } else { $marker }
+        $findText = if ($scenario -in @('unrelated_find','find_wrong_raw_query')) { 'UNRELATED' } else { $marker }
         $findEvidenceText = if ($scenario -eq 'find_ocr_zero_letter') {
             $marker -replace '^P0', 'PO'
+        } elseif ($scenario -eq 'find_wrong_raw_query') {
+            # 反例故意只破坏 raw query；canonical 两侧仍相等，才能单独钉住 FindQueryMatched。
+            $marker
         } else { $findText }
-        $normalizedMarker = ([regex]::Replace($marker.ToUpperInvariant(), '[^A-Z0-9]', '')).Replace('O', '0')
-        $matchNormalized = if ($scenario -eq 'find_wrong_normalized') { 'OTHER' } else { $normalizedMarker }
-        $queryNormalized = if ($scenario -eq 'find_wrong_query_normalized') { 'OTHER' } else { $normalizedMarker }
+        # 真实 producer 是 TextNorm.ocr：对这里的 ASCII fixture 去空白、小写与 o→0，**保留连字符**。
+        # 这是 fixture 自己的 producer-like 逻辑；不得复用 runner 的 Normalize-P0MarkerText。
+        function ConvertTo-FixtureGatewayOcrCanonical([string]$Text) {
+            return ([regex]::Replace($Text.ToLowerInvariant(), '\s', '')).Replace('o', '0')
+        }
+        $gatewayQueryCanonical = ConvertTo-FixtureGatewayOcrCanonical $marker
+        $gatewayMatchCanonical = ConvertTo-FixtureGatewayOcrCanonical $findEvidenceText
+        $matchNormalized = switch ($scenario) {
+            'find_wrong_normalized' { 'wrong-normalized' }
+            'find_empty_normalized' { '' }
+            default { $gatewayMatchCanonical }
+        }
+        $queryNormalized = switch ($scenario) {
+            'find_wrong_query_normalized' { 'wrong-query' }
+            'find_empty_normalized' { '' }
+            default { $gatewayQueryCanonical }
+        }
         ToolUse 'f1' 'ui_find' @{text=$findText}
         $matchRole = if ($scenario -eq 'find_input') { 'input' } else { 'text' }
         $matchFlags = if ($scenario -eq 'find_input') { 'EF' } else { '' }
@@ -1309,20 +1349,22 @@ if ($code -eq 'OK') {
         if ($scenario -eq 'find_ocr_split_bubble') {
             $spaced = $findEvidenceText.Insert([Math]::Min(12, $findEvidenceText.Length), ' ')
             $extraMatches = @(@{
-                ref='e2';text=$spaced;normalized=$normalizedMarker;role=$matchRole;flags=$matchFlags
+                ref='e2';text=$spaced;normalized=(ConvertTo-FixtureGatewayOcrCanonical $spaced);role=$matchRole;flags=$matchFlags
                 bounds=$nudged;source='ocr'
             })
         }
         if ($scenario -eq 'find_ocr_extra_text') {
+            $otherText = 'OTHER-MESSAGE'
             $extraMatches = @(@{
-                ref='e2';text='OTHER-MESSAGE';normalized='OTHER-MESSAGE';role=$matchRole;flags=$matchFlags
+                ref='e2';text=$otherText;normalized=(ConvertTo-FixtureGatewayOcrCanonical $otherText);role=$matchRole;flags=$matchFlags
                 bounds=$nudged;source='ocr'
             })
         }
         # 在哈希表字面量里对数组做 `+` 会解析成 op_Addition 失败，先拼好再塞进去。
+        $matchSource = if ($scenario -in @('find_ocr_input','find_ocr_zero_letter')) { 'ocr' } else { 'a11y' }
         $allMatches = @(@{
             ref='e1';text=$findEvidenceText;normalized=$matchNormalized;role=$matchRole;flags=$matchFlags
-            bounds=$matchBounds;source=if($scenario -eq 'find_ocr_input'){'ocr'}else{'a11y'}
+            bounds=$matchBounds;source=$matchSource
         })
         foreach ($extra in $extraMatches) { $allMatches += $extra }
         $findData = @{
@@ -2416,14 +2458,21 @@ try {
         }
     }
 
-    Test-Case 'marker 归一化与网关 OcrEngine.norm 同口径（O→0）' {
+    Test-Case 'gateway 同源 canonical 可容忍 O/0 OCR 抖动' {
         # 2026-07-31 第六轮实锤：消息确实发出去了、marker 也确实出现在消息区，
-        # OCR 把 P0ALLOW 读成 POALLOW（字母 O），而 runner 只做大写+去符号 → 判成证据不匹配。
-        # runner 的判据不能比网关自己还严，否则真机上必然出现"网关认了、runner 不认"。
+        # OCR 把 P0ALLOW 读成 POALLOW（字母 O）；query_normalized 与每个 match.normalized
+        # 都由 gateway 同一份 TextNorm.ocr 产出，runner 只需逐字比较这两侧，不能再另算一份。
         $fixture = New-Fixture find_ocr_zero_letter
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -eq 0) "O/0 抖动不该否决本腿：`n$($result.Text)"
         Assert-Contains $result.Text '语义判定通过'
+        $findData = Get-ClaudeFixtureUiFindData -Fixture $fixture
+        $findMatches = @($findData.matches)
+        Assert-True ($findMatches.Count -eq 1) 'O/0 fixture 应恰有一个 OCR 命中。'
+        Assert-True ($findMatches[0].source -ceq 'ocr') 'PO… 命中必须来自真实 gateway 可产出的 OCR source。'
+        Assert-True ([string]$findMatches[0].text -cmatch '^POALLOW-') 'O/0 fixture 没有保留 PO… OCR 原文。'
+        Assert-True ([string]$findMatches[0].normalized -ceq [string]$findData.query_normalized) `
+            'O/0 OCR 原文经 producer canonical 后必须与 query_normalized 逐字相等。'
     }
 
     # ——— Reentry 腿（批次 4 新腿：批准后切走再回来） ———
@@ -4096,12 +4145,45 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-True ($result.ExitCode -ne 0) '命中里混进别的文本必须判失败。'
     }
 
-    Test-Case 'Allow 判据：text 正确也不能掩盖 normalized 或 query_normalized 错误' {
-        foreach ($scenario in @('find_wrong_normalized','find_wrong_query_normalized')) {
+    Test-Case 'gateway 保留连字符 canonical 覆盖无焦点 Allow 与稳定焦点 Reentry' {
+        foreach ($case in @(
+            @{ Scenario='find_focus_missing_with_band'; Leg='Allow'; Path='无焦点候选区边界' },
+            @{ Scenario='happy'; Leg='Reentry'; Path='稳定 focused input' }
+        )) {
+            $fixture = New-Fixture $case.Scenario
+            $result = Invoke-FixtureRunner $fixture @($case.Leg)
+            Assert-True ($result.ExitCode -eq 0) `
+                "$($case.Leg) 的 $($case.Path) 应接受 gateway 的 p0*-<suffix> canonical：`n$($result.Text)"
+            Assert-Contains $result.Text '语义判定通过'
+            $findData = Get-ClaudeFixtureUiFindData -Fixture $fixture
+            $queryCanonical = [string]$findData.query_normalized
+            $expectedPrefix = if ($case.Leg -ceq 'Allow') { 'p0all0w-' } else { 'p0reentry-' }
+            Assert-True ($queryCanonical.StartsWith($expectedPrefix, [StringComparison]::Ordinal)) `
+                "$($case.Leg) fixture canonical 没有机械证明小写与 o→0：$queryCanonical"
+            Assert-True ($queryCanonical.Contains('-', [StringComparison]::Ordinal)) `
+                "$($case.Leg) fixture canonical 丢失连字符：$queryCanonical"
+            Assert-True ($queryCanonical -ceq $queryCanonical.ToLowerInvariant()) `
+                "$($case.Leg) fixture canonical 不是全小写：$queryCanonical"
+            $findMatches = @($findData.matches)
+            Assert-True ($findMatches.Count -ge 1) "$($case.Leg) fixture 至少应有一个 match。"
+            Assert-True (@($findMatches | Where-Object { [string]$_.normalized -cne $queryCanonical }).Count -eq 0) `
+                "$($case.Leg) fixture 的 match.normalized 没有逐项等于 query_normalized。"
+        }
+    }
+
+    Test-Case '原始 ui_find.text 错误时同源 canonical 相等也必须失败' {
+        $fixture = New-Fixture find_wrong_raw_query
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '错误 raw query 不得被相等的 normalized 字段掩盖。'
+        Assert-Contains $result.Text 'ui_find'
+    }
+
+    Test-Case 'Allow 判据：text 正确也不能掩盖错误或空 canonical' {
+        foreach ($scenario in @('find_wrong_normalized','find_wrong_query_normalized','find_empty_normalized')) {
             $fixture = New-Fixture $scenario
             $result = Invoke-FixtureRunner $fixture @('Allow')
             Assert-True ($result.ExitCode -ne 0) `
-                "$scenario 必须按 normalized/query_normalized 契约失败，不能退回 text 猜 marker。"
+                "$scenario 必须按 normalized/query_normalized 契约 fail-closed，不能退回 text 猜 marker。"
         }
     }
 
