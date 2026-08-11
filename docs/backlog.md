@@ -102,7 +102,27 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`3ed077de8d0227cfe68785c49a649d0da0b889fa`** | `claude/serene-faraday-42d1fb` | **C 道已创建，等待用户就位（0/4）** | 用户 08-11 接受 0.147 `view_image` 有界 residual；新 task `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 使用 clean worktree，同一 build 一次性 Allow → Stale → Deny → Reentry；旧 C 不复用 |
+| **4（最终安全修复 + Codex 通道）** | **待钉新 SHA**（当前基线 `d36e3d2`） | `claude/serene-faraday-42d1fb` | **两条 C 已冻结；A 修 runner 假阴性（0/4）** | `3ed077d` 的 fresh-title 阻断已由 `d36e3d2` 修复并在真机证实；第二条 C 的 Allow 已发送，却被 runner/gateway 连字符归一契约漂移误判。修复、全 gate、独立复核后另建 clean C，旧 task/run 均不复用 |
+
+**批次 4 两条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
+`019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
+`20260811T202517-0e176d3f08b9`：Allow 真人 `allowed` 后，最终 fresh title OCR 误选日期文本，
+`E_VERIFY_FAIL` 正确 fail-closed、未发送、cleanup clean；Stale/Deny/Reentry 未运行。A 道随后以
+`d36e3d2c2b302c47d235d089aba46fbbdfd26c22` 修复标题候选与 final-title 证据硬门，完整离线 gate 为
+dispatch 58/58、gateway Debug/Release/assembleDebug、runner 144/144、凭据扫描通过，独立复审 Approved。
+
+第二条 task `019ff10f-a650-7e70-a7f0-df3bc8730581` 固定 `d36e3d2`，run
+`20260811T215340-d3eb4c2bdeaf`：Allow 真人 `allowed`，`final_title_read` resolved 且所选指纹精确等于
+「文件传输助手」，消息气泡也已在失败截图中出现；但 gateway 的 `normalized` / `query_normalized`
+按唯一生产契约保留连字符，runner 又用自己的 PowerShell 规则去掉连字符后严格比较，因而把成功发送
+判成证据不匹配。该 runner 假阴性后整轮按规则冻结，Stale/Deny/Reentry 未运行，cleanup clean；
+**批次 4 仍是 0/4、未判定。** 下一步只走 A 道：用真实 producer 形态补 RED，移除 `ui_find`
+边界的重复归一，完整 gate 与独立复审通过后提交并钉新 SHA，再创建第三条 clean C 从头四腿。
+
+**证据留存缺口（与功能修复分开）：** 两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
+截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
+ledger 行并补回 main。下次 C 在结束前必须先把 ledger 落 main，并把需要长期保留的脱敏证据复制到
+非临时位置；不能把 task 消息里的临时路径当作持久归档。
 
 **批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
 `cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
