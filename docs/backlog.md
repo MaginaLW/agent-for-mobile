@@ -102,9 +102,9 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`f0a767335e70aa99ed0fc242a1217978600435af`** | `claude/serene-faraday-42d1fb` | **第三条 clean C 已创建、待用户就位（0/4）** | task `019ff195-0fde-7eb2-ac1a-88ee11cc1a2d` 已置顶并固定该 SHA；HEAD/clean/`local.properties` 预热通过。旧 task/run 永久冻结，只能从头 Allow → Stale → Deny → Reentry |
+| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **第四条 clean C 已创建、待用户就位（0/4）** | task `019ffbc0-f5a7-7701-9a86-0bf3d07242bf` 已固定该 SHA；HEAD/clean/ignored `local.properties` 预热通过，未构建/安装/adb/runner。旧 task/run 永久冻结，只能从头 Allow → Stale → Deny → Reentry |
 
-**批次 4 两条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
+**批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
 `20260811T202517-0e176d3f08b9`：Allow 真人 `allowed` 后，最终 fresh title OCR 误选日期文本，
 `E_VERIFY_FAIL` 正确 fail-closed、未发送、cleanup clean；Stale/Deny/Reentry 未运行。A 道随后以
@@ -123,13 +123,42 @@ match canonical 只在 gateway 同源字段间逐字比较，消息区几何仍�
 dispatch 58/58、Debug 510/510、Release 407/407、assembleDebug、runner 49+49+48=146/146、凭据扫描 PASS。
 
 第三条 clean C task `019ff195-0fde-7eb2-ac1a-88ee11cc1a2d` 已置顶并固定 `f0a7673`；worktree
-HEAD/clean 与 gitignored `app/local.properties` 预热均已机械核对，当前只等待用户“已就位”。之后只能
-在该任务一次构建/安装/runner，从头按 Allow → Stale → Deny → Reentry（75s）四腿；任一失败即冻结。
+HEAD/clean 与 gitignored `app/local.properties` 预热均已机械核对。run
+`20260813T201212-3e9ae5507700` 只构建/安装/runner 各一次；Allow 真人 `allowed` / overlay 后，
+`type_text` OCR readback 把同一 20 字 marker 的两份重叠识别直接拼接，confirmation 截图却只有一份；
+最终 Enter 前长度硬门检出多 23 字（容差 4），以 `E_STALE_REF` 正确 fail-closed、未发送，
+Stale/Deny/Reentry 未运行，teardown clean、cleanup true。fresh title 已 resolved，所选 6 字候选正确，
+不是标题失败。该 task/run 已冻结，绝不重跑或复用；批次仍为 **0/4、未判定**。
 
-**证据留存缺口（与功能修复分开）：** 两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
+该 run 的 ledger 已由 main 以 commit `164736f` 按 run ID 去重落为恰好一行；持久脱敏证据位于
+`docs/runs/evidence/20260813T201212-3e9ae5507700/`（gitignored），共 13 个普通文件，
+`SHA256SUMS.txt` 列出的其余 12 文件逐项复算通过。A 道根因边界是输入 OCR 聚合层裸
+`joinToString`：修复只能折叠几何高重叠且归一后互相包含的同一物理行；不重叠重复与重叠无关
+文本继续保留，让最终长度门照常 fail-closed。计划见分支
+`docs/superpowers/plans/2026-08-13-input-bar-ocr-overlap-contract.md`。
+
+A 道最终在 `636048a6359f9ebae71a7ceb8a551fc1b2ca6b72` 闭环。输入读回先按原始
+“IoU ≥ 0.5 且归一后互相包含”关系建分量，只有分量内两两都成立的 clique 才折叠；折叠保留归一后
+最长候选、只在等长等价时看 confidence，非 clique 整组保留，所以高置信短串不能吞未批准后缀，
+桥接候选也不能吞两端真实重复。最终长度守卫、标题、确认、raw query 与发送后验均未放宽。
+完整 gate 途中还暴露失败腿会在执行器终态前 kill child；runner 的越权扫描现统一调用 canonical
+`Read-DispatchTraceTranscript -AllowPartial`，只放宽 EOF，并在 PowerShell 展开前严格验证顶层 frame、
+identity/discriminator 与 input/arguments 原始 JSON 类型。最终独立复审 Critical/Important/Minor
+`0/0/0`；`scripts/check.ps1 -Shards 3` exit 0：diff-check clean、dispatch 71/71、Gateway
+Debug/Release/assembleDebug、runner 50+49+49=148/148、凭据扫描 PASS。
+
+第四条 clean C task `019ffbc0-f5a7-7701-9a86-0bf3d07242bf` 已置顶并固定 `636048a`；新 worktree
+top-level/HEAD/clean 与 ignored `app/local.properties` 的普通文件、非 link、源目标长度/哈希均已机械核对，
+未构建、未安装、未调用 adb/设备、未运行 runner，当前只等待用户在该任务回复“已就位”。之后只允许
+唯一 `:gateway:assembleDebug` 与唯一
+`-Legs Allow,Stale,Deny,Reentry -Executor gateway -Brain codex -Provision -ReentryDwellSec 75`；任一失败即
+冻结本 task/run，后三腿 NOT RUN，不在 C 修代码。
+
+**证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
 ledger 行并补回 main。下次 C 在结束前必须先把 ledger 落 main，并把需要长期保留的脱敏证据复制到
-非临时位置；不能把 task 消息里的临时路径当作持久归档。
+非临时位置；不能把 task 消息里的临时路径当作持久归档。第三条 C 已按新规在释放前完成 ledger 去重与
+13 文件持久化，证明这道交接门可执行。
 
 **批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
 `cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
