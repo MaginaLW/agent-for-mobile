@@ -81,6 +81,30 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 - **`ToolSearch` 必须留在白名单里**：gateway 的 MCP 工具是延迟注册的，执行器要先用它加载 schema 才调得动 `macro_run` 等；禁掉它整条链就没法起步。同理，trace 事后审计原先"任何非 `mcp__gateway__` 的 tool_use 一律抛错"会**误杀每一次正常跑测**（这道门此前从没在成功路径上真正执行过，所以一直没暴露）——现在 `ToolSearch` 走显式白名单且不计入调用序列，它的纯文本结果也不再被当作证据信封解析或孤儿结果。
 - **只在成功路径上跑的审计等于没有审计。** 那次 `Bash` 之所以无人发现，是因为完整语义审计排在"确认卡截图已就位"之后，腿早在那之前就抛错了。凡是"执行器有没有越权"这类与语义无关的策略检查，都要抽成独立函数，在失败路径上也跑一遍并写进 manifest（现为 `tool_policy_violations`）。
 
+### 失败路径的 partial trace 也只能有一套 canonical parser（2026-08-13）
+
+runner 会在腿失败后终止仍在运行的执行器，所以策略审计拿到的 trace 可能已经持久化了
+`tool_use` / `item.started`，却还没有配对结果或唯一终态。这里不能为“尽量捞出越权工具名”再写一套
+宽松事件扫描：两套 parser 很快就会在 orphan/duplicate、started/completed 身份、arguments、事件顺序和
+未知帧上漂移，最后要么漏掉越权调用，要么把模型可控名字/诊断回显进 console 与 manifest。
+
+正确边界是：
+
+1. **复用完整 trace 的 canonical reader，partial 只放宽 EOF。** 默认模式仍要求完整 lifecycle；partial
+   可缺终态，且至多允许最后一个调用未完成。终态已经出现、前一个调用未完成就启动下一调用、坏 JSON、
+   未知事件、孤儿/重复结果和身份不一致，两种模式一律拒绝。
+2. **先按原始 JSON 类型判型，再读字段。** PowerShell 的 pipeline 会把单元素 JSON array 自动展开；
+   `Get-DispatchPropertyValue` 也可能把单元素数组枚举成其中的 string/object。每个 JSONL 帧用
+   `ConvertFrom-Json -NoEnumerate` 保留顶层值并强制为 object；required string/object 字段直接检查
+   `PSObject.Properties[name].Value`，不能先强转或经 pipeline 取值。
+3. **parse failure 的公开结果必须独占且固定。** 一旦 canonical reader 拒绝，策略结果只写
+   `trace_transcript_invalid`；合法 canonical 调用才折叠成固定的 `Bash` / `non_gateway_tool`，不复制
+   parser 原始错误或模型控制的身份。
+4. **fixture 要机械证明 child 在终态前被杀。** 先写调用帧与 sentinel，再让 runner 因另一个确定性
+   失败终止 child；随后断言 trace 无终态但仍含调用身份。仅靠 `sleep` 期待调度时序，会让测试偶尔
+   写完终态而假绿。direct matrix 还要同时覆盖 strict/partial、两种 brain、顶层单元素 object array、
+   raw discriminator/identity、`invalid` 独占和合法完整 canonical 等价。
+
 ## 危险动作统一硬门（2026-07-19 离线测试）
 
 - **风险等级只作元数据会产生旁路**：把 `Level.D` 写进工具注册信息并不会机械阻止 handler；统一安全门必须位于所有 handler 之前，静态等级和动态目标风险都在这里判定。
@@ -310,6 +334,30 @@ E 只解决第 2 层，第 1 层还得靠 `timeout`。
 3. **同源 canonical 不替代独立安全门。** 原始 `ui_find.text` 仍须逐字等于本腿 marker，消息区几何
    仍独立判断；Windows OCR、Deny 带外验证与 teardown 使用的本地归一是另一条证据通道，
    不为表面统一而改它。
+
+### 输入栏 OCR 候选不能裸 join，先证明是不是同一物理行（2026-08-13，真机实锤）
+
+批次 4 第三条 C 的输入框截图只有一份 marker，但 `type_text` OCR readback 把两条只差前导标点的
+识别结果空格拼成一串。早期 `contains` 只能证明“批准内容在里面”，于是报了 verified；最终 Enter 前
+长度硬门看见多出 23 字，正确 fail-closed。现场证据没有保留每条候选的来源和 bounds，所以“正好来自
+原图/增强图双跑”只能算最强解释，不能写成直接观测；能坐实的是 producer 把同一裁剪里的全部行裸
+`joinToString`，把替代识别伪装成了真实内容增量。
+
+这类输入读回按五条处理：
+
+1. **先在 producer 的候选层判物理行，再产出读回串。** 只有 IoU 足够高、两侧归一非空且文本互为
+   包含关系时，才可能把它们视作替代识别；策略不接收批准 marker、SHA 或长度，不能按 consumer 的
+   期望“挑答案”。
+2. **几何与语义缺一不可。** 非重叠的同文可能是真实重复输入；重叠但无关的文字也可能是两个真实
+   元素。两类都必须保留，让下游继续 fail-closed。短到不足两字的候选同样不折叠。
+3. **不要为通过率改弱最终安全门。** OCR 的包含判据仍须配长度容差；空、漏识或无法证明同源时仍是
+   `Unverified` / `Mismatch`，标题、确认和发送后验协议也不参与这次修复。
+4. **折叠必须信息单调，关系歧义就整组保留。** 高 confidence 不代表内容更完整；优先保留归一后最长
+   候选，只有等长等价时才看 confidence。`A↔桥`、`桥↔C` 不证明 `A↔C`，非传递分量不得借桥吞掉
+   两端的真实重复。
+5. **fixture 直接喂逐行文本、置信度和框。** 正例复刻现场的轻微标点差异；反例至少钉住非重叠同文、
+   重叠无关、IoU 阈值两侧、短文本、较长候选含真实额外内容和三候选非传递链。只拿聚合后的单串做
+   测试，会再次把 producer 接缝藏掉。
 
 ### 加闸门时必须回头看一眼「谁在生成这份文件」（2026-08-08，自己挡住自己）
 
