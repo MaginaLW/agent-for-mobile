@@ -1542,9 +1542,7 @@ class GatewayA11yService : AccessibilityService() {
         if (clipped.width() <= 0 || clipped.height() <= 0) return null
         val piece = Bitmap.createBitmap(full, clipped.left, clipped.top, clipped.width(), clipped.height())
         val lines = OcrEngine.recognize(piece, 0.25f)
-        if (lines.isEmpty()) return null
-        return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
-            .joinToString(" ") { it.text }
+        return composeInputOcrReadback(lines)
     }
 
     /** 任意区域 OCR 直读（type_text 树空读回验证用）：返回区域邻域内按位置拼接的文本，无文字 → null。 */
@@ -1560,10 +1558,21 @@ class GatewayA11yService : AccessibilityService() {
         if (r.width() <= 0 || r.height() <= 0) return null
         val piece = Bitmap.createBitmap(full, r.left, r.top, r.width(), r.height())
         val lines = OcrEngine.recognize(piece, 0.25f)
-        if (lines.isEmpty()) return null
-        return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
-            .joinToString(" ") { it.text }
+        return composeInputOcrReadback(lines)
     }
+
+    /** 输入读回专用：只折叠可同时证明几何重叠且语义相含的同一物理行替代识别。 */
+    private fun composeInputOcrReadback(lines: List<OcrEngine.OcrLine>): String? =
+        InputBarOcrReadbackPolicy.compose(
+            lines = lines.map {
+                InputBarOcrLine(
+                    text = it.text,
+                    confidence = it.conf,
+                    box = it.bounds.toOcrBox(),
+                )
+            },
+            normalize = OcrEngine::norm,
+        )
 
     /** 读回结果连同实际使用的几何一起返回——2026-07-26 排查实测：字明明在框里却读回 null，
      *  没有几何就只能靠猜。region/screen 只是尺寸数字，不含任何屏幕内容。 */
