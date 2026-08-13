@@ -416,22 +416,22 @@ function Get-P0NonGatewayToolUses {
         [Parameter(Mandatory)][string]$TracePath,
         [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain
     )
-    $offenders = [Collections.Generic.List[string]]::new()
-    try { $transcript = Read-DispatchTraceTranscript -TracePath $TracePath -Brain $Brain }
+    try { $transcript = Read-DispatchTraceTranscript -TracePath $TracePath -Brain $Brain -AllowPartial }
     catch {
-        # 不把 parser 的原始诊断或未知 item/tool 名写进 console/manifest：这些字段来自模型 trace，
-        # 可能含 token。完整判定路径会另报固定 trace_transcript_invalid。
+        # canonical parse 失败时 invalid 独占公开结果：不能从错误前缀继续捞工具名、重建第二套 parser，
+        # 也不能把 parser 的模型可控诊断复制到 console/manifest。
         return @('trace_transcript_invalid')
     }
+    $offenders = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($call in @($transcript.Calls)) {
         $rawName = [string]$call.RawName
         if ($rawName -cin $script:P0InfrastructureTools) { continue }
         if ([string]$call.Server -cne 'gateway') {
-            # 保留既有 Bash 行为证据；其它未知名字统一折叠，避免把攻击者控制的 tool 名回显。
+            # 只保留历史上已公开的 Claude Bash 固定名；其它模型可控身份统一折叠，避免外泄。
             [void]$offenders.Add($(if ($rawName -ceq 'Bash') { 'Bash' } else { 'non_gateway_tool' }))
         }
     }
-    return $offenders.ToArray()
+    return @($offenders | Sort-Object)
 }
 
 <#

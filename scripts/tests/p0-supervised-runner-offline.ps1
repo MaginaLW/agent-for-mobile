@@ -194,6 +194,8 @@ function New-Fixture {
         'wrong_text', 'wrong_hash', 'unrelated_find', 'unknown_post_tool', 'stale_read_after',
         'find_input', 'find_bottom', 'find_ocr_input', 'find_focus_missing', 'find_focus_changed',
         'trace_malformed', 'trace_non_gateway', 'trace_tool_search', 'trace_local_bash_after_block',
+        'trace_local_bash_partial_malformed',
+        'codex_trace_non_gateway_partial',
         'result_malformed',
         'result_orphan', 'audit_malformed', 'audit_missing_field',
         'ledger_traversal', 'ledger_absolute', 'ledger_wrong_slug', 'ledger_legacy_slug',
@@ -949,7 +951,9 @@ if ($scenario -eq 'dispatch_exit_before_confirmation' -or
     [Console]::Error.WriteLine('fixture_dispatch_infrastructure_failure')
     exit 23
 }
-if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
+if ($scenario -notin @(
+        'missing_screenshot','trace_local_bash_after_block','trace_local_bash_partial_malformed',
+        'codex_trace_non_gateway_partial')) {
     $validPngBase64 =
         'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAqElEQVR4nOXOIQEAAAwEoetf+hcDMYGnas/xgMYDGg9oPKDxgMYD' +
         'Gg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9oPKDxgMYDGg9o' +
@@ -987,7 +991,11 @@ if ($scenario -eq 'timeout') {
     Start-Sleep -Seconds 20
     exit 9
 }
-$confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+if ($scenario -notin @(
+        'trace_local_bash_after_block','trace_local_bash_partial_malformed','codex_trace_non_gateway_partial')) {
+    $confirm | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+}
 if ($scenario -in @('deny_but_allowed_continues','notification_leaf_link_continues')) {
     Start-Sleep -Milliseconds 1800
     Set-Content -LiteralPath (Join-Path $state 'continued-after-abort.txt') -Value '1' -NoNewline -Encoding ascii
@@ -1408,6 +1416,33 @@ if ($scenario -eq 'result_orphan') { ToolResult 'orphan-result' @{ok=$true;data=
 if ($scenario -eq 'trace_local_bash_after_block') {
     Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='b0';name='Bash';input=@{command='true'}})}}
     Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='b0';content=@(@{type='text';text='(no output)'})})}}
+    # 确定性复刻“主腿先失败并 kill child”：Bash 已写进 trace，但唯一 result 终态还没来得及写。
+    # 越权扫描的职责正是读这种 partial trace；若 fixture 靠进程调度碰巧写完终态，用例会假绿。
+    Set-Content -LiteralPath (Join-Path $state 'local-bash-written.txt') -Value '1' -NoNewline -Encoding ascii
+    $confirm | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+    Start-Sleep -Seconds 20
+}
+elseif ($scenario -eq 'trace_local_bash_partial_malformed') {
+    Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='b0';name='Bash';input=@{command='true'}})}}
+    Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='b0';content=@(@{type='text';text='(no output)'})})}}
+    Add-Content -LiteralPath $tracePath -Value '{bad-trace' -Encoding utf8
+    # parser 已看到并配对 Bash 后才遇到坏帧；公开结果仍必须由 invalid 独占，不能继续捞名字。
+    Set-Content -LiteralPath (Join-Path $state 'bash-malformed-written.txt') -Value '1' -NoNewline -Encoding ascii
+    $confirm | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+    Start-Sleep -Seconds 20
+}
+elseif ($scenario -eq 'codex_trace_non_gateway_partial') {
+    Add-Event ([ordered]@{ type='item.started'; item=[ordered]@{
+        id='local0'; type='mcp_tool_call'; server='local'; tool='foreground_app'; arguments=@{}
+    } })
+    # 与 Claude fixture 相同：先机械证明 non-gateway started 已持久化，再交出确认状态；缺截图会让
+    # runner 杀掉仍在 sleep 的 child，因此该调用不可能补出 completed/turn.completed 而假绿。
+    Set-Content -LiteralPath (Join-Path $state 'codex-non-gateway-written.txt') -Value '1' -NoNewline -Encoding ascii
+    $confirm | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+    Start-Sleep -Seconds 20
 }
 $finalText = if ($scenario -eq 'codex_secret_agent_message') {
     '结果：成功 Authorization: Bearer codex-agent-message-fixture-secret'
@@ -3521,6 +3556,14 @@ try {
         $fixture = New-Fixture trace_local_bash_after_block
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) '缺确认截图必须失败。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'local-bash-written.txt')) `
+            'fixture 尚未把 Bash 调用写进 trace 就被杀，未形成目标 partial trace。'
+        $trace = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\traces') `
+            -Filter '*.jsonl' -File | Select-Object -First 1
+        Assert-True ($null -ne $trace) 'fixture 未留下 partial trace。'
+        $traceRaw = Get-Content -LiteralPath $trace.FullName -Raw -Encoding utf8
+        Assert-Contains $traceRaw '"name":"Bash"'
+        Assert-NotMatches $traceRaw '"type":"result"'
         Assert-Contains $result.Text '越权'
         Assert-Contains $result.Text 'Bash'
         $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
@@ -3529,6 +3572,53 @@ try {
         $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'Bash') `
             "manifest 未记录越权工具，实际：$($manifestJson.tool_policy_violations)"
+    }
+
+    Test-Case 'Codex 腿失败的 partial trace 保留 non-gateway started 身份' {
+        $fixture = New-Fixture codex_trace_non_gateway_partial -Brain codex
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '缺确认截图必须失败。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'codex-non-gateway-written.txt')) `
+            'fixture 尚未把 Codex non-gateway started 写入 trace 就被杀。'
+        $trace = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\traces') `
+            -Filter '*.jsonl' -File | Select-Object -First 1
+        Assert-True ($null -ne $trace) 'fixture 未留下 Codex partial trace。'
+        $traceRaw = Get-Content -LiteralPath $trace.FullName -Raw -Encoding utf8
+        Assert-Matches $traceRaw '"type":"item\.started".*"id":"local0".*"server":"local"'
+        Assert-NotMatches $traceRaw '"type":"item\.completed".*"id":"local0"'
+        Assert-NotMatches $traceRaw '"type":"turn\.completed"'
+        Assert-Contains $result.Text '越权'
+        Assert-Contains $result.Text 'non_gateway_tool'
+        Assert-NotMatches $result.Text 'foreground_app'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'non_gateway_tool') `
+            "manifest 未固定折叠 Codex non-gateway 身份，实际：$($manifestJson.tool_policy_violations)"
+    }
+
+    Test-Case 'canonical partial invalid parse dominates 已配对 Bash 身份' {
+        $fixture = New-Fixture trace_local_bash_partial_malformed
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '缺确认截图且 trace malformed 必须失败。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'bash-malformed-written.txt')) `
+            'fixture 尚未依次写入 Bash 配对与 malformed 行。'
+        $trace = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\traces') `
+            -Filter '*.jsonl' -File | Select-Object -First 1
+        Assert-True ($null -ne $trace) 'fixture 未留下 malformed partial trace。'
+        $traceRaw = Get-Content -LiteralPath $trace.FullName -Raw -Encoding utf8
+        Assert-Contains $traceRaw '"name":"Bash"'
+        Assert-Contains $traceRaw '{bad-trace'
+        Assert-NotMatches $traceRaw '"type":"result"'
+        Assert-Contains $result.Text 'trace_transcript_invalid'
+        Assert-NotMatches $result.Text '(?i)越权[^\r\n]*Bash'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'trace_transcript_invalid') `
+            "malformed trace 未由 invalid 独占，实际：$($manifestJson.tool_policy_violations)"
     }
 
     Test-Case 'Stale 返回后任何只读续调也失败' {

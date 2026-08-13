@@ -203,8 +203,46 @@ function Test-Case {
     catch {
         $script:Failed++
         Write-Host "FAIL  $Name" -ForegroundColor Red
-        Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
+            Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
     }
+}
+
+function Invoke-TranscriptFixture {
+    param(
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines,
+        [switch]$AllowPartial
+    )
+    $trace = Join-Path $SentinelDir ("canonical-partial-$([guid]::NewGuid().ToString('N')).jsonl")
+    try {
+        $Lines | Set-Content -LiteralPath $trace -Encoding utf8
+        $result = & {
+            param($HelperPath, $TracePath, $SelectedBrain, $UsePartial)
+            Set-StrictMode -Version 3.0
+            . $HelperPath
+            if ($UsePartial) {
+                Read-DispatchTraceTranscript -TracePath $TracePath -Brain $SelectedBrain -AllowPartial
+            }
+            else {
+                Read-DispatchTraceTranscript -TracePath $TracePath -Brain $SelectedBrain
+            }
+        } (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1') $trace $Brain ([bool]$AllowPartial)
+        return ,$result
+    }
+    finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+}
+
+function Assert-TranscriptFixtureRejected {
+    param(
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines,
+        [switch]$AllowPartial,
+        [Parameter(Mandatory)][string]$Because
+    )
+    $rejected = $false
+    try { $null = Invoke-TranscriptFixture -Brain $Brain -Lines $Lines -AllowPartial:$AllowPartial }
+    catch { $rejected = $true }
+    Assert-True $rejected $Because
 }
 
 try {
@@ -690,6 +728,449 @@ public static class Program {
             }).Count -eq 0) '缺省 is_error 应按 transport success 处理，且时序必须保留。'
         }
         finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case 'canonical partial 双 brain 只放宽合法 EOF 且默认严格行为不变' {
+        $claudeComplete = @(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"schema-1","name":"ToolSearch","input":{"query":"gateway"}}]}}',
+            '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"schema-1","content":[{"type":"text","text":"schema"}]}]}}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__gateway__foreground_app","input":{}}]}}',
+            '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":[{"type":"text","text":"{\"ok\":true}"}]}]}}',
+            '{"type":"result","subtype":"success","session_id":"partial-claude","result":"结果：成功"}'
+        )
+        $codexComplete = @(
+            '{"type":"thread.started","thread_id":"partial-codex"}',
+            '{"type":"turn.started"}',
+            '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}',
+            '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}',
+            '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"output_tokens":2}}'
+        )
+
+        foreach ($case in @(
+            @{ Brain='claude'; Complete=$claudeComplete },
+            @{ Brain='codex'; Complete=$codexComplete }
+        )) {
+            $strict = Invoke-TranscriptFixture -Brain $case.Brain -Lines $case.Complete
+            $partialOnComplete = Invoke-TranscriptFixture -Brain $case.Brain -Lines $case.Complete -AllowPartial
+            Assert-True (($strict | ConvertTo-Json -Compress -Depth 30) -ceq
+                ($partialOnComplete | ConvertTo-Json -Compress -Depth 30)) `
+                "$($case.Brain) 完整 trace 在 AllowPartial 下改变了 canonical 结果。"
+
+            $withoutTerminal = @($case.Complete | Select-Object -SkipLast 1)
+            Assert-TranscriptFixtureRejected -Brain $case.Brain -Lines $withoutTerminal `
+                -Because "$($case.Brain) 默认严格模式错误接受了无终态 EOF。"
+            $completedPrefix = Invoke-TranscriptFixture -Brain $case.Brain -Lines $withoutTerminal -AllowPartial
+            Assert-True ($null -eq $completedPrefix.Terminal -and $completedPrefix.Calls.Count -ge 1 -and
+                $completedPrefix.Calls[$completedPrefix.Calls.Count - 1].ResultCount -eq 1 -and
+                $completedPrefix.Calls[$completedPrefix.Calls.Count - 1].CompletedBeforeNext) `
+                "$($case.Brain) 未接受全部调用已完成、仅缺终态的合法 EOF。"
+
+            $unfinished = if ($case.Brain -ceq 'claude') {
+                @($claudeComplete[0], $claudeComplete[1],
+                    '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tail-1","name":"mcp__gateway__press_key","input":{"key":"enter"}}]}}')
+            }
+            else {
+                @($codexComplete[0], $codexComplete[1],
+                    '{"type":"item.started","item":{"id":"tail-1","type":"mcp_tool_call","server":"gateway","tool":"press_key","arguments":{"key":"enter"}}}')
+            }
+            Assert-TranscriptFixtureRejected -Brain $case.Brain -Lines $unfinished `
+                -Because "$($case.Brain) 默认严格模式错误接受了未完成尾调用。"
+            $unfinishedPrefix = Invoke-TranscriptFixture -Brain $case.Brain -Lines $unfinished -AllowPartial
+            $tail = $unfinishedPrefix.Calls[$unfinishedPrefix.Calls.Count - 1]
+            Assert-True ($null -eq $unfinishedPrefix.Terminal -and $tail.Id -ceq 'tail-1' -and
+                $tail.Name -ceq 'press_key' -and $tail.Server -ceq 'gateway' -and
+                $tail.ResultCount -eq 0 -and $tail.Outcome -ceq 'started' -and
+                -not $tail.CompletedBeforeNext) `
+                "$($case.Brain) 没有原样保留合法 EOF 的最后一个 unfinished Call。"
+        }
+
+        $toolSearch = Invoke-TranscriptFixture -Brain claude -AllowPartial -Lines @(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"schema-tail","name":"ToolSearch","input":{"query":"gateway"}}]}}'
+        )
+        Assert-True ($toolSearch.Calls.Count -eq 1 -and $toolSearch.Calls[0].RawName -ceq 'ToolSearch') `
+            'partial ToolSearch 身份未进入 canonical inventory。'
+        $gatewayOnly = Invoke-TranscriptFixture -Brain codex -AllowPartial -Lines @(
+            '{"type":"thread.started","thread_id":"gateway-prefix"}',
+            '{"type":"turn.started"}',
+            '{"type":"item.started","item":{"id":"gateway-tail","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}'
+        )
+        Assert-True ($gatewayOnly.Calls.Count -eq 1 -and $gatewayOnly.Calls[0].Server -ceq 'gateway') `
+            'partial gateway 调用身份未进入 canonical inventory。'
+
+        Assert-TranscriptFixtureRejected -Brain claude -Lines @() -AllowPartial `
+            -Because '空 Claude trace 无法证明工具策略，AllowPartial 必须 fail closed。'
+        $codexThreadOnlyLines = @('{"type":"thread.started","thread_id":"thread-only-prefix"}')
+        Assert-TranscriptFixtureRejected -Brain codex -Lines $codexThreadOnlyLines `
+            -Because 'Codex thread.started-only 在默认严格模式下不得通过。'
+        $threadOnly = Invoke-TranscriptFixture -Brain codex -Lines $codexThreadOnlyLines -AllowPartial
+        Assert-True ($threadOnly.SessionId -ceq 'thread-only-prefix' -and $null -eq $threadOnly.Terminal -and
+            $threadOnly.Turns -eq 0 -and $threadOnly.Calls.Count -eq 0) `
+            'Codex thread.started-only 应是保留 session 身份的合法 partial 前缀。'
+    }
+
+    Test-Case 'canonical partial 两 brain 对坏帧与非尾 unfinished 仍 fail closed' {
+        $cases = @(
+            @{ Brain='claude'; Name='malformed JSON'; Lines=@('{bad-json') },
+            @{ Brain='claude'; Name='unknown event'; Lines=@('{"type":"future.event"}') },
+            @{ Brain='claude'; Name='terminal with unfinished call'; Lines=@(
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{}}]}}',
+                '{"type":"result","subtype":"success","session_id":"s","result":"结果：成功"}') },
+            @{ Brain='claude'; Name='non-tail unfinished call'; Lines=@(
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{}}]}}',
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"mcp__gateway__foreground_app","input":{}}]}}') },
+            @{ Brain='codex'; Name='malformed JSON'; Lines=@('{bad-json') },
+            @{ Brain='codex'; Name='unknown event'; Lines=@(
+                '{"type":"thread.started","thread_id":"s"}', '{"type":"turn.started"}', '{"type":"future.event"}') },
+            @{ Brain='codex'; Name='terminal with unfinished call'; Lines=@(
+                '{"type":"thread.started","thread_id":"s"}', '{"type":"turn.started"}',
+                '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"other","tool":"shell","arguments":{}}}',
+                '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}') },
+            @{ Brain='codex'; Name='non-tail unfinished call'; Lines=@(
+                '{"type":"thread.started","thread_id":"s"}', '{"type":"turn.started"}',
+                '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"other","tool":"shell","arguments":{}}}',
+                '{"type":"item.started","item":{"id":"c2","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}') }
+        )
+        foreach ($case in $cases) {
+            Assert-TranscriptFixtureRejected -Brain $case.Brain -Lines $case.Lines -AllowPartial `
+                -Because "AllowPartial 错误接受 $($case.Brain) $($case.Name)。"
+        }
+    }
+
+    Test-Case 'canonical partial Claude 结构 ID 与 result 配对错误仍 fail closed' {
+        $validUse = '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{}}]}}'
+        $validResult = '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":[{"type":"text","text":"ok"}]}]}}'
+        $cases = @(
+            @{ Name='assistant missing message'; Lines=@('{"type":"assistant"}') },
+            @{ Name='user missing message'; Lines=@('{"type":"user"}') },
+            @{ Name='message missing content'; Lines=@('{"type":"assistant","message":{}}') },
+            @{ Name='content is not array'; Lines=@('{"type":"assistant","message":{"content":{"type":"text","text":"x"}}}') },
+            @{ Name='content missing type'; Lines=@('{"type":"assistant","message":{"content":[{"text":"x"}]}}') },
+            @{ Name='content empty type'; Lines=@('{"type":"user","message":{"content":[{"type":""}]}}') },
+            @{ Name='blank tool identity'; Lines=@('{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"","input":{}}]}}') },
+            @{ Name='duplicate tool id'; Lines=@($validUse, $validResult,
+                '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{}}]}}') },
+            @{ Name='orphan result'; Lines=@(
+                '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"orphan","content":[{"type":"text","text":"ok"}]}]}}') },
+            @{ Name='duplicate result'; Lines=@($validUse, $validResult, $validResult) }
+        )
+        foreach ($case in $cases) {
+            Assert-TranscriptFixtureRejected -Brain claude -Lines $case.Lines -AllowPartial `
+                -Because "AllowPartial 错误接受 Claude $($case.Name)。"
+        }
+    }
+
+    Test-Case 'canonical partial Codex lifecycle 身份 arguments 与 unknown item 仍 fail closed' {
+        $thread = '{"type":"thread.started","thread_id":"s"}'
+        $turn = '{"type":"turn.started"}'
+        $start = '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{"key":"v"}}}'
+        $complete = '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{"key":"v"},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}'
+        $cases = @(
+            @{ Name='duplicate started id'; Lines=@($thread,$turn,$start,$complete,$start) },
+            @{ Name='orphan completed'; Lines=@($thread,$turn,
+                '{"type":"item.completed","item":{"id":"orphan","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{},"error":null,"status":"completed"}}') },
+            @{ Name='duplicate completed'; Lines=@($thread,$turn,$start,$complete,$complete) },
+            @{ Name='server mismatch'; Lines=@($thread,$turn,$start,
+                '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"other","tool":"foreground_app","arguments":{"key":"v"},"result":{},"error":null,"status":"completed"}}') },
+            @{ Name='tool mismatch'; Lines=@($thread,$turn,$start,
+                '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"press_key","arguments":{"key":"v"},"result":{},"error":null,"status":"completed"}}') },
+            @{ Name='arguments mismatch'; Lines=@($thread,$turn,$start,
+                '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{"key":"wrong"},"result":{},"error":null,"status":"completed"}}') },
+            @{ Name='unknown item'; Lines=@($thread,$turn,
+                '{"type":"item.completed","item":{"id":"cmd1","type":"command_execution","command":"forbidden"}}') },
+            @{ Name='blank started id'; Lines=@($thread,$turn,
+                '{"type":"item.started","item":{"id":"","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}') },
+            @{ Name='blank server'; Lines=@($thread,$turn,
+                '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"","tool":"foreground_app","arguments":{}}}') },
+            @{ Name='blank tool'; Lines=@($thread,$turn,
+                '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"","arguments":{}}}') }
+        )
+        foreach ($case in $cases) {
+            Assert-TranscriptFixtureRejected -Brain codex -Lines $case.Lines -AllowPartial `
+                -Because "AllowPartial 错误接受 Codex $($case.Name)。"
+        }
+    }
+
+    Test-Case 'canonical partial reviewer Claude tool block type 大小写不丢调用身份' {
+        $traceLines = @(
+            '{"type":"assistant","message":{"content":[{"type":"TOOL_USE","id":"upper-1","name":"Bash","input":{"command":"true"}}]}}',
+            '{"type":"user","message":{"content":[{"type":"TOOL_RESULT","tool_use_id":"upper-1","content":[{"type":"text","text":"{\"ok\":true}"}]}]}}',
+            '{"type":"result","subtype":"success","session_id":"upper-claude","result":"结果：成功"}'
+        )
+        foreach ($allowPartial in @($false,$true)) {
+            $transcript = Invoke-TranscriptFixture -Brain claude -Lines $traceLines -AllowPartial:$allowPartial
+            Assert-True ($transcript.Calls.Count -eq 1 -and
+                $transcript.Calls[0].RawName -ceq 'Bash' -and
+                $transcript.Calls[0].Id -ceq 'upper-1' -and
+                $transcript.Calls[0].ResultCount -eq 1 -and
+                $transcript.Calls[0].Outcome -ceq 'success') `
+                "Claude TOOL_USE/TOOL_RESULT 在 AllowPartial=$allowPartial 时被静默丢弃。"
+        }
+    }
+
+    Test-Case 'canonical partial reviewer Claude input 与 Codex arguments 只接受 JSON object' {
+        $claudeInvalid = @(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash"}]}}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":null}]}}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":"scalar"}]}}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":[]}]}}',
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":[{"wrapped":true}]}]}}'
+        )
+        foreach ($line in $claudeInvalid) {
+            Assert-TranscriptFixtureRejected -Brain claude -Lines @($line) -AllowPartial `
+                -Because 'AllowPartial 错误接受了非 JSON object 的 Claude tool_use.input。'
+        }
+
+        $codexPrefix = @(
+            '{"type":"thread.started","thread_id":"object-contract"}',
+            '{"type":"turn.started"}'
+        )
+        foreach ($argumentsJson in @('"scalar"','[]','[{}]','null')) {
+            $start = '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":' + $argumentsJson + '}}'
+            Assert-TranscriptFixtureRejected -Brain codex -Lines @($codexPrefix + $start) -AllowPartial `
+                -Because "AllowPartial 错误接受 Codex item.started.arguments=$argumentsJson。"
+
+            $completed = '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":' + $argumentsJson + ',"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}'
+            Assert-TranscriptFixtureRejected -Brain codex -Lines @($codexPrefix + $start + $completed) -AllowPartial `
+                -Because "AllowPartial 错误接受 Codex item.completed.arguments=$argumentsJson。"
+        }
+        $missingStart = '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app"}}'
+        Assert-TranscriptFixtureRejected -Brain codex -Lines @($codexPrefix + $missingStart) -AllowPartial `
+            -Because 'AllowPartial 错误接受缺 arguments 的 Codex item.started。'
+        $validStart = '{"type":"item.started","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}'
+        $missingCompleted = '{"type":"item.completed","item":{"id":"c1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","result":{},"error":null,"status":"completed"}}'
+        Assert-TranscriptFixtureRejected -Brain codex -Lines @($codexPrefix + $validStart + $missingCompleted) -AllowPartial `
+            -Because 'AllowPartial 错误接受缺 arguments 的 Codex item.completed。'
+    }
+
+    Test-Case 'canonical partial reviewer Codex 完整失败终态与 partial 前缀分别记 Turns' {
+        $failedTurn = @(
+            '{"type":"thread.started","thread_id":"failed-without-turn-start"}',
+            '{"type":"turn.failed","error":{"message":"fixture"}}'
+        )
+        foreach ($allowPartial in @($false,$true)) {
+            $transcript = Invoke-TranscriptFixture -Brain codex -Lines $failedTurn -AllowPartial:$allowPartial
+            Assert-True ($transcript.Terminal.Type -ceq 'turn.failed' -and $transcript.Turns -eq 1) `
+                "完整 Codex turn.failed 在 AllowPartial=$allowPartial 时没有保留 Turns=1。"
+        }
+        $threadOnly = Invoke-TranscriptFixture -Brain codex -AllowPartial -Lines @(
+            '{"type":"thread.started","thread_id":"thread-only-reviewer"}'
+        )
+        Assert-True ($null -eq $threadOnly.Terminal -and $threadOnly.Turns -eq 0) `
+            'Codex thread.started-only partial 必须保持 Turns=0。'
+    }
+
+    Test-Case 'canonical partial reviewer unfinished 最后调用允许合法非调用后缀' {
+        $claude = Invoke-TranscriptFixture -Brain claude -AllowPartial -Lines @(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tail-c","name":"Bash","input":{"command":"true"}}]}}',
+            '{"type":"system","subtype":"fixture"}',
+            '{"type":"rate_limit_event","rate_limit_info":{}}'
+        )
+        Assert-True ($claude.Calls.Count -eq 1 -and $claude.Calls[0].Id -ceq 'tail-c' -and
+            $claude.Calls[0].ResultCount -eq 0) 'Claude 合法非调用后缀丢失 unfinished 最后调用。'
+
+        $codex = Invoke-TranscriptFixture -Brain codex -AllowPartial -Lines @(
+            '{"type":"thread.started","thread_id":"suffix-codex"}',
+            '{"type":"turn.started"}',
+            '{"type":"item.started","item":{"id":"tail-x","type":"mcp_tool_call","server":"local","tool":"shell","arguments":{}}}',
+            '{"type":"item.started","item":{"id":"reason-1","type":"reasoning"}}',
+            '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"still running"}}'
+        )
+        Assert-True ($codex.Calls.Count -eq 1 -and $codex.Calls[0].Id -ceq 'tail-x' -and
+            $codex.Calls[0].ResultCount -eq 0) 'Codex 合法非调用后缀丢失 unfinished 最后调用。'
+    }
+
+    Test-Case 'canonical partial reviewer raw JSON string 拒绝 Claude identity 强转' {
+        $invalidUses = @(
+            [ordered]@{ type='tool_use'; id=7; name='Bash'; input=[ordered]@{} },
+            [ordered]@{ type='tool_use'; id='bool-name'; name=$true; input=[ordered]@{} },
+            [ordered]@{ type='tool_use'; id='object-name'; name=[pscustomobject]@{value='Bash'}; input=[ordered]@{} }
+        )
+        foreach ($content in $invalidUses) {
+            $line = [ordered]@{type='assistant';message=[ordered]@{content=@($content)}} |
+                ConvertTo-Json -Compress -Depth 20
+            Assert-TranscriptFixtureRejected -Brain claude -Lines @($line) -AllowPartial `
+                -Because 'Claude tool_use id/name 非原始 JSON string 却被强转接受。'
+        }
+
+        $useLine = [ordered]@{type='assistant';message=[ordered]@{content=@(
+            [ordered]@{type='tool_use';id='paired-array-id';name='Bash';input=[ordered]@{}}
+        )}} | ConvertTo-Json -Compress -Depth 20
+        $resultLine = [ordered]@{type='user';message=[ordered]@{content=@(
+            [ordered]@{type='tool_result';tool_use_id=@('paired-array-id');content=@(
+                [ordered]@{type='text';text='{"ok":true}'})}
+        )}} | ConvertTo-Json -Compress -Depth 20
+        Assert-TranscriptFixtureRejected -Brain claude -Lines @($useLine,$resultLine) -AllowPartial `
+            -Because 'Claude tool_result.tool_use_id 数组被展开后冒充 string identity。'
+    }
+
+    Test-Case 'canonical partial reviewer raw JSON string 拒绝 Codex started identity 强转' {
+        $invalidThread = [ordered]@{type='thread.started';thread_id=[pscustomobject]@{value='thread'}} |
+            ConvertTo-Json -Compress -Depth 20
+        Assert-TranscriptFixtureRejected -Brain codex -Lines @($invalidThread) -AllowPartial `
+            -Because 'Codex thread_id object 被强转为 session string。'
+
+        $prefix = @(
+            '{"type":"thread.started","thread_id":"raw-string-started"}',
+            '{"type":"turn.started"}'
+        )
+        $invalidItems = @(
+            [ordered]@{id=7;type='mcp_tool_call';server='gateway';tool='foreground_app';arguments=[ordered]@{}},
+            [ordered]@{id='bool-server';type='mcp_tool_call';server=$true;tool='foreground_app';arguments=[ordered]@{}},
+            [ordered]@{id='array-tool';type='mcp_tool_call';server='gateway';tool=@('foreground_app');arguments=[ordered]@{}}
+        )
+        foreach ($item in $invalidItems) {
+            $line = [ordered]@{type='item.started';item=$item} | ConvertTo-Json -Compress -Depth 20
+            Assert-TranscriptFixtureRejected -Brain codex -Lines @($prefix + $line) -AllowPartial `
+                -Because 'Codex item.started id/server/tool 非原始 JSON string 却被强转接受。'
+        }
+    }
+
+    Test-Case 'canonical partial reviewer raw JSON string 拒绝 Codex completed identity 强转' {
+        $prefix = @(
+            '{"type":"thread.started","thread_id":"raw-string-completed"}',
+            '{"type":"turn.started"}'
+        )
+        $cases = @(
+            [ordered]@{ StartId='7'; StartServer='gateway'; StartTool='foreground_app';
+                CompletedId=7; CompletedServer='gateway'; CompletedTool='foreground_app' },
+            [ordered]@{ StartId='bool-server'; StartServer='True'; StartTool='foreground_app';
+                CompletedId='bool-server'; CompletedServer=$true; CompletedTool='foreground_app' },
+            [ordered]@{ StartId='array-tool'; StartServer='gateway'; StartTool='foreground_app';
+                CompletedId='array-tool'; CompletedServer='gateway'; CompletedTool=@('foreground_app') }
+        )
+        foreach ($case in $cases) {
+            $startLine = [ordered]@{type='item.started';item=[ordered]@{
+                id=$case.StartId;type='mcp_tool_call';server=$case.StartServer;tool=$case.StartTool;
+                arguments=[ordered]@{}
+            }} | ConvertTo-Json -Compress -Depth 20
+            $completedLine = [ordered]@{type='item.completed';item=[ordered]@{
+                id=$case.CompletedId;type='mcp_tool_call';server=$case.CompletedServer;tool=$case.CompletedTool;
+                arguments=[ordered]@{};result=[ordered]@{content=@(
+                    [ordered]@{type='text';text='{"ok":true}'})};error=$null;status='completed'
+            }} | ConvertTo-Json -Compress -Depth 20
+            Assert-TranscriptFixtureRejected -Brain codex -Lines @($prefix + $startLine + $completedLine) -AllowPartial `
+                -Because 'Codex item.completed id/server/tool 非原始 JSON string 却被强转接受。'
+        }
+    }
+
+    Test-Case 'canonical partial discriminator raw types' {
+        $acceptedMalformedCases = [Collections.Generic.List[string]]::new()
+        $claudeCases = @(
+            @{ Name='event.type singleton array'; Lines=@(
+                '{"type":["assistant"],"message":{"content":[]}}',
+                '{"type":"result","subtype":"success","session_id":"raw-event-type","result":"结果：成功"}') },
+            @{ Name='message singleton object array'; Lines=@(
+                '{"type":"assistant","message":[{"content":[]}]}',
+                '{"type":"result","subtype":"success","session_id":"raw-message","result":"结果：成功"}') },
+            @{ Name='content.type singleton array'; Lines=@(
+                '{"type":"assistant","message":{"content":[{"type":["tool_use"],"id":"raw-content-type","name":"Bash","input":{}}]}}',
+                '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"raw-content-type","content":[{"type":"text","text":"ok"}]}]}}',
+                '{"type":"result","subtype":"success","session_id":"raw-content-type","result":"结果：成功"}') }
+        )
+        foreach ($case in $claudeCases) {
+            foreach ($allowPartial in @($false,$true)) {
+                $rejected = $false
+                try {
+                    $null = Invoke-TranscriptFixture -Brain claude -Lines $case.Lines `
+                        -AllowPartial:$allowPartial
+                }
+                catch { $rejected = $true }
+                if (-not $rejected) {
+                    $acceptedMalformedCases.Add("Claude $($case.Name) AllowPartial=$allowPartial")
+                }
+            }
+        }
+
+        $codexCases = @(
+            @{ Name='event.type singleton array'; Lines=@(
+                '{"type":["thread.started"],"thread_id":"raw-event-type"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}') },
+            @{ Name='event.item singleton object array'; Lines=@(
+                '{"type":"thread.started","thread_id":"raw-event-item"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.started","item":[{"id":"reason-1","type":"reasoning"}]}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}') },
+            @{ Name='item.type mcp singleton array'; Lines=@(
+                '{"type":"thread.started","thread_id":"raw-mcp-type"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.started","item":{"id":"call-1","type":["mcp_tool_call"],"server":"gateway","tool":"foreground_app","arguments":{}}}',
+                '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}') },
+            @{ Name='item.type reasoning singleton array'; Lines=@(
+                '{"type":"thread.started","thread_id":"raw-reasoning-type"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.started","item":{"id":"reason-1","type":["reasoning"]}}',
+                '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}') }
+        )
+        foreach ($case in $codexCases) {
+            foreach ($allowPartial in @($false,$true)) {
+                $rejected = $false
+                try {
+                    $null = Invoke-TranscriptFixture -Brain codex -Lines $case.Lines `
+                        -AllowPartial:$allowPartial
+                }
+                catch { $rejected = $true }
+                if (-not $rejected) {
+                    $acceptedMalformedCases.Add("Codex $($case.Name) AllowPartial=$allowPartial")
+                }
+            }
+        }
+        Assert-True ($acceptedMalformedCases.Count -eq 0) `
+            ("原始 JSON discriminator 被 PowerShell 展开并接受：" +
+                ($acceptedMalformedCases -join '; '))
+    }
+
+    Test-Case 'canonical partial top-level JSON frame raw object' {
+        $acceptedMalformedFrames = [Collections.Generic.List[string]]::new()
+        $claudeLines = @(
+            '[{"type":"assistant","message":{"content":[{"type":"tool_use","id":"wrapped-claude","name":"Bash","input":{"command":"true"}}]}}]',
+            '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"wrapped-claude","content":[{"type":"text","text":"ok"}]}]}}',
+            '{"type":"result","subtype":"success","session_id":"wrapped-claude","result":"结果：成功"}'
+        )
+        foreach ($allowPartial in @($false,$true)) {
+            try {
+                $transcript = Invoke-TranscriptFixture -Brain claude -Lines $claudeLines `
+                    -AllowPartial:$allowPartial
+                $identity = if ($transcript.Calls.Count -eq 1) {
+                    $transcript.Calls[0].RawName
+                }
+                else { "calls=$($transcript.Calls.Count)" }
+                $acceptedMalformedFrames.Add(
+                    "Claude AllowPartial=$allowPartial canonical=$identity")
+            }
+            catch { }
+        }
+
+        $codexLines = @(
+            '{"type":"thread.started","thread_id":"wrapped-codex"}',
+            '{"type":"turn.started"}',
+            '[{"type":"item.started","item":{"id":"wrapped-codex-call","type":"mcp_tool_call","server":"local","tool":"shell","arguments":{}}}]',
+            '{"type":"item.completed","item":{"id":"wrapped-codex-call","type":"mcp_tool_call","server":"local","tool":"shell","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}',
+            '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
+        )
+        foreach ($allowPartial in @($false,$true)) {
+            try {
+                $transcript = Invoke-TranscriptFixture -Brain codex -Lines $codexLines `
+                    -AllowPartial:$allowPartial
+                $identity = if ($transcript.Calls.Count -eq 1) {
+                    "$($transcript.Calls[0].Server)/$($transcript.Calls[0].Name)"
+                }
+                else { "calls=$($transcript.Calls.Count)" }
+                $acceptedMalformedFrames.Add(
+                    "Codex AllowPartial=$allowPartial canonical=$identity")
+            }
+            catch { }
+        }
+        Assert-True ($acceptedMalformedFrames.Count -eq 0) `
+            ("顶层 JSON array frame 被展开并接受：" + ($acceptedMalformedFrames -join '; '))
     }
 
     Test-Case 'Codex 多条 agent_message 只把最后正文归一为 FinalText' {

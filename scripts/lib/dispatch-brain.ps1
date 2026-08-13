@@ -21,6 +21,47 @@ function Get-DispatchPropertyValue {
     return $property.Value
 }
 
+function Test-DispatchJsonObject {
+    param([AllowNull()]$Value)
+    return $Value -is [Management.Automation.PSCustomObject] -or
+        $Value -is [Collections.IDictionary]
+}
+
+function Get-DispatchRequiredJsonObject {
+    param(
+        [AllowNull()]$InputObject,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$ErrorMessage
+    )
+    $property = if ($null -eq $InputObject) { $null } else { $InputObject.PSObject.Properties[$Name] }
+    # 与 required-string 相同，必须在 property.Value 上判型；否则单元素 JSON array 会被
+    # PowerShell pipeline 展开成其中那个 PSCustomObject，冒充原始 JSON object。
+    if ($null -eq $property -or -not (Test-DispatchJsonObject -Value $property.Value)) {
+        throw $ErrorMessage
+    }
+    return $property.Value
+}
+
+function Test-DispatchNonEmptyJsonString {
+    param([AllowNull()]$Value)
+    return $Value -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$Value)
+}
+
+function Get-DispatchRequiredNonEmptyJsonString {
+    param(
+        [AllowNull()]$InputObject,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$ErrorMessage
+    )
+    $property = if ($null -eq $InputObject) { $null } else { $InputObject.PSObject.Properties[$Name] }
+    # 必须直接检查 property.Value；复用 Get-DispatchPropertyValue 会让单元素 JSON array 经
+    # PowerShell pipeline 自动展开成 string，从而再次绕过原始 JSON 类型约束。
+    if ($null -eq $property -or -not (Test-DispatchNonEmptyJsonString -Value $property.Value)) {
+        throw $ErrorMessage
+    }
+    return [string]$property.Value
+}
+
 function Resolve-DispatchTrustedCodexExecutable {
     [CmdletBinding()]
     param()
@@ -291,7 +332,10 @@ function Read-DispatchTraceTranscript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$TracePath,
-        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
+        # 合法完整 trace 的 canonical 输出不变，默认模式仍要求完整 lifecycle；两种模式共享更严格的
+        # 逐帧/JSON-object malformed 校验。此开关只额外放宽 EOF：可缺终态，最后一个调用可未完成。
+        [switch]$AllowPartial
     )
 
     if (-not (Test-Path -LiteralPath $TracePath -PathType Leaf)) {
@@ -308,17 +352,39 @@ function Read-DispatchTraceTranscript {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $eventOrdinal++
             if ($terminalSeen) { throw 'Claude trace 的 result 终态之后仍有事件。' }
-            try { $event = $line | ConvertFrom-Json -Depth 40 -ErrorAction Stop }
+            try {
+                $event = ConvertFrom-Json -InputObject $line -Depth 40 -NoEnumerate -ErrorAction Stop
+            }
             catch { throw 'Claude trace 含无法解析的非空 JSON 行。' }
-            switch ([string]$event.type) {
+            if (-not (Test-DispatchJsonObject -Value $event)) {
+                throw 'Claude trace 的非空 JSON 行必须是顶层 JSON object。'
+            }
+            $eventType = Get-DispatchRequiredNonEmptyJsonString -InputObject $event -Name 'type' `
+                -ErrorMessage 'Claude trace 事件缺少非空字符串 type。'
+            switch ($eventType) {
                 'assistant' {
-                    foreach ($content in @($event.message.content)) {
-                        if ($content.type -ne 'tool_use') { continue }
-                        $id = [string]$content.id
-                        if ([string]::IsNullOrWhiteSpace($id) -or $callsById.ContainsKey($id)) {
+                    $message = Get-DispatchRequiredJsonObject -InputObject $event -Name 'message' `
+                        -ErrorMessage 'Claude assistant 事件缺少 JSON object message。'
+                    $messageContentProperty = $message.PSObject.Properties['content']
+                    $messageContent = $null
+                    if ($null -ne $messageContentProperty) { $messageContent = $messageContentProperty.Value }
+                    if ($null -eq $messageContent -or
+                        $messageContent -isnot [Array]) {
+                        throw 'Claude assistant 事件缺少 message.content 数组。'
+                    }
+                    foreach ($content in $messageContent) {
+                        $contentType = Get-DispatchRequiredNonEmptyJsonString -InputObject $content -Name 'type' `
+                            -ErrorMessage 'Claude assistant message.content 缺少非空字符串 type。'
+                        if ($contentType -ine 'tool_use') { continue }
+                        $id = Get-DispatchRequiredNonEmptyJsonString -InputObject $content -Name 'id' `
+                            -ErrorMessage 'Claude trace 含缺失或非字符串的 tool_use id。'
+                        if ($callsById.ContainsKey($id)) {
                             throw 'Claude trace 含缺失或重复的 tool_use id。'
                         }
-                        $rawName = [string]$content.name
+                        $rawName = Get-DispatchRequiredNonEmptyJsonString -InputObject $content -Name 'name' `
+                            -ErrorMessage 'Claude tool_use 缺少非空字符串工具名。'
+                        $input = Get-DispatchRequiredJsonObject -InputObject $content -Name 'input' `
+                            -ErrorMessage 'Claude tool_use.input 必须是 JSON object。'
                         $server = ''
                         $name = $rawName
                         $match = [regex]::Match($rawName, '^mcp__([^_]+)__(.+)$')
@@ -328,7 +394,7 @@ function Read-DispatchTraceTranscript {
                         }
                         $call = [pscustomobject]@{
                             Id=$id; Server=$server; Name=$name; RawName=$rawName
-                            Input=(Get-DispatchPropertyValue $content 'input')
+                            Input=$input
                             ResultEnvelope=$null; ResultCount=0; Outcome='started'
                             Ordinal=$calls.Count; StartedOrdinal=$eventOrdinal; CompletedOrdinal=$null
                             CompletedBeforeNext=$false
@@ -338,10 +404,22 @@ function Read-DispatchTraceTranscript {
                     }
                 }
                 'user' {
-                    foreach ($content in @($event.message.content)) {
-                        if ($content.type -ne 'tool_result') { continue }
-                        $id = [string]$content.tool_use_id
-                        if ([string]::IsNullOrWhiteSpace($id) -or -not $callsById.ContainsKey($id)) {
+                    $message = Get-DispatchRequiredJsonObject -InputObject $event -Name 'message' `
+                        -ErrorMessage 'Claude user 事件缺少 JSON object message。'
+                    $messageContentProperty = $message.PSObject.Properties['content']
+                    $messageContent = $null
+                    if ($null -ne $messageContentProperty) { $messageContent = $messageContentProperty.Value }
+                    if ($null -eq $messageContent -or
+                        $messageContent -isnot [Array]) {
+                        throw 'Claude user 事件缺少 message.content 数组。'
+                    }
+                    foreach ($content in $messageContent) {
+                        $contentType = Get-DispatchRequiredNonEmptyJsonString -InputObject $content -Name 'type' `
+                            -ErrorMessage 'Claude user message.content 缺少非空字符串 type。'
+                        if ($contentType -ine 'tool_result') { continue }
+                        $id = Get-DispatchRequiredNonEmptyJsonString -InputObject $content -Name 'tool_use_id' `
+                            -ErrorMessage 'Claude trace 含缺失或非字符串的 tool_result.tool_use_id。'
+                        if (-not $callsById.ContainsKey($id)) {
                             throw 'Claude trace 含孤儿 tool_result。'
                         }
                         $call = $callsById[$id]
@@ -359,17 +437,29 @@ function Read-DispatchTraceTranscript {
                     $terminalSeen = $true
                 }
                 { $_ -in @('system','rate_limit_event') } { }
-                default { throw "Claude trace 含未知事件类型：$($event.type)" }
+                default { throw "Claude trace 含未知事件类型：$eventType" }
             }
         }
-        if ($null -eq $terminal) { throw 'Claude trace 缺少唯一 result 终态。' }
-        foreach ($call in $calls) {
-            if ($call.ResultCount -ne 1) { throw "Claude trace 的调用 $($call.Id) 没有唯一结果。" }
+        if ($eventOrdinal -eq 0) { throw 'Claude trace 为空。' }
+        if ($null -eq $terminal -and -not $AllowPartial) { throw 'Claude trace 缺少唯一 result 终态。' }
+        for ($index = 0; $index -lt $calls.Count; $index++) {
+            $call = $calls[$index]
+            $mayBeUnfinishedTail = $AllowPartial -and $null -eq $terminal -and
+                $index -eq $calls.Count - 1 -and $call.ResultCount -eq 0
+            if ($call.ResultCount -ne 1 -and -not $mayBeUnfinishedTail) {
+                throw "Claude trace 的调用 $($call.Id) 没有唯一结果。"
+            }
         }
         for ($index = 0; $index -lt $calls.Count; $index++) {
+            if ($calls[$index].ResultCount -eq 0) {
+                # AllowPartial 唯一容许的未完成项已在上一轮证明为最后一个调用。
+                $calls[$index].CompletedBeforeNext = $false
+                continue
+            }
             $nextOrdinal = if ($index + 1 -lt $calls.Count) {
                 [int]$calls[$index + 1].StartedOrdinal
-            } else { $eventOrdinal }
+            } elseif ($null -ne $terminal) { $eventOrdinal }
+            else { $eventOrdinal + 1 }
             $calls[$index].CompletedBeforeNext = [int]$calls[$index].CompletedOrdinal -lt $nextOrdinal
             if (-not $calls[$index].CompletedBeforeNext) {
                 throw "Claude trace 的调用 $($calls[$index].Id) 未在下一事件边界前完成。"
@@ -381,10 +471,12 @@ function Read-DispatchTraceTranscript {
         $terminalResult = Get-DispatchPropertyValue $terminal 'result'
         return [pscustomobject]@{
             Brain='claude'; Schema='claude-stream-json-v1'; SessionId=[string]$terminalSessionId
-            Terminal=[pscustomobject]@{
-                Type='result'; Status=[string]$terminalSubtype
-                Success=([string]$terminalSubtype -ceq 'success')
-            }
+            Terminal=$(if ($null -eq $terminal) { $null } else {
+                [pscustomobject]@{
+                    Type='result'; Status=[string]$terminalSubtype
+                    Success=([string]$terminalSubtype -ceq 'success')
+                }
+            })
             FinalText=$(if ($terminalResult -is [string]) { [string]$terminalResult } else { '' })
             Usage=[pscustomobject]@{
                 InputTokens=$(if ($null -ne $usage -and $null -ne $usage.PSObject.Properties['input_tokens']) { [long]$usage.input_tokens } else { $null })
@@ -392,8 +484,12 @@ function Read-DispatchTraceTranscript {
                 OutputTokens=$(if ($null -ne $usage -and $null -ne $usage.PSObject.Properties['output_tokens']) { [long]$usage.output_tokens } else { $null })
                 CacheWriteTokens=$(if ($null -ne $usage -and $null -ne $usage.PSObject.Properties['cache_creation_input_tokens']) { [long]$usage.cache_creation_input_tokens } else { $null })
             }
-            Turns=$(if ($null -ne $terminal.PSObject.Properties['num_turns']) { [int](Get-DispatchPropertyValue $terminal 'num_turns') } else { $null })
-            CostUsd=$(if ($null -ne $terminal.PSObject.Properties['total_cost_usd']) { [double](Get-DispatchPropertyValue $terminal 'total_cost_usd') } else { $null })
+            Turns=$(if ($null -ne $terminal -and $null -ne $terminal.PSObject.Properties['num_turns']) {
+                [int](Get-DispatchPropertyValue $terminal 'num_turns')
+            } else { $null })
+            CostUsd=$(if ($null -ne $terminal -and $null -ne $terminal.PSObject.Properties['total_cost_usd']) {
+                [double](Get-DispatchPropertyValue $terminal 'total_cost_usd')
+            } else { $null })
             Calls=[object[]]$calls.ToArray()
         }
     }
@@ -404,6 +500,7 @@ function Read-DispatchTraceTranscript {
     $threadStarted = 0
     $turnStarted = 0
     $turnTerminals = 0
+    $terminal = $null
     $terminalSeen = $false
     # 仅在解析期间保留正文与 ordinal；canonical 只暴露最终正文，避免中间说明扩散到
     # console/ledger。ordinal 用来证明最终正文发生在全部 MCP completed 之后。
@@ -417,57 +514,74 @@ function Read-DispatchTraceTranscript {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $eventOrdinal++
         if ($terminalSeen) { throw 'Codex trace 的 turn.completed 终态之后仍有事件。' }
-        try { $event = $line | ConvertFrom-Json -Depth 40 -ErrorAction Stop }
+        try {
+            $event = ConvertFrom-Json -InputObject $line -Depth 40 -NoEnumerate -ErrorAction Stop
+        }
         catch { throw 'Codex trace 含无法解析的非空 JSON 行。' }
-        switch ([string]$event.type) {
+        if (-not (Test-DispatchJsonObject -Value $event)) {
+            throw 'Codex trace 的非空 JSON 行必须是顶层 JSON object。'
+        }
+        $eventType = Get-DispatchRequiredNonEmptyJsonString -InputObject $event -Name 'type' `
+            -ErrorMessage 'Codex trace 事件缺少非空字符串 type。'
+        switch ($eventType) {
             'thread.started' {
                 $threadStarted++
                 if ($threadStarted -ne 1 -or $turnStarted -gt 0 -or $calls.Count -gt 0) {
                     throw 'Codex trace 的 thread.started 缺失、重复或错序。'
                 }
-                $sessionId = [string]$event.thread_id
-                if ([string]::IsNullOrWhiteSpace($sessionId)) { throw 'Codex thread.started 缺少 thread_id。' }
+                $sessionId = Get-DispatchRequiredNonEmptyJsonString -InputObject $event -Name 'thread_id' `
+                    -ErrorMessage 'Codex thread.started 缺少非空字符串 thread_id。'
             }
             'turn.started' {
                 if ($threadStarted -ne 1 -or ++$turnStarted -ne 1) { throw 'Codex turn.started 重复或错序。' }
             }
             'item.started' {
                 if ($threadStarted -ne 1 -or $turnStarted -ne 1) { throw 'Codex item.started 早于 turn.started。' }
-                $item = $event.item
-                if ([string]$item.type -eq 'reasoning') { continue }
-                if ([string]$item.type -ne 'mcp_tool_call') {
-                    throw "Codex trace 含未授权 item.started 类型：$($item.type)"
+                $item = Get-DispatchRequiredJsonObject -InputObject $event -Name 'item' `
+                    -ErrorMessage 'Codex item.started 缺少 JSON object item。'
+                $itemType = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'type' `
+                    -ErrorMessage 'Codex item.started 缺少非空字符串 item.type。'
+                if ($itemType -ceq 'reasoning') { continue }
+                if ($itemType -cne 'mcp_tool_call') {
+                    throw "Codex trace 含未授权 item.started 类型：$itemType"
                 }
-                $id = [string]$item.id
-                if ([string]::IsNullOrWhiteSpace($id) -or $callsById.ContainsKey($id)) {
+                $id = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'id' `
+                    -ErrorMessage 'Codex trace 含缺失或非字符串的 mcp_tool_call id。'
+                if ($callsById.ContainsKey($id)) {
                     throw 'Codex trace 含缺失或重复的 mcp_tool_call id。'
                 }
                 if ($calls.Count -gt 0 -and $calls[$calls.Count - 1].ResultCount -ne 1) {
                     throw 'Codex trace 在上一 MCP 调用 completed 前启动了下一调用。'
                 }
+                $server = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'server' `
+                    -ErrorMessage 'Codex mcp_tool_call 缺少非空字符串 server。'
+                $name = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'tool' `
+                    -ErrorMessage 'Codex mcp_tool_call 缺少非空字符串 tool。'
+                $arguments = Get-DispatchRequiredJsonObject -InputObject $item -Name 'arguments' `
+                    -ErrorMessage 'Codex mcp_tool_call.arguments 必须是 JSON object。'
                 $call = [pscustomobject]@{
-                    Id=$id; Server=[string]$item.server; Name=[string]$item.tool
-                    RawName="mcp__$($item.server)__$($item.tool)"; Input=$item.arguments
+                    Id=$id; Server=$server; Name=$name
+                    RawName="mcp__${server}__${name}"; Input=$arguments
                     ResultEnvelope=$null; ResultCount=0; Outcome='started'
                     Ordinal=$calls.Count; StartedOrdinal=$eventOrdinal; CompletedOrdinal=$null
                     CompletedBeforeNext=$false
-                    InputCanonical=($item.arguments | ConvertTo-Json -Compress -Depth 40)
-                }
-                if ([string]::IsNullOrWhiteSpace($call.Server) -or [string]::IsNullOrWhiteSpace($call.Name)) {
-                    throw 'Codex mcp_tool_call 缺少 server/tool。'
+                    InputCanonical=($arguments | ConvertTo-Json -Compress -Depth 40)
                 }
                 $callsById.Add($id, $call)
                 $calls.Add($call)
             }
             'item.completed' {
                 if ($threadStarted -ne 1) { throw 'Codex item.completed 早于 thread.started。' }
-                $item = $event.item
-                if ([string]$item.type -eq 'error') {
+                $item = Get-DispatchRequiredJsonObject -InputObject $event -Name 'item' `
+                    -ErrorMessage 'Codex item.completed 缺少 JSON object item。'
+                $itemType = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'type' `
+                    -ErrorMessage 'Codex item.completed 缺少非空字符串 item.type。'
+                if ($itemType -ceq 'error') {
                     $sawCodexError = $true
                     continue
                 }
                 if ($turnStarted -ne 1) { throw 'Codex item.completed 早于 turn.started。' }
-                switch ([string]$item.type) {
+                switch ($itemType) {
                     'reasoning' { continue }
                     'agent_message' {
                         if (-not ($item.text -is [string])) { throw 'Codex agent_message 缺少文本。' }
@@ -477,15 +591,22 @@ function Read-DispatchTraceTranscript {
                         })
                     }
                     'mcp_tool_call' {
-                        $id = [string]$item.id
-                        if ([string]::IsNullOrWhiteSpace($id) -or -not $callsById.ContainsKey($id)) {
+                        $id = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'id' `
+                            -ErrorMessage 'Codex completed 含缺失或非字符串的 mcp_tool_call id。'
+                        if (-not $callsById.ContainsKey($id)) {
                             throw 'Codex trace 含孤儿 mcp_tool_call completed。'
                         }
                         $call = $callsById[$id]
-                        if ($call.Server -cne [string]$item.server -or $call.Name -cne [string]$item.tool) {
+                        $completedServer = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'server' `
+                            -ErrorMessage "Codex mcp_tool_call $id 的 completed 缺少非空字符串 server。"
+                        $completedName = Get-DispatchRequiredNonEmptyJsonString -InputObject $item -Name 'tool' `
+                            -ErrorMessage "Codex mcp_tool_call $id 的 completed 缺少非空字符串 tool。"
+                        $completedArguments = Get-DispatchRequiredJsonObject -InputObject $item -Name 'arguments' `
+                            -ErrorMessage "Codex mcp_tool_call $id 的 completed.arguments 必须是 JSON object。"
+                        if ($call.Server -cne $completedServer -or $call.Name -cne $completedName) {
                             throw "Codex mcp_tool_call $id 的 started/completed 身份不一致。"
                         }
-                        $completedInput = $item.arguments | ConvertTo-Json -Compress -Depth 40
+                        $completedInput = $completedArguments | ConvertTo-Json -Compress -Depth 40
                         if ($call.InputCanonical -cne $completedInput) {
                             throw "Codex mcp_tool_call $id 的 started/completed arguments 不一致。"
                         }
@@ -507,7 +628,7 @@ function Read-DispatchTraceTranscript {
                         if ($null -eq $call.ResultEnvelope) { throw "Codex mcp_tool_call $id 缺少结构化结果。" }
                         $call.Outcome = 'success'
                     }
-                    default { throw "Codex trace 含未授权 item.completed 类型：$($item.type)" }
+                    default { throw "Codex trace 含未授权 item.completed 类型：$itemType" }
                 }
             }
             'turn.completed' {
@@ -531,24 +652,40 @@ function Read-DispatchTraceTranscript {
             'error' {
                 $sawCodexError = $true
             }
-            default { throw "Codex trace 含未知事件类型：$($event.type)" }
+            default { throw "Codex trace 含未知事件类型：$eventType" }
         }
     }
-    if ($threadStarted -ne 1 -or $turnTerminals -ne 1) { throw 'Codex trace 缺少唯一 thread/turn 终态。' }
-    if ($terminal.Success -and $sawCodexError) { throw 'Codex 成功终态之前出现 error diagnostics。' }
-    if ($terminal.Success -and $finalMessages.Count -lt 1) { throw 'Codex trace 缺少 agent_message 终态正文。' }
+    if ($threadStarted -ne 1 -or ($null -eq $terminal -and -not $AllowPartial) -or
+        ($null -ne $terminal -and $turnTerminals -ne 1)) {
+        throw 'Codex trace 缺少唯一 thread/turn 终态。'
+    }
+    if ($null -ne $terminal -and $terminal.Success -and $sawCodexError) {
+        throw 'Codex 成功终态之前出现 error diagnostics。'
+    }
+    if ($null -ne $terminal -and $terminal.Success -and $finalMessages.Count -lt 1) {
+        throw 'Codex trace 缺少 agent_message 终态正文。'
+    }
     for ($index = 0; $index -lt $calls.Count; $index++) {
         $call = $calls[$index]
-        if ($call.ResultCount -ne 1) { throw "Codex mcp_tool_call $($call.Id) 缺少唯一 completed。" }
+        $mayBeUnfinishedTail = $AllowPartial -and $null -eq $terminal -and
+            $index -eq $calls.Count - 1 -and $call.ResultCount -eq 0
+        if ($call.ResultCount -ne 1 -and -not $mayBeUnfinishedTail) {
+            throw "Codex mcp_tool_call $($call.Id) 缺少唯一 completed。"
+        }
+        if ($call.ResultCount -eq 0) {
+            $call.CompletedBeforeNext = $false
+            continue
+        }
         $nextOrdinal = if ($index + 1 -lt $calls.Count) {
             [int]$calls[$index + 1].StartedOrdinal
-        } else { [int]$terminalOrdinal }
+        } elseif ($null -ne $terminal) { [int]$terminalOrdinal }
+        else { $eventOrdinal + 1 }
         $call.CompletedBeforeNext = [int]$call.CompletedOrdinal -lt $nextOrdinal
         if (-not $call.CompletedBeforeNext) {
             throw "Codex mcp_tool_call $($call.Id) 未在下一调用/终态前 completed。"
         }
     }
-    if ($terminal.Success) {
+    if ($null -ne $terminal -and $terminal.Success) {
         $lastMessage = $finalMessages[$finalMessages.Count - 1]
         $latestCallCompletion = -1
         foreach ($call in $calls) {
@@ -559,7 +696,7 @@ function Read-DispatchTraceTranscript {
             throw 'Codex 最后 agent_message 必须晚于全部 MCP completed 且早于 turn.completed。'
         }
     }
-    if ($terminal.Success) {
+    if ($null -ne $terminal -and $terminal.Success) {
         if ($null -eq $usage) { throw 'Codex turn.completed 缺少 usage。' }
         foreach ($field in @('input_tokens','cached_input_tokens','output_tokens')) {
             $property = $usage.PSObject.Properties[$field]
@@ -578,6 +715,7 @@ function Read-DispatchTraceTranscript {
             OutputTokens=$(if ($null -ne $usage -and $null -ne $usage.PSObject.Properties['output_tokens']) { [long]$usage.output_tokens } else { $null })
             CacheWriteTokens=$(if ($null -ne $usage -and $null -ne $usage.PSObject.Properties['cache_write_input_tokens']) { [long]$usage.cache_write_input_tokens } else { $null })
         }
-        Turns=1; CostUsd=$null; Calls=[object[]]$calls.ToArray()
+        Turns=$(if ($null -ne $terminal) { 1 } else { $turnStarted })
+        CostUsd=$null; Calls=[object[]]$calls.ToArray()
     }
 }
