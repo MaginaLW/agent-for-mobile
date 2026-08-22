@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **第四条 clean C 已创建、待用户就位（0/4）** | task `019ffbc0-f5a7-7701-9a86-0bf3d07242bf` 已固定该 SHA；HEAD/clean/ignored `local.properties` 预热通过，未构建/安装/adb/runner。旧 task/run 永久冻结，只能从头 Allow → Stale → Deny → Reentry |
+| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **08-22 两条替代 clean C 均在 setup 冻结（0/4）** | 原固定 task/worktree 已从当前主机丢失；替代 run 一条因裸 `adb` 不在 PATH、一条因 vivo USB 安装确认页无人点击而超时，均 0 腿、cleanup clean。下一条必须全新 C，显式绝对 `-AdbPath`，用户先守在系统安装确认页，再从头 Allow → Stale → Deny → Reentry |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -153,6 +153,19 @@ top-level/HEAD/clean 与 ignored `app/local.properties` 的普通文件、非 li
 唯一 `:gateway:assembleDebug` 与唯一
 `-Legs Allow,Stale,Deny,Reentry -Executor gateway -Brain codex -Provision -ReentryDwellSec 75`；任一失败即
 冻结本 task/run，后三腿 NOT RUN，不在 C 修代码。
+
+**08-22 恢复结果：上段固定 task 与 worktree 已从当前 Codex 主机消失，开跑前即永久冻结。** 候选 SHA
+仍在远端与 object store。第一条替代 clean C 唯一构建成功，但 run `20260822T203023-11ee0a8b00c6`
+在 provision 前以“设备发现 失败”终止：runner 默认 `AdbPath=adb`，而新机 PATH 不含 platform-tools；
+`local.properties` 只供 Gradle 使用，runner 不读。manifest `legs=[]`、`cleanup.ok=true`，没有 slug 或
+dispatch，所以 ledger 零行是正确事实，人工补行会伪造一次未发生的派单。
+
+第二条替代 clean C 以绝对 `-AdbPath` 做过 runner 同正则的一台 `device` 正对照并完成唯一构建；run
+`20260822T203737-ef7fb2ce2896` 随后在 `adb install -r` 的 120s 硬超时冻结。logcat 机械证据显示
+20:37:39 拉起 `com.android.packageinstaller/.PackageInterceptActivity`，旧包 `lastUpdateTime` 仍为
+08-13，说明安装没有完成；同样 `legs=[]`、`cleanup.ok=true`、无 ledger 行。**批次仍为 0/4、未判定。**
+下一条只能是全新 clean C：继续固定 `636048a`、显式同一绝对 `-AdbPath`，且用户须从 Provision 开始
+盯住手机并立即确认本项目 debug APK 的系统安装页；之后仍只允许唯一 build 与唯一四腿 runner。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
