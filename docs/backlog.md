@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **08-22 三条替代 clean C 均在 setup 冻结（0/4）** | 裸 `adb` 与安装页超时已定位；第三条坐实新旧 debug 签名不一致。旧 key 不在本机，当前等用户决定是否卸载旧网关（会清其数据/授权）再开全新 C；四腿从未启动 |
+| **4（最终安全修复 + Codex 通道）** | **`de6685c65b3ea3fe71bc41c95802791e69f49460`** | `codex/batch4-codex-0149` | **08-22 五条替代 clean C 均冻结；新候选待全新 C（0/4）** | 旧网关经用户授权已卸载、新包已安装；第四条暴露 dispatch 子层 PATH， 第五条暴露 0.147 版本硬钉。新候选精确兼容官方 0.149，真实 CLI smoke 与 Codex 离线契约 15/15 通过；四腿仍从未启动 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -176,6 +176,20 @@ dispatch，所以 ledger 零行是正确事实，人工补行会伪造一次未�
 `C:\Users\Admin\.android\debug.keystore` 创建于 08-22 20:27，全盘没有旧 key。**这是签名不兼容的
 确定证据，不是对手机无提示 UI 的猜测。** 继续必须先经用户明确授权卸载旧 `dev.magina.gateway`
 （会清除网关私有数据与系统授权，但不影响微信），随后才能新建下一条 clean C；未授权前不得动。
+
+用户随后明确授权卸载。主会话机械核对包名后只卸载 `dev.magina.gateway`，未动微信；新 debug APK
+成功安装。第四条替代 run `20260822T205229-53a0760161f9` 在 Allow 进入确认前因 dispatch 子层仍以
+裸 `adb` 检查 PATH 而 fail-closed；第五条 run `20260822T205622-e75f7a2242a0` 已给整个 runner
+进程补齐 SDK PATH，并以绝对 adb 做正对照，但旧候选的 Codex 通道只接受 0.147，面对当前官方签名
+`codex-cli 0.149.0-alpha.4.1` 立即拒绝。两条均仅有 Allow 失败记录，真人决定 `not_observed`，
+teardown clean、cleanup true；ledger 各恰好一行，后三腿 NOT RUN。
+
+A 道因此从原功能基线派生 `de6685c65b3ea3fe71bc41c95802791e69f49460`：版本白名单只精确接受
+已验证的 `0.147.0`、`0.149.0` 与当前官方签名 `0.149.0-alpha.4.1`，0.149 profile 显式关闭
+已稳定启用的 `view_image` 并移除已删除 feature，未知版本继续 fail-closed。主会话复跑真实签名 resolver、
+`exec --help`、feature maturity/default、生产 argv strict-config 正反例均 PASS；Codex 聚焦离线契约
+15/15。下一条 C 必须固定该 SHA、在同一 runner 进程补齐 SDK PATH，并仍遵守唯一 build、唯一四腿、
+任一失败立即冻结。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
