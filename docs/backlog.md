@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **08-22 两条替代 clean C 均在 setup 冻结（0/4）** | 原固定 task/worktree 已从当前主机丢失；替代 run 一条因裸 `adb` 不在 PATH、一条因 vivo USB 安装确认页无人点击而超时，均 0 腿、cleanup clean。下一条必须全新 C，显式绝对 `-AdbPath`，用户先守在系统安装确认页，再从头 Allow → Stale → Deny → Reentry |
+| **4（最终安全修复 + Codex 通道）** | **`636048a6359f9ebae71a7ceb8a551fc1b2ca6b72`** | `claude/serene-faraday-42d1fb` | **08-22 三条替代 clean C 均在 setup 冻结（0/4）** | 裸 `adb` 与安装页超时已定位；第三条坐实新旧 debug 签名不一致。旧 key 不在本机，当前等用户决定是否卸载旧网关（会清其数据/授权）再开全新 C；四腿从未启动 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -166,6 +166,16 @@ dispatch，所以 ledger 零行是正确事实，人工补行会伪造一次未�
 08-13，说明安装没有完成；同样 `legs=[]`、`cleanup.ok=true`、无 ledger 行。**批次仍为 0/4、未判定。**
 下一条只能是全新 clean C：继续固定 `636048a`、显式同一绝对 `-AdbPath`，且用户须从 Provision 开始
 盯住手机并立即确认本项目 debug APK 的系统安装页；之后仍只允许唯一 build 与唯一四腿 runner。
+
+第三条替代 clean C 在用户明确“会点安装”后建立，固定 SHA、绝对 adb、一台 device、`zen_mode=0`、
+微信前台与唯一构建均机械通过；run `20260822T204640-c6c54d3583e4` 的安装页收到真人点击后约 11s
+以“安装 debug APK 失败”终止，仍为 `legs=[]`、`cleanup.ok=true`、无 ledger。设备旧包
+`lastUpdateTime` 仍为 08-13。主会话只读 pull 旧 APK，以同一 `apksigner` 比对证书：旧包 SHA-256
+`18b545effb641f1e69c1aa25a2dd99717deede41dea883f8159ff61e93924809`，新包
+`ef99efaa844c7c910eafb16eb164ad14594abc7248f73d9a48b1ebeb39969ea1`；本机
+`C:\Users\Admin\.android\debug.keystore` 创建于 08-22 20:27，全盘没有旧 key。**这是签名不兼容的
+确定证据，不是对手机无提示 UI 的猜测。** 继续必须先经用户明确授权卸载旧 `dev.magina.gateway`
+（会清除网关私有数据与系统授权，但不影响微信），随后才能新建下一条 clean C；未授权前不得动。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
