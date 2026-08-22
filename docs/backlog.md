@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`de6685c65b3ea3fe71bc41c95802791e69f49460`** | `codex/batch4-codex-0149` | **08-22 六条替代 clean C 均冻结；待全新 C（0/4）** | 新候选精确兼容官方 0.149，真实 CLI smoke 与 Codex 离线契约 15/15 通过；第六条唯一构建成功，但 vivo 安装确认 120s 内未完成，四腿仍从未启动 |
+| **4（最终安全修复 + Codex 通道）** | **A 道处理中（基线 `de6685c65b3ea3fe71bc41c95802791e69f49460`）** | `codex/batch4-precheck-unify` | **08-22 七条替代 clean C 均冻结；暂不进 C（0/4）** | run 7 安装成功，但 precheck 旧标题判据假放行、宏在确认前正确 fail-closed；先统一生产判据并持久化 precheck 证据，再钉新 SHA |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -197,6 +197,20 @@ A 道因此从原功能基线派生 `de6685c65b3ea3fe71bc41c95802791e69f49460`�
 以“安装 debug APK 超时”在 setup 冻结。manifest 为 `legs=[]`、`cleanup.ok=true`，未生成 slug/dispatch，
 所以 ledger 无行；唯一证据文件已持久化且 SHA-256 复算一致。不得复用该 run/worktree。下一条仍固定
 `de6685c` 建全新 clean C，但开跑前必须由用户确认安装页可见，并在 runner 的窗口内完成系统安装确认。
+
+第七条 clean C run `20260822T232308-85e978e72f99` 固定 `de6685c`，唯一构建、安装、设备/
+勿扰/微信前台检查均通过。Allow 派单只调用一次 `macro_run(p0_wechat_file_transfer_prepare)`，宏在确认卡
+出现前以 `E_BLOCKED stage=unrecognized_entry` fail-closed；未调用输入、确认或发送工具，真人决定
+`not_observed`，teardown/cleanup clean，Stale/Deny/Reentry NOT RUN。失败截图明确显示文件传输助手会话
+与空输入框，但它不是宏的同一 OCR 数据帧；本 run 没持久化 OCR candidates，不能把“尾噪”冒充已证事实。
+
+代码审查坐实了**即使同一 snapshot 也会分叉**：零 token precheck 的 `P0FocusProbeValidator.build`
+仍是 07-24 的 `contains("文件传输助手")` + 从候选中反向挑目标；宏/生产则已在 08-09/08-11 收紧为
+`ConversationSurfacePolicy` 先结构选唯一标题，再用 `LabelMatchPolicy` 精确相等，并带前台窗口与真实
+状态栏下沿。仓内已有“文件传输助手8”及耳朵图标 OCR 成窄 `G` 的真机先例，因此尾噪是强推断，
+采样抖动也不能排除。A 道必须先用跨生产者 RED 钉住尾噪、冲突强 a11y 与独立窄 `G` 正向，再让
+precheck/盲点 probe 复用生产策略；同时把 precheck exit/attempts/waited/probe_ready/reason 落 manifest。
+不得靠放宽生产收件人匹配换成功率，`de6685c` 不再直接重进 C。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
