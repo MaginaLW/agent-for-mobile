@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **A 道处理中（基线 `de6685c65b3ea3fe71bc41c95802791e69f49460`）** | `codex/batch4-precheck-unify` | **08-22 七条替代 clean C 均冻结；暂不进 C（0/4）** | run 7 安装成功，但 precheck 旧标题判据假放行、宏在确认前正确 fail-closed；先统一生产判据并持久化 precheck 证据，再钉新 SHA |
+| **4（最终安全修复 + Codex 通道）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **A 道全绿，待全新 clean C（0/4）** | precheck/实际 probe 已统一生产标题策略；严格 schema 与逐腿脱敏证据闭环。Gateway 524/524+418/418、runner 153/153、assembleDebug/凭据扫描通过，独审 0/0/0 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -211,6 +211,14 @@ A 道因此从原功能基线派生 `de6685c65b3ea3fe71bc41c95802791e69f49460`�
 采样抖动也不能排除。A 道必须先用跨生产者 RED 钉住尾噪、冲突强 a11y 与独立窄 `G` 正向，再让
 precheck/盲点 probe 复用生产策略；同时把 precheck exit/attempts/waited/probe_ready/reason 落 manifest。
 不得靠放宽生产收件人匹配换成功率，`de6685c` 不再直接重进 C。
+
+A 道最终候选为 `67ef56cc8289b34d09843701d7b83986a206ad0e`。跨生产者 RED 先坐实尾噪与强
+a11y 冲突会让旧 precheck 假放行；修后 precheck 与实际 blind focus 都复用生产标题身份，精确标题旁独立
+窄 `G` 正向仍通过。每腿 manifest/precheck.json 只落 allowlist 结构，不落 raw stdout/leftovers/free-text
+reason；exit 0 只有完整严格 schema 才放行，exit 1 只有明确 unavailable 信封才按既有策略 fail-open，
+exit 2、畸形/矛盾信封、异常码与 helper 缺失均 dispatch 前 fail-closed。两轮独审先报 0/2/0、修后
+0/0/0；完整 gate 为 Gateway Debug 524/524、Release 418/418、assembleDebug、runner 153/153、AST、
+diff check 与凭据扫描全绿。下一条 C 只允许固定该 SHA。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
