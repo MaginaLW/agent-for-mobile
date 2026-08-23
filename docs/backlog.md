@@ -80,18 +80,20 @@ Deny 腿那次假通过（2026-08-01）证明了自报证据的失败形态长�
 Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不经执行器、不进 trace。
 现在 manifest 记的是 `gateway_reported_blocked_no_independent_check`，自动化后改为如实结论。
 
-### 平板 T0/T1/T2 · 先画像，再发送
+### 平板横屏 T0-L/T-L1/T-L2 · 先画像，再量 pane，最后发送
 
-- **T0（只读入场，不占危险动作批次）**：兼容候选 `5ba9532aad3485b22a25e20c9eeaa89264333b87`
-  从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `dumpsys` / `settings get` 查询采集脱敏
-  设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。竖屏、
-  全屏、单窗口是首轮 readiness 入口；横屏/多栏、分屏/自由窗、浮动 IME 只记录为 unsupported，
-  不临场删门槛。离线 fake-adb 23/23，T0 无论是否 accepted 都保持 `p0_capability=unsupported`。
-- **T1（平板 P0）**：T0 通过后，先让标题、焦点、输入栏和发送后验绑定同一 app window/pane；再钉新
-  SHA 运行 Allow→Stale→Deny→Reentry。手机批次 4 的语义沿用，但设备画像与 posture 必须进 manifest。
-- **T2（横屏/双栏）**：pane-aware OCR/ref、IME-only 目标输入框身份证据、X/Y 双轴发送后验与裁 pane
-  带外 OCR。它改变多处安全面，单独成批；不与响应式确认卡同批。
-- **T3（确认 surface）**：平板横屏/大屏 overlay、通知和取证响应式布局；同样单独成批。
+- **T0-L（横屏只读入场，不占危险动作批次）**：候选 `bc0076951828760355689fe9adbc8e1e1b654827`
+  从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `am get-config` / `dumpsys` / `settings get` 查询采集脱敏
+  设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。横屏、
+  微信前台、全屏单 OS app window 是 readiness 入口；竖屏、多窗/PiP、letterbox、浮动 IME 均 blocked。
+  离线 fake-adb 24/24；accepted 也固定 `p0_capability=unsupported`，含 layout 未验与横屏 P0 未实现。
+- **T-L1（微信横屏 pane 只读探针）**：纯感知两帧，区分 OS window 与微信内部 pane；唯一目标标题、
+  input/message/toolbar 必须在同一 pane 且 layout epoch 稳定。左栏同名标题、跨 pane 或漂移均 fail-closed；
+  只落 bounds/hash/reason，不落聊天明文，accepted 仍不放行 P0。
+- **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
+  IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
+  确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
+- **T-L3 / T-P（后置）**：响应式确认 surface 与多窗单独成批；PA2553 竖屏兼容在横屏闭环后再验。
 
 ### 不进批次的 A 道纵深（C 队列排满时做）
 
@@ -116,8 +118,9 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0（只读入场）** | **`5ba9532aad3485b22a25e20c9eeaa89264333b87`** | `codex/tablet-intake` | **兼容候选待重采** | run `tablet-t0-20260823T162008Z-5e4e0186` 证明 ADB 已通但横屏/Chrome/pinned 且旧 rotation/sw 未解析；新候选 23/23，待竖屏、微信全屏、单窗口后开全新 T0 |
-| **Tablet T1（P0 四腿）** | 待 T0/A 道 | — | **未入队** | 必须先证明 app window/pane/输入焦点/消息后验在平板成立，再钉 SHA |
+| **Tablet T0-L（横屏只读入场）** | **`bc0076951828760355689fe9adbc8e1e1b654827`** | `codex/tablet-intake` | **离线完成；按用户要求暂不连接** | 24/24、runner 153/153；旧 run 证明 ADB 可通但 Chrome+pinned，待横屏路线离线收敛后再通知连接 |
+| **Tablet T-L1（pane 只读探针）** | 待 A 道 | — | **未入队** | 必须区分 OS 单窗口与微信内部 pane；两帧唯一标题/input/message 同 pane，仍不放行 P0 |
+| **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -580,7 +583,7 @@ Deny 带外截屏比对可行。
 
 | 问题 | 收敛到的选项 | 提出时间 |
 |---|---|---|
-| 后续真机使用手机还是平板？ | **统一改用 Android 平板**（用户 08-23 决定）；手机 C 暂停并保留历史。首轮默认竖屏/全屏/单窗口只读 T0，横屏与多窗另批 | 2026-08-23 |
+| 后续真机与平板默认姿态？ | **统一改用 vivo PA2553 Android 平板，并以日常横屏为当前设计/验收基线**（用户 08-23 切平板、08-24 改横屏）；手机 C 暂停并保留历史。路线为 T0-L → T-L1 pane 只读探针 → T-L2 横屏 P0，竖屏兼容后置 | 2026-08-24 |
 | Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **已接受**：空 cwd + 无 shell/枚举 + 不提供本机路径 + 未知 item fail closed；若将来出现路径暴露/未知 item 或可禁用版本，重新收紧 | 2026-08-11 |
 | 语义意图审批四题 | **全部按推荐拍定**（用户 08-02），见下 | 2026-08-02 |
 | 锁屏审批与 D1 结构性冲突，走哪条路？ | **先收窄批次 2，再做语义意图**（用户 08-02 拍板） | 2026-08-02 |

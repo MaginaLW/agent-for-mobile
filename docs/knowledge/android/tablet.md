@@ -1,7 +1,7 @@
 # Android 平板知识册
 
-> 当前状态：🔵 首份 T0 真机画像已保存；兼容候选已钉
-> `5ba9532aad3485b22a25e20c9eeaa89264333b87`。真机验证前不合入 main 行为。
+> 当前状态：🔵 用户 2026-08-24 决定 PA2553 日常横屏为当前平板基线；T0-L 离线候选已钉
+> `bc0076951828760355689fe9adbc8e1e1b654827`。按用户要求，先离线弄清横屏路线，再通知连接平板。
 
 ## 当前能力边界
 
@@ -10,7 +10,10 @@
   fail-closed。不得删除这道门来换成功率。
 - snapshot/OCR 多处仍以整屏为坐标系；在分屏、自由窗或微信双栏下，标题、IME 焦点、输入框和消息
   气泡可能分属不同 pane。未建立 window/pane 身份前，禁止危险输入与发送。
-- 首轮支持边界：竖屏、全屏、单窗口、默认显示缩放、非浮动 IME；其他形态只读记录为 unsupported。
+- 首轮 T0-L readiness：横屏、微信前台、全屏单 OS app window、边界覆盖当前显示、默认显示缩放、
+  采集稳定、非浮动 IME。accepted 只允许继续做只读 pane 探针；P0 仍 unsupported。
+- OS 单窗口不等于微信内部单 pane。横屏微信可能同时展示左侧会话列表和右侧目标会话；未建立唯一
+  target pane、title/input/message 同 pane 与 layout epoch 前，禁止危险输入和发送。
 
 ## T0 入场需要记录
 
@@ -37,8 +40,22 @@ T0 当前只覆盖设备/显示/姿态/窗口/IME 的固定只读 ADB 查询；�
 - 新候选只用固定 `am get-config` 的唯一当前 `swNNNdp` 决策 device class；activity 全局配置若存在则必须
   与其一致。窗口尺寸回退只在唯一前台 owner、fullscreen、原点为 0,0 且边长严格匹配 effective wm size
   时用于 current orientation；冲突、重复、历史 config 或采集前后漂移均返回 unknown/blocked。
-- 下一次 T0：关闭 Chrome、画中画/pinned、分屏/自由窗，断开实体键盘，平板锁竖屏；微信全屏停在
-  文件传输助手会话页，输入框清空、键盘收起。即使 readiness accepted，微信内部单/双 pane 仍待只读探针。
+- 下一次 T0-L（主会话明确通知连接后）：关闭 Chrome、画中画/pinned、分屏/自由窗，断开实体键盘，
+  平板锁横屏；微信全屏停在文件传输助手会话页，输入框清空、键盘收起。内部单/双 pane 保持真实日常
+  状态，不要求用户强行切成手机 UI；交给 T-L1 只读探针判定。
+
+## 横屏路线与硬边界
+
+1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
+   `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
+2. **T-L1** 纯感知两帧探针必须找到唯一目标 pane，并证明目标标题是 pane toolbar、不是左栏同名行；
+   toolbar/message/input bounds 与前台/window identity 在两帧中稳定。只保存 bounds/hash/reason。
+3. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
+   display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
+4. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable
+   或 inconclusive 均不得把横屏批次判通过。
+5. 手机 `P0FocusProbeValidator` 的 `h>w`、比例和手机式标题/底栏规则继续保留；横屏是独立策略，不在
+   手机路径上删门放行。竖屏平板兼容在横屏闭环后另批验证。
 
 ## 参考
 
