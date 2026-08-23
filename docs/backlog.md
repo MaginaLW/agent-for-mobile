@@ -116,7 +116,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0（只读入场）** | **`451b1bf6f32dbc154978bd3b6f02921fbd04f463`** | `codex/tablet-intake` | **离线完成；待平板只读实测** | fake-adb 16/16；只采脱敏画像，零安装/零启动/零截图/零输入/零发送；实测通过后再规划平板四腿 |
+| **Tablet T0（只读入场）** | **`451b1bf6f32dbc154978bd3b6f02921fbd04f463`** | `codex/tablet-intake` | **真机入口阻断：ADB 0 台** | 首次入口 exit 1，未生成 run/profile、未重试、未触碰 T1；待开启 USB 调试并授权本电脑后再开一条全新 T0 |
 | **Tablet T1（P0 四腿）** | 待 T0/A 道 | — | **未入队** | 必须先证明 app window/pane/输入焦点/消息后验在平板成立，再钉 SHA |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
