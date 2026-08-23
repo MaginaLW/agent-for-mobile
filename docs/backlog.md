@@ -102,7 +102,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 |---|---|---|---|---|
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（最终安全修复 + Codex 通道）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **A 道全绿，待全新 clean C（0/4）** | precheck/实际 probe 已统一生产标题策略；严格 schema 与逐腿脱敏证据闭环。Gateway 524/524+418/418、runner 153/153、assembleDebug/凭据扫描通过，独审 0/0/0 |
+| **4（最终安全修复 + Codex 通道）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **A 道全绿；08-23 clean C 安装确认超时（0/4）** | 新候选离线 gate/独审 0/0/0；run 8 唯一构建后停在 vivo 安装页 120s，四腿未启动。相同现象第三次，不再盲重跑；等用户能现场完成安装确认 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
 `019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
@@ -219,6 +219,14 @@ reason；exit 0 只有完整严格 schema 才放行，exit 1 只有明确 unavai
 exit 2、畸形/矛盾信封、异常码与 helper 缺失均 dispatch 前 fail-closed。两轮独审先报 0/2/0、修后
 0/0/0；完整 gate 为 Gateway Debug 524/524、Release 418/418、assembleDebug、runner 153/153、AST、
 diff check 与凭据扫描全绿。下一条 C 只允许固定该 SHA。
+
+08-23 第八条 clean C run `20260823T095948-028b841bc24d` 固定 `67ef56c`，唯一构建成功，
+设备/屏幕/勿扰/微信前台与 clean HEAD 均通过；runner 启动后却在 vivo
+`PackageInterceptActivity` 等满 120 秒，包 `lastUpdateTime` 未变化，setup 以“安装 debug APK 超时”冻结。
+manifest 为 `legs=[]`、`cleanup.ok=true`，无 slug/dispatch，故 ledger 无行；唯一持久证据 SHA-256 为
+`4DC81FEE8F115405DA6B20802C7871BE62A90589B3613779E972787AE9D24801`。这是 run 2、run 6 后
+第三次相同安装确认未完成；按会话纪律不再盲重跑。下一条仍固定该 SHA，但只有在用户能现场看到系统
+按钮并当场完成点击时才新建，过期安装页不得补点。
 
 **证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
 截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
