@@ -82,9 +82,11 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 ### 平板 T0/T1/T2 · 先画像，再发送
 
-- **T0（只读入场，不占危险动作批次）**：从 `67ef56c` 派生，采集脱敏设备/显示/姿态/窗口画像；
-  只验安装、权限、截图、前台和只读 probe，严格零输入、零确认、零发送。竖屏、全屏、单窗口是首轮入口；
-  横屏/多栏、分屏/自由窗、浮动 IME 只记录为 unsupported，不临场删门槛。
+- **T0（只读入场，不占危险动作批次）**：候选 `451b1bf6f32dbc154978bd3b6f02921fbd04f463`
+  从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `dumpsys` / `settings get` 查询采集脱敏
+  设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。竖屏、
+  全屏、单窗口是首轮 readiness 入口；横屏/多栏、分屏/自由窗、浮动 IME 只记录为 unsupported，
+  不临场删门槛。离线 fake-adb 16/16，T0 无论是否 accepted 都保持 `p0_capability=unsupported`。
 - **T1（平板 P0）**：T0 通过后，先让标题、焦点、输入栏和发送后验绑定同一 app window/pane；再钉新
   SHA 运行 Allow→Stale→Deny→Reentry。手机批次 4 的语义沿用，但设备画像与 posture 必须进 manifest。
 - **T2（横屏/双栏）**：pane-aware OCR/ref、IME-only 目标输入框身份证据、X/Y 双轴发送后验与裁 pane
@@ -114,7 +116,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0（只读入场）** | A 道处理中 | `codex/tablet-intake` | **已启动；待钉 SHA** | 只采脱敏画像与只读能力，零输入/零发送；通过后才允许规划平板四腿 |
+| **Tablet T0（只读入场）** | **`451b1bf6f32dbc154978bd3b6f02921fbd04f463`** | `codex/tablet-intake` | **离线完成；待平板只读实测** | fake-adb 16/16；只采脱敏画像，零安装/零启动/零截图/零输入/零发送；实测通过后再规划平板四腿 |
 | **Tablet T1（P0 四腿）** | 待 T0/A 道 | — | **未入队** | 必须先证明 app window/pane/输入焦点/消息后验在平板成立，再钉 SHA |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

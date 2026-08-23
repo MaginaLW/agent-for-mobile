@@ -1,6 +1,7 @@
 # Android 平板知识册
 
-> 当前状态：🔵 只读设计与代码审计；尚无平板真机数据。首轮实测后按“设备/ROM/日期”补证据。
+> 当前状态：🔵 T0 只读入场候选已钉 `451b1bf6f32dbc154978bd3b6f02921fbd04f463`；尚无平板真机数据。
+> 首轮实测后按“设备/ROM/日期”补证据；真机验证前不合入 main 行为。
 
 ## 当前能力边界
 
@@ -18,6 +19,11 @@
 - 窗口：application window 数量、前台 package/activity、app window bounds、windowing mode。
 - 输入：默认 IME、硬键盘/浮动 IME；解析不出记 `unknown`，绝不猜。
 - ROM：USB 安装确认、a11y、overlay、notification、后台/电池策略；厂商特有结论再路由到厂商册。
+
+T0 当前只覆盖设备/显示/姿态/窗口/IME 的固定只读 ADB 查询；不安装 APK、不启动 App、不截图、
+不改设置、不接 gateway。ROM 安装、权限与后台策略属于 T0 后续分层探测，不得混入这次只读入场。
+即使只读 readiness accepted，也仍须保持 `p0_capability=unsupported`，直到微信 app window/pane、
+目标输入焦点与消息后验在该平板上分别验证。
 
 ## 参考
 
