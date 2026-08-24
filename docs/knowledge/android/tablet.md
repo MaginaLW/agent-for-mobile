@@ -1,7 +1,9 @@
 # Android 平板知识册
 
-> 当前状态：🔵 用户 2026-08-24 决定 PA2553 日常横屏为当前平板基线；T0-L 离线候选已钉
-> `bc0076951828760355689fe9adbc8e1e1b654827`。按用户要求，先离线弄清横屏路线，再通知连接平板。
+> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L 无设备候选
+> `394e03f8b147b3038a9d06f9fb354860c76d958f`（36/36）与 T-L1 无机契约
+> `f5c8e15bca5065b504dab73149c7750a1e6dda3d`（gate 11/11、契约 41/41、coverage 25/25）已通过独立复核；
+> 均未合行为、未触碰设备。
 
 ## 当前能力边界
 
@@ -15,18 +17,22 @@
 - OS 单窗口不等于微信内部单 pane。横屏微信可能同时展示左侧会话列表和右侧目标会话；未建立唯一
   target pane、title/input/message 同 pane 与 layout epoch 前，禁止危险输入和发送。
 
-## T0 入场需要记录
+## T0-L 已实现画像
 
 - 设备：manufacturer/model/product/device、Android/API/ABI；ADB serial 与 build fingerprint 只落 hash。
-- 显示：physical/override size、density、smallestWidthDp、rotation/orientation、system bars/insets。
+- 显示：physical/override size、density、smallestWidthDp、rotation/orientation；任一 size/density override
+  都阻断默认显示基线。
 - 窗口：application window 数量、前台 package/activity、app window bounds、windowing mode。
-- 输入：默认 IME、硬键盘/浮动 IME；解析不出记 `unknown`，绝不猜。
-- ROM：USB 安装确认、a11y、overlay、notification、后台/电池策略；厂商特有结论再路由到厂商册。
+- 输入：默认 IME、IME visible/floating/session；解析不出记 `unknown`，绝不猜。
 
 T0 当前只覆盖设备/显示/姿态/窗口/IME 的固定只读 ADB 查询；不安装 APK、不启动 App、不截图、
 不改设置、不接 gateway。ROM 安装、权限与后台策略属于 T0 后续分层探测，不得混入这次只读入场。
 即使只读 readiness accepted，也仍须保持 `p0_capability=unsupported`，直到微信 app window/pane、
 目标输入焦点与消息后验在该平板上分别验证。
+
+T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutout insets 或多 display；这些字段必须
+由未来 T-L1 受控 producer 与真机数据补齐。ROM 的 USB 安装确认、a11y、overlay、notification、后台/
+电池策略也不属于本次纯 ADB intake；以后按厂商和能力分层验证，再路由到厂商册。
 
 ## vivo PA2553 / Android 16 · 2026-08-24
 
@@ -48,13 +54,15 @@ T0 当前只覆盖设备/显示/姿态/窗口/IME 的固定只读 ADB 查询；�
 
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
-2. **T-L1** 纯感知两帧探针必须找到唯一目标 pane，并证明目标标题是 pane toolbar、不是左栏同名行；
+2. **T-L1 无机契约** 当前只有 synthetic schema/validator：生产入口在读取 caller 文件前固定
+   `runtime_producer_unavailable`，fixture 只能验证几何契约，不能产生 runtime、微信验证或执行授权。
+3. **T-L1 真机 producer** 未来必须纯感知两帧并找到唯一目标 pane，证明目标标题是 pane toolbar、不是左栏同名行；
    toolbar/message/input bounds 与前台/window identity 在两帧中稳定。只保存 bounds/hash/reason。
-3. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
+4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
-4. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable
+5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable
    或 inconclusive 均不得把横屏批次判通过。
-5. 手机 `P0FocusProbeValidator` 的 `h>w`、比例和手机式标题/底栏规则继续保留；横屏是独立策略，不在
+6. 手机 `P0FocusProbeValidator` 的 `h>w`、比例和手机式标题/底栏规则继续保留；横屏是独立策略，不在
    手机路径上删门放行。竖屏平板兼容在横屏闭环后另批验证。
 
 ## 参考
