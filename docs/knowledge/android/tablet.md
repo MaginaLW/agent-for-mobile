@@ -1,9 +1,9 @@
 # Android 平板知识册
 
-> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L 无设备候选
-> `394e03f8b147b3038a9d06f9fb354860c76d958f`（36/36）与 T-L1 无机契约
-> `f5c8e15bca5065b504dab73149c7750a1e6dda3d`（gate 11/11、契约 41/41、coverage 25/25）已通过独立复核；
-> 均未合行为、未触碰设备。
+> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 候选
+> `135010863ef395a0cb8aacfa625ae87a2453b1dd`（42/42、coverage 41/41、独审 P0/P1=0）与 T-L1 无机契约
+> `f5c8e15bca5065b504dab73149c7750a1e6dda3d`（gate 11/11、契约 41/41、coverage 25/25）均未合行为。
+> v4 已取得一次真实平板画像但正确 blocked；首条固定 v5 C0 在设备发现阶段看到 0 台设备，未产出画像。
 
 ## 当前能力边界
 
@@ -49,6 +49,19 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 - 下一次 T0-L（主会话明确通知连接后）：关闭 Chrome、画中画/pinned、分屏/自由窗，断开实体键盘，
   平板锁横屏；微信全屏停在文件传输助手会话页，输入框清空、键盘收起。内部单/双 pane 保持真实日常
   状态，不要求用户强行切成手机 UI；交给 T-L1 只读探针判定。
+
+## schema v4/v5 受控结果 · 2026-08-25
+
+- v4 只读 run `t0l-landscape-20260825T113747Z-da2fa68d` 已取得 PA2553 / Android 16 画像：physical
+  1968×2800、400dpi、`smallest_width_dp=787`，但 rotation、current size 与 foreground 均不可可靠判定；
+  两个窗口都投影为 `[0,0,2800,1968]`，v4 没保存也没比较 WindowState identity，无法证明是一个对象重复输出
+  还是两个不同窗口。readiness 因此保持 blocked；历史 v4 JSON 不迁移、不补判。
+- v5 候选 `135010863ef395a0cb8aacfa625ae87a2453b1dd` 改为 topResumed 权威、identity canonical、强可见性、
+  focus/display/type 关系、default-display rotation 严格定域、状态/IME 初末双读与 run-wide 脱敏标签；离线
+  fake-adb 42/42、required coverage 41/41、独审 P0/P1=0。即使 readiness accepted，P0 也恒 unsupported。
+- 首条固定 v5 C0 `t0l-v5-landscape-20260825T125508Z-13501086-r1` 只执行一次入口，`adb devices`
+  识别到 0 台设备后 exit 1；查询表未继续、无 profile/evidence、未重跑。这是连接/发现前置失败，既不验证
+  也不否定 v5 解析。下一次必须在用户重新确认 USB 连接与调试授权后使用全新 run/worktree，不能复用本轮。
 
 ## 横屏路线与硬边界
 

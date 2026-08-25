@@ -82,12 +82,16 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 ### 平板横屏 T0-L/T-L1/T-L2 · 先画像，再量 pane，最后发送
 
-- **T0-L（横屏只读入场，不占危险动作批次）**：候选 `394e03f8b147b3038a9d06f9fb354860c76d958f`
+- **T0-L（横屏只读入场，不占危险动作批次）**：schema v5 候选 `135010863ef395a0cb8aacfa625ae87a2453b1dd`
   从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `am get-config` / `dumpsys` / `settings get` 查询采集脱敏
   设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。横屏、
   微信前台、全屏单 OS app window 是 readiness 入口；竖屏、多窗/PiP、letterbox、浮动 IME 均 blocked。
-  无设备 gate 36/36，含 0/offline/no-permissions/mixed device、ADB 路径/退出/超时进程树、旋转/override
-  漂移和机器可读汇总；accepted 也固定 P0 unsupported，含 layout 未验与横屏 P0 未实现。
+  v5 无设备 gate 42/42、required coverage 41/41、独审 P0/P1=0；补齐 foreground 权威来源、window
+  identity/强可见性/focus、default-display rotation、严格尺寸回退、run-wide 脱敏标签与状态/IME 初末双读。
+  accepted 也固定 P0 unsupported，含 layout 未验与横屏 P0 未实现。历史 v4 真机画像
+  `t0l-landscape-20260825T113747Z-da2fa68d` 因 ROM 证据不足正确 blocked，不追溯改判；首条固定 v5 C0
+  `t0l-v5-landscape-20260825T125508Z-13501086-r1` 在唯一入口的设备发现阶段识别到 0 台设备，exit 1、
+  无 profile/evidence、未重跑。需用户重新确认连接/USB 调试后另开全新 C0；该失败不验证也不否定 v5 解析。
 - **T-L1（微信横屏 pane 只读探针）**：无机契约候选 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
   先以纯感知两帧模型区分 OS window 与微信内部 pane；唯一目标标题、
   input/message/toolbar 必须在同一 pane 且 layout epoch 稳定。左栏同名标题、跨 pane 或漂移均 fail-closed；
@@ -122,7 +126,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0-L（横屏只读入场）** | **`394e03f8b147b3038a9d06f9fb354860c76d958f`** | `codex/tablet-intake` | **无机 gate 完成；待全新只读 C0** | 36/36；旧 run 只证明 ADB 可通但 Chrome+pinned；本 SHA 行为未合 main，连接前仍需主会话明确通知 |
+| **Tablet T0-L（横屏只读入场）** | **`135010863ef395a0cb8aacfa625ae87a2453b1dd`** | `codex/tablet-intake` | **v5 无机 gate 完成；设备发现失败后待全新 C0** | 42/42、coverage 41/41、独审 P0/P1=0；v4 真机画像正确 blocked；v5 run `t0l-v5-landscape-20260825T125508Z-13501086-r1` 识别 0 台设备、无画像且未重跑；行为未合 main |
 | **Tablet T-L1（pane 只读探针）** | **`f5c8e15bca5065b504dab73149c7750a1e6dda3d`** | `codex/tablet-tl1-offline` | **无机契约完成；runtime producer 未实现** | gate 11/11、契约 41/41、coverage 25/25；fixture/runtime 隔离，生产入口读路径前即 blocked；等 T0-L 真机画像后另批实现 producer |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
