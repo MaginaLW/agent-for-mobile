@@ -130,6 +130,13 @@ Invoke-Check '平板只读 intake 无设备离线门' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-intake-offline-gate.log')
 }
 
+Invoke-Check '平板双窗 T-L1 v2 诊断离线门' {
+    Invoke-Logged -LogName 'tablet-layout-observation-v2-offline-gate.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\run-tablet-layout-observation-v2-offline-gate.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-v2-offline-gate.log')
+}
+
 Invoke-Check '派单离线测试' {
     Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')

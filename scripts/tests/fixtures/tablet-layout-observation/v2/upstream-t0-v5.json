@@ -1,0 +1,27 @@
+{
+  "schema_version": 5,
+  "run_id": "t0-fixture-native-multi-landscape",
+  "captured_at_utc": "2026-08-25T00:00:00.0000000Z",
+  "device": {
+    "serial_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "manufacturer": "vivo",
+    "model": "pa2553",
+    "api_level": 36,
+    "fingerprint_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "assessment": {
+    "intake_status": "accepted",
+    "readiness_status": "blocked",
+    "readiness_block_reasons": [
+      "application_window_count_not_one",
+      "focus_absent"
+    ],
+    "p0_capability": "unsupported",
+    "p0_unsupported_reasons": [
+      "application_window_count_not_one",
+      "focus_absent",
+      "wechat_layout_unverified",
+      "tablet_landscape_p0_unimplemented"
+    ]
+  }
+}

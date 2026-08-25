@@ -1,0 +1,314 @@
+{
+  "schema": "tablet-layout-observation/v2",
+  "run_id": "tl1-v2-fixture-native-multi",
+  "captured_at": "2026-08-25T00:00:02.2000000Z",
+  "mode": "diagnostic_only",
+  "provenance": {
+    "kind": "offline_fixture",
+    "name": "tablet-layout-observation-fixture",
+    "version": "v2",
+    "producer_commit_sha": "0000000000000000000000000000000000000000",
+    "producer_artifact_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_attested": false
+  },
+  "upstream_t0": {
+    "source_kind": "offline_fixture",
+    "schema_version": 5,
+    "run_id": "t0-fixture-native-multi-landscape",
+    "captured_at": "2026-08-25T00:00:00.0000000Z",
+    "artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "producer_commit_sha": "4ca32b131007df58f7752c5ee9b2d049cb1cd54e",
+    "device_profile_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "intake_status": "accepted",
+    "readiness_status": "blocked",
+    "readiness_reasons": ["application_window_count_not_one", "focus_absent"],
+    "p0_capability": "unsupported",
+    "p0_unsupported_reasons": [
+      "application_window_count_not_one", "focus_absent", "wechat_layout_unverified",
+      "tablet_landscape_p0_unimplemented"
+    ]
+  },
+  "route": {
+    "kind": "probe_only",
+    "settings_mutation_allowed": false,
+    "device_action_allowed": false
+  },
+  "privacy": {
+    "hash_algorithm": "sha256",
+    "raw_window_identity_persisted": false,
+    "raw_node_identity_persisted": false,
+    "chat_plaintext_persisted": false,
+    "raw_screenshot_persisted": false,
+    "raw_dump_persisted": false,
+    "whole_screen_ocr_persisted": false
+  },
+  "frames": [
+    {
+      "capture_id": "capture-1",
+      "captured_at": "2026-08-25T00:00:01.0000000Z",
+      "capture": {
+        "token": "c1",
+        "revision_before": 101,
+        "revision_after": 101,
+        "layout_revision": 101,
+        "ime_revision": 101
+      },
+      "display": {
+        "display_id_status": "known",
+        "display_id": 0,
+        "effective_size": { "width": 2800, "height": 1968 },
+        "orientation": "landscape"
+      },
+      "a11y_windows": [
+        {
+          "window_label": "aw1",
+          "identity_namespace": "a11y_run_local",
+          "display_id": 0,
+          "type": "application",
+          "root_status": "readable",
+          "root_package": "com.tencent.mm",
+          "layer": 10,
+          "bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 },
+          "active": false,
+          "focused": false
+        },
+        {
+          "window_label": "aw2",
+          "identity_namespace": "a11y_run_local",
+          "display_id": 0,
+          "type": "application",
+          "root_status": "readable",
+          "root_package": "com.tencent.mm",
+          "layer": 11,
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 },
+          "active": true,
+          "focused": false
+        }
+      ],
+      "windows_truncated": false,
+      "panes": [
+        {
+          "pane_label": "ap1",
+          "window_label": "aw1",
+          "role": "navigation",
+          "bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 },
+          "binding": "root_subtree"
+        },
+        {
+          "pane_label": "ap2",
+          "window_label": "aw2",
+          "role": "conversation",
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 },
+          "binding": "root_subtree"
+        }
+      ],
+      "panes_truncated": false,
+      "node_observations": [
+        {
+          "node_label": "an1", "window_label": "aw1", "pane_label": "ap1", "role": "conversation_row",
+          "bounds": { "left": 40, "top": 160, "right": 840, "bottom": 280 },
+          "visible": true, "enabled": true, "clickable": true, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an2", "window_label": "aw2", "pane_label": "ap2", "role": "toolbar_title",
+          "bounds": { "left": 1480, "top": 40, "right": 2220, "bottom": 120 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an3", "window_label": "aw2", "pane_label": "ap2", "role": "container",
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 160 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an4", "window_label": "aw2", "pane_label": "ap2", "role": "message_viewport",
+          "bounds": { "left": 900, "top": 160, "right": 2800, "bottom": 1720 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": true, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an5", "window_label": "aw2", "pane_label": "ap2", "role": "input_editor",
+          "bounds": { "left": 900, "top": 1720, "right": 2800, "bottom": 1968 },
+          "visible": true, "enabled": true, "clickable": true, "long_clickable": false,
+          "editable": true, "scrollable": false, "checkable": false, "focused": false
+        }
+      ],
+      "nodes_truncated": false,
+      "target": {
+        "expected_title_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "conversation_window_label": "aw2",
+        "conversation_pane_label": "ap2",
+        "title_candidates": [
+          {
+            "candidate_label": "tt1", "node_label": "an2",
+            "label_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "semantic_role": "pane_toolbar_title", "source": "a11y_node",
+            "bounds": { "left": 1480, "top": 40, "right": 2220, "bottom": 120 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c1"
+          }
+        ],
+        "toolbar_candidates": [
+          {
+            "candidate_label": "tb1", "source_node_labels": ["an2", "an3"],
+            "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 160 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c1"
+          }
+        ],
+        "message_candidates": [
+          {
+            "candidate_label": "msg1", "source_node_labels": ["an4"],
+            "bounds": { "left": 900, "top": 160, "right": 2800, "bottom": 1720 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c1"
+          }
+        ],
+        "input_candidates": [
+          {
+            "candidate_label": "in1", "node_label": "an5", "node_package": "com.tencent.mm",
+            "bounds": { "left": 900, "top": 1720, "right": 2800, "bottom": 1968 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c1",
+            "editable": true, "focused": false,
+            "editor_fingerprint_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ],
+        "focus": { "status": "absent", "window_label": null, "input_candidate_label": null },
+        "ime": {
+          "visible": false, "mode": "none", "bounds": null, "editor_fingerprint_hash": null,
+          "binding": "not_active", "target_input_candidate_label": null, "capture_token": "c1"
+        }
+      }
+    },
+    {
+      "capture_id": "capture-2",
+      "captured_at": "2026-08-25T00:00:02.2000000Z",
+      "capture": {
+        "token": "c2",
+        "revision_before": 102,
+        "revision_after": 102,
+        "layout_revision": 102,
+        "ime_revision": 102
+      },
+      "display": {
+        "display_id_status": "known", "display_id": 0,
+        "effective_size": { "width": 2800, "height": 1968 }, "orientation": "landscape"
+      },
+      "a11y_windows": [
+        {
+          "window_label": "aw1", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "type": "application", "root_status": "readable", "root_package": "com.tencent.mm", "layer": 10,
+          "bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw2", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "type": "application", "root_status": "readable", "root_package": "com.tencent.mm", "layer": 11,
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 },
+          "active": true, "focused": false
+        }
+      ],
+      "windows_truncated": false,
+      "panes": [
+        {
+          "pane_label": "ap1", "window_label": "aw1", "role": "navigation",
+          "bounds": { "left": 0, "top": 0, "right": 900, "bottom": 1968 }, "binding": "root_subtree"
+        },
+        {
+          "pane_label": "ap2", "window_label": "aw2", "role": "conversation",
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 1968 }, "binding": "root_subtree"
+        }
+      ],
+      "panes_truncated": false,
+      "node_observations": [
+        {
+          "node_label": "an1", "window_label": "aw1", "pane_label": "ap1", "role": "conversation_row",
+          "bounds": { "left": 40, "top": 160, "right": 840, "bottom": 280 },
+          "visible": true, "enabled": true, "clickable": true, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an2", "window_label": "aw2", "pane_label": "ap2", "role": "toolbar_title",
+          "bounds": { "left": 1480, "top": 40, "right": 2220, "bottom": 120 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an3", "window_label": "aw2", "pane_label": "ap2", "role": "container",
+          "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 160 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": false, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an4", "window_label": "aw2", "pane_label": "ap2", "role": "message_viewport",
+          "bounds": { "left": 900, "top": 160, "right": 2800, "bottom": 1720 },
+          "visible": true, "enabled": true, "clickable": false, "long_clickable": false,
+          "editable": false, "scrollable": true, "checkable": false, "focused": false
+        },
+        {
+          "node_label": "an5", "window_label": "aw2", "pane_label": "ap2", "role": "input_editor",
+          "bounds": { "left": 900, "top": 1720, "right": 2800, "bottom": 1968 },
+          "visible": true, "enabled": true, "clickable": true, "long_clickable": false,
+          "editable": true, "scrollable": false, "checkable": false, "focused": false
+        }
+      ],
+      "nodes_truncated": false,
+      "target": {
+        "expected_title_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "conversation_window_label": "aw2", "conversation_pane_label": "ap2",
+        "title_candidates": [
+          {
+            "candidate_label": "tt1", "node_label": "an2",
+            "label_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "semantic_role": "pane_toolbar_title", "source": "a11y_node",
+            "bounds": { "left": 1480, "top": 40, "right": 2220, "bottom": 120 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c2"
+          }
+        ],
+        "toolbar_candidates": [
+          {
+            "candidate_label": "tb1", "source_node_labels": ["an2", "an3"],
+            "bounds": { "left": 900, "top": 0, "right": 2800, "bottom": 160 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c2"
+          }
+        ],
+        "message_candidates": [
+          {
+            "candidate_label": "msg1", "source_node_labels": ["an4"],
+            "bounds": { "left": 900, "top": 160, "right": 2800, "bottom": 1720 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c2"
+          }
+        ],
+        "input_candidates": [
+          {
+            "candidate_label": "in1", "node_label": "an5", "node_package": "com.tencent.mm",
+            "bounds": { "left": 900, "top": 1720, "right": 2800, "bottom": 1968 },
+            "window_label": "aw2", "pane_label": "ap2", "capture_token": "c2",
+            "editable": true, "focused": false,
+            "editor_fingerprint_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ],
+        "focus": { "status": "absent", "window_label": null, "input_candidate_label": null },
+        "ime": {
+          "visible": false, "mode": "none", "bounds": null, "editor_fingerprint_hash": null,
+          "binding": "not_active", "target_input_candidate_label": null, "capture_token": "c2"
+        }
+      }
+    }
+  ],
+  "consistency": { "sample_count": 2, "minimum_interval_ms": 1200, "stable": true, "reason_codes": [] },
+  "diagnostic_status": "observed",
+  "reason_codes": [],
+  "layout_accepted": false,
+  "wechat_layout_verified": false,
+  "editor_action_ready": false,
+  "p0_capability": "unsupported",
+  "p0_blockers": [
+    "tablet_layout_diagnostic_only", "upstream_t0_readiness_blocked",
+    "tablet_landscape_p0_unimplemented", "tablet_tl2_unverified"
+  ],
+  "execution_grant": false
+}

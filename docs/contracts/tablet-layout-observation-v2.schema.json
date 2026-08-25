@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-for-mobile.local/contracts/tablet-layout-observation-v2.schema.json",
+  "title": "Tablet T-L1 v2 diagnostic-only layout observation",
+  "description": "Synthetic-contract shape for a two-frame, native multi-window tablet observation. It never grants layout acceptance, WeChat verification, device action, P0, or execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "run_id", "captured_at", "mode", "provenance", "upstream_t0", "route",
+    "privacy", "frames", "consistency", "diagnostic_status", "reason_codes",
+    "layout_accepted", "wechat_layout_verified", "editor_action_ready", "p0_capability",
+    "p0_blockers", "execution_grant"
+  ],
+  "properties": {
+    "schema": { "const": "tablet-layout-observation/v2" },
+    "run_id": { "$ref": "#/$defs/safeId" },
+    "captured_at": { "$ref": "#/$defs/timestamp", "x-runtime-producer-only": true },
+    "mode": { "const": "diagnostic_only" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "upstream_t0": { "$ref": "#/$defs/upstreamT0" },
+    "route": { "$ref": "#/$defs/route" },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "frames": {
+      "type": "array", "minItems": 2, "maxItems": 4,
+      "items": { "$ref": "#/$defs/frame" },
+      "x-runtime-producer-only": true
+    },
+    "consistency": { "$ref": "#/$defs/consistency" },
+    "diagnostic_status": { "enum": ["observed", "blocked", "inconclusive"] },
+    "reason_codes": {
+      "type": "array", "uniqueItems": true, "maxItems": 64,
+      "items": { "$ref": "#/$defs/reasonCode" }
+    },
+    "layout_accepted": { "const": false },
+    "wechat_layout_verified": { "const": false },
+    "editor_action_ready": { "const": false },
+    "p0_capability": { "const": "unsupported" },
+    "p0_blockers": {
+      "type": "array", "uniqueItems": true, "minItems": 4, "maxItems": 4,
+      "items": {
+        "enum": [
+          "tablet_layout_diagnostic_only", "upstream_t0_readiness_blocked",
+          "tablet_landscape_p0_unimplemented", "tablet_tl2_unverified"
+        ]
+      },
+      "allOf": [
+        { "contains": { "const": "tablet_layout_diagnostic_only" } },
+        { "contains": { "const": "upstream_t0_readiness_blocked" } },
+        { "contains": { "const": "tablet_landscape_p0_unimplemented" } },
+        { "contains": { "const": "tablet_tl2_unverified" } }
+      ]
+    },
+    "execution_grant": { "const": false }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "diagnostic_status": { "const": "observed" } }, "required": ["diagnostic_status"] },
+      "then": {
+        "properties": {
+          "reason_codes": { "maxItems": 0 },
+          "consistency": {
+            "properties": { "stable": { "const": true }, "reason_codes": { "maxItems": 0 } }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string", "minLength": 1, "maxLength": 80,
+      "pattern": "^(?![\\s\\S]*[\\r\\n])[a-z0-9][a-z0-9._-]{0,79}$"
+    },
+    "reasonCode": {
+      "enum": [
+        "upstream_t0_invalid", "upstream_t0_stale", "upstream_t0_hash_mismatch",
+        "upstream_t0_producer_mismatch", "upstream_t0_device_hash_mismatch",
+        "runtime_producer_unavailable", "fixture_origin_required", "route_contract_violation",
+        "capture_order_invalid", "capture_in_future", "capture_stale", "capture_span_exceeded",
+        "atomic_capture_revision_invalid", "not_landscape", "display_unknown",
+        "multi_display_blocked", "window_count_not_two", "window_label_invalid",
+        "window_label_duplicate", "window_identity_replacement", "window_root_owner_conflict",
+        "window_geometry_invalid", "window_pane_bijection_invalid", "pane_geometry_invalid",
+        "target_window_pane_missing", "target_window_pane_drift", "target_title_not_unique",
+        "title_wrong_role", "title_wrong_window", "title_wrong_pane", "title_geometry_invalid",
+        "region_candidate_missing", "region_candidate_ambiguous", "region_binding_invalid",
+        "region_geometry_invalid", "cross_window_region", "focus_target_conflict",
+        "focus_fallback_insufficient", "ime_target_editor_unbound", "floating_ime_unsupported",
+        "overlay_target_occlusion", "window_inventory_truncated", "pane_inventory_truncated",
+        "node_inventory_truncated", "node_binding_invalid",
+        "capture_semantics_drift", "consistency_declared_mismatch", "privacy_contract_violation",
+        "raw_identity_persisted", "chat_plaintext_persisted", "chat_content_digest_persisted", "declared_status_mismatch",
+        "declared_reasons_incomplete", "safety_constants_invalid"
+      ]
+    },
+    "hash": {
+      "type": "string", "minLength": 71, "maxLength": 71,
+      "pattern": "^(?![\\s\\S]*[\\r\\n])sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": {
+      "type": "string", "minLength": 28, "maxLength": 28, "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"
+    },
+    "nullableHash": { "oneOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+    "nullableSafeId": { "oneOf": [{ "$ref": "#/$defs/safeId" }, { "type": "null" }] },
+    "nullableWindowLabel": { "oneOf": [{ "$ref": "#/$defs/windowLabel" }, { "type": "null" }] },
+    "nullablePaneLabel": { "oneOf": [{ "$ref": "#/$defs/paneLabel" }, { "type": "null" }] },
+    "windowLabel": { "type": "string", "pattern": "^aw[1-9][0-9]{0,2}$" },
+    "paneLabel": { "type": "string", "pattern": "^ap[1-9][0-9]{0,2}$" },
+    "captureToken": { "type": "string", "pattern": "^c[1-9][0-9]{0,2}$" },
+    "nodeLabel": { "type": "string", "pattern": "^an[1-9][0-9]{0,3}$" },
+    "candidateLabel": { "type": "string", "pattern": "^(tt|tb|msg|in)[1-9][0-9]{0,2}$" },
+    "size": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      }
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "top": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "right": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "bottom": { "type": "integer", "minimum": -32768, "maximum": 32768 }
+      }
+    },
+    "nullableRect": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+    "nullableSize": { "oneOf": [{ "$ref": "#/$defs/size" }, { "type": "null" }] },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "version", "producer_commit_sha", "producer_artifact_sha256", "runtime_attested"],
+      "properties": {
+        "kind": { "enum": ["offline_fixture", "gateway_runtime_probe"] },
+        "name": { "$ref": "#/$defs/safeId" },
+        "version": { "$ref": "#/$defs/safeId" },
+        "producer_commit_sha": { "$ref": "#/$defs/gitSha" },
+        "producer_artifact_sha256": { "$ref": "#/$defs/hash" },
+        "runtime_attested": { "const": false }
+      }
+    },
+    "upstreamT0": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "source_kind", "schema_version", "run_id", "captured_at", "artifact_sha256",
+        "producer_commit_sha", "device_profile_hash", "intake_status", "readiness_status",
+        "readiness_reasons", "p0_capability", "p0_unsupported_reasons"
+      ],
+      "properties": {
+        "source_kind": { "enum": ["offline_fixture", "trusted_runtime"] },
+        "schema_version": { "const": 5 },
+        "run_id": { "$ref": "#/$defs/safeId" },
+        "captured_at": { "$ref": "#/$defs/timestamp" },
+        "artifact_sha256": { "$ref": "#/$defs/hash" },
+        "producer_commit_sha": { "$ref": "#/$defs/gitSha" },
+        "device_profile_hash": { "$ref": "#/$defs/hash" },
+        "intake_status": { "const": "accepted" },
+        "readiness_status": { "const": "blocked" },
+        "readiness_reasons": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "p0_capability": { "const": "unsupported" },
+        "p0_unsupported_reasons": {
+          "type": "array", "minItems": 2, "maxItems": 64, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" },
+          "allOf": [
+            { "contains": { "const": "wechat_layout_unverified" } },
+            { "contains": { "const": "tablet_landscape_p0_unimplemented" } }
+          ]
+        }
+      }
+    },
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "settings_mutation_allowed", "device_action_allowed"],
+      "properties": {
+        "kind": { "const": "probe_only" },
+        "settings_mutation_allowed": { "const": false },
+        "device_action_allowed": { "const": false }
+      }
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "hash_algorithm", "raw_window_identity_persisted", "raw_node_identity_persisted",
+        "chat_plaintext_persisted", "raw_screenshot_persisted", "raw_dump_persisted",
+        "whole_screen_ocr_persisted"
+      ],
+      "properties": {
+        "hash_algorithm": { "const": "sha256" },
+        "raw_window_identity_persisted": { "const": false },
+        "raw_node_identity_persisted": { "const": false },
+        "chat_plaintext_persisted": { "const": false },
+        "raw_screenshot_persisted": { "const": false },
+        "raw_dump_persisted": { "const": false },
+        "whole_screen_ocr_persisted": { "const": false }
+      }
+    },
+    "frame": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "capture_id", "captured_at", "capture", "display", "a11y_windows", "windows_truncated",
+        "panes", "panes_truncated", "node_observations", "nodes_truncated", "target"
+      ],
+      "properties": {
+        "capture_id": { "$ref": "#/$defs/safeId" },
+        "captured_at": { "$ref": "#/$defs/timestamp" },
+        "capture": { "$ref": "#/$defs/capture" },
+        "display": { "$ref": "#/$defs/display" },
+        "a11y_windows": {
+          "type": "array", "maxItems": 16,
+          "items": { "$ref": "#/$defs/a11yWindow" }
+        },
+        "windows_truncated": { "type": "boolean" },
+        "panes": {
+          "type": "array", "maxItems": 8,
+          "items": { "$ref": "#/$defs/pane" }
+        },
+        "panes_truncated": { "type": "boolean" },
+        "node_observations": {
+          "type": "array", "maxItems": 512,
+          "items": { "$ref": "#/$defs/nodeObservation" }
+        },
+        "nodes_truncated": { "type": "boolean" },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token", "revision_before", "revision_after", "layout_revision", "ime_revision"],
+      "properties": {
+        "token": { "$ref": "#/$defs/captureToken" },
+        "revision_before": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "revision_after": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "layout_revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "ime_revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+      }
+    },
+    "display": {
+      "type": "object", "additionalProperties": false,
+      "required": ["display_id_status", "display_id", "effective_size", "orientation"],
+      "properties": {
+        "display_id_status": { "enum": ["known", "unknown"] },
+        "display_id": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 16 }, { "type": "null" }] },
+        "effective_size": { "$ref": "#/$defs/nullableSize" },
+        "orientation": { "enum": ["landscape", "portrait", "square", "unknown"] }
+      }
+    },
+    "a11yWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "window_label", "identity_namespace", "display_id", "type", "root_status",
+        "root_package", "layer", "bounds", "touchable_bounds", "active", "focused"
+      ],
+      "properties": {
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "identity_namespace": { "const": "a11y_run_local" },
+        "display_id": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 16 }, { "type": "null" }] },
+        "type": { "enum": ["application", "input_method", "accessibility_overlay", "system", "unknown"] },
+        "root_status": { "enum": ["readable", "absent", "unreadable"] },
+        "root_package": { "$ref": "#/$defs/nullableSafeId" },
+        "layer": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+        "bounds": { "$ref": "#/$defs/nullableRect" },
+        "touchable_bounds": { "$ref": "#/$defs/nullableRect" },
+        "active": { "type": "boolean" },
+        "focused": { "type": "boolean" }
+      }
+    },
+    "pane": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pane_label", "window_label", "role", "bounds", "binding"],
+      "properties": {
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "role": { "enum": ["navigation", "conversation", "unknown"] },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "binding": { "enum": ["root_subtree", "structural_partition", "unknown"] }
+      }
+    },
+    "nodeObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "node_label", "window_label", "pane_label", "role", "bounds", "visible", "enabled",
+        "clickable", "long_clickable", "editable", "scrollable", "checkable", "focused"
+      ],
+      "properties": {
+        "node_label": { "$ref": "#/$defs/nodeLabel" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "pane_label": { "$ref": "#/$defs/nullablePaneLabel" },
+        "role": { "enum": ["toolbar_title", "conversation_row", "message_viewport", "input_editor", "container", "other"] },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "visible": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "clickable": { "type": "boolean" },
+        "long_clickable": { "type": "boolean" },
+        "editable": { "type": "boolean" },
+        "scrollable": { "type": "boolean" },
+        "checkable": { "type": "boolean" },
+        "focused": { "type": "boolean" }
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "expected_title_hash", "conversation_window_label", "conversation_pane_label",
+        "title_candidates", "toolbar_candidates", "message_candidates", "input_candidates",
+        "focus", "ime"
+      ],
+      "properties": {
+        "expected_title_hash": { "$ref": "#/$defs/hash" },
+        "conversation_window_label": { "$ref": "#/$defs/nullableWindowLabel" },
+        "conversation_pane_label": { "$ref": "#/$defs/nullablePaneLabel" },
+        "title_candidates": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/titleCandidate" } },
+        "toolbar_candidates": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/regionCandidate" } },
+        "message_candidates": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/regionCandidate" } },
+        "input_candidates": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/inputCandidate" } },
+        "focus": { "$ref": "#/$defs/focusObservation" },
+        "ime": { "$ref": "#/$defs/imeObservation" }
+      }
+    },
+    "titleCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "candidate_label", "node_label", "label_hash", "semantic_role", "source", "bounds",
+        "window_label", "pane_label", "capture_token"
+      ],
+      "properties": {
+        "candidate_label": { "$ref": "#/$defs/candidateLabel" },
+        "node_label": { "$ref": "#/$defs/nodeLabel" },
+        "label_hash": { "$ref": "#/$defs/hash" },
+        "semantic_role": { "enum": ["pane_toolbar_title", "conversation_row", "unknown"] },
+        "source": { "enum": ["a11y_node", "ocr_pane_crop", "fused"] },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "capture_token": { "$ref": "#/$defs/captureToken" }
+      }
+    },
+    "regionCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_label", "source_node_labels", "bounds", "window_label", "pane_label", "capture_token"],
+      "properties": {
+        "candidate_label": { "$ref": "#/$defs/candidateLabel" },
+        "source_node_labels": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/nodeLabel" } },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "capture_token": { "$ref": "#/$defs/captureToken" }
+      }
+    },
+    "inputCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "candidate_label", "node_label", "node_package", "bounds", "window_label", "pane_label",
+        "capture_token", "editable", "focused", "editor_fingerprint_hash"
+      ],
+      "properties": {
+        "candidate_label": { "$ref": "#/$defs/candidateLabel" },
+        "node_label": { "$ref": "#/$defs/nodeLabel" },
+        "node_package": { "const": "com.tencent.mm" },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "capture_token": { "$ref": "#/$defs/captureToken" },
+        "editable": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "editor_fingerprint_hash": { "$ref": "#/$defs/nullableHash" }
+      }
+    },
+    "focusObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "window_label", "input_candidate_label"],
+      "properties": {
+        "status": { "enum": ["known", "absent", "unknown"] },
+        "window_label": { "$ref": "#/$defs/nullableWindowLabel" },
+        "input_candidate_label": { "oneOf": [{ "$ref": "#/$defs/candidateLabel" }, { "type": "null" }] }
+      }
+    },
+    "imeObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "visible", "mode", "bounds", "editor_fingerprint_hash", "binding",
+        "target_input_candidate_label", "capture_token"
+      ],
+      "properties": {
+        "visible": { "type": "boolean" },
+        "mode": { "enum": ["none", "docked", "floating", "unknown"] },
+        "bounds": { "$ref": "#/$defs/nullableRect" },
+        "editor_fingerprint_hash": { "$ref": "#/$defs/nullableHash" },
+        "binding": { "enum": ["target_editor", "other_editor", "not_active", "unknown"] },
+        "target_input_candidate_label": { "oneOf": [{ "$ref": "#/$defs/candidateLabel" }, { "type": "null" }] },
+        "capture_token": { "$ref": "#/$defs/captureToken" }
+      }
+    },
+    "consistency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sample_count", "minimum_interval_ms", "stable", "reason_codes"],
+      "properties": {
+        "sample_count": { "type": "integer", "minimum": 2, "maximum": 4 },
+        "minimum_interval_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "stable": { "type": "boolean" },
+        "reason_codes": {
+          "type": "array", "uniqueItems": true, "maxItems": 64,
+          "items": { "$ref": "#/$defs/reasonCode" }
+        }
+      }
+    }
+  }
+}
