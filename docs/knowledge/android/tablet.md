@@ -2,8 +2,9 @@
 
 > 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 clean producer
 > `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
-> fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v1 单窗契约归档，下一步是
-> diagnostic-only v2 `probe_only` 原生双 window/pane producer；T-L1/P0 尚未放行。
+> fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
+> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`，
+> 尚未接受控 runner/attest 或做真机 C1a，app 未合 main；T-L1/P0 仍未放行。
 
 ## 当前能力边界
 
@@ -79,15 +80,31 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
 
+## T-L1 v2 无机冻结 · 2026-08-26
+
+- diagnostic-only contract/schema/validator/gate 源提交 `c8bd3e3...`，以 main `589421a` 合入；gate
+  self-test 5/5、cases 24/24、required coverage 24/24，输出恒为 layout/P0/execution false。
+- 隔离 producer 候选 `b5769df7baba075fda47aec17f249a5caa124b92` 位于 `codex/tablet-tl1-v2`；只读枚举
+  Accessibility window/node，未接 ToolRegistry/MCP，不含 action、gesture、input、settings、截图、文件写入或
+  sleep，production capability 固定 `runtime_runner_not_connected` / unavailable。
+- producer 专项 33/33；全量 Debug 350/350、Release 259/259，`assembleDebug` 成功；标准仓库检查的 T0、
+  T-L1、dispatch 28/28、runner 82/82 与凭据扫描全部通过，独立终审 P0/P1/P2=0。以上全是无设备结果，
+  不构成 runtime evidence、微信布局验证或 P0 放行。
+- 下一步先以 `b5769df...` 为基线补独立受控 runner/attest、离线 gate 与独审，再钉 clean descendant SHA 并
+  另行授权 C1a；只读观察保持 vivo 应用多窗开启的日常横屏形态，不得靠关功能满足旧单窗门。真机结果
+  用于修订/冻结后续契约，不自动授予 action 或 execution。
+
 ## 横屏路线与硬边界
 
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
-2. **T-L1 无机契约** 当前只有 synthetic schema/validator：生产入口在读取 caller 文件前固定
-   `runtime_producer_unavailable`，fixture 只能验证几何契约，不能产生 runtime、微信验证或执行授权。
-3. **T-L1 真机 producer** 未来必须纯感知两帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标 pane，
-   证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与选中
-   window/pane identity 在两帧中稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文。
+2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
+   runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
+3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未接 runtime、未合 main；须先增加独立
+   受控 runner/attest 并重新钉 SHA。C1a 必须纯感知多帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
+   pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
+   window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
+   descendant 固定 SHA 真机验收前仍称 unavailable。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
 5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable

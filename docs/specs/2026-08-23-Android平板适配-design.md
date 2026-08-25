@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed，T-L1 v2 只读双窗探针待实现
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结，受控 runner/attest 与真机 C1a 待完成
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -93,9 +93,11 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 6. 只保存 run-local label、bounds/hash/reason，不持久化 raw window ID、聊天明文或全屏截图；OCR 只在
    已绑定 window/pane crop 内使用。任一歧义、漂移、跨 pane 或证据来源不可信都 fail-closed。
 
-当前无机 validator 没有真实 producer：fixture 最多得到 `fixture_contract_valid=true`，而
-`runtime_evidence`、`wechat_layout_verified`、P0 与 execution grant 永远为 false。未来受控 producer
-实现并经真机验证后，T-L1 runtime accepted 才可把 `wechat_layout_verified=true`；P0 仍 unsupported。
+当前 v2 无机 schema/validator/gate 已以 main `589421a` 冻结，fixture 最多得到
+`fixture_contract_valid=true`，而 `runtime_evidence`、`wechat_layout_verified`、P0 与 execution grant 永远
+为 false。隔离只读 producer 基线 `b5769df7baba075fda47aec17f249a5caa124b92` 尚未接 ToolRegistry/MCP、
+未合 main；须先补独立受控 runner/attest、独审并钉 descendant SHA，完成真机 C1a 后才可讨论 T-L1
+runtime accepted，P0 仍 unsupported。
 
 ### T-L2 · 横屏 P0
 
@@ -125,8 +127,9 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    `4ca32b1...` 均在 PA2553 上 exit 0 并正确输出 readiness blocked/P0 unsupported。
 2. **A1 归档**：T-L1 v1 `f5c8e15b...` 的 gate 11/11、契约 41/41、coverage 25/25 保留为安全
    fail-closed 的旧单窗合成门；真实 producer unavailable，不能拿去做 PA2553 日常形态真机验收。
-3. **A2/C1a 只读诊断**：实现 v2 diagnostic-only observation schema、可信 T0→`probe_only` envelope 与
-   隔离的多 a11y window producer；先在应用多窗保持开启的 PA2553 上只读取证，结果固定不 accepted。
+3. **A2/C1a 只读诊断**：v2 diagnostic-only observation schema、可信 T0→`probe_only` envelope 与隔离的
+   多 a11y window producer 已离线冻结；下一步先补独立受控 runner/attest 并钉 descendant SHA，再在应用多窗
+   保持开启的 PA2553 上只读取证。结果固定不 accepted，且须用户另行授权后才启动真机工序。
 4. **A3/C1b 只读契约**：根据 C1a 真实 window/root/node/region 形态冻结 v2 contract、对抗 fixture 与
    validator，再固定新 SHA 真机验收；即使 T-L1 accepted，P0 仍 unsupported。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
@@ -174,5 +177,7 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 
 当前 T0-L v5 clean port `4ca32b1...` 已满足 42/42、coverage 41/41 并完成只读 C0；T-L1 v1
 `f5c8e15b...` 的 gate 11/11、41/41 cases、25/25 coverage 只作为旧单窗 fail-closed 归档。
-首版 `c0f2e65` 因 synthetic provenance、freshness 与退化几何 C 级缺口作废，不得恢复或入队；
-T-L1 v2 必须按原生双 window/pane 路线重新完成 A2/C1a 准入。
+首版 `c0f2e65` 因 synthetic provenance、freshness 与退化几何 C 级缺口作废，不得恢复或入队。T-L1 v2
+contract/gate `589421a` 已 5/5、24/24、coverage 24/24；producer 基线 `b5769df...` 专项 33/33、
+Debug 350/350、Release 259/259、独审 0/0/0。producer 已满足无机 A2，但受控 runner/attest 尚未实现，
+原生双 window/pane 的真机 C1a 也尚未开始。
