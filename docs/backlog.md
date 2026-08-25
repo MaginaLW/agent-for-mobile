@@ -85,15 +85,20 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - **T0-L（横屏只读入场，不占危险动作批次）**：schema v5 候选 `135010863ef395a0cb8aacfa625ae87a2453b1dd`
   从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `am get-config` / `dumpsys` / `settings get` 查询采集脱敏
   设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。横屏、
-  微信前台、全屏单 OS app window 是 readiness 入口；竖屏、多窗/PiP、letterbox、浮动 IME 均 blocked。
+  现行 v5 readiness 仍以微信前台、全屏单 OS app window 为旧入口；竖屏、多窗/PiP、letterbox、浮动 IME
+  均 fail-closed，但单窗不再代表产品目标。用户 08-25 拍板“项目适配设备，不关设备功能换绿”；vivo
+  原生横屏应用多窗/同 App 双窗口须由下一版 T-L1 建模，关闭它最多只做显式对照实验。
   v5 无设备 gate 42/42、required coverage 41/41、独审 P0/P1=0；补齐 foreground 权威来源、window
   identity/强可见性/focus、default-display rotation、严格尺寸回退、run-wide 脱敏标签与状态/IME 初末双读。
   accepted 也固定 P0 unsupported，含 layout 未验与横屏 P0 未实现。历史 v4 真机画像
   `t0l-landscape-20260825T113747Z-da2fa68d` 因 ROM 证据不足正确 blocked，不追溯改判；首条固定 v5 C0
-  `t0l-v5-landscape-20260825T125508Z-13501086-r1` 在唯一入口的设备发现阶段识别到 0 台设备，exit 1、
-  无 profile/evidence、未重跑。需用户重新确认连接/USB 调试后另开全新 C0；该失败不验证也不否定 v5 解析。
-- **T-L1（微信横屏 pane 只读探针）**：无机契约候选 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
-  先以纯感知两帧模型区分 OS window 与微信内部 pane；唯一目标标题、
+  `t0l-v5-landscape-20260825T125508Z-13501086-r1` 在设备发现阶段识别到 0 台、无画像且未重跑；重连后的
+  r2 `t0l-v5-landscape-20260825T132258Z-r2` 唯一入口 exit 0，证明 intake 能在 vivo 真机正确 fail-closed：
+  两个强可见微信 `base_application` 均为 `multi_landscape`，rotation 歧义、focus absent，readiness blocked、
+  P0 unsupported。证据已入 main `d076345`。原候选祖先夹带未验手机批次 4，禁止直接 merge；T0-only
+  clean port 必须钉新 SHA 再做一次只读 C0。
+- **T-L1（微信横屏 window/pane 只读探针）**：旧无机契约候选 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
+  先以纯感知两帧模型区分 vivo 同 App 双 OS window 与微信内部 pane；唯一目标标题、
   input/message/toolbar 必须在同一 pane 且 layout epoch 稳定。左栏同名标题、跨 pane 或漂移均 fail-closed；
   只落 bounds/hash/reason，不落聊天明文。当前只有 synthetic contract validator（41/41），真实 producer
   固定 unavailable；fixture 最多 `fixture_contract_valid`，runtime/微信验证/P0/执行授权永远 false。机器 gate
@@ -101,7 +106,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
-- **T-L3 / T-P（后置）**：响应式确认 surface 与多窗单独成批；PA2553 竖屏兼容在横屏闭环后再验。
+- **T-L3 / T-P（后置）**：响应式确认 surface、其它多 App 分屏/自由窗单独成批；PA2553 竖屏兼容在横屏闭环后再验。
 
 ### 不进批次的 A 道纵深（C 队列排满时做）
 
@@ -126,7 +131,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0-L（横屏只读入场）** | **`135010863ef395a0cb8aacfa625ae87a2453b1dd`** | `codex/tablet-intake` | **v5 无机 gate 完成；设备发现失败后待全新 C0** | 42/42、coverage 41/41、独审 P0/P1=0；v4 真机画像正确 blocked；v5 run `t0l-v5-landscape-20260825T125508Z-13501086-r1` 识别 0 台设备、无画像且未重跑；行为未合 main |
+| **Tablet T0-L（横屏只读入场）** | **clean port 待钉**（已验源 SHA `135010863ef395a0cb8aacfa625ae87a2453b1dd`） | `codex/tablet-intake-clean` | **源 SHA 真机正确 fail-closed；正做无污染移植** | 42/42、coverage 41/41、独审 P0/P1=0；r2 两个微信 `multi_landscape` base window，readiness blocked/P0 unsupported；evidence `d076345`；原 SHA 祖先污染，clean SHA 须重跑 C0 后才合 |
 | **Tablet T-L1（pane 只读探针）** | **`f5c8e15bca5065b504dab73149c7750a1e6dda3d`** | `codex/tablet-tl1-offline` | **无机契约完成；runtime producer 未实现** | gate 11/11、契约 41/41、coverage 25/25；fixture/runtime 隔离，生产入口读路径前即 blocked；等 T0-L 真机画像后另批实现 producer |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
@@ -591,6 +596,7 @@ Deny 带外截屏比对可行。
 
 | 问题 | 收敛到的选项 | 提出时间 |
 |---|---|---|
+| 平板适配遇到系统原生功能时，是关功能换单窗还是项目适配？ | **项目尽量适配设备，不靠关闭功能换通过**（用户 08-25 拍板）；vivo 横屏应用多窗/同 App 双窗口作为日常基线。关闭功能最多是明确标注的对照实验，不得成为产品前置或最终验收条件 | 2026-08-25 |
 | 后续真机与平板默认姿态？ | **统一改用 vivo PA2553 Android 平板，并以日常横屏为当前设计/验收基线**（用户 08-23 切平板、08-24 改横屏）；手机 C 暂停并保留历史。路线为 T0-L → T-L1 pane 只读探针 → T-L2 横屏 P0，竖屏兼容后置 | 2026-08-24 |
 | Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **已接受**：空 cwd + 无 shell/枚举 + 不提供本机路径 + 未知 item fail closed；若将来出现路径暴露/未知 item 或可禁用版本，重新收紧 | 2026-08-11 |
 | 语义意图审批四题 | **全部按推荐拍定**（用户 08-02），见下 | 2026-08-02 |
