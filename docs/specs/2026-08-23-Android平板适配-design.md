@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 横屏优先；T0-L 无设备 gate 与 T-L1 无机契约已完成，尚未横屏真机验收
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed，T-L1 v2 只读双窗探针待实现
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -13,6 +13,14 @@
 设计与验收基线；竖屏兼容后置。这个决定不修改手机历史策略，也不允许删除手机现有 `h>w`、比例、
 顶部中心标题或底栏安全门。横屏走显式、默认关闭的 tablet-landscape 证据路径。
 
+2026-08-25 用户进一步拍板：**项目尽量适配设备，不通过关闭设备功能换通过**。PA2553 的产品设计与
+最终验收以 vivo“应用多窗”保持日常开启的横屏形态为基线；项目必须识别同一微信的双 OS window，
+并把目标 conversation pane、标题、消息区和输入区绑定到同一 window/pane identity。关闭应用多窗不属于
+正常准备、部署前置或通过条件；只有用户另行明确授权时，才可作为标注 `control_only` 的对照实验，
+且该结果不得计入产品验收。vivo 官方对应用多窗的说明是横屏并排展示同一 App 不同层级界面：
+[应用多窗说明](https://bbs.vivo.com.cn/newbbs/thread/32933113)、
+[vivo Pad“一个 App，双窗口”](https://www.vivo.com.cn/vivo/vivopad)。
+
 目标不是把 `phone` 文案替换成 `tablet`，而是让每次安全判断绑定**当前 App 窗口和目标会话 pane**。
 Android 官方也把可用 App 窗口而非设备型号作为适配基准，并要求考虑运行时旋转、分屏和窗口尺寸变化：
 [window size classes](https://developer.android.com/develop/ui/views/layout/use-window-size-classes)、
@@ -20,7 +28,7 @@ Android 官方也把可用 App 窗口而非设备型号作为适配基准，并�
 
 ## 2. 首轮边界
 
-T0-L 首轮 readiness 只接受：
+T0-L v5 的首轮 readiness 仍只接受：
 
 - Android 平板（`smallestWidthDp >= 600`）；
 - 横屏、全屏、单个 owner-matching BASE_APPLICATION 窗口，边界精确覆盖当前显示；
@@ -28,9 +36,15 @@ T0-L 首轮 readiness 只接受：
 - IME 状态可解析且非浮动；实体键盘、safe insets、cutout 与多 display 留给 T-L1/真机 producer；
 - 微信在前台；内部单栏/双栏不由 T0-L 猜测，交给下一阶段只读探针。
 
-T0-L readiness accepted 只表示“可以继续做横屏只读 pane 测量”，不表示危险动作支持。微信内部 pane、
+这是一条保守的旧单窗入口，不再定义目标设备形态。T0-L readiness accepted 只表示“可以继续做横屏只读
+pane 测量”，不表示危险动作支持。微信内部 pane、
 分屏/自由窗、桌面窗口、PiP、浮动 IME 与外接显示器均不能被 T0-L 放行为 P0。Android 16 大屏会忽略
 部分 orientation/resizable 限制，所以不能靠 manifest 锁方向代替真实适配。
+
+T0-L r2/r3 的 `intake_status=accepted` 仅表示设备已分类为 tablet；正式结论仍是
+`readiness_status=blocked`、`p0_capability=unsupported`，任何状态、报告和路由不得简称为“T0 通过”。
+T-L1 v2 可以通过独立 `probe_only` 资格从该 blocked evidence 启动纯感知诊断，但不得回写 T0，不得产生
+readiness/P0/execution grant；路由必须保持 `settings_mutation_allowed=false`、`device_action_allowed=false`。
 
 ## 3. 为什么不能直接跑现有四腿
 
@@ -61,15 +75,23 @@ T0-L 不安装、不启动 App、不注入输入、不改设置、不调用确�
 T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wechat_layout_unverified` 与
 `tablet_landscape_p0_unimplemented`。外部 `tablet-profile.json` 只用于验收归因，不参与 gateway 放行。
 
-### T-L1 · 微信横屏 pane 只读探针
+### T-L1 · 微信原生横屏双 window/pane 只读探针
 
-在 T0-L 通过后，用独立 R 级工具做两帧以上纯感知探针，不点击、不输入、不切 IME、不启动 App：
+在可信 fresh T0 evidence 获得 `probe_only` 资格后，用隔离的 R 级工具做两帧以上纯感知探针，不点击、
+不输入、不切 IME、不启动 App，也不修改手机/P0 共用的单窗口选择器：
 
-1. 区分 OS 的唯一全屏 App window 与微信内部 `single_pane` / `dual_pane` / `ambiguous` 布局。
-2. 找到唯一目标会话 pane；「文件传输助手」必须是 pane toolbar/title，不能是左栏同名会话行。
-3. 在同一 pane 内机械分出 toolbar、message viewport 与 bottom input bar，并绑定 window/pane identity。
-4. 记录 display/app window/pane bounds、layout epoch、title/input 来源和两帧一致性；不持久化聊天明文。
-5. 任一歧义、漂移、跨 pane 或 IME/editor 未绑定都 fail-closed。
+1. 枚举全部 interactive application windows；T0/WMS 的 `wN` 与 a11y 的 run-local `awN` 分属不同身份
+   命名空间，不得凭编号或 bounds 宣称相等。
+2. 原生基线要求恰好两个稳定、root owner 均为微信的 a11y window，并建立 navigation/conversation
+   pane 与 window 的一一绑定；另一 App、额外 display、identity 替换或 root 冲突均 blocked。
+3. 找到唯一目标会话 pane；「文件传输助手」必须是目标 window/pane toolbar/title，不能是另一窗同名会话行。
+4. 在同一 target window + pane 内机械分出 toolbar、message viewport 与 input region；两帧 identity、
+   window→pane 映射、几何与 layout epoch 必须稳定。
+5. focus absent、IME hidden 可以形成 `layout_accepted=true` 的纯感知结论，但固定
+   `editor_action_ready=false`、`p0_capability=unsupported`、`execution_grant=false`；已知 focus 指向别窗
+   或 visible IME 未绑定 target editor 时立即 blocked。
+6. 只保存 run-local label、bounds/hash/reason，不持久化 raw window ID、聊天明文或全屏截图；OCR 只在
+   已绑定 window/pane crop 内使用。任一歧义、漂移、跨 pane 或证据来源不可信都 fail-closed。
 
 当前无机 validator 没有真实 producer：fixture 最多得到 `fixture_contract_valid=true`，而
 `runtime_evidence`、`wechat_layout_verified`、P0 与 execution grant 永远为 false。未来受控 producer
@@ -86,10 +108,11 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 5. 确认卡整卡和两个按钮必须位于横屏 safe area；布局变化立即 `E_STALE_REF`。
 6. 完整离线矩阵和独审通过后，才钉 SHA 跑 Allow→Stale→Deny→Reentry。
 
-### T-L3 · 横屏确认 surface 与多窗
+### T-L3 · 横屏确认 surface 与其它多 App 窗口形态
 
 确认 overlay 改为有最大宽/高、正文可滚动、按钮固定可见，并独立验证横屏 safe area、大字体、显示缩放
-与 cutout。分屏/自由窗只有在元素具备 window identity、OCR 先裁 App window、后验绑定 pane 后再开放。
+与 cutout。其它 App 分屏/自由窗只有在元素具备 window identity、OCR 先裁 App window、后验绑定 pane 后再开放；
+vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后置。
 
 ### T-P · 竖屏兼容
 
@@ -98,13 +121,15 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 
 ## 5. 验收顺序
 
-1. **A0 无机**：T0-L fake-adb/基础设施 gate；固定 `394e03f8...`，36/36。
-2. **A1 无机**：冻结 T-L1 schema/纯 validator/对抗 fixture；固定 `f5c8e15b...`，gate 11/11、契约
-   41/41、required coverage 25/25。真实 producer
-   在读取 caller 文件前即 `runtime_producer_unavailable`，synthetic 数据不能进入 C。
-3. **C0 只读**：用户明确连接后只跑 T0-L；未知/漂移即冻结并回 A，不算手机批次 4 失败。
-4. **A2/C1 只读**：按 C0 真实画像实现并验证受控 T-L1 producer；持久化脱敏 pane schema，P0 仍 unsupported。
-5. **A3**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
+1. **A0/C0**：T0-L v5 fake-adb 42/42、coverage 41/41；源 SHA `1350108...` 与 clean port
+   `4ca32b1...` 均在 PA2553 上 exit 0 并正确输出 readiness blocked/P0 unsupported。
+2. **A1 归档**：T-L1 v1 `f5c8e15b...` 的 gate 11/11、契约 41/41、coverage 25/25 保留为安全
+   fail-closed 的旧单窗合成门；真实 producer unavailable，不能拿去做 PA2553 日常形态真机验收。
+3. **A2/C1a 只读诊断**：实现 v2 diagnostic-only observation schema、可信 T0→`probe_only` envelope 与
+   隔离的多 a11y window producer；先在应用多窗保持开启的 PA2553 上只读取证，结果固定不 accepted。
+4. **A3/C1b 只读契约**：根据 C1a 真实 window/root/node/region 形态冻结 v2 contract、对抗 fixture 与
+   validator，再固定新 SHA 真机验收；即使 T-L1 accepted，P0 仍 unsupported。
+5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
 ## 6. T0-L 验收矩阵
@@ -112,9 +137,10 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 | 场景 | intake | P0 能力 |
 |---|---|---|
 | PA2553 横屏、全屏、单 OS 窗口、微信前台 | readiness accepted | `unsupported`：待 T-L1 + T-L2 |
+| PA2553 日常横屏、同一微信两个 `multi_landscape` OS 窗口 | intake accepted、readiness blocked；仅可路由 `probe_only` | `unsupported`：待 T-L1 v2 双 window/pane 证据 |
 | 平板竖屏 | 画像通过但 readiness blocked | `unsupported_portrait_compat_pending` |
 | 横屏 4:3 / letterbox | 画像通过并明确记录 | `unsupported_geometry` |
-| 分屏/自由窗/多 APPLICATION window | 画像通过并明确记录 | `unsupported_multi_window` |
+| 其它 App 分屏/自由窗/额外 APPLICATION window | 画像通过并明确记录 | `unsupported_multi_window` |
 | 浮动 IME | 画像通过并阻断 readiness | `unsupported_input_mode` |
 | font scale / 实体键盘 / safe insets / cutout / 多 display | T0-L 不冒充已证明 | 留给 T-L1/真机 producer，未知即不进危险阶段 |
 | 手机 | intake 拒绝 `not_tablet` | 手机历史流程已暂停 |
@@ -127,6 +153,9 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 - 未识别的 rotation/window mode/insets/input mode 不得猜成默认值。
 - 手机和平板 run 分开编号与归因；历史手机 C 不复用。
 - 手机 `h>w`、手机比例和手机式标题/底栏门永远不因横屏平板而放宽；tablet-landscape 是独立路径。
+- vivo 应用多窗保持日常开启；关闭功能只能是用户另行授权并标注 `control_only` 的对照实验，结果不得计入产品验收。
+- T0 blocked evidence 只可产生 `probe_only` 资格，不得改写原 assessment 或授予设备动作/P0。
+- 新 TabletLayoutProbe 隔离枚举多 window；禁止放宽手机共用 `applicationWindow()`/P0 validator。
 - T-L1 必须先有左栏同名标题、错 pane 同 Y marker、pane 漂移等反例，再进入横屏危险实现。
 
 ## 8. 无机 → C0 准入清单
@@ -143,6 +172,7 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 - 主会话独立复跑 T0-L 与 T-L1 gate，并记录 SHA、用例数及作废候选；
 - C0 新开只读任务，只跑 T0-L，不安装、不截图、不连接 gateway。失败即冻结回 A。
 
-当前已满足无机准入：T0-L `394e03f8...` 36/36；T-L1 contract `f5c8e15b...` 的 gate 11/11、
-41/41 cases、25/25 required coverage。首版
-`c0f2e65` 因 synthetic provenance、freshness 与退化几何 C 级缺口作废，不得恢复或入队。
+当前 T0-L v5 clean port `4ca32b1...` 已满足 42/42、coverage 41/41 并完成只读 C0；T-L1 v1
+`f5c8e15b...` 的 gate 11/11、41/41 cases、25/25 coverage 只作为旧单窗 fail-closed 归档。
+首版 `c0f2e65` 因 synthetic provenance、freshness 与退化几何 C 级缺口作废，不得恢复或入队；
+T-L1 v2 必须按原生双 window/pane 路线重新完成 A2/C1a 准入。
