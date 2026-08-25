@@ -1,0 +1,105 @@
+{
+  "schema_version": 4,
+  "run_id": "t0l-landscape-20260825T113747Z-da2fa68d",
+  "captured_at_utc": "2026-08-25T11:37:49.7110904Z",
+  "device": {
+    "serial_hash": "sha256:7c883b430943c320285b802d6a40abd360bf550d40ef35a6eb6e9e376539a045",
+    "brand": "vivo",
+    "manufacturer": "vivo",
+    "model": "PA2553",
+    "product": "DPD2437",
+    "device": "DPD2437",
+    "android_release": "16",
+    "api_level": 36,
+    "abi": [
+      "arm64-v8a"
+    ],
+    "fingerprint_hash": "sha256:32f9f96874c3fc6dc5a532dcbba3cec18337376ef44b27cb9dbcdd67ccbe54df"
+  },
+  "display": {
+    "physical_size": {
+      "width": 1968,
+      "height": 2800
+    },
+    "override_size": null,
+    "current_size": null,
+    "physical_density_dpi": 400,
+    "override_density_dpi": null,
+    "smallest_width_dp": 787,
+    "smallest_width_dp_status": "known",
+    "smallest_width_dp_source": "am_config",
+    "rotation": null,
+    "orientation": "unknown",
+    "current_size_source": "unknown",
+    "aspect_4_3": null
+  },
+  "state": {
+    "screen_awake": true,
+    "keyguard_locked": false,
+    "zen_mode": 0,
+    "default_ime": "com.vivo.ai.ime.pad/com.vivo.ai.ime.main.IMEService"
+  },
+  "foreground": {
+    "package": null,
+    "activity": null
+  },
+  "application_windows": {
+    "parse_status": "known",
+    "count": 2,
+    "windows": [
+      {
+        "index": 0,
+        "bounds": [
+          0,
+          0,
+          2800,
+          1968
+        ],
+        "windowing_mode": "fullscreen",
+        "owner_matches_foreground": null
+      },
+      {
+        "index": 1,
+        "bounds": [
+          0,
+          0,
+          2800,
+          1968
+        ],
+        "windowing_mode": "fullscreen",
+        "owner_matches_foreground": null
+      }
+    ]
+  },
+  "input_method": {
+    "session_active": false,
+    "visible": false,
+    "floating": false,
+    "bounds": null
+  },
+  "assessment": {
+    "tablet_threshold_dp": 600,
+    "readiness_orientation_baseline": "landscape",
+    "device_class": "tablet",
+    "intake_status": "accepted",
+    "capture_consistent": null,
+    "readiness_status": "blocked",
+    "readiness_block_reasons": [
+      "orientation_unknown",
+      "aspect_unknown",
+      "top_package_unknown",
+      "capture_consistency_unknown",
+      "application_window_count_not_one"
+    ],
+    "p0_capability": "unsupported",
+    "p0_unsupported_reasons": [
+      "orientation_unknown",
+      "aspect_unknown",
+      "top_package_unknown",
+      "capture_consistency_unknown",
+      "application_window_count_not_one",
+      "wechat_layout_unverified",
+      "tablet_landscape_p0_unimplemented"
+    ]
+  }
+}
