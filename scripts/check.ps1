@@ -123,6 +123,13 @@ Invoke-Check '空白字符与冲突标记（git diff --check）' {
     'clean'
 }
 
+Invoke-Check '平板只读 intake 无设备离线门' {
+    Invoke-Logged -LogName 'tablet-intake-offline-gate.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-tablet-intake-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-intake-offline-gate.log')
+}
+
 Invoke-Check '派单离线测试' {
     Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
