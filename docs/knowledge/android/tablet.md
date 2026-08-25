@@ -1,9 +1,9 @@
 # Android 平板知识册
 
-> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 源候选
-> `135010863ef395a0cb8aacfa625ae87a2453b1dd`（42/42、coverage 41/41、独审 P0/P1=0）已在 r2 真机正确
-> fail-closed；画像证据已入 main `d076345`。源候选祖先夹带未验手机行为，正在做 T0-only clean port，尚未合行为。
-> T-L1 旧无机契约 `f5c8e15bca5065b504dab73149c7750a1e6dda3d` producer 仍 unavailable，须改为支持原生双窗。
+> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 clean producer
+> `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
+> fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v1 单窗契约归档，下一步是
+> diagnostic-only v2 `probe_only` 原生双 window/pane producer；T-L1/P0 尚未放行。
 
 ## 当前能力边界
 
@@ -70,6 +70,11 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   rotation 歧义、4 个强可见 unknown type、18 个 malformed window field、focus absent。readiness 按
   `application_window_count_not_one` 等原因正确 blocked，P0 unsupported；JSON SHA-256（Windows worktree）
   `41ed9725fe27d3af40caeae7f200fa0636870ed7bac5fbe8a13d1c5ef3375f42`，main evidence commit `d076345`。
+- T0-only clean producer `4ca32b131...` 的 r3 `t0l-v5-clean-landscape-20260825T134257Z-r3` 也只执行
+  一次入口并 exit 0；assessment 与 r2 逐字段一致。r3 仅少一个不可见 unknown fullscreen block，block 21→20、
+  malformed field 18→17，两个强可见微信 base window、4 个强可见 unknown type、focus absent 与全部阻断原因
+  均不变。Windows worktree JSON SHA-256 为 `5e6699bdcf71aaf200d6f7610b639335d982d1c12f3749ed49a61571d97e44dd`；
+  producer/main merge 为 `4ca32b1...` / `a7940d5`，evidence main commit 为 `bd64ea5`。
 - vivo 官方将“应用多窗”定义为横屏时并排展示同一应用不同层级界面，并宣传“一个 App，双窗口”；因此
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
