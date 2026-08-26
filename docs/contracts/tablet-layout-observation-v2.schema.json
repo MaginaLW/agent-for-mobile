@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-for-mobile.local/contracts/tablet-layout-observation-v2.schema.json",
   "title": "Tablet T-L1 v2 diagnostic-only layout observation",
-  "description": "Synthetic-contract shape for a two-frame, native multi-window tablet observation. It never grants layout acceptance, WeChat verification, device action, P0, or execution.",
+  "description": "Synthetic-contract shape for a 2-4 frame native multi-window tablet observation; the controlled C1a producer uses exactly two frames. It never grants layout acceptance, WeChat verification, device action, P0, or execution.",
   "type": "object",
   "additionalProperties": false,
   "required": [

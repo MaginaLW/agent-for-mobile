@@ -3,8 +3,9 @@
 > 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 clean producer
 > `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
 > fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
-> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`，
-> 尚未接受控 runner/attest 或做真机 C1a，app 未合 main；T-L1/P0 仍未放行。
+> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`。
+> C1a debug-only provider、受控 runner/attest、无机门与独审已在 clean-port 候选完成；尚未做真机 C1a，
+> app 未合 main，`runtime_evidence`/T-L1/P0 仍未放行。
 
 ## 当前能力边界
 
@@ -80,7 +81,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
 
-## T-L1 v2 无机冻结 · 2026-08-26
+## T-L1 v2 / C1a 无机冻结 · 2026-08-26
 
 - diagnostic-only contract/schema/validator/gate 源提交 `c8bd3e3...`，以 main `589421a` 合入；gate
   self-test 5/5、cases 24/24、required coverage 24/24，输出恒为 layout/P0/execution false。
@@ -90,9 +91,13 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 - producer 专项 33/33；全量 Debug 350/350、Release 259/259，`assembleDebug` 成功；标准仓库检查的 T0、
   T-L1、dispatch 28/28、runner 82/82 与凭据扫描全部通过，独立终审 P0/P1/P2=0。以上全是无设备结果，
   不构成 runtime evidence、微信布局验证或 P0 放行。
-- 下一步先以 `b5769df...` 为基线补独立受控 runner/attest、离线 gate 与独审，再钉 clean descendant SHA 并
-  另行授权 C1a；只读观察保持 vivo 应用多窗开启的日常横屏形态，不得靠关功能满足旧单窗门。真机结果
-  用于修订/冻结后续契约，不自动授予 action 或 execution。
+- C1a 候选位于 `codex/tablet-tl1-c1a`：从当前 main 干净移植、机械绑定 producer/T0 六个基线 blob；
+  debug-only provider 与独立受控 runner/attest 已实现，本轮固定 c1/等待至少 900 ms/c2、不补拍；release
+  全包 absence 通过。C1a 15/15、coverage 45/45、self 3/3；全量 Debug 373/373、Release 261/261，
+  标准全门通过，跨层独审 P0/P1=0。以上仍是无设备结果，不构成 runtime evidence、微信布局验证或 P0 放行。
+- 下一步钉本 clean-port/content-attested 候选的完整 SHA，由独立 C 会话执行唯一一次 C1a。只读观察保持
+  vivo 应用多窗开启的日常横屏形态，不得靠关功能满足旧单窗门；真机结果用于修订/冻结后续合同，
+  不自动授予 runtime acceptance、action 或 execution。
 
 ## 横屏路线与硬边界
 
@@ -100,11 +105,11 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
    runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
-3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未接 runtime、未合 main；须先增加独立
-   受控 runner/attest 并重新钉 SHA。C1a 必须纯感知多帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
+3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 已增加独立
+   受控 runner/attest，待钉完整 SHA 并执行一次真机采集。C1a 必须纯感知且恰好两帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
    pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
    window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
-   descendant 固定 SHA 真机验收前仍称 unavailable。
+   clean-port/content-attested 固定 SHA 真机验收前仍称 unavailable。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
 5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable

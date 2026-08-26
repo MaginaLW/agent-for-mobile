@@ -137,6 +137,13 @@ Invoke-Check '平板双窗 T-L1 v2 诊断离线门' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-v2-offline-gate.log')
 }
 
+Invoke-Check '平板双窗 T-L1 C1a 受控 runner 无设备门' {
+    Invoke-Logged -LogName 'tablet-layout-c1a-offline-gate.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-tablet-layout-c1a-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-c1a-offline-gate.log')
+}
+
 Invoke-Check '派单离线测试' {
     Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
@@ -155,9 +162,10 @@ else {
         Invoke-Logged -LogName 'gradle.log' -FilePath $gradlew -Arguments @(
             '-p', (Join-Path $RepoRoot 'app'),
             ':gateway:testDebugUnitTest', ':gateway:testReleaseUnitTest', ':gateway:assembleDebug',
+            ':gateway:verifyTabletC1aReleaseAbsence',
             '--console=plain'
         ) | Out-Null
-        'testDebug + testRelease + assembleDebug'
+        'testDebug + testRelease + assembleDebug + C1a release absence'
     }
 }
 

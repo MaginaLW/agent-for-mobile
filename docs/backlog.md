@@ -100,14 +100,16 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   unknown window 诊断 block，未改变结论。r2/r3 evidence 分别为 main `d076345` / `bd64ea5`。
 - **T-L1（微信横屏 window/pane 只读探针）**：v1 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
   归档为旧单窗合成门。v2 diagnostic-only 契约、schema、validator、对抗 fixture 与 gate 已以 main
-  `589421a` 冻结：从 fresh blocked T0 只路由 `probe_only`，以 2–4 帧、全部 interactive window、唯一
+  `589421a` 冻结：从 fresh blocked T0 只路由 `probe_only`，离线合同允许 2–4 帧、全部 interactive window、唯一
   target window/pane、title/input/message/toolbar、focus/IME/overlay/display 与精确 capture epoch 建模 vivo
   同 App 双 OS window；只落 run-local label、bounds、run-salted hash、reason，不落 raw identity/聊天明文。
   gate self-test 5/5、cases/coverage 24/24；runtime/layout/微信验证/P0/执行授权恒 false。隔离 producer 候选
   `b5769df7baba075fda47aec17f249a5caa124b92`（`codex/tablet-tl1-v2`）专项 33/33、Debug 350/350、
   Release 259/259、assembleDebug 通过且独审 0/0/0；未接 ToolRegistry/MCP、production 固定 unavailable，
-  app 未合 main；下一步先补独立受控 runner/attest、独审并钉 descendant SHA，再另行授权保持 vivo 应用多窗
-  开启的只读 C1a。
+  app 未合 main。C1a debug-only provider、独立受控 runner/attest、release-absence 与无机门已在
+  `codex/tablet-tl1-c1a` 完成：本轮固定恰好 c1/c2 两帧，C1a 15/15、coverage 45/45、self 3/3，
+  Debug 373/373、Release 261/261、标准全门通过且跨层独审 P0/P1=0。下一步钉本 clean-port/content-attested
+  候选的完整 SHA，由独立 C 会话在 vivo 应用多窗保持开启时执行唯一一次只读 C1a。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -137,7 +139,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
-| **Tablet T-L1 v2（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；C1a SHA 待钉 | `codex/tablet-tl1-v2` | **A2 producer 已冻结；受控 runner/attest 待补，C1a 未入队，app 未合 main** | 离线契约/gate 已合 main `589421a`；production unavailable；runner 独审后另钉 descendant SHA 并申请真机授权，保持 vivo 应用多窗开启；P0/execution 仍恒 false |
+| **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；C1a 为本 clean-port 候选提交，开跑令填完整 SHA | `codex/tablet-tl1-c1a` | **A2/C1a 无机实现、全门与独审完成；待独立 C 就位并只采一次，app 未合 main** | 契约/gate 已合 main `589421a`；候选机械绑定 producer/T0 六个基线 blob，C1a 15/15、45/45、3/3，Debug 373/373、Release 261/261，P0/P1=0；保持 vivo 应用多窗开启；即使 origin 成立，runtime/layout/P0/execution 仍恒 false/unsupported |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

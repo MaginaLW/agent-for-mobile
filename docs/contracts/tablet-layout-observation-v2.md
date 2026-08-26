@@ -1,7 +1,8 @@
 # `tablet-layout-observation/v2` 诊断契约
 
-这是 PA2553 日常横屏、vivo“应用多窗”保持开启时的 T-L1 第一阶段契约。它只描述**两帧纯感知诊断**，
-不是 layout acceptance、微信真机验证、编辑器动作、P0 或 execution grant。机器结构见
+这是 PA2553 日常横屏、vivo“应用多窗”保持开启时的 T-L1 第一阶段契约。机器合同描述 **2–4 帧纯感知诊断**，
+其中受控 C1a producer 固定恰好两帧（c1/c2）。这两条路径都不是 layout acceptance、微信真机验证、
+编辑器动作、P0 或 execution grant。机器结构见
 [`tablet-layout-observation-v2.schema.json`](tablet-layout-observation-v2.schema.json)。
 
 ## 永久安全边界
@@ -17,8 +18,10 @@
   `tablet_landscape_p0_unimplemented`、`tablet_tl2_unverified`。
 
 `diagnostic_status=observed` 只表示 synthetic fixture 在这份诊断模型中自洽。它不能简写为“T-L1 通过”，
-不能进入 T-L2，也不能喂给既有手机 gateway。runtime producer、runner attest 和可信 evidence root 尚未开放；
-非 `-FixtureMode` file 入口在读取 caller 路径前固定返回 `runtime_producer_unavailable`。
+不能进入 T-L2，也不能喂给既有手机 gateway。公共 file consumer 的非 `-FixtureMode` 入口仍在读取 caller 路径前
+固定返回 `runtime_producer_unavailable`。C1a 新增的 trusted-runtime 路径只允许经独立受控 runner 完成
+clean-port/APK/设备/T0/ContentProvider 绑定后内部调用；它只在 sidecar 记录 origin/read-only proof，validation
+仍固定 `runtime_evidence=false`，不得冒充 runtime accepted。
 
 ## fresh blocked T0 envelope
 
@@ -36,12 +39,12 @@ fixture validator 从受控 root 的固定 `upstream-t0-v5.json` 单独读取 ar
 required 顶层字段、因而无法安全继续时才能提前返回。caller 在 observation 里重复自报相同字段不能构成 runtime provenance；fixture 与 runtime 的
 `source_kind`/`provenance.kind` 分离，fixture 永远 `runtime_evidence=false`。
 
-未来 runner 必须把 T0 producer 留下的**原始 BOM-less bytes**交给 app producer，不能先 parse/re-serialize
+受控 C1a runner 必须把 T0 producer 留下的**原始 BOM-less bytes**交给 app producer，不能先 parse/re-serialize
 再传入。app 构造边界只接受 1..65,536 bytes、strict UTF-8/RFC 8259 object，拒绝任意层重复 key、非 Int64 number，
 并用与 consumer 相同的 device canonical JSON 重算 hash。该 intrinsic provenance 复核仍不构成 runner
 attest 或 runtime evidence；当前 production capability 继续 unavailable。
 
-## 两帧 DTO
+## 2–4 帧 DTO（C1a 固定两帧）
 
 每帧包含：
 

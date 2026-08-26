@@ -947,12 +947,20 @@ function Test-TL1V2Semantics {
         [Parameter(Mandatory)]$T0,
         [Parameter(Mandatory)][string]$T0Raw,
         [Parameter(Mandatory)][DateTimeOffset]$ValidationNowUtc,
+        [Parameter(Mandatory)][ValidateSet('fixture','trusted_runtime')][string]$OriginMode,
         [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]]$Issues
     )
     if ($Evidence.schema -cne $script:TL1V2Schema -or $Evidence.mode -cne 'diagnostic_only') {
         Add-TL1V2Issue $Issues 'safety_constants_invalid' '/schema'
     }
-    if ($Evidence.provenance.kind -cne 'offline_fixture' -or $Evidence.upstream_t0.source_kind -cne 'offline_fixture') {
+    if ($OriginMode -ceq 'fixture') {
+        if ($Evidence.provenance.kind -cne 'offline_fixture' -or
+            $Evidence.upstream_t0.source_kind -cne 'offline_fixture') {
+            Add-TL1V2Issue $Issues 'fixture_origin_required' '/provenance'
+        }
+    }
+    elseif ($Evidence.provenance.kind -cne 'gateway_runtime_probe' -or
+        $Evidence.upstream_t0.source_kind -cne 'trusted_runtime') {
         Add-TL1V2Issue $Issues 'fixture_origin_required' '/provenance'
     }
     if ($Evidence.provenance.runtime_attested -or $Evidence.route.kind -cne 'probe_only' -or
@@ -1118,9 +1126,88 @@ function Test-TabletLayoutObservationV2File {
         if ($null -eq $t0Raw) { return New-TL1V2ValidationResult $false $false $issues }
         $t0 = ConvertFrom-TL1V2StrictJson $t0Raw $issues -CheckSyntheticPrivacyCanary
         if ($null -eq $t0) { return New-TL1V2ValidationResult $false $false $issues }
-        Test-TL1V2Semantics $snapshot $t0 $t0Raw ([DateTimeOffset]::UtcNow) $issues
+        Test-TL1V2Semantics $snapshot $t0 $t0Raw ([DateTimeOffset]::UtcNow) fixture $issues
         $observed = $issues.Count -eq 0
         return New-TL1V2ValidationResult $true $observed $issues
+    }
+    catch {
+        $script:TL1V2LastValidationException = $_.Exception.ToString()
+        Add-TL1V2Issue $issues 'validation_exception' '/'
+        return New-TL1V2ValidationResult $false $false $issues
+    }
+}
+
+function Test-TabletLayoutObservationV2TrustedRuntimeFile {
+    <#
+    仅供经受控 C1a runner 完成设备/APK/入口绑定后调用。公共 CLI 不暴露此 switch；
+    普通非 Fixture 入口仍在读取 caller 路径前返回 runtime_producer_unavailable。
+    C1a 只证明 origin，validation envelope 的 runtime_evidence 仍固定 false，留给 A3/C1b 新合同。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$EvidenceRoot,
+        [Parameter(Mandatory)][string]$ExpectedRunId,
+        [Parameter(Mandatory)][string]$ExpectedProducerCommitSha,
+        [Parameter(Mandatory)][string]$ExpectedProducerArtifactSha256
+    )
+    $issues = [Collections.Generic.List[object]]::new()
+    $script:TL1V2LastValidationException = $null
+    if ($ExpectedRunId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,79}$' -or
+        $ExpectedProducerCommitSha -cnotmatch '^[0-9a-f]{40}$' -or
+        $ExpectedProducerArtifactSha256 -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        Add-TL1V2Issue $issues 'runtime_producer_unavailable' '/provenance'
+        return New-TL1V2ValidationResult $false $false $issues
+    }
+    try {
+        $originBindingValid = $true
+        $controlledPath = Resolve-TL1V2ControlledPath $Path $EvidenceRoot $issues
+        if ($null -eq $controlledPath) { return New-TL1V2ValidationResult $false $false $issues }
+        $raw = Read-TL1V2ControlledUtf8 $controlledPath $issues
+        if ($null -eq $raw) { return New-TL1V2ValidationResult $false $false $issues }
+        $evidence = ConvertFrom-TL1V2StrictJson $raw $issues -CheckPrivacy
+        if ($null -eq $evidence) { return New-TL1V2ValidationResult $false $false $issues }
+        $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+        $schemaPath = Join-Path $repoRoot 'docs\contracts\tablet-layout-observation-v2.schema.json'
+        if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf) -or
+            -not ($raw | Test-Json -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) {
+            Add-TL1V2Issue $issues 'json_schema_validation_failed' '/'
+            return New-TL1V2ValidationResult $false $false $issues
+        }
+        $snapshotRaw = $evidence | ConvertTo-Json -Depth 100 -Compress -ErrorAction Stop
+        $snapshot = $snapshotRaw | ConvertFrom-Json -Depth 100 -DateKind String -ErrorAction Stop
+        if ($snapshot.run_id -cne $ExpectedRunId -or
+            $snapshot.provenance.kind -cne 'gateway_runtime_probe' -or
+            $snapshot.provenance.runtime_attested -ne $false -or
+            $snapshot.provenance.producer_commit_sha -cne $ExpectedProducerCommitSha -or
+            $snapshot.provenance.producer_artifact_sha256 -cne $ExpectedProducerArtifactSha256 -or
+            $snapshot.upstream_t0.source_kind -cne 'trusted_runtime' -or
+            $snapshot.upstream_t0.run_id -cne $ExpectedRunId) {
+            Add-TL1V2Issue $issues 'runtime_producer_unavailable' '/provenance'
+            $originBindingValid = $false
+        }
+        $t0Candidate = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) $script:TL1V2FixedT0FixtureName
+        $t0Path = Resolve-TL1V2ControlledPath $t0Candidate $EvidenceRoot $issues
+        if ($null -eq $t0Path) { return New-TL1V2ValidationResult $false $false $issues }
+        $t0Raw = Read-TL1V2ControlledUtf8 $t0Path $issues
+        if ($null -eq $t0Raw) { return New-TL1V2ValidationResult $false $false $issues }
+        $t0 = ConvertFrom-TL1V2StrictJson $t0Raw $issues -CheckSyntheticPrivacyCanary
+        if ($null -eq $t0) { return New-TL1V2ValidationResult $false $false $issues }
+        Test-TL1V2Semantics $snapshot $t0 $t0Raw ([DateTimeOffset]::UtcNow) trusted_runtime $issues
+        $observed = $issues.Count -eq 0
+        $originFailureCodes = @(
+            'runtime_producer_unavailable','upstream_t0_invalid','upstream_t0_stale',
+            'upstream_t0_hash_mismatch','upstream_t0_producer_mismatch','upstream_t0_device_hash_mismatch',
+            'fixture_origin_required','route_contract_violation','safety_constants_invalid',
+            'consistency_declared_mismatch','declared_status_mismatch','declared_reasons_incomplete',
+            'privacy_contract_violation','raw_identity_persisted','chat_plaintext_persisted',
+            'chat_content_digest_persisted','validation_exception'
+        )
+        if (@($issues | Where-Object { $originFailureCodes -ccontains [string]$_.code }).Count -gt 0) {
+            $originBindingValid = $false
+        }
+        # C1a 不允许把 runtime origin proof 提升为 runtime acceptance。
+        return New-TL1V2ValidationResult $originBindingValid $observed $issues
     }
     catch {
         $script:TL1V2LastValidationException = $_.Exception.ToString()
