@@ -4,9 +4,10 @@
 
 无机入口只运行 synthetic fixture gate；真机只能按下文 C1a 受控只读入口、在固定干净 SHA 上执行：
 
-> 2026-08-26 状态：fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已按失败
-> 冻结，禁止复用。A 道修复与标准全门/独审已完成；必须先提交新的完整 SHA、完成外部 clean/blob 复核，
-> 并取得用户对新 C 轮的明确授权，才能再次连接设备。不得把已冻结 run 写成 C1a 或 T-L1 通过。
+> 2026-08-26 状态：fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的失败 C1a 已冻结且禁止
+> 复用；修复 fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 的唯一 run 已建立 trusted
+> origin/read-only sidecar，但 diagnostic 仍 blocked。该结果是“C1a 只读取证成功”，不是 T-L1 通过；不得
+> 据此进入 T-L2 或提升 runtime/layout/P0/execution。
 
 ```powershell
 pwsh -NoProfile -File scripts/run-tablet-layout-observation-v2-offline-gate.ps1
@@ -133,8 +134,32 @@ T0、observation、validation 三份文件的 artifact hash，并在 sidecar 原
 - trusted-runtime validation 失败且没有 success sidecar，故 origin 未成立；`runtime_evidence=false`、
   `layout_accepted=false`、`p0_capability=unsupported`、`execution_grant=false`。完整证据 hash、reason 与修复
   边界见 [`2026-08-26-T-L1-C1a只读取证失败.md`](../runs/2026-08-26-T-L1-C1a只读取证失败.md)。
-- 失败期间 vivo“应用多窗”保持开启，未修改设备设置。A 修复与标准全门/独审现已完成；当前分支 HEAD 已作为新 fixed-SHA 候选固定，
-  完成外部 clean/blob 复核并取得用户新授权前，不得进入下一轮 C。
+- 失败期间 vivo“应用多窗”保持开启，未修改设备设置。该轮随后回 A 修复；失败 SHA 与 evidence 始终保留，
+  不被后续成功 run 覆盖或追溯改判。
+
+## 2026-08-26 修复后 C1a 成功取证
+
+- fixed SHA：`4b96f89a6622eb8b5fe04bd249571c7d77936b25`；run：
+  `tl1-c1a-20260826t125127z-354a7b4b0ed5`；runner exit 0。
+- success sidecar 确认 `c1a_origin_binding_verified=true`、`c1a_probe_entrypoint_read_only=true`、
+  observation schema valid，cleanup=`not_required`（result 已消费，按协议无需 abort，不写成 cleanup passed）。
+  evidence root 恰好包含五个标准文件；failure/tmp 不存在。
+- T0 profile/upstream 都是 23,865 bytes、747 个 CRLF，且无 bare LF/CR，SHA-256 同为
+  `6f5b1539d3d09bf77e26dc2ba5d700d11857c3edac84eef33fee03df4a81c316`。这是真机证明
+  `adb exec-in` binary stdin 修复保持原始 CRLF bytes，而不是只由 fake-adb 推断。
+- c1/c2 各调用一次，capture ID 为 `capture-c1`/`capture-c2`，delta 2023.223 ms；host wait 905 ms、
+  总 span 3140 ms、recapture=0。两帧均为横屏 2800×1968，两个稳定 `com.tencent.mm` application window
+  bounds 为 `[0,0,985,1968]` 与 `[989,0,2800,1968]`。
+- validation 为 `diagnostic_observed=false`、`diagnostic_status=blocked`，保留七项 reason：`window_pane_bijection_invalid`、
+  `target_window_pane_missing`、`node_binding_invalid`、`target_title_not_unique`、
+  `region_candidate_missing`、`focus_fallback_insufficient`、`focus_target_conflict`。固定
+  runtime/layout/微信/editor/execution=false、P0 unsupported，所以 T-L1 未通过，下一步回 A3/C1b 冻结合同。
+- 本 run `settings_mutation_used=false`、`target_app_started=false`、`screen_capture_used=false`。用户现场保持
+  vivo“应用多窗”；机械证据是 T0 `multi_landscape` 与两个稳定 a11y application window，runner 未读取开关
+  值。这只证明可信只读诊断可在该双窗形态下完成，布局适配仍 blocked；项目不通过关闭功能换结论。
+- 这是 direct runner，sidecar 中 `dispatch_used=false`；该入口按合同不写 ledger，不得为补齐表面流程而
+  人工造 ledger 行。五文件 hash 与完整归因见
+  [`2026-08-26-T-L1-C1a只读取证成功.md`](../runs/2026-08-26-T-L1-C1a只读取证成功.md)。
 
 无设备门：
 
@@ -149,7 +174,8 @@ pwsh -NoProfile -File scripts/check-tablet-layout-c1a-offline.ps1
 
 A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、Release 261/261、
 dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence、凭据扫描全绿，独立终审
-P0/P1=0。以上仍只是离线准入，不是 C1a/T-L1 通过；当前分支 HEAD 已作为新 fixed-SHA 候选固定，待完成外部 clean/blob 复核。
+P0/P1=0。`4b96f89...` 的真机结果只把 C1a origin/read-only 从候选变成已取证；T-L1 仍因七项真实
+diagnostic blocker 未通过，app 未合 main。
 
 完整协议见 [`tablet-layout-c1a/v1`](../contracts/tablet-layout-c1a-v1.md)。
 

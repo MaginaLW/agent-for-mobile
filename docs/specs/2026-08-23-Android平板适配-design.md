@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结；fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；A 修复与标准全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob 复核与用户新授权
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结；失败 SHA `2635fc9f...` 原样冻结，修复 fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证；diagnostic blocked，T-L1 未通过，转 A3/C1b
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -127,6 +127,27 @@ runtime/layout/微信布局/editor/P0/execution 均保持 false/unsupported。�
 T-L1 24/24，assembleDebug/release absence/凭据扫描全绿；独立终审 P0/P1=0。vivo“应用多窗”在失败轮
 保持开启，设备设置未改。
 
+修复后的 fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 随后完成唯一 C1a run
+`tl1-c1a-20260826t125127z-354a7b4b0ed5`，runner exit 0。success sidecar 证明 origin binding、只读入口与
+schema 有效，cleanup=`not_required`；fresh APK local/pre/post base SHA-256 全部等于
+`0f2e5922e5f4c12b03b74fe06b7e0e40aa870ec376eca2cf06a4984ac2e4b288`。T0 profile/upstream
+同为 23,865 bytes、747 个 CRLF、无 bare LF/CR，且 SHA-256 同为
+`6f5b1539d3d09bf77e26dc2ba5d700d11857c3edac84eef33fee03df4a81c316`，机械证明 `adb exec-in`
+的 binary stdin 修复在真机保持了原始 bytes。
+
+c1/c2 各一次，capture ID 为 `capture-c1`/`capture-c2`，delta 2023.223 ms；host wait 905 ms、总 span
+3140 ms、recapture=0。两帧横屏 2800×1968，两个稳定 `com.tencent.mm` application window 分别覆盖
+`[0,0,985,1968]` 与 `[989,0,2800,1968]`。用户现场保持 vivo“应用多窗”；机械证据是 T0
+`multi_landscape` 与这两个 a11y application window，不构成系统开关值 attest。run 未修改 settings、未启动
+目标 App、未截图；这证明可信只读诊断可在原生双窗形态下完成，不等于布局已经适配。
+
+可信来源不等于布局通过。validation 保留 `window_pane_bijection_invalid`、`target_window_pane_missing`、
+`node_binding_invalid`、`target_title_not_unique`、`region_candidate_missing`、
+`focus_fallback_insufficient`、`focus_target_conflict` 七项真实 reason，`diagnostic_observed=false`、
+`diagnostic_status=blocked`；
+runtime/layout/微信/editor/execution 仍为 false，P0 unsupported。因此 C1a 只读取证成功，但 T-L1 未通过，
+app 不合 main，也不能进入 T-L2；下一步是 A3/C1b 根据真实 window/root/node/region 形态冻结新合同。
+
 ### T-L2 · 横屏 P0
 
 在 T0-L 与 T-L1 通过后，依次完成：
@@ -156,10 +177,10 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 2. **A1 归档**：T-L1 v1 `f5c8e15b...` 的 gate 11/11、契约 41/41、coverage 25/25 保留为安全
    fail-closed 的旧单窗合成门；真实 producer unavailable，不能拿去做 PA2553 日常形态真机验收。
 3. **A2/C1a 只读诊断**：v2 diagnostic-only observation schema、可信 T0→`probe_only` envelope 与隔离的
-   多 a11y window producer 已离线冻结；首个 fixed SHA 的首次真机取证已经按失败冻结，origin 未成立，绝不
-   写成 C1a 通过。A 道已修复 binary T0 transport 与可逆 capture logical revision，且不改 producer/T0
-   六个 baseline blob、不删除真实 diagnostic blocker；标准全门与独审已通过。当前分支 HEAD 已作为新 fixed-SHA 候选固定；下一步
-   完成外部 clean/blob 复核，再取得用户对新一轮的明确授权。结果仍固定不 accepted。
+   多 a11y window producer 已离线冻结；首个 fixed SHA 的失败 run 原样保留。A 道修复 binary T0 transport
+   与可逆 capture logical revision 后，`4b96f89...` 的唯一真机 run 已建立 origin/read-only、证明横屏双微信
+   window 形态，同时如实保留七项 diagnostic blocker。A2/C1a 的来源与只读取证完成，但结果固定不 accepted，
+   T-L1/P0/execution 未通过。
 4. **A3/C1b 只读契约**：根据 C1a 真实 window/root/node/region 形态冻结 v2 contract、对抗 fixture 与
    validator，再固定新 SHA 真机验收；即使 T-L1 accepted，P0 仍 unsupported。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
@@ -215,7 +236,8 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 contract/gate `589421a` 已 5/5、24/24、coverage 24/24；producer 基线 `b5769df...` 专项 33/33。
 C1a clean-port 候选已完成 debug-only provider、受控 runner/attest 与 release-absence：C1a 15/15、
 coverage 45/45、self 3/3，Debug 373/373、Release 261/261，标准全门通过，跨层独审 P0/P1=0。
-这些是失败 fixed SHA `2635fc9...` 的 pre-C 历史计数。该 SHA 的真机 C1a 已冻结失败；当前 A 修复的
+这些是失败 fixed SHA `2635fc9...` 的 pre-C 历史计数。该 SHA 的真机 C1a 已冻结失败；A 修复的
 标准全门为 C1a 15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、
-runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。提交新 fixed
-SHA、完成外部 clean/blob 复核并取得新授权前不得再进 C；runtime/layout/P0/execution 不放行。
+runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。fixed SHA
+`4b96f89...` 已完成唯一 origin/read-only C1a；diagnostic 仍 blocked，runtime/layout/P0/execution 不放行，
+app 未合 main，下一步进入 A3/C1b。

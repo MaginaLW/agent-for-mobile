@@ -4,10 +4,10 @@
 > `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
 > fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
 > 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`。
-> fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败：首轮安装超时且无
-> run/evidence，另行授权重试产生 run `tl1-c1a-20260826t114535z-63667b68ce4f`，但 trusted origin 未成立。
-> A 修复与标准全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob 复核与用户新授权；app 未合 main，
-> `runtime_evidence`/layout/T-L1/P0/execution 仍未放行。
+> fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
+> `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
+> 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
+> 微信/editor/T-L1/P0/execution 仍未放行，下一步是 A3/C1b 合同冻结。
 
 ## 当前能力边界
 
@@ -83,7 +83,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
 
-## T-L1 v2 / C1a 无机冻结与首次真机失败 · 2026-08-26
+## T-L1 v2 / C1a 无机冻结、首次失败与修复后取证 · 2026-08-26
 
 - diagnostic-only contract/schema/validator/gate 源提交 `c8bd3e3...`，以 main `589421a` 合入；gate
   self-test 5/5、cases 24/24、required coverage 24/24，输出恒为 layout/P0/execution false。
@@ -118,8 +118,29 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   本次形态仍应保持 diagnostic blocked，且不会提升 runtime/layout/P0/execution。
 - A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、
   Release 261/261、dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence 与凭据扫描
-  全绿，独立终审 P0/P1=0。当前分支 HEAD 已作为新 fixed-SHA 候选固定；下一步完成外部 clean/blob 复核，再取得用户明确授权；
-  此前不得连接设备或重用失败 SHA。vivo“应用多窗”全程保持开启，未为取证或修复修改设备设置。
+  全绿，独立终审 P0/P1=0。新 fixed SHA 为 `4b96f89a6622eb8b5fe04bd249571c7d77936b25`；失败 SHA
+  不复用。用户现场全程保持 vivo“应用多窗”，runner 未读取该开关值，也未为取证或修复修改设备设置。
+- 唯一成功 C1a run `tl1-c1a-20260826t125127z-354a7b4b0ed5` runner exit 0。fresh APK 的 local/pre/post
+  base SHA-256 均为 `0f2e5922e5f4c12b03b74fe06b7e0e40aa870ec376eca2cf06a4984ac2e4b288`；success
+  sidecar 给出 `c1a_origin_binding_verified=true`、`c1a_probe_entrypoint_read_only=true`、schema valid，
+  cleanup=`not_required`。标准 evidence 恰好五文件，无 failure/tmp。
+- Windows T0 修复已获真机机械证明：profile 与 upstream 均为 23,865 bytes，包含 747 个 CRLF，且无 bare
+  LF/CR；两者 SHA-256 同为 `6f5b1539d3d09bf77e26dc2ba5d700d11857c3edac84eef33fee03df4a81c316`，
+  sidecar 标记 `original_bytes_forwarded=true`。因此 `adb exec-in` binary stdin + raw canonical URI 在真机
+  保持了原始 bytes，不再出现失败 run 的 CRLF→LF 漂移。
+- c1/c2 各一次，对应 `capture-c1`/`capture-c2`，帧间 delta 2023.223 ms；host wait 905 ms、总 span
+  3140 ms、recapture=0。两帧都是横屏 2800×1968，并稳定枚举两个 `com.tencent.mm` application window：
+  `[0,0,985,1968]` 与 `[989,0,2800,1968]`。
+- 取证只证明来源与只读边界，不证明布局。validation 保持 `diagnostic_observed=false`、
+  `diagnostic_status=blocked`，七项 reason 为
+  `window_pane_bijection_invalid`、`target_window_pane_missing`、`node_binding_invalid`、
+  `target_title_not_unique`、`region_candidate_missing`、`focus_fallback_insufficient`、
+  `focus_target_conflict`；runtime/layout/微信/editor/execution 均 false，P0 unsupported。因此 C1a 取证
+  成功不等于 T-L1 通过，不能进入 T-L2。
+- 本 run 没有修改 settings、没有启动目标 App、没有截图；用户现场保持 vivo 日常“应用多窗”，机械证据是
+  T0 `multi_landscape` 与两个稳定 a11y application window，并不构成系统开关值 attest。它证明可信只读诊断
+  可在该双窗形态下完成，而不是布局已经适配。direct C1a runner 未走 dispatch，按其合同不写 ledger；本次以五文件 evidence
+  和 `docs/runs/2026-08-26-T-L1-C1a只读取证成功.md` 冻结归因，不补造 ledger 行。
 
 ## 横屏路线与硬边界
 
@@ -127,13 +148,13 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
    runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
-3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 首次真机
-   run 已按失败冻结，A 道传输/capture-order 修复与全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob
-   复核和用户新授权。
-   C1a 必须纯感知且恰好两帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
+3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 已在
+   `4b96f89...` 建立可信 origin/read-only，并真实观察到 vivo 同 App 双 OS window，但七项诊断 blocker 使
+   T-L1 保持 blocked。下一步 A3/C1b 必须基于该形态找到唯一目标
    pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
    window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
-   clean-port/content-attested 固定 SHA 真机验收前仍称 unavailable。
+   C1a 已建立 clean-port/content-attested origin/read-only，但在上述七项 blocker 消除并经 C1b 新合同验收前，
+   layout/T-L1 仍称 unavailable/blocked。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
 5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable
