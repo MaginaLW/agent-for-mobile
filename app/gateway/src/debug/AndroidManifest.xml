@@ -11,5 +11,13 @@
             android:exported="true"
             android:grantUriPermissions="false"
             android:permission="android.permission.DUMP" />
+
+        <!-- C1b is an independent read-only diagnostic producer with its own closed pipe protocol. -->
+        <provider
+            android:name=".tablet.c1b.TabletC1bContentProvider"
+            android:authorities="dev.magina.gateway.tablet.c1b"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>

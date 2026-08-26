@@ -9,13 +9,16 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 class TabletC1aSurfaceTest {
     @Test
-    fun `debug manifest exposes exactly one DUMP protected non grantable provider`() {
+    fun `debug manifest exposes exactly one C1a DUMP protected non grantable provider`() {
         val manifest = projectFile("src/debug/AndroidManifest.xml")
         val document = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
             .newDocumentBuilder().parse(manifest)
         val providers = document.getElementsByTagName("provider")
-        assertEquals(1, providers.length)
-        val provider = providers.item(0).attributes
+        val c1aProviders = (0 until providers.length).map { providers.item(it) }.filter { node ->
+            node.attributes.getNamedItemNS(ANDROID_NAMESPACE, "authorities")?.nodeValue == TABLET_C1A_AUTHORITY
+        }
+        assertEquals(1, c1aProviders.size)
+        val provider = c1aProviders.single().attributes
         assertEquals(
             ".tablet.c1a.TabletC1aContentProvider",
             provider.getNamedItemNS(ANDROID_NAMESPACE, "name").nodeValue,

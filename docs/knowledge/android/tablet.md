@@ -7,7 +7,9 @@
 > fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
 > `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
 > 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
-> 微信/editor/T-L1/P0/execution 仍未放行，下一步是 A3/C1b 合同冻结。
+> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已无机
+> 完成：observation 49/49、coverage 89/89、host fake-ADB 26/26、Android Debug 71/71、Release 33/33；
+> 本轮 real ADB=0。下一步是固定新 SHA并针对该 SHA取得一次新授权，C1a 授权不可复用。
 
 ## 当前能力边界
 
@@ -142,19 +144,60 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   可在该双窗形态下完成，而不是布局已经适配。direct C1a runner 未走 dispatch，按其合同不写 ledger；本次以五文件 evidence
   和 `docs/runs/2026-08-26-T-L1-C1a只读取证成功.md` 冻结归因，不补造 ledger 行。
 
+## A3/C1b 第一批设计结论 · 2026-08-26
+
+- v2 observation/schema/validator/fixture 与两条 C1a evidence 永久冻结，不追溯换语义；C1b 另开
+  `tablet-layout-observation/c1b-v1`。现有 `rootStatus=readable` 不能被回填成“语义树可用”。
+- Android 平台 window type 必须同时保存 raw code 与闭合名称。API 36 code `7` 记为
+  `window_control`，只表示控制关联窗口的系统 window；不能事后把 C1a 的 `unknown` 断言成分栏线。
+- 每个 window 独立记录 root-handle 状态、root→window exact/mismatch/unknown、subtree complete/truncated/
+  read-error/not-attempted、root child 数、visited/正几何可见/focused-editable/read-error 数与 budget exhaustion。
+  `complete` 只表示完整遍历平台暴露的树；`child=0 + visited=1 + positive-visible=0` 仍是 opaque。
+- projection pane 只把 application window/root 投影到 run-local `awN/apN`；首版 `semantic_role=unknown`、
+  evidence 为空。禁止用左右、宽窄、layer、active/focused、包名、scrollable 或 editable 推断
+  navigation/conversation。左右镜像交换必须保持全部语义结论不变。
+- `AccessibilityWindowInfo.title` 只做 caller-known expected hash 的 window-level match state，不保存明文或
+  未命中内容 hash，也不冒充 toolbar title。direct input focus 只有 refresh、focused/editable/visible/enabled、
+  微信 owner、正几何、windowId 与唯一 focused application window 全部一致时才可记 `editor_known`；仍不得
+  选择 conversation/target。只有 window focus 时记 `window_only`，不报成 editor 冲突。
+- 第一批未来 fresh C1b sidecar 最多提升可信来源、微信 window ownership、root projection、双 application
+  window topology 与 hidden IME；navigation/conversation/target/regions/layout/微信布局/editor/P0/execution
+  一律 false/unsupported。若 fresh C1b 仍 opaque，下一步另审 pane/window-bound 视觉通道，不关闭 vivo
+  “应用多窗”，也不回退整屏 OCR/坐标猜测。
+- **observation 不能靠 caller 传入的 SHA 自证真机来源**：schema 正确、run id/producer SHA/APK hash 与参数一致，
+  最多叫 `runtime_binding_inputs_match`。只有宿主独立重算 clean HEAD、实现文件、签名/APK、唯一设备/
+  fingerprint/boot、provider challenge/control transcript、T0 原始 bytes、c1/c2 计数与 evidence hash，并由
+  closed success sidecar 绑定后，consumer 才能提升 `runtime_origin_verified/runtime_evidence`。
+- **重复读取失败不能伪装成跨帧稳定（C1b 无机复核，2026-08-26）**：display/type/layer/touchable/
+  active/focused 等 window shell 字段若两帧都异常，不能各自回退到合法默认值再得到“相等”。wire 没有
+  显式 unknown 状态的关键字段应丢弃该 window 并标记 inventory truncated；成功读到未映射 type code 可
+  保留 raw code，但必须阻断完整 topology/focus/hidden-IME。producer 的 focus fail-closed 条件还必须能由
+  consumer 从持久化的 root/subtree/node/pane/bounds/count 重新算出；只在内存 diagnostic 里记失败而不让
+  wire 结论变化，会造成 producer 诚实报 unknown、consumer 却期待 absent/window_only 的跨层错位。
+- **传输程序也是来源链的信任根（C1b 无机复核，2026-08-27）**：仅要求 `-AdbPath` 是绝对普通文件，
+  不能支撑“独立来源绑定”。C1b runner 因而只接受 `ANDROID_SDK_ROOT == ANDROID_HOME` 下 canonical
+  `platform-tools/adb.exe`，在采集前后及 sidecar 发布读回时绑定 executable hash、exact `adb version` hash、
+  Installed-as path 与解析版本。该规则明确了宿主信任边界；它不声称能抵抗已完全控制本机 SDK 的攻击者。
+- **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
+  时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
+  sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧
+  `capture.token`。进程内 consumed ledger 固定 128 项且永不淘汰；容量满后以 `replay_ledger_full` 拒绝新
+  identity，不能为了有界内存而让最旧 nonce 再次可用。failure evidence 的 `cleanup=completed` 也只能来自
+  与最后可信 generation/counter/committed-prefix 完整一致的闭合 abort terminal control；只看状态名不够。
+
 ## 横屏路线与硬边界
 
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
    runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
-3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 已在
-   `4b96f89...` 建立可信 origin/read-only，并真实观察到 vivo 同 App 双 OS window，但七项诊断 blocker 使
-   T-L1 保持 blocked。下一步 A3/C1b 必须基于该形态找到唯一目标
-   pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
-   window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
-   C1a 已建立 clean-port/content-attested origin/read-only，但在上述七项 blocker 消除并经 C1b 新合同验收前，
-   layout/T-L1 仍称 unavailable/blocked。
+3. **T-L1 C1a/C1b 只读 producer**：clean-port C1a 已在 `4b96f89...` 建立可信 origin/read-only，并真实
+   观察到 vivo 同 App 双 OS window，但七项诊断 blocker 使 T-L1 保持 blocked。C1b 第一批只验证 window
+   inventory/owner、root binding/subtree、run-local root projection、focus inventory 与 hidden IME；它不寻找
+   navigation/conversation/target，不证明 toolbar/title-node，也不划分 message/input regions。即使 fresh C1b
+   sidecar 将 origin/ownership/root projection/topology/IME 置真，layout/T-L1/P0/execution 仍称 blocked/
+   unsupported。若 pure-a11y 仍 opaque，下一步另审 window/pane-bound 视觉合同；不得把目标语义塞回本合同，
+   也不得关闭 vivo“应用多窗”或退回整屏坐标猜测。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
 5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable

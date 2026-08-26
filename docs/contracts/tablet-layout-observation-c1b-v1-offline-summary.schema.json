@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-for-mobile.local/contracts/tablet-layout-observation-c1b-v1-offline-summary.schema.json",
+  "title": "Tablet T-L1 C1b v1 offline gate machine summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "gate_run_id", "started_at", "finished_at", "suite", "status", "test_exit_code",
+    "total_cases", "passed_cases", "failed_cases", "required_coverage_count",
+    "covered_required_count", "coverage_ids", "cases", "cross_layer_requirements",
+    "fixture_contract_only", "runtime_origin_verified", "runtime_evidence",
+    "wechat_window_ownership_verified", "window_root_projection_verified",
+    "application_window_topology_verified", "ime_hidden_verified", "navigation_pane_verified",
+    "conversation_pane_verified", "target_conversation_verified", "target_regions_verified",
+    "layout_accepted", "wechat_layout_verified", "editor_action_ready",
+    "settings_mutation_allowed", "device_action_allowed", "screenshot_allowed", "ocr_allowed",
+    "p0_capability", "execution_grant"
+  ],
+  "properties": {
+    "schema": { "const": "tablet-layout-observation-offline-summary/c1b-v1" },
+    "gate_run_id": { "type": "string", "pattern": "^gate-[0-9a-f]{32}$" },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "suite": { "const": "tablet-layout-observation/c1b-v1" },
+    "status": { "const": "passed" },
+    "test_exit_code": { "const": 0 },
+    "total_cases": { "const": 49 },
+    "passed_cases": { "const": 49 },
+    "failed_cases": { "const": 0 },
+    "required_coverage_count": { "const": 89 },
+    "covered_required_count": { "const": 89 },
+    "coverage_ids": {
+      "type": "array", "minItems": 89, "maxItems": 89, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/safeId" }
+    },
+    "cases": {
+      "type": "array", "minItems": 49, "maxItems": 49,
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "cross_layer_requirements": {
+      "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
+      "items": { "const": "direct_focus_refresh_binding_preconditions_kotlin" }
+    },
+    "fixture_contract_only": { "const": true },
+    "runtime_origin_verified": { "const": false },
+    "runtime_evidence": { "const": false },
+    "wechat_window_ownership_verified": { "const": false },
+    "window_root_projection_verified": { "const": false },
+    "application_window_topology_verified": { "const": false },
+    "ime_hidden_verified": { "const": false },
+    "navigation_pane_verified": { "const": false },
+    "conversation_pane_verified": { "const": false },
+    "target_conversation_verified": { "const": false },
+    "target_regions_verified": { "const": false },
+    "layout_accepted": { "const": false },
+    "wechat_layout_verified": { "const": false },
+    "editor_action_ready": { "const": false },
+    "settings_mutation_allowed": { "const": false },
+    "device_action_allowed": { "const": false },
+    "screenshot_allowed": { "const": false },
+    "ocr_allowed": { "const": false },
+    "p0_capability": { "const": "unsupported" },
+    "execution_grant": { "const": false }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string", "minLength": 1, "maxLength": 96,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,95}$"
+    },
+    "timestamp": {
+      "type": "string", "minLength": 28, "maxLength": 28, "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["case_id", "status", "coverage_ids"],
+      "properties": {
+        "case_id": { "$ref": "#/$defs/safeId" },
+        "status": { "enum": ["passed", "failed"] },
+        "coverage_ids": {
+          "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        }
+      }
+    }
+  }
+}

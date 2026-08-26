@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结；失败 SHA `2635fc9f...` 原样冻结，修复 fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证；diagnostic blocked，T-L1 未通过，转 A3/C1b
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer 与受控 runner 已无机完成，尚未访问平板，待新 fixed SHA 与新授权
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -83,17 +83,25 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 
 1. 枚举全部 interactive application windows；T0/WMS 的 `wN` 与 a11y 的 run-local `awN` 分属不同身份
    命名空间，不得凭编号或 bounds 宣称相等。
-2. 原生基线要求恰好两个稳定、root owner 均为微信的 a11y window，并建立 navigation/conversation
-   pane 与 window 的一一绑定；另一 App、额外 display、identity 替换或 root 冲突均 blocked。
-3. 找到唯一目标会话 pane；「文件传输助手」必须是目标 window/pane toolbar/title，不能是另一窗同名会话行。
-4. 在同一 target window + pane 内机械分出 toolbar、message viewport 与 input region；两帧 identity、
-   window→pane 映射、几何与 layout epoch 必须稳定。
-5. 本轮 C1a 无论 observation 形态如何都固定 `runtime_evidence=false`、`layout_accepted=false`、
-   `editor_action_ready=false`、`p0_capability=unsupported`、`execution_grant=false`。只有后续 A3/C1b
-   新合同才可讨论 focus absent、IME hidden 是否足以形成 `layout_accepted=true` 的纯感知结论；已知 focus
-   指向别窗或 visible IME 未绑定 target editor 时仍须立即 blocked。
-6. 只保存 run-local label、bounds/hash/reason，不持久化 raw window ID、聊天明文或全屏截图；OCR 只在
-   已绑定 window/pane crop 内使用。任一歧义、漂移、跨 pane 或证据来源不可信都 fail-closed。
+2. C1b 第一批只要求恰好两个稳定、root owner 均为微信的 application window，并验证 window inventory、
+   root→window exact binding 与一窗一 projection pane；另一 App、额外 display、identity 替换、截断或 root
+   冲突均 blocked。这里的 projection pane 只表示 OS window/root 的几何投影，`semantic_role` 固定为
+   `unknown`，不等于 navigation/conversation。
+3. `window.root` 非空不等于页面语义树可用。若 root 为零几何、`childCount=0`、没有正几何可见节点，则
+   必须记录为完整读取到的 opaque subtree；不得用 left/right、宽窄、layer、active/focused、包名、
+   scrollable 或 editable 猜 navigation/conversation。window-level title exact match 与 `window_only` focus
+   也只能作为诊断事实，不能选择目标会话。
+4. 只有后续新合同取得独立语义证据后，才可找到唯一目标会话 pane，并证明「文件传输助手」是目标
+   window/pane 的 toolbar/title、不是另一窗同名会话行；随后才能在同一 target window + pane 内机械分出
+   toolbar、message viewport 与 input region。若 pure-a11y 仍 opaque，下一步应评审 pane/window-bound
+   视觉通道，而不是关闭 vivo“应用多窗”或回退整屏坐标猜测。
+5. C1a observation 固定 `runtime_evidence=false`。未来 C1b fresh fixed-SHA runner/sidecar 最多可把可信来源、
+   微信 window ownership、root projection、双 application-window topology、hidden IME 等机械结论置真；
+   navigation/conversation/target/region、`layout_accepted`、`wechat_layout_verified`、
+   `editor_action_ready`、P0 与 execution 仍固定 false/unsupported。
+6. 只保存 run-local label、平台 window type code、bounds、计数、固定 match state 与 reason；不持久化 raw
+   window/root/node identity、window/node title 明文、聊天内容或稳定内容 hash，也不截图/OCR。任一歧义、
+   漂移、跨 pane、预算耗尽或证据来源不可信都 fail-closed。
 
 当前 v2 无机 schema/validator/gate 已以 main `589421a` 冻结，fixture 最多得到
 `fixture_contract_valid=true`，而 `runtime_evidence`、`wechat_layout_verified`、P0 与 execution grant 永远
@@ -146,7 +154,15 @@ c1/c2 各一次，capture ID 为 `capture-c1`/`capture-c2`，delta 2023.223 ms�
 `focus_fallback_insufficient`、`focus_target_conflict` 七项真实 reason，`diagnostic_observed=false`、
 `diagnostic_status=blocked`；
 runtime/layout/微信/editor/execution 仍为 false，P0 unsupported。因此 C1a 只读取证成功，但 T-L1 未通过，
-app 不合 main，也不能进入 T-L2；下一步是 A3/C1b 根据真实 window/root/node/region 形态冻结新合同。
+app 不合 main，也不能进入 T-L2。
+
+A3/C1b 已按上述真实形态另开 `tablet-layout-observation/c1b-v1`，没有改写 v2/C1a。第一批只读 producer
+闭合保存 platform window type、root handle/binding、subtree completeness、run-local projection pane、direct focus
+与 IME inventory；任何 display/type/layer/touchable/active/focused 结构读取失败都不得以默认值冒充稳定窗口，
+opaque subtree、截断 window inventory 或未知 window type 也不能提升 focus/hidden IME。observation gate 49/49、coverage 89/89、
+self 5/5，host fake-ADB 26/26，Android C1b Debug 71/71、Release 33/33，v2/C1a 回归全绿，独审
+P0/P1/P2=0。本轮只做无机实现与 fake-ADB E2E，real ADB 调用为 0；C1a 授权已消费且不能复用。
+下一步是提交固定完整 SHA，再针对该 SHA 单独取得一次 C1b build/install/只读采集授权。
 
 ### T-L2 · 横屏 P0
 
@@ -181,8 +197,11 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    与可逆 capture logical revision 后，`4b96f89...` 的唯一真机 run 已建立 origin/read-only、证明横屏双微信
    window 形态，同时如实保留七项 diagnostic blocker。A2/C1a 的来源与只读取证完成，但结果固定不 accepted，
    T-L1/P0/execution 未通过。
-4. **A3/C1b 只读契约**：根据 C1a 真实 window/root/node/region 形态冻结 v2 contract、对抗 fixture 与
-   validator，再固定新 SHA 真机验收；即使 T-L1 accepted，P0 仍 unsupported。
+4. **A3/C1b 只读契约**：保持 v2 contract/schema/validator/fixture 原样冻结，另建 C1b pure-a11y
+   diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。无机 gate、fake-ADB 真实 runner
+   E2E、Debug/Release/release-absence 和独审现已通过；下一步只剩提交固定新 SHA并请求一次新授权。第一批只验
+   window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和 topology
+   成立，T-L1 语义布局与 P0 仍未通过。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -239,5 +258,6 @@ coverage 45/45、self 3/3，Debug 373/373、Release 261/261，标准全门通过
 这些是失败 fixed SHA `2635fc9...` 的 pre-C 历史计数。该 SHA 的真机 C1a 已冻结失败；A 修复的
 标准全门为 C1a 15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、
 runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。fixed SHA
-`4b96f89...` 已完成唯一 origin/read-only C1a；diagnostic 仍 blocked，runtime/layout/P0/execution 不放行，
-app 未合 main，下一步进入 A3/C1b。
+`4b96f89...` 已完成唯一 origin/read-only C1a；diagnostic 仍 blocked，runtime/layout/P0/execution 不放行。
+C1b observation 49/49、coverage 89/89、self 5/5，host fake-ADB 26/26，Android Debug 71/71、Release
+33/33，v2 24/24、C1a 15/15 回归与独审 P0/P1/P2=0；本轮 real ADB=0，下一步固定 C1b SHA并取得新授权。

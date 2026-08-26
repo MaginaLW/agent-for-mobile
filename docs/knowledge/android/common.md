@@ -45,6 +45,7 @@
 ## App 屏蔽无障碍树与 IME 单命名空间降级（微信，2026-07-25）
 
 - **微信 ≥8.0.52 对 a11y 树基本不透明**：会话页 `ui_snapshot` 的 a11y 元素恒为状态栏那 13 项，标题/气泡/输入框 100% 来自 OCR，`findFocus(FOCUS_INPUT)` 取不到焦点节点；同一时刻 IME 侧（激活、InputConnection、`focusedInputId`）三项全部正常。与网络调研"有意混淆 a11y 节点数据对抗自动化"吻合。**因此"a11y 可见的焦点可编辑节点"在此 App 上不可满足，与点击精度、OCR 质量、几何算法都无关**——不要再往这三个方向排查。
+- **`window.root != null` 也不能代表树可用（PA2553 / Android 16，2026-08-26）**：同一微信双窗口可返回非空 root handle，但 root bounds 为 `[0,0,0,0]`、`childCount=0`，没有正几何可见 descendant。这应表达为“平台暴露的 subtree 已完整遍历，但业务语义仍 opaque”，而不是 unreadable，也不是可用 `root_subtree`。合同必须正交记录 root-handle 状态、root→window binding、遍历完整性与 semantic usability；零几何 root 可以作为结构占位证据，永远不能成为 toolbar/input/target candidate。
 - **对策：显式的 IME 单命名空间降级链**（design：`docs/specs/2026-07-25-IME单命名空间降级门-design.md`）。要点：
   - 身份来源写进值本身（`FocusIdentity(source = A11Y | IME_ONLY)`），**降级必须显式**。直接删掉 a11y 检查会让 `blank == blank` 恒真，绑定悄悄退化成"无绑定"。
   - **能严则严**：`FocusIdentity.of()` 是唯一降级决策点，a11y 侧一旦给得出合法节点身份就必须走严格链；a11y 侧有值但格式非法（例如把 IME 会话 id 塞进 a11y 位）一律 fail-closed，既不接受也不降级。

@@ -144,6 +144,20 @@ Invoke-Check '平板双窗 T-L1 C1a 受控 runner 无设备门' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-c1a-offline-gate.log')
 }
 
+Invoke-Check '平板双窗 T-L1 C1b pure-a11y 离线门' {
+    Invoke-Logged -LogName 'tablet-layout-observation-c1b-v1-offline-gate.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\run-tablet-layout-observation-c1b-v1-offline-gate.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-c1b-v1-offline-gate.log')
+}
+
+Invoke-Check '平板双窗 T-L1 C1b 受控 runner 无设备门' {
+    Invoke-Logged -LogName 'tablet-layout-c1b-host-offline-gate.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\run-tablet-layout-c1b-offline-gate.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-c1b-host-offline-gate.log')
+}
+
 Invoke-Check '派单离线测试' {
     Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
@@ -162,10 +176,10 @@ else {
         Invoke-Logged -LogName 'gradle.log' -FilePath $gradlew -Arguments @(
             '-p', (Join-Path $RepoRoot 'app'),
             ':gateway:testDebugUnitTest', ':gateway:testReleaseUnitTest', ':gateway:assembleDebug',
-            ':gateway:verifyTabletC1aReleaseAbsence',
+            ':gateway:verifyTabletC1aReleaseAbsence', ':gateway:verifyTabletC1bReleaseAbsence',
             '--console=plain'
         ) | Out-Null
-        'testDebug + testRelease + assembleDebug + C1a release absence'
+        'testDebug + testRelease + assembleDebug + C1a/C1b release absence'
     }
 }
 
