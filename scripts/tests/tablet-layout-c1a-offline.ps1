@@ -30,7 +30,7 @@ $script:RequiredCoverage = [string[]]@(
     'capture_host_wait_900', 'capture_span_15s', 'no_recapture', 'result_single_consume',
     'abort_cleanup', 'device_binding_pre_post', 'safe_atomic_evidence', 'trusted_runtime_validator',
     'public_runtime_unavailable', 'claim_scope_false', 'privacy_no_raw_secret', 'argv_allowlist',
-    'content_remote_shell_literal', 'content_stderr_empty', 'stdin_overall_deadline',
+    'content_remote_shell_literal', 'content_t0_binary_stdin', 'content_stderr_empty', 'stdin_overall_deadline',
     'installed_host_stream_pre_post', 'installed_stderr_cap_after_eof', 'installed_path_closed', 'post_apk_binding',
     'control_json_types_exact', 'a11y_bound_wait_vivo', 'implementation_hash_postcheck',
     'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate'
@@ -135,10 +135,16 @@ if($tail.Count -eq 3 -and $tail[0] -ceq 'exec-out' -and $tail[1] -ceq 'cat'){
  try{$stream.CopyTo([Console]::OpenStandardOutput())}finally{$stream.Dispose()}
  exit 0
 }
-if($tail.Count -eq 5 -and $tail[0] -ceq 'shell' -and $tail[1] -ceq 'content'){
+if($tail.Count -eq 5 -and $tail[1] -ceq 'content' -and
+   (($tail[0] -ceq 'exec-in' -and $tail[2] -ceq 'write') -or
+    ($tail[0] -ceq 'shell' -and $tail[2] -ceq 'read'))){
  $operation=$tail[2];$uriLiteral=$tail[4];$remoteCommand=@($tail[1..($tail.Count-1)]) -join ' '
- if($tail[3] -cne '--uri'-or$uriLiteral-cnotmatch "^'([^']+)'$"){exit 97}
- $uri=$Matches[1]
+ if($tail[3] -cne '--uri'){exit 97}
+ if($operation -ceq 'write'){
+  if($uriLiteral-cnotmatch '^content://[^''\x00-\x20\x7f%+]+$'){exit 97};$uri=$uriLiteral
+ }else{
+  if($uriLiteral-cnotmatch "^'([^']+)'$"){exit 97};$uri=$Matches[1]
+ }
  Add-Content -LiteralPath (Join-Path $state 'content-remote-command.txt') -Value $remoteCommand -Encoding utf8
  Add-Content -LiteralPath (Join-Path $state 'content-uri.txt') -Value "$operation $uri" -Encoding utf8
  if(-not[string]::IsNullOrEmpty($env:TABLET_C1A_FAKE_CONTENT_STDERR)){[Console]::Error.Write($env:TABLET_C1A_FAKE_CONTENT_STDERR)}
@@ -290,7 +296,8 @@ try {
     Test-Case 'fake adb 精确 content 协议、stdin 与统一 nonce' @(
         'single_device','post_discovery_serial','install_once_no_retry','content_protocol_exact',
         'content_nonce_constant','title_hash_exact','t0_raw_bytes_unchanged','capture_exact_c1_c2',
-        'result_single_consume','abort_cleanup','argv_allowlist','content_remote_shell_literal'
+        'result_single_consume','abort_cleanup','argv_allowlist','content_remote_shell_literal',
+        'content_t0_binary_stdin'
     ) {
         $fake = New-FakeTools
         $priorState=$env:TABLET_C1A_FAKE_STATE;$priorControl=$env:TABLET_C1A_FAKE_CONTROL;$priorApk=$env:TABLET_C1A_FAKE_APK
@@ -307,7 +314,8 @@ try {
             $t0Uri=New-TL1C1aUri t0 'tl1-c1a-test' $nonce $commit $artifact
             Assert-True ($t0Uri -match 'title_hash=sha256:5d3510ec998c991305fcede15b32be9ea1c4061d82ab15a3994a38faa243311c') 'title hash 漂移'
             Assert-True ($t0Uri -notmatch '[%+]') 'URI 不得使用 percent/+ 别名'
-            $raw=[Text.UTF8Encoding]::new($false).GetBytes('{"raw":"unchanged"}')
+            # 真实 T0 producer 在 Windows 留下 CRLF；这个样本能抓住 adb shell 的 text-mode 归一化。
+            $raw=[Text.UTF8Encoding]::new($false).GetBytes("{`r`n  `"raw`": `"unchanged`"`r`n}`r`n")
             $writeResult=Invoke-TL1C1aAdb -AdbPath $fake.Adb -Serial $serial -Name content_t0 -Value $t0Uri -InputBytes $raw -AllowFailure
             Assert-Equal $writeResult.ExitCode 0 ("fake content write 失败："+$writeResult.Stderr)
             foreach($endpoint in @('status','c1','c2','result','abort')){
@@ -324,14 +332,21 @@ try {
             }
             $joined=($argv | ForEach-Object { $_ -join ' ' }) -join "`n"
             Assert-True ($joined -notmatch '(?i)\b(forward|reverse|input|screencap|uiautomator|logcat|uninstall|force-stop|am\s+start|settings\s+(put|delete)|ime\s+(set|enable|disable)|pm\s+clear)\b') '出现禁止 adb argv'
+            $t0Calls=@($argv | Where-Object { @($_).Count -eq 7 -and $_[2] -ceq 'exec-in' -and $_[3] -ceq 'content' -and $_[4] -ceq 'write' })
+            Assert-Equal $t0Calls.Count 1 'T0 必须且只能使用一次 adb exec-in content write'
+            Assert-Equal $t0Calls[0][6] $t0Uri 'exec-in 必须接收 raw canonical URI，不得夹带字面单引号'
+            $readCalls=@($argv | Where-Object { @($_).Count -eq 7 -and $_[2] -ceq 'shell' -and $_[3] -ceq 'content' -and $_[4] -ceq 'read' })
+            Assert-Equal $readCalls.Count 5 '只读 content endpoint 必须继续使用 adb shell content read'
+            Assert-True (@($readCalls | Where-Object { $_[6] -cnotmatch "^'content://[^']+'$" }).Count -eq 0) `
+                'adb shell content read 必须保留远端 POSIX 单引号'
             $uris=@(Get-Content -LiteralPath (Join-Path $fake.State 'content-uri.txt'))
             Assert-Equal $uris.Count 6 'content endpoint 数漂移'
             Assert-True (@($uris | Where-Object { $_ -notmatch [regex]::Escape("nonce=$nonce") }).Count -eq 0) 'nonce 未统一'
             Assert-True (@($uris | Where-Object { $_ -match "['\^]" }).Count -eq 0) 'provider canonical URI 夹带 quote/caret'
             $remote=@(Get-Content -LiteralPath (Join-Path $fake.State 'content-remote-command.txt'))
             Assert-Equal $remote.Count 6 'remote content command 数漂移'
-            Assert-True ($remote[0] -ceq "content write --uri '$t0Uri'") "T0 remote shell 未用 POSIX 单引号保护完整 URI：$($remote[0])"
-            Assert-Equal @([regex]::Matches($remote[0],'&')).Count 3 'T0 remote shell query 被截断'
+            Assert-True ($remote[0] -ceq "content write --uri $t0Uri") "T0 exec-in 外部 argv 不是 raw canonical URI：$($remote[0])"
+            Assert-Equal @([regex]::Matches($remote[0],'&')).Count 3 'T0 exec-in query 被截断'
         }
         finally{$env:TABLET_C1A_FAKE_STATE=$priorState;$env:TABLET_C1A_FAKE_CONTROL=$priorControl;$env:TABLET_C1A_FAKE_APK=$priorApk}
     }
@@ -634,6 +649,28 @@ try {
         $trusted=Test-TabletLayoutObservationV2TrustedRuntimeFile $obsPath $root $t0.run_id $commit $artifact
         Assert-True $trusted.fixture_contract_valid ("trusted runtime origin 未通过：" + (@($trusted.reason_codes) -join ','))
         Assert-True (-not $trusted.runtime_evidence) 'C1a 不得提升 runtime evidence'
+
+        # 真实诊断 blocker 与 runtime origin 是两条轴：producer 如实声明 blocker 时，origin 仍可成立，
+        # 但 diagnostic/runtime/layout/P0/execution 绝不能因此提升。
+        $blockedObs=$obs|ConvertTo-Json -Depth 100|ConvertFrom-Json -Depth 100 -DateKind String
+        foreach($frame in @($blockedObs.frames)){$frame.windows_truncated=$true}
+        $blockedObs.diagnostic_status='blocked'
+        $blockedObs.reason_codes=@('ime_target_editor_unbound','window_inventory_truncated')
+        $blockedPath=Join-Path $root 'observation-blocked.json'
+        $blockedObs|ConvertTo-Json -Depth 100|Set-Content -LiteralPath $blockedPath -Encoding utf8NoBOM
+        $blockedTrusted=Test-TabletLayoutObservationV2TrustedRuntimeFile $blockedPath $root $t0.run_id $commit $artifact
+        Assert-True $blockedTrusted.fixture_contract_valid `
+            ("diagnostic blocker 错误撤回 trusted runtime origin：" + (@($blockedTrusted.reason_codes) -join ','))
+        Assert-True (-not $blockedTrusted.diagnostic_observed) 'diagnostic blocker 被错误判 observed'
+        Assert-True (@($blockedTrusted.reason_codes) -contains 'window_inventory_truncated') `
+            '真实 diagnostic blocker 未保留'
+        Assert-True (@($blockedTrusted.reason_codes) -contains 'ime_target_editor_unbound') `
+            '截断窗口导致的 IME/editor blocker 未保留'
+        Assert-True (@($blockedTrusted.reason_codes) -notcontains 'declared_reasons_incomplete') `
+            'producer 已完整声明 blocker 却被判 reasons incomplete'
+        Assert-True (-not $blockedTrusted.runtime_evidence -and -not $blockedTrusted.layout_accepted -and
+            $blockedTrusted.p0_capability -ceq 'unsupported' -and -not $blockedTrusted.execution_grant) `
+            'diagnostic blocked trusted origin 错误提升 claim scope'
         $public=Test-TabletLayoutObservationV2File (Join-Path $root 'missing.json') $root
         Assert-True (@($public.reason_codes) -contains 'runtime_producer_unavailable') '公共 runtime 未固定 unavailable'
     }

@@ -177,7 +177,7 @@ internal class TabletC1aContentProvider : ContentProvider() {
                         ?: throw IllegalStateException("A11y service identity type changed")
                     AndroidTabletLayoutProbeSource(
                         service = service,
-                        revisionProvider = { service.revision },
+                        revisionProvider = { c1aCaptureRevision(service.revision, captureToken) },
                     )
                         .captureSingleFrame(captureId, captureToken, expectedTitleHash)
                 },

@@ -4,8 +4,10 @@
 > `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
 > fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
 > 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`。
-> C1a debug-only provider、受控 runner/attest、无机门与独审已在 clean-port 候选完成；尚未做真机 C1a，
-> app 未合 main，`runtime_evidence`/T-L1/P0 仍未放行。
+> fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败：首轮安装超时且无
+> run/evidence，另行授权重试产生 run `tl1-c1a-20260826t114535z-63667b68ce4f`，但 trusted origin 未成立。
+> A 修复与标准全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob 复核与用户新授权；app 未合 main，
+> `runtime_evidence`/layout/T-L1/P0/execution 仍未放行。
 
 ## 当前能力边界
 
@@ -81,7 +83,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
 
-## T-L1 v2 / C1a 无机冻结 · 2026-08-26
+## T-L1 v2 / C1a 无机冻结与首次真机失败 · 2026-08-26
 
 - diagnostic-only contract/schema/validator/gate 源提交 `c8bd3e3...`，以 main `589421a` 合入；gate
   self-test 5/5、cases 24/24、required coverage 24/24，输出恒为 layout/P0/execution false。
@@ -94,10 +96,30 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 - C1a 候选位于 `codex/tablet-tl1-c1a`：从当前 main 干净移植、机械绑定 producer/T0 六个基线 blob；
   debug-only provider 与独立受控 runner/attest 已实现，本轮固定 c1/等待至少 900 ms/c2、不补拍；release
   全包 absence 通过。C1a 15/15、coverage 45/45、self 3/3；全量 Debug 373/373、Release 261/261，
-  标准全门通过，跨层独审 P0/P1=0。以上仍是无设备结果，不构成 runtime evidence、微信布局验证或 P0 放行。
-- 下一步钉本 clean-port/content-attested 候选的完整 SHA，由独立 C 会话执行唯一一次 C1a。只读观察保持
-  vivo 应用多窗开启的日常横屏形态，不得靠关功能满足旧单窗门；真机结果用于修订/冻结后续合同，
-  不自动授予 runtime acceptance、action 或 execution。
+  标准全门通过，跨层独审 P0/P1=0。这组计数只描述 fixed SHA `2635fc9...` 的 pre-C 基线，不能转写成
+  当前 A 修复后的全门结果。
+- 第一个明确授权的 C 轮在安装阶段超时；脚本没有生成 `run_id`，没有调用 c1/c2，也没有产生 evidence。
+  本轮按“安装失败不自动重试”冻结。用户随后另行明确授权一次重试，才启动下一轮。
+- 第二轮唯一 run `tl1-c1a-20260826t114535z-63667b68ce4f` 只调用 c1/c2 各一次，capture token/ID 分别为
+  `c1`/`capture-c1` 与 `c2`/`capture-c2`，时间间隔 1982.304 ms；result 单次消费后会话结束，没有补拍或
+  自动重试。observation 为 `diagnostic_status=blocked`，trusted-runtime validation 失败，无 success sidecar，
+  所以 origin 未建立；runtime/layout/微信布局/editor/P0/execution 均为 false/unsupported。
+- 第一条根因是 Windows 普通 `adb shell` stdin 将 T0 原始 23,865 bytes 中 747 个 CRLF 归一为 LF：宿主
+  artifact hash `43d9529ce10dca04c4bc60528d66376844f23edf0ebea9b63f0de04e8ff48fed`，provider 所见
+  `f9d548...`，触发 `upstream_t0_hash_mismatch`。修复只把 T0 write 改为 `adb exec-in content write` 的
+  binary stdin，并传 raw canonical URI；只读 endpoint 仍走 `adb shell content read` 与远端 POSIX 引号。
+- 第二条根因是静态页面没有新无障碍事件，两帧 raw event revision 合法地保持 15/15，而旧跨帧严格递增
+  断言把它误判成 `capture_order_invalid`。A 修复仅在 debug-only C1a adapter 公开可逆 logical marker：
+  `logical revision = raw event revision + c1/c2 capture ordinal`；用 token 可还原 raw，帧内 event 漂移、
+  跨帧 raw 下降与溢出仍 fail closed，producer/T0 六个 baseline blob 不改。
+- 修复不会删除真实诊断 blocker：`focus_fallback_insufficient`、`focus_target_conflict`、
+  `node_binding_invalid`、`region_candidate_missing`、`target_title_not_unique`、
+  `target_window_pane_missing`、`window_pane_bijection_invalid` 仍须保留。因此即使后续 origin 能建立，
+  本次形态仍应保持 diagnostic blocked，且不会提升 runtime/layout/P0/execution。
+- A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、
+  Release 261/261、dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence 与凭据扫描
+  全绿，独立终审 P0/P1=0。当前分支 HEAD 已作为新 fixed-SHA 候选固定；下一步完成外部 clean/blob 复核，再取得用户明确授权；
+  此前不得连接设备或重用失败 SHA。vivo“应用多窗”全程保持开启，未为取证或修复修改设备设置。
 
 ## 横屏路线与硬边界
 
@@ -105,8 +127,10 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
    runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
-3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 已增加独立
-   受控 runner/attest，待钉完整 SHA 并执行一次真机采集。C1a 必须纯感知且恰好两帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
+3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未合 main；clean-port C1a 首次真机
+   run 已按失败冻结，A 道传输/capture-order 修复与全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob
+   复核和用户新授权。
+   C1a 必须纯感知且恰好两帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
    pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
    window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
    clean-port/content-attested 固定 SHA 真机验收前仍称 unavailable。

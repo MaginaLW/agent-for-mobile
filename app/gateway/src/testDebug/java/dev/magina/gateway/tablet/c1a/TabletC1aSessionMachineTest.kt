@@ -6,6 +6,7 @@ import dev.magina.gateway.tablet.RawProbeDisplay
 import dev.magina.gateway.tablet.RawProbeIme
 import dev.magina.gateway.tablet.RawTabletProbeFrame
 import dev.magina.gateway.tablet.TRUSTED_T0_PRODUCER_SHA
+import dev.magina.gateway.tablet.TabletProbeRunContext
 import dev.magina.gateway.tablet.probeSha256Bytes
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -32,7 +33,13 @@ class TabletC1aSessionMachineTest {
         val service = Any()
         val c1 = machine.capture(KEY, "c1", { service }) { identity, captureId, token, hash ->
             assertTrue(identity === service)
-            frame(captureId, token, hash, "2026-08-26T00:01:00.0000000Z", 1)
+            frame(
+                captureId,
+                token,
+                hash,
+                "2026-08-26T00:01:00.0000000Z",
+                c1aCaptureRevision(eventRevision = 15, captureToken = token),
+            )
         }
         assertEquals(C1aSessionState.AWAITING_C2, c1.state)
         assertEquals("c1", c1.captureToken)
@@ -40,7 +47,13 @@ class TabletC1aSessionMachineTest {
         monotonic += 1_000
         val c2 = machine.capture(KEY, "c2", { service }) { identity, captureId, token, hash ->
             assertTrue(identity === service)
-            frame(captureId, token, hash, "2026-08-26T00:01:01.0000000Z", 2)
+            frame(
+                captureId,
+                token,
+                hash,
+                "2026-08-26T00:01:01.0000000Z",
+                c1aCaptureRevision(eventRevision = 15, captureToken = token),
+            )
         }
         assertEquals(C1aSessionState.COMPLETE, c2.state)
         assertEquals("c2", c2.captureToken)
@@ -62,10 +75,111 @@ class TabletC1aSessionMachineTest {
             .getJSONObject("capture").getString("token"))
         assertEquals("c2", observation.getJSONArray("frames").getJSONObject(1)
             .getJSONObject("capture").getString("token"))
+        assertEquals(16, observation.getJSONArray("frames").getJSONObject(0)
+            .getJSONObject("capture").getLong("revision_before"))
+        assertEquals(17, observation.getJSONArray("frames").getJSONObject(1)
+            .getJSONObject("capture").getLong("revision_before"))
+        val reasons = observation.getJSONArray("reason_codes")
+        assertFalse((0 until reasons.length()).any { reasons.getString(it) == "capture_order_invalid" })
 
         val replay = machine.result(KEY) as C1aResultRead.Control
         assertEquals(C1aSessionState.ABSENT, replay.snapshot.state)
         assertEquals("session_not_found", replay.snapshot.reasonCode)
+    }
+
+    @Test
+    fun `CRLF T0 snapshot survives caller wiping and assembly without byte normalization`() {
+        val lf = t0Raw()
+        val crlf = String(lf, StandardCharsets.UTF_8)
+            .replace("\n", "\r\n")
+            .toByteArray(StandardCharsets.UTF_8)
+        lf.fill(0)
+        val expectedHash = probeSha256Bytes(crlf)
+        val normalized = String(crlf, StandardCharsets.UTF_8)
+            .replace("\r\n", "\n")
+            .toByteArray(StandardCharsets.UTF_8)
+        try {
+            assertNotEquals(expectedHash, probeSha256Bytes(normalized))
+        } finally {
+            normalized.fill(0)
+        }
+
+        val machine = machine()
+        assertEquals(C1aSessionState.AWAITING_C1, machine.start(ENVELOPE, crlf).state)
+        assertTrue(crlf.all { it == 0.toByte() })
+
+        val retainedContext = retainedPayload(machine, "context") as TabletProbeRunContext
+        val retainedRaw = retainedContext.copyUpstreamT0RawUtf8()
+        try {
+            assertEquals(expectedHash, probeSha256Bytes(retainedRaw))
+        } finally {
+            retainedRaw.fill(0)
+        }
+
+        val service = Any()
+        machine.capture(KEY, "c1", { service }) { _, captureId, token, hash ->
+            frame(captureId, token, hash, "2026-08-26T00:01:00.0000000Z", 1)
+        }
+        assertEquals(
+            C1aSessionState.COMPLETE,
+            machine.capture(KEY, "c2", { service }) { _, captureId, token, hash ->
+                frame(captureId, token, hash, "2026-08-26T00:01:01.0000000Z", 2)
+            }.state,
+        )
+        val observation = JSONObject((machine.result(KEY) as C1aResultRead.Observation).json)
+        assertEquals(expectedHash, observation.getJSONObject("upstream_t0").getString("artifact_sha256"))
+        assertFalse(observation.getJSONArray("reason_codes").toString().contains("upstream_t0_hash_mismatch"))
+    }
+
+    @Test
+    fun `capture revision adds frame order without hiding service event drift`() {
+        assertEquals(1, c1aCaptureRevision(eventRevision = 0, captureToken = "c1"))
+        assertEquals(2, c1aCaptureRevision(eventRevision = 0, captureToken = "c2"))
+        assertTrue(
+            c1aCaptureRevision(eventRevision = 15, captureToken = "c1") <
+                c1aCaptureRevision(eventRevision = 15, captureToken = "c2"),
+        )
+        assertNotEquals(
+            c1aCaptureRevision(eventRevision = 15, captureToken = "c1"),
+            c1aCaptureRevision(eventRevision = 16, captureToken = "c1"),
+        )
+        expectFailure { c1aCaptureRevision(eventRevision = -1, captureToken = "c1") }
+        expectFailure { c1aCaptureRevision(eventRevision = 15, captureToken = "c3") }
+        expectFailure { c1aCaptureRevision(eventRevision = Int.MAX_VALUE.toLong(), captureToken = "c2") }
+    }
+
+    @Test
+    fun `composite revision accepts stable or increasing event epochs and rejects decreasing epochs`() {
+        val same = mappedRevisionObservation(c1EventRevision = 15, c2EventRevision = 15)
+        assertFalse("capture_order_invalid" in reasonCodes(same))
+        assertEquals(15, rawEventRevision(same, frameIndex = 0))
+        assertEquals(15, rawEventRevision(same, frameIndex = 1))
+
+        val increasing = mappedRevisionObservation(c1EventRevision = 15, c2EventRevision = 16)
+        assertFalse("capture_order_invalid" in reasonCodes(increasing))
+        assertEquals(15, rawEventRevision(increasing, frameIndex = 0))
+        assertEquals(16, rawEventRevision(increasing, frameIndex = 1))
+
+        val decreasing = mappedRevisionObservation(c1EventRevision = 15, c2EventRevision = 14)
+        assertTrue("capture_order_invalid" in reasonCodes(decreasing))
+        assertTrue(
+            "capture_order_invalid" in reasonCodes(decreasing.getJSONObject("consistency")),
+        )
+    }
+
+    @Test
+    fun `composite revision preserves an event change inside one atomic frame`() {
+        val drift = mappedRevisionObservation(
+            c1EventRevision = 15,
+            c2EventRevision = 16,
+            c1RevisionAfterEventRevision = 16,
+        )
+        assertTrue("atomic_capture_revision_invalid" in reasonCodes(drift))
+        assertTrue(
+            "atomic_capture_revision_invalid" in reasonCodes(drift.getJSONObject("consistency")),
+        )
+        val c1Capture = drift.getJSONArray("frames").getJSONObject(0).getJSONObject("capture")
+        assertNotEquals(c1Capture.getLong("revision_before"), c1Capture.getLong("revision_after"))
     }
 
     @Test
@@ -430,6 +544,54 @@ class TabletC1aSessionMachineTest {
         nodesTruncated = false,
         readErrors = 0,
     )
+
+    private fun mappedRevisionObservation(
+        c1EventRevision: Long,
+        c2EventRevision: Long,
+        c1RevisionAfterEventRevision: Long = c1EventRevision,
+    ): JSONObject {
+        val machine = machine()
+        assertEquals(C1aSessionState.AWAITING_C1, machine.start(ENVELOPE, t0Raw()).state)
+        val service = Any()
+        assertEquals(
+            C1aSessionState.AWAITING_C2,
+            machine.capture(KEY, "c1", { service }) { _, captureId, token, hash ->
+                frame(
+                    captureId,
+                    token,
+                    hash,
+                    "2026-08-26T00:01:00.0000000Z",
+                    c1aCaptureRevision(c1EventRevision, token),
+                ).copy(
+                    revisionAfter = c1aCaptureRevision(c1RevisionAfterEventRevision, token),
+                )
+            }.state,
+        )
+        assertEquals(
+            C1aSessionState.COMPLETE,
+            machine.capture(KEY, "c2", { service }) { _, captureId, token, hash ->
+                frame(
+                    captureId,
+                    token,
+                    hash,
+                    "2026-08-26T00:01:01.0000000Z",
+                    c1aCaptureRevision(c2EventRevision, token),
+                )
+            }.state,
+        )
+        return JSONObject((machine.result(KEY) as C1aResultRead.Observation).json)
+    }
+
+    private fun rawEventRevision(observation: JSONObject, frameIndex: Int): Long {
+        val capture = observation.getJSONArray("frames").getJSONObject(frameIndex).getJSONObject("capture")
+        val ordinal = frameIndex + 1L
+        return capture.getLong("revision_before") - ordinal
+    }
+
+    private fun reasonCodes(container: JSONObject): Set<String> {
+        val reasons = container.getJSONArray("reason_codes")
+        return (0 until reasons.length()).mapTo(linkedSetOf()) { reasons.getString(it) }
+    }
 
     private fun retainedPayload(machine: TabletC1aSessionMachine, fieldName: String): Any? {
         val sessionField = TabletC1aSessionMachine::class.java.getDeclaredField("session").apply {

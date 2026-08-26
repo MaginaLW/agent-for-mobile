@@ -41,12 +41,14 @@ path hash、本地 APK hash 与 package/version 必须 exact 一致。安装只�
 - 其余均 exact mode `r`：`/status/<run_id>`、`/capture/c1/<run_id>`、
   `/capture/c2/<run_id>`、`/result/<run_id>`、`/abort/<run_id>`。
 
-AOSP `content write` 只把 stdin 原始 bytes 写入 provider FD，不返回 ACK。runner 要求 write 的 stdout/stderr
+AOSP `content write` 只把 stdin bytes 写入 provider FD，不返回 ACK。Windows 宿主必须经 `adb exec-in` 的 binary
+stdin copy 发送原始 T0；不得使用会把 CRLF 改成 LF 的普通 `adb shell` stdin 路径。runner 要求 write 的 stdout/stderr
 为空，随后只读一次 status；provider 在该首次 status 内 bounded wait 最多 3000 ms，等待同 key pipe reader
 完成，不要求宿主轮询。pending input 自注册起还有独立 15 秒 guard，超时会关闭读端并进入失败收口；
 `abort` 与 claim-start 使用同一把锁，因此 abort ACK 一旦返回，晚到 reader 不得再创建 session。
-由于 AOSP `adb shell` 会把多 argv 无 escape 拼回远端 shell，runner 只在发命令时对已通过 closed
-grammar 的 canonical URI 加 POSIX 单引号；引号不属于 URI，provider 仍收到含全部 query 的原值。
+ADB `shell` read 会把多 argv 无 escape 拼回远端 shell，因此 runner 只在这些只读命令中对已通过 closed
+grammar 的 canonical URI 加 POSIX 单引号；引号不属于 URI。`exec-in` 会自行 escape command argv，T0 write
+必须传 raw canonical URI，预置单引号反而会成为参数内容。两条路径的 provider 最终都收到含完整 query 的原值。
 
 正常次序固定为：
 

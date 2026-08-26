@@ -106,10 +106,16 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   gate self-test 5/5、cases/coverage 24/24；runtime/layout/微信验证/P0/执行授权恒 false。隔离 producer 候选
   `b5769df7baba075fda47aec17f249a5caa124b92`（`codex/tablet-tl1-v2`）专项 33/33、Debug 350/350、
   Release 259/259、assembleDebug 通过且独审 0/0/0；未接 ToolRegistry/MCP、production 固定 unavailable，
-  app 未合 main。C1a debug-only provider、独立受控 runner/attest、release-absence 与无机门已在
-  `codex/tablet-tl1-c1a` 完成：本轮固定恰好 c1/c2 两帧，C1a 15/15、coverage 45/45、self 3/3，
-  Debug 373/373、Release 261/261、标准全门通过且跨层独审 P0/P1=0。下一步钉本 clean-port/content-attested
-  候选的完整 SHA，由独立 C 会话在 vivo 应用多窗保持开启时执行唯一一次只读 C1a。
+  app 未合 main。首个 fixed candidate `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的 pre-C 全门与跨层独审
+  已通过，但首个授权轮在安装阶段超时，`run_id=none`、无采集/无 evidence；用户另行明确授权重试后，唯一
+  run `tl1-c1a-20260826t114535z-63667b68ce4f` 仅执行 c1/c2 各一次、间隔 1982.304 ms、无补拍，最终
+  trusted-runtime validation 失败并冻结。origin 未成立，runtime/layout/P0/execution 仍为 false/unsupported；
+  失败记录见 [`2026-08-26-T-L1-C1a只读取证失败.md`](runs/2026-08-26-T-L1-C1a只读取证失败.md)。A 道已修复
+  Windows `adb shell` stdin 的 CRLF 归一化与静态页 raw revision 15/15 的假顺序阻断，不改 producer/T0 六个
+  baseline blob，也不删除真实 pane/title/focus/node/region blocker。标准全门已通过：C1a 15/15、coverage
+  46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、runner 82/82、T-L1 24/24，
+  assembleDebug/release absence/凭据扫描全绿；独立终审 P0/P1=0。当前分支 HEAD 已作为新 fixed-SHA 候选固定；完成外部 clean/blob 复核
+  并取得用户新授权前，不得再次进入 C。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -139,7 +145,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
-| **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；C1a 为本 clean-port 候选提交，开跑令填完整 SHA | `codex/tablet-tl1-c1a` | **A2/C1a 无机实现、全门与独审完成；待独立 C 就位并只采一次，app 未合 main** | 契约/gate 已合 main `589421a`；候选机械绑定 producer/T0 六个基线 blob，C1a 15/15、45/45、3/3，Debug 373/373、Release 261/261，P0/P1=0；保持 vivo 应用多窗开启；即使 origin 成立，runtime/layout/P0/execution 仍恒 false/unsupported |
+| **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 fixed SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；新候选已固定为当前分支 HEAD | `codex/tablet-tl1-c1a` | **C1a 已冻结失败；A 修复与全门/独审完成，app 未合 main** | run `tl1-c1a-20260826t114535z-63667b68ce4f` c1/c2 各一次、1982.304 ms、无补拍；origin 未成立，runtime/layout/P0/execution=false/unsupported；新门为 C1a 15/15、coverage 46/46、self 3/3、Debug 377/377、Release 261/261、终审 P0/P1=0；当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob 复核和新授权；vivo 应用多窗全程开启且未改设置 |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

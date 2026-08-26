@@ -4,6 +4,10 @@
 
 无机入口只运行 synthetic fixture gate；真机只能按下文 C1a 受控只读入口、在固定干净 SHA 上执行：
 
+> 2026-08-26 状态：fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已按失败
+> 冻结，禁止复用。A 道修复与标准全门/独审已完成；必须先提交新的完整 SHA、完成外部 clean/blob 复核，
+> 并取得用户对新 C 轮的明确授权，才能再次连接设备。不得把已冻结 run 写成 C1a 或 T-L1 通过。
+
 ```powershell
 pwsh -NoProfile -File scripts/run-tablet-layout-observation-v2-offline-gate.ps1
 ```
@@ -69,6 +73,13 @@ app 只接受 1..65,536 bytes strict UTF-8/RFC 8259 object，拒绝重复 key �
 重算 device canonical hash。完成这些 intrinsic 检查仍不等于 runner attest，不能把 production capability
 从 unavailable 改成 available。
 
+Windows 宿主写 T0 必须使用 `adb exec-in content write --uri <raw-canonical-uri>`。`exec-in` 的 binary stdin
+路径保持 CRLF 与全部原始 bytes；不得用普通 `adb shell content write`，后者会在 Windows text-mode stdin
+路径把 CRLF 归一为 LF。`exec-in` 会自行 escape command argv，因此 URI 参数必须是已通过 closed grammar 的
+raw canonical URI，不能预置字面 POSIX 单引号；status/c1/c2/result/abort 这些只读 endpoint 仍走
+`adb shell content read`，并继续用远端 POSIX 单引号保护完整 query。write 没有远端 ACK 通道，首次 status 的
+bounded wait 仍是唯一认证/完成边界。
+
 ## C1a 受控只读入口
 
 C1a 已有独立受控 runner 候选；必须在 runner/Android provider 完成独审并钉住新的完整 SHA 后运行：
@@ -90,6 +101,12 @@ pwsh -NoProfile -File scripts/run-tablet-layout-c1a.ps1 `
 开始前由用户把 vivo 平板保持在日常横屏、保持“应用多窗”开启，并把微信停在“文件传输助手”会话；runner
 不会导航或启动目标 App。项目适配设备原生双窗，不以关闭设备功能换绿。
 
+Android debug-only C1a adapter 的 observation `capture.revision_*` 是可逆 logical marker，而不是冒充 raw
+无障碍事件序号：`logical revision = raw event revision + capture ordinal`，其中 c1/c2 ordinal 固定为 1/2，
+可由 capture token 反算 raw。稳定静态页允许两帧 raw revision 相等；raw 下降、溢出、未知 token 或同一帧内
+raw event 漂移仍 fail closed。此映射只解决“恰好采了两帧且顺序明确”的表达，不删除 pane/title/focus/node/
+region 等真实诊断 blocker，也不修改 producer/T0 六个 baseline blob。
+
 正常证据固定落在：
 
 ```text
@@ -105,6 +122,20 @@ T0、observation、validation 三份文件的 artifact hash，并在 sidecar 原
 布尔只由 clean-port blob、fresh APK/install、provider 回显、同设备/T0、固定 argv 与实现/证据 hash 联合支撑。
 即使 observation 显示 `diagnostic_status=observed`，C1a 仍固定 runtime/layout/action/P0/execution 不放行。
 
+失败时不发布 success sidecar，只原子保留 `tablet-layout-c1a-failure.json` 与已经产生的只读证据。一次明确授权
+只允许一个 capture attempt；任一失败都必须冻结 evidence 并回 A，不能在同轮重安装、重采或补拍。
+
+## 2026-08-26 首次真机 C1a 冻结
+
+- 第一授权轮在安装阶段超时：`run_id=none`，未调用 c1/c2，也未产生 evidence；没有自动重试。
+- 用户另行明确授权后才开始第二轮。唯一 run `tl1-c1a-20260826t114535z-63667b68ce4f` 的 c1/c2 各执行
+  一次，capture ID 为 `capture-c1`/`capture-c2`，间隔 1982.304 ms；result 单次消费，无补拍。
+- trusted-runtime validation 失败且没有 success sidecar，故 origin 未成立；`runtime_evidence=false`、
+  `layout_accepted=false`、`p0_capability=unsupported`、`execution_grant=false`。完整证据 hash、reason 与修复
+  边界见 [`2026-08-26-T-L1-C1a只读取证失败.md`](../runs/2026-08-26-T-L1-C1a只读取证失败.md)。
+- 失败期间 vivo“应用多窗”保持开启，未修改设备设置。A 修复与标准全门/独审现已完成；当前分支 HEAD 已作为新 fixed-SHA 候选固定，
+  完成外部 clean/blob 复核并取得用户新授权前，不得进入下一轮 C。
+
 无设备门：
 
 ```powershell
@@ -115,6 +146,10 @@ pwsh -NoProfile -File scripts/check-tablet-layout-c1a-offline.ps1
 `validate-tablet-layout-observation-v2.ps1` 不带 `-FixtureMode` 时仍在读 caller path 前返回
 `runtime_producer_unavailable`；trusted-runtime 路径只由受控 C1a runner 内部调用，且 `runtime_evidence=false`。
 项目标准 Gradle 门还会执行 `:gateway:verifyTabletC1aReleaseAbsence`，证明 C1a provider 只存在于 debug APK。
+
+A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、Release 261/261、
+dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence、凭据扫描全绿，独立终审
+P0/P1=0。以上仍只是离线准入，不是 C1a/T-L1 通过；当前分支 HEAD 已作为新 fixed-SHA 候选固定，待完成外部 clean/blob 复核。
 
 完整协议见 [`tablet-layout-c1a/v1`](../contracts/tablet-layout-c1a-v1.md)。
 

@@ -372,12 +372,13 @@ function Get-TL1C1aSingleDevice {
     return [string]$rows[0].Serial
 }
 
-function ConvertTo-TL1C1aRemoteContentUriLiteral {
+function ConvertTo-TL1C1aContentUriArgument {
     param(
         [Parameter(Mandatory)][ValidateSet(
             'content_t0','content_status','content_c1','content_c2','content_result','content_abort'
         )][string]$Name,
-        [Parameter(Mandatory)][string]$Uri
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][bool]$BinaryStdin
     )
     $runPattern = '[a-z0-9][a-z0-9._-]{0,79}'
     $noncePattern = 'n-[0-9a-f]{32}'
@@ -401,7 +402,12 @@ function ConvertTo-TL1C1aRemoteContentUriLiteral {
     if ($Uri -cnotmatch $expected -or $Uri -match "['\x00-\x20\x7f%+]" ) {
         throw 'Content URI 不符合固定 closed grammar。'
     }
-    # adb shell 会把多 argv 无转义拼回远端 sh；必须让远端 shell 看到字面 POSIX 单引号。
+    if (($Name -ceq 'content_t0') -ne $BinaryStdin) {
+        throw 'Content URI transport 与 endpoint 不一致。'
+    }
+    # adb exec-in 会对 command argv 自行 escape_arg，必须给它 raw canonical URI；预置单引号会变成参数内容。
+    # adb shell 则把多 argv 无转义拼回远端 sh，只读 endpoint 必须显式提供 POSIX 单引号。
+    if ($BinaryStdin) { return $Uri }
     return "'$Uri'"
 }
 
@@ -431,8 +437,8 @@ function Invoke-TL1C1aAdb {
         [switch]$AllowFailure
     )
     $contentNames = @('content_t0','content_status','content_c1','content_c2','content_result','content_abort')
-    $remoteContentUri = if ($contentNames -ccontains $Name) {
-        ConvertTo-TL1C1aRemoteContentUriLiteral -Name $Name -Uri $Value
+    $contentUriArgument = if ($contentNames -ccontains $Name) {
+        ConvertTo-TL1C1aContentUriArgument -Name $Name -Uri $Value -BinaryStdin:($Name -ceq 'content_t0')
     } else { $null }
     $tail = switch ($Name) {
         'fingerprint' { @('shell','getprop','ro.build.fingerprint') }
@@ -442,12 +448,14 @@ function Invoke-TL1C1aAdb {
         'install' { @('install','-r','-t',$Value) }
         'package_path' { @('shell','pm','path',$script:TL1C1aPackageName) }
         'package_dump' { @('shell','dumpsys','package',$script:TL1C1aPackageName) }
-        'content_t0' { @('shell','content','write','--uri',$remoteContentUri) }
-        'content_status' { @('shell','content','read','--uri',$remoteContentUri) }
-        'content_c1' { @('shell','content','read','--uri',$remoteContentUri) }
-        'content_c2' { @('shell','content','read','--uri',$remoteContentUri) }
-        'content_result' { @('shell','content','read','--uri',$remoteContentUri) }
-        'content_abort' { @('shell','content','read','--uri',$remoteContentUri) }
+        # Windows adb shell 从重定向 stdin 经 CRT text mode 读取，会把 CRLF 归一为 LF。
+        # exec-in 在 adb 客户端启用 binary stdin，才能把 T0 producer 的原始 bytes 原样送进 provider。
+        'content_t0' { @('exec-in','content','write','--uri',$contentUriArgument) }
+        'content_status' { @('shell','content','read','--uri',$contentUriArgument) }
+        'content_c1' { @('shell','content','read','--uri',$contentUriArgument) }
+        'content_c2' { @('shell','content','read','--uri',$contentUriArgument) }
+        'content_result' { @('shell','content','read','--uri',$contentUriArgument) }
+        'content_abort' { @('shell','content','read','--uri',$contentUriArgument) }
         default { throw '内部错误：未知 C1a ADB 映射。' }
     }
     if ($Name -eq 'install' -and (-not [IO.Path]::IsPathFullyQualified($Value) -or

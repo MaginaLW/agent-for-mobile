@@ -95,6 +95,26 @@ internal fun interface C1aFrameCapture {
     ): RawTabletProbeFrame
 }
 
+/**
+ * C1a 的 revision 同时承担帧内原子 bracket 与跨帧采集顺序证明。
+ *
+ * GatewayA11yService.revision 只在相关无障碍事件发生时递增；页面稳定时 c1/c2 会读到同一个值，
+ * 不能单独证明两次采集的先后。这里把固定 capture ordinal 加到事件 revision 上：同一帧内每次
+ * 采样使用同一 ordinal，因而事件漂移仍会表现为 revision 不相等；同一 service 的 c2 则即使没有
+ * 新事件也严格大于 c1。超过 v2 closed schema 的值直接拒绝，不截断或回绕。
+ */
+internal fun c1aCaptureRevision(eventRevision: Long, captureToken: String): Long {
+    val captureOrdinal = when (captureToken) {
+        "c1" -> 1L
+        "c2" -> 2L
+        else -> throw IllegalArgumentException("C1a capture token has no revision ordinal")
+    }
+    require(eventRevision in 0L..(Int.MAX_VALUE.toLong() - captureOrdinal)) {
+        "C1a event revision is outside the closed observation schema"
+    }
+    return eventRevision + captureOrdinal
+}
+
 internal fun interface C1aExpiryCancellation {
     fun cancel()
 }

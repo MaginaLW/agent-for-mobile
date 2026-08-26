@@ -24,7 +24,7 @@ $Required=[string[]]@(
     'capture_host_wait_900', 'capture_span_15s', 'no_recapture', 'result_single_consume',
     'abort_cleanup', 'device_binding_pre_post', 'safe_atomic_evidence', 'trusted_runtime_validator',
     'public_runtime_unavailable', 'claim_scope_false', 'privacy_no_raw_secret', 'argv_allowlist',
-    'content_remote_shell_literal', 'content_stderr_empty', 'stdin_overall_deadline',
+    'content_remote_shell_literal', 'content_t0_binary_stdin', 'content_stderr_empty', 'stdin_overall_deadline',
     'installed_host_stream_pre_post', 'installed_stderr_cap_after_eof', 'installed_path_closed', 'post_apk_binding',
     'control_json_types_exact', 'a11y_bound_wait_vivo', 'implementation_hash_postcheck',
     'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate'

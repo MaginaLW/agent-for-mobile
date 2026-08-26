@@ -50,7 +50,11 @@ attest 或 runtime evidence；当前 production capability 继续 unavailable。
 
 - `capture`：run-local `cN`、`revision_before`、`revision_after`、`layout_revision`、`ime_revision`；四个
   revision 必须相等，capture token 必须严格按 frame index 为 `c1`、`c2`……且全局唯一，下一帧 revision
-  严格递增；帧间至少 900 ms，总跨度不超过 15 秒，末帧距验证时刻不超过 2 分钟；
+  严格递增；Android C1a 的字段是 composite logical marker：`logical revision = 同一无障碍服务的 raw event
+  revision + capture token ordinal`，可按 `raw = logical - ordinal` 还原，不冒充原始 event epoch。同一 service
+  identity 下 raw revision 相等或递增时 c1/c2 严格有序，raw 下降时仍阻断；任一帧读取期间的 raw revision
+  漂移仍会破坏四值相等并 fail closed；
+  帧间至少 900 ms，总跨度不超过 15 秒，末帧距验证时刻不超过 2 分钟；
 - `display`：display ID 的 known/unknown 状态、nullable ID/size 与 orientation；unknown、非横屏或额外
   display 都能被持久为诊断，但不能 observed；
 - `a11y_windows`：全部 interactive window（含 application、IME、accessibility overlay 与 system），最多 16；

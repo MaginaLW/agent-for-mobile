@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结；C1a debug-only provider、受控 runner/attest、无机门与独审已完成，待钉 clean-port SHA 并做唯一一次真机只读取证
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2 离线契约已合 main、隔离只读 producer 基线已冻结；fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；A 修复与标准全门/独审已完成，当前分支 HEAD 已作为新 fixed-SHA 候选固定，待外部 clean/blob 复核与用户新授权
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -99,8 +99,33 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 `fixture_contract_valid=true`，而 `runtime_evidence`、`wechat_layout_verified`、P0 与 execution grant 永远
 为 false。隔离只读 producer 基线 `b5769df7baba075fda47aec17f249a5caa124b92` 未接 ToolRegistry/MCP、
 未合 main；C1a 已从当前 main 干净移植，机械绑定 producer/T0 六个基线 blob，并完成独立受控
-runner/attest、release-absence、无机门与独审。下一步钉 content-attested SHA；完成唯一一次真机 C1a 后才可讨论 T-L1
-runtime accepted，P0 仍 unsupported。
+runner/attest、release-absence、无机门与独审。首个 fixed SHA `2635fc9...` 的 pre-C 全门只说明当时离线候选
+可进入 C，不等于真机 origin 或 T-L1 通过。
+
+2026-08-26 的第一个明确授权轮在安装阶段超时，`run_id=none`、无 c1/c2、无 evidence；按合同没有自动
+重试。用户另行明确授权后，第二轮唯一 run `tl1-c1a-20260826t114535z-63667b68ce4f` 只采 c1/c2 各一次，
+间隔 1982.304 ms、无补拍。trusted-runtime validation 失败且没有 success sidecar，origin 未成立；
+runtime/layout/微信布局/editor/P0/execution 均保持 false/unsupported。该失败不否定纯只读取证边界，也不授予
+任何能力；它只把 transport/order 两个离线缺口和真实设备诊断 blocker 带回 A。
+
+两个修复边界是：
+
+1. Windows 普通 `adb shell` stdin 把 T0 的 747 个 CRLF 归一为 LF，artifact hash 因而从
+   `43d9529ce10dca04c4bc60528d66376844f23edf0ebea9b63f0de04e8ff48fed` 变成 provider 所见的
+   `f9d548...`。T0 write 改为 `adb exec-in content write` 的 binary stdin，并向其传 raw canonical URI；
+   只读 content endpoint 继续使用 `adb shell` 与远端 POSIX 引号。
+2. 静态页没有新 a11y event，两帧 raw revision 合法保持 15/15，却被跨帧 strict-increase 误判为
+   `capture_order_invalid`。仅在 debug-only C1a adapter 使用可逆
+   `logical revision = raw event revision + capture ordinal`；capture token 可反算 raw，帧内 event 漂移、
+   raw 跨帧下降、未知 token 与溢出仍 fail closed。六个 producer/T0 baseline blob 不改。
+
+以上修复不得删除 `focus_fallback_insufficient`、`focus_target_conflict`、`node_binding_invalid`、
+`region_candidate_missing`、`target_title_not_unique`、`target_window_pane_missing`、
+`window_pane_bijection_invalid` 等真实诊断 blocker。即使下一轮可信 origin 成立，这些 blocker 仍使当前布局
+保持 diagnostic blocked；C1a 也始终不提升 runtime/layout/P0/execution。A 修复的标准全门已通过：C1a
+15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、runner 82/82、
+T-L1 24/24，assembleDebug/release absence/凭据扫描全绿；独立终审 P0/P1=0。vivo“应用多窗”在失败轮
+保持开启，设备设置未改。
 
 ### T-L2 · 横屏 P0
 
@@ -131,9 +156,10 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 2. **A1 归档**：T-L1 v1 `f5c8e15b...` 的 gate 11/11、契约 41/41、coverage 25/25 保留为安全
    fail-closed 的旧单窗合成门；真实 producer unavailable，不能拿去做 PA2553 日常形态真机验收。
 3. **A2/C1a 只读诊断**：v2 diagnostic-only observation schema、可信 T0→`probe_only` envelope 与隔离的
-   多 a11y window producer 已离线冻结；独立受控 runner/attest 已从当前 main 干净移植并机械绑定
-   producer/T0 六个基线 blob，无机门与独审完成。下一步钉 content-attested SHA，再在应用多窗保持开启的
-   PA2553 上唯一一次只读取证。结果固定不 accepted；用户已确认进入 C1a，但仍须独立 C 会话逐项就位后才开跑。
+   多 a11y window producer 已离线冻结；首个 fixed SHA 的首次真机取证已经按失败冻结，origin 未成立，绝不
+   写成 C1a 通过。A 道已修复 binary T0 transport 与可逆 capture logical revision，且不改 producer/T0
+   六个 baseline blob、不删除真实 diagnostic blocker；标准全门与独审已通过。当前分支 HEAD 已作为新 fixed-SHA 候选固定；下一步
+   完成外部 clean/blob 复核，再取得用户对新一轮的明确授权。结果仍固定不 accepted。
 4. **A3/C1b 只读契约**：根据 C1a 真实 window/root/node/region 形态冻结 v2 contract、对抗 fixture 与
    validator，再固定新 SHA 真机验收；即使 T-L1 accepted，P0 仍 unsupported。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
@@ -164,6 +190,10 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 - T0 blocked evidence 只可产生 `probe_only` 资格，不得改写原 assessment 或授予设备动作/P0。
 - 新 TabletLayoutProbe 隔离枚举多 window；禁止放宽手机共用 `applicationWindow()`/P0 validator。
 - T-L1 必须先有左栏同名标题、错 pane 同 Y marker、pane 漂移等反例，再进入横屏危险实现。
+- Windows 向 debug-only provider 写 fresh T0 原始 bytes 必须走 `adb exec-in` binary stdin 与 raw canonical URI；
+  普通 `adb shell` stdin 不可作为 byte-exact 通道。
+- C1a capture logical revision 必须可由 token 还原 raw event revision；它只证明采集顺序，不能掩盖帧内
+  event 漂移、raw 下降或任何 window/pane 诊断 blocker。
 
 ## 8. 无机 → C0 准入清单
 
@@ -185,4 +215,7 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 contract/gate `589421a` 已 5/5、24/24、coverage 24/24；producer 基线 `b5769df...` 专项 33/33。
 C1a clean-port 候选已完成 debug-only provider、受控 runner/attest 与 release-absence：C1a 15/15、
 coverage 45/45、self 3/3，Debug 373/373、Release 261/261，标准全门通过，跨层独审 P0/P1=0。
-以上仍全是无设备结果；原生双 window/pane 的真机 C1a 尚未采集，runtime/layout/P0/execution 不放行。
+这些是失败 fixed SHA `2635fc9...` 的 pre-C 历史计数。该 SHA 的真机 C1a 已冻结失败；当前 A 修复的
+标准全门为 C1a 15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、
+runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。提交新 fixed
+SHA、完成外部 clean/blob 复核并取得新授权前不得再进 C；runtime/layout/P0/execution 不放行。
