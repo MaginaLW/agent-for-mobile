@@ -134,8 +134,10 @@ class SafetyPolicy(
             )
         }
 
-        // 档位与"要不要确认"是两件独立的事：这里先算出命中词与档位，放行判定在下面，
-        // 一字未动。档位算错不会让任何动作少走一次确认，只会让批次 2 的措辞选错。
+        // 档位与"要不要确认"是两件独立的事：这里先算出命中词与档位，放行判定在下面。
+        // 通用 click/long_click 无法仅凭有限词表证明目标安全：无标签图标、OCR 漏字或未收录语言
+        // 都可能承载发送/支付/删除动作。因此这两类动作一律确认；词表只负责给已知语义分档，
+        // 未命中时按 fail-closed 归 I 级，绝不把"没有识别出危险"当成"已证明安全"。
         var tier: RiskTier? = null
         val dynamicReason = when {
             enterPressed -> {
@@ -153,6 +155,9 @@ class SafetyPolicy(
                 hit?.let {
                     tier = tierOfWord(it)
                     "${args.optString("action")} 危险目标（命中“$it”）"
+                } ?: run {
+                    tier = RiskTier.IRREVERSIBLE
+                    "${args.optString("action")} 目标语义未知（未命中风险词，按 fail-closed 要求确认）"
                 }
             }
 

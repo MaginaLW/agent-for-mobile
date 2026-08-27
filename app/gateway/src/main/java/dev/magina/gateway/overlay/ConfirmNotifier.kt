@@ -6,26 +6,76 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import dev.magina.gateway.core.ConfirmNotificationContent
 import dev.magina.gateway.core.RiskTier
 
 /**
- * 危险动作审批通知（批次 2）。与 [ConfirmOverlay] 的悬浮卡**并联**：同一次确认两条通道，
- * 谁先点谁算数，由 `ConfirmApprovalArbiter` 裁决。
+ * 通知允许暴露的操作面。这里刻意没有 `ALLOW`：通知监听器能够代发通知 action 的
+ * `PendingIntent`，所以批准能力只能留在已经绘制并启用的 [ConfirmOverlay] 按钮上。
+ */
+internal enum class ConfirmNotificationAction {
+    DENY,
+    DETAILS,
+}
+
+internal fun confirmNotificationActions(): List<ConfirmNotificationAction> = listOf(
+    ConfirmNotificationAction.DENY,
+    ConfirmNotificationAction.DETAILS,
+)
+
+/** Android `PendingIntent` 的身份与生命周期策略；纯函数产出，供 JVM 用例钉住。 */
+internal data class ConfirmNotificationPendingIntentSpec(
+    val requestCode: Int,
+    val dataUri: String,
+    val flags: Int,
+)
+
+internal fun confirmNotificationPendingIntentSpec(
+    confirmationId: String,
+    action: ConfirmNotificationAction,
+): ConfirmNotificationPendingIntentSpec {
+    val actionName = when (action) {
+        ConfirmNotificationAction.DENY -> "deny"
+        ConfirmNotificationAction.DETAILS -> "details"
+    }
+    return ConfirmNotificationPendingIntentSpec(
+        requestCode = when (action) {
+            ConfirmNotificationAction.DENY -> REQUEST_DENY
+            ConfirmNotificationAction.DETAILS -> REQUEST_DETAILS
+        },
+        // extras 不参与 PendingIntent 匹配；完整 confirmationId 必须进入 data 才能隔离两次确认。
+        dataUri = "gateway-confirmation://notification/$actionName/${confirmationId.encodeAsHex()}",
+        flags = PendingIntent.FLAG_CANCEL_CURRENT or
+            PendingIntent.FLAG_IMMUTABLE or
+            PendingIntent.FLAG_ONE_SHOT,
+    )
+}
+
+private fun String.encodeAsHex(): String = buildString(length * 4) {
+    this@encodeAsHex.forEach { character ->
+        val value = character.code
+        append(HEX_DIGITS[(value ushr 12) and 0x0f])
+        append(HEX_DIGITS[(value ushr 8) and 0x0f])
+        append(HEX_DIGITS[(value ushr 4) and 0x0f])
+        append(HEX_DIGITS[value and 0x0f])
+    }
+}
+
+/**
+ * 危险动作证据通知（批次 2）。它与 [ConfirmOverlay] 同时显示，但能力不对称：通知只允许
+ * **拒绝**或回到 App 查看证据，批准只能在已经完成绘制与取证门的可见悬浮卡上完成。
  *
- * 三条按 B 道拍板落地的形态，改之前先看理由：
+ * 两条沿用的通知形态，改之前先看理由：
  *
  * - **不声明 `USE_FULL_SCREEN_INTENT`**（决定二）。FSI 的作用正是把整页免解锁糊到锁屏上，
  *   而 L1 已经决定用 `VISIBILITY_PRIVATE` 把明文挡在锁屏外，两者直接冲突。不声明也顺带省掉
  *   一条需要用户去系统设置手动打开的依赖。通知停在展开态，点进去才看全部证据。
  * - **独立的 `IMPORTANCE_HIGH` 通道**，与前台服务那条 `IMPORTANCE_LOW` 分开：混在一起时
  *   用户嫌吵关掉整个通道，会连审批一起关掉而不自知。
- * - **`setAuthenticationRequired` 保持默认 false**：见 [allowAction] 上的说明，
- *   那是用户的明示选择，不是漏设的默认值；**当前尚无实际后果**（锁屏审批走不通）。
- *
  * **本类的实际适用面（2026-08-02 收窄）**：批次 2 现在验的是「屏幕亮着但人没盯着」——
- * heads-up 浮窗或下拉通知栏里点得到、点了能真的把决定送进网关。**锁屏那一面已移出**：
- * 锁屏下危险动作在前台身份这道门就结束了，这条通知根本不会被 post（spec §5.4）。
+ * heads-up 浮窗或下拉通知栏里能看到脱敏证据并及时拒绝。通知上的 action PendingIntent
+ * 可能被 NotificationListener 代发，因此绝不能携带批准能力。
  */
 object ConfirmNotifier {
 
@@ -41,10 +91,10 @@ object ConfirmNotifier {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "危险操作审批",
+            "危险操作确认提醒",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Agent 请求执行危险操作时推送，可直接在锁屏上批准或拒绝"
+            description = "Agent 请求执行危险操作时推送；可拒绝或查看证据，批准仅限屏幕确认卡"
             setShowBadge(true)
             lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
@@ -72,7 +122,7 @@ object ConfirmNotifier {
         val publicLine = ConfirmNotificationContent.publicLine(tier, action, target)
 
         // 锁屏上真正显示的那一份：只有"档位 · 动作 → 目标"，一个字的明文都没有。
-        // 免解锁批准（决定三）时用户读到的就是这一行——B 道拍板 §2.1 已把这条记为预期形态。
+        // 锁屏上只能看到这一行脱敏证据；通知不提供批准入口。
         val publicVersion = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(ConfirmNotificationContent.TITLE)
@@ -80,7 +130,7 @@ object ConfirmNotifier {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .build()
 
-        val notification = Notification.Builder(context, CHANNEL_ID)
+        val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(ConfirmNotificationContent.TITLE)
             .setContentText(publicLine)
@@ -101,7 +151,7 @@ object ConfirmNotifier {
             // 本轮**只动这一个变量**：autogroup 那条候选留给下一轮的差集数据来判。
             // **刻意不调 setOngoing(true)。** 2026-08-01 批次 2 真机验收：用户锁屏后根本看不到
             // 这条通知，两次 timed_out；系统与厂商的每 App 锁屏开关都是开的、通道 importance=4、
-            // 通知确实 posted 且 actions=3 带 publicVersion、fullscreenIntent=null。
+            // 通知确实 posted 且带 publicVersion、fullscreenIntent=null。
             // 同机旁证很硬：本包那条**常驻的前台服务通知（ongoing）同样不上锁屏**。
             // ongoing 通知带 FLAG_ONGOING_EVENT，锁屏通知列表历来把它过滤掉——而批次 2 的
             // 全部收益就是"锁屏上点一下"，为了防误划走而牺牲掉整个功能是本末倒置。
@@ -121,106 +171,89 @@ object ConfirmNotifier {
             // 通知本体只放脱敏版本上锁屏；完整三项锚点要解锁展开才看得到。
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion)
-            .addAction(allowAction(context, confirmationId, nonce))
-            .addAction(denyAction(context, confirmationId, nonce))
-            .addAction(detailsAction(context))
-            .build()
-        manager.notify(NOTIFICATION_ID, notification)
+        confirmNotificationActions().forEach { notificationAction ->
+            builder.addAction(
+                when (notificationAction) {
+                    ConfirmNotificationAction.DENY -> denyAction(context, confirmationId, nonce)
+                    ConfirmNotificationAction.DETAILS -> detailsAction(context, confirmationId)
+                }
+            )
+        }
+        manager.notify(NOTIFICATION_ID, builder.build())
     }
 
     fun cancel(context: Context) {
         context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 
-    /**
-     * 「允许本次」。
-     *
-     * **`setAuthenticationRequired(true)` 是有意没有加的**——这是用户 2026-08-01 经
-     * AskUserQuestion 作出的**明示选择**（B 道拍板 `2026-08-01-通知栏审批布局-B道拍板.md` §2），
-     * 不是遗漏的默认值，**请不要"顺手修掉"**。
-     *
-     * 被接受的风险，如实写在这里：**任何拿到这台手机的人，都能在 60 秒确认窗口内替用户批准
-     * 一笔转账、一次删除、一次改密码，不需要锁屏密码。** 批次 2 的红线（审批通道让大脑碰不到）
-     * 挡的是大脑，挡不到物理接触。
-     *
-     * 换来的是批次 2 的收益完整兑现：任何危险动作都是锁屏上一次点击。
-     *
-     * **但它当前一次都没被行使过，也就没有实际后果**（2026-08-02，spec §5.4/§5.5）：锁屏后目标
-     * App 不再是活动应用窗口，危险动作在 `SafetyGate.requireKnownForeground` 就以 `E_BLOCKED`
-     * 结束——**早于 `policy.assess`，所以卡和通知都不会出现**。免不免解锁根本没有机会体现。
-     * 写清这一点是因为本仓反复栽在同一族坑里：**尚未生效的说法留在原地会被当成真相**，
-     * 下一个人读到上面那段会以为免解锁已经在跑了。
-     *
-     * **重开条件**（任一命中就重新走 B 道）：手机曾离开用户控制（丢失、借出、被他人长时间持有），
-     * 或出现一次真实的误批准。届时最小改动就是在这里按 `riskTier` 给 I 级挂上
-     * `setAuthenticationRequired(true)`——接口就在手边，改动量很小，所以现在选宽松没有把路堵死。
-     * **另加一条**：一旦锁屏审批本身被重新打通（语义意图那篇 spec 落地），这个选择**当场变成
-     * 承重的**，应当在同一轮里重新确认一次，而不是沿用一个从未被行使过的决定。
-     */
-    private fun allowAction(context: Context, confirmationId: String, nonce: String): Notification.Action =
-        Notification.Action.Builder(
-            null,
-            "允许本次",
-            decisionIntent(context, confirmationId, nonce, allowed = true),
-        ).build()
-
     private fun denyAction(context: Context, confirmationId: String, nonce: String): Notification.Action =
         Notification.Action.Builder(
             null,
             "拒绝",
-            decisionIntent(context, confirmationId, nonce, allowed = false),
+            denyIntent(context, confirmationId, nonce),
         ).build()
 
-    /** 第三个按钮：解锁并回到设备，完整 8 项证据在已经显示着的确认卡上。 */
-    private fun detailsAction(context: Context): Notification.Action {
+    /** 第二个按钮：解锁并回到设备，完整 8 项证据在已经显示着的确认卡上。 */
+    private fun detailsAction(context: Context, confirmationId: String): Notification.Action {
+        val spec = confirmNotificationPendingIntentSpec(
+            confirmationId,
+            ConfirmNotificationAction.DETAILS,
+        )
         val open = Intent(Intent.ACTION_MAIN)
             .setClassName(context.packageName, "${context.packageName}.MainActivity")
+            .setData(Uri.parse(spec.dataUri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return Notification.Action.Builder(
             null,
             "查看全部证据",
             PendingIntent.getActivity(
                 context,
-                REQUEST_DETAILS,
+                spec.requestCode,
                 open,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                spec.flags,
             ),
         ).build()
     }
 
     /**
-     * 回执 PendingIntent。三处刻意的写法：
+     * 「拒绝」回执 PendingIntent。批准没有对应 builder，能力只存在于可见确认卡。
      *
      * - **显式组件 + 限定本包**：广播只可能落到自家不导出的 receiver 上。
      * - **`FLAG_IMMUTABLE`**：拿到这个 PendingIntent 的人改不了里面的 extras，
-     *   也就伪造不出"另一个 confirmationId / 另一个 allowed"。
-     * - **`FLAG_UPDATE_CURRENT` + 按 allowed 分开的 requestCode**：允许与拒绝是两个不同的
-     *   PendingIntent，不会互相覆盖；而同一次确认重复 post 时更新的是同一个，nonce 保持一致。
+     *   也就伪造不出另一个 confirmationId / nonce。
+     * - **唯一 data URI**：confirmationId 是 Android 匹配身份的一部分，A 的句柄不会被 B 更新。
+     * - **`FLAG_CANCEL_CURRENT | FLAG_ONE_SHOT`**：同一次确认重复 post 时旧句柄先失效，
+     *   新句柄成功发送一次后也立即失效；绝不使用会改写旧句柄 extras 的 UPDATE_CURRENT。
      */
-    private fun decisionIntent(
+    internal fun denyIntent(
         context: Context,
         confirmationId: String,
         nonce: String,
-        allowed: Boolean,
     ): PendingIntent {
+        val spec = confirmNotificationPendingIntentSpec(
+            confirmationId,
+            ConfirmNotificationAction.DENY,
+        )
         val intent = Intent(ACTION_DECIDE)
             .setClassName(context.packageName, ConfirmDecisionReceiver::class.java.name)
             .setPackage(context.packageName)
+            .setData(Uri.parse(spec.dataUri))
             .putExtra(EXTRA_CONFIRMATION_ID, confirmationId)
             .putExtra(EXTRA_NONCE, nonce)
-            .putExtra(EXTRA_ALLOWED, allowed)
+            .putExtra(EXTRA_ALLOWED, false)
         return PendingIntent.getBroadcast(
             context,
-            if (allowed) REQUEST_ALLOW else REQUEST_DENY,
+            spec.requestCode,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            spec.flags,
         )
     }
 
     /** 确认窗口之外再多给 15s：宁可晚一点被系统收走，不可早于人还能点的时候就消失。 */
     private const val TIMEOUT_SLACK_MS = 15_000L
 
-    private const val REQUEST_ALLOW = 0x9101
-    private const val REQUEST_DENY = 0x9102
-    private const val REQUEST_DETAILS = 0x9103
 }
+
+private const val HEX_DIGITS = "0123456789abcdef"
+private const val REQUEST_DENY = 0x9102
+private const val REQUEST_DETAILS = 0x9103

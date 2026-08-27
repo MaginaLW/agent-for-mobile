@@ -29,9 +29,9 @@
         </activity>
 
         <!--
-            通知栏审批的回执落点（批次 2）。
+            通知栏“拒绝”回执的落点（批次 2）；批准只来自可见确认卡，不经过广播。
             exported=false 是安全要求，不是习惯：只有本进程发出的显式广播能到这里。
-            配合 PendingIntent 的 FLAG_IMMUTABLE 与一次性 nonce，大脑没有任何路径替真人点头。
+            配合唯一、immutable、one-shot 的 PendingIntent 与一次性 nonce，旧句柄不能复用。
 
             **刻意没有声明 USE_FULL_SCREEN_INTENT**（B 道决定二）：FSI 的作用正是把整页免解锁
             糊到锁屏上，而锁屏那一层已经用 VISIBILITY_PRIVATE 把明文挡在外面，两者直接冲突。

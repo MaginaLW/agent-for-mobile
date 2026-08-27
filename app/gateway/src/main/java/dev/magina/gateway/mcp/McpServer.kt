@@ -1,5 +1,6 @@
 package dev.magina.gateway.mcp
 
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
@@ -27,7 +28,6 @@ import org.json.JSONObject
  */
 object McpServer {
 
-    private const val PROTOCOL_FALLBACK = "2025-03-26"
     private var engine: ApplicationEngine? = null
     val running: Boolean get() = engine != null
 
@@ -36,8 +36,14 @@ object McpServer {
         val guard = BearerAuthGuard(token)
         engine = embeddedServer(CIO, port = port, host = "127.0.0.1") {
             routing {
-                get("/health") { call.respondText("ok") }
-                get("/mcp") { call.respondText("", status = HttpStatusCode.MethodNotAllowed) }
+                get("/health") {
+                    if (acceptOriginOrRespond(call)) call.respondText("ok")
+                }
+                get("/mcp") {
+                    if (acceptOriginOrRespond(call)) {
+                        call.respondText("", status = HttpStatusCode.MethodNotAllowed)
+                    }
+                }
                 post("/mcp") { handle(call, guard) }
             }
         }.start(wait = false)
@@ -49,6 +55,7 @@ object McpServer {
     }
 
     private suspend fun handle(call: ApplicationCall, guard: BearerAuthGuard) {
+        if (!acceptOriginOrRespond(call)) return
         val verdict = guard.check(call.request.header("Authorization"))
         if (!verdict.allowed) {
             // 失败退避：拖慢猜测，不锁死端口（锁死会让同机乱打的进程把我们自己也挡在外面）。
@@ -66,6 +73,23 @@ object McpServer {
         val id = req.opt("id")
         val params = req.optJSONObject("params") ?: JSONObject()
 
+        if (!McpTransportPolicy.acceptsProtocolVersion(
+                method = method,
+                headerVersion = call.request.header("MCP-Protocol-Version"),
+            )
+        ) {
+            call.respondText(
+                rpcError(
+                    id ?: JSONObject.NULL,
+                    -32600,
+                    "unsupported MCP-Protocol-Version; supported=${McpTransportPolicy.SUPPORTED_PROTOCOL_VERSION}",
+                ).toString(),
+                contentType = ContentType.Application.Json,
+                status = HttpStatusCode.BadRequest,
+            )
+            return
+        }
+
         // 通知类消息无 id，按规范回 202
         if (id == null || id == JSONObject.NULL) {
             call.respondText("", status = HttpStatusCode.Accepted)
@@ -76,7 +100,10 @@ object McpServer {
             "initialize" -> rpcResult(
                 id,
                 JSONObject()
-                    .put("protocolVersion", params.optString("protocolVersion", PROTOCOL_FALLBACK))
+                    .put(
+                        "protocolVersion",
+                        McpTransportPolicy.negotiateProtocolVersion(params.opt("protocolVersion") as? String),
+                    )
                     .put("capabilities", JSONObject().put("tools", JSONObject()))
                     .put(
                         "serverInfo",
@@ -100,12 +127,27 @@ object McpServer {
                         JSONObject().put("type", "image").put("data", it).put("mimeType", result.imageMime),
                     )
                 }
-                // 信封自带 ok/error 语义，isError 恒 false 让大脑读结构化错误而非裸报错文本
-                rpcResult(id, JSONObject().put("content", content).put("isError", false))
+                rpcResult(
+                    id,
+                    JSONObject()
+                        .put("content", content)
+                        .put("isError", McpTransportPolicy.toolResultIsError(result.envelope)),
+                )
             }
             else -> rpcError(id, -32601, "method not found: $method")
         }
-        call.respondText(response.toString(), io.ktor.http.ContentType.Application.Json)
+        call.respondText(response.toString(), ContentType.Application.Json)
+    }
+
+    /** Origin 必须先于鉴权和正文处理；不可信网页不能借 localhost 与 token 端点交互。 */
+    private suspend fun acceptOriginOrRespond(call: ApplicationCall): Boolean {
+        if (McpTransportPolicy.acceptsOrigin(call.request.header("Origin"))) return true
+        call.respondText(
+            """{"error":"forbidden_origin"}""",
+            contentType = ContentType.Application.Json,
+            status = HttpStatusCode.Forbidden,
+        )
+        return false
     }
 
     private fun rpcResult(id: Any, result: JSONObject): JSONObject =

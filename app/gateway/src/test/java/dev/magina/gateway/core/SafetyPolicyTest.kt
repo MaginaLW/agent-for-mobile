@@ -376,6 +376,61 @@ class SafetyPolicyTest {
         assertTrue(decision is SafetyDecision.ConfirmationRequired)
     }
 
+    /**
+     * 有限词表只能识别已知危险语义，不能证明未命中目标安全。无标签图标、陌生文案和 OCR 漏字
+     * 都必须 fail-closed，且未知风险保守归 I 级。
+     */
+    @Test
+    fun `unknown click and long click targets fail closed`() {
+        val cases = listOf(
+            Triple("click", SafetyTarget(ref = "icon", bounds = "[1,2][30,40]", source = "a11y"), "无标签"),
+            Triple(
+                "click",
+                SafetyTarget(ref = "confirm", text = "确认", bounds = "[1,2][30,40]", source = "a11y"),
+                "未收录的确认文案",
+            ),
+            Triple(
+                "long_click",
+                SafetyTarget(ref = "continue", text = "Continue", bounds = "[1,2][30,40]", source = "a11y"),
+                "未收录文案",
+            ),
+            Triple(
+                "click",
+                SafetyTarget(ref = "ocr-1", text = "继续", bounds = "[1,2][30,40]", source = "ocr"),
+                "OCR 目标",
+            ),
+        )
+
+        cases.forEach { (action, target, description) ->
+            val decision = policy.assess(
+                "ui_action",
+                Level.W,
+                JSONObject().put("ref", target.ref).put("action", action),
+                normalContext.copy(target = target),
+            )
+
+            assertTrue("$description 的 $action 必须确认", decision is SafetyDecision.ConfirmationRequired)
+            decision as SafetyDecision.ConfirmationRequired
+            assertEquals("$description 的未知风险必须归 I 级", RiskTier.IRREVERSIBLE, decision.riskTier)
+            assertTrue(decision.actionSummary.contains("目标语义未知"))
+        }
+    }
+
+    /** fail-closed 只覆盖真正触发控件的 click/long_click，不扩大到 focus 等非触发动作。 */
+    @Test
+    fun `non click ui actions keep their static write policy`() {
+        val decision = policy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "input").put("action", "focus"),
+            normalContext.copy(
+                target = SafetyTarget(ref = "input", text = "输入框", bounds = "[1,2][30,40]", source = "a11y"),
+            ),
+        )
+
+        assertTrue(decision is SafetyDecision.Allowed)
+    }
+
     @Test
     fun `argument fingerprint is stable across JSON key order`() {
         val first = JSONObject().put("action", "click").put("ref", "r1")

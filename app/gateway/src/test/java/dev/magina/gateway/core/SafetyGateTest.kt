@@ -120,6 +120,33 @@ class SafetyGateTest {
     }
 
     @Test
+    fun `unlabeled click cannot reach executor without confirmation`() {
+        val clickArgs = JSONObject().put("ref", "icon").put("action", "click")
+        val context = initialContext.copy(
+            target = SafetyTarget(
+                ref = "icon",
+                bounds = "[900,1800][1080,1920]",
+                source = "a11y",
+            ),
+        )
+        var confirmerCalls = 0
+        var executorCalls = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; false },
+            contextProvider = { context },
+            onExecutionFailure = { fail("未知点击在门前被拒时不得记录执行失败") },
+        )
+
+        expectGatewayError(ErrorCode.E_BLOCKED) {
+            gate.execute("ui_action", Level.W, clickArgs) { _, _ -> executorCalls++ }
+        }
+
+        assertEquals(1, confirmerCalls)
+        assertEquals(0, executorCalls)
+    }
+
+    @Test
     fun `confirmation timeout never calls executor or failure recorder`() {
         var executorCalls = 0
         var failureRecords = 0

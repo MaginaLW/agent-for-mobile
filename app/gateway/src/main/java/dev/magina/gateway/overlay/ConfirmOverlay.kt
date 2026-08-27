@@ -53,11 +53,11 @@ object ConfirmOverlay {
          */
         onDecisionObserved: (TestConfirmationDecision, ApprovalChannel?) -> Unit = { _, _ -> },
         /**
-         * 并联的通知栏审批（批次 2）。给了它就同时推一条通知，锁屏上也能点。
+         * 与确认卡同时显示的通知证据面（批次 2）。通知只能拒绝或打开详情，批准能力只在
+         * 已完成绘制与取证门的可见确认卡上。
          *
-         * **两条通道共用下面那个 `future`**：`CompletableFuture.complete` 只会成功一次，
-         * 所以先点的那一边赢，后到的一律被丢弃——这就是接缝 2 要的那个 CAS，
-         * 不存在"卡上拒绝、通知上允许"同时生效的状态。
+         * 卡片决定与通知拒绝共用下面那个 `future`：`CompletableFuture.complete` 只会成功一次，
+         * 所以先到的有效决定赢，后到的一律被丢弃。
          */
         notification: ConfirmNotificationRequest? = null,
     ): Boolean {
@@ -327,8 +327,8 @@ object ConfirmOverlay {
             }
             if (!enablePosted) throw IllegalStateException("主线程 Handler 已停止")
             buttonsEnabled.get(2, TimeUnit.SECONDS)
-            // 通知在**卡的按钮已经可点之后**才推：早于它就会出现"锁屏上能批准，而卡还没画完、
-            // 取证也还没就绪"的窗口，等于让审批跑到证据前面去。
+            // 通知在**卡的按钮已经可点之后**才推：即便通知只有拒绝能力，也不能让本轮证据面
+            // 先于确认卡完成绘制与取证，避免用户看到尚未就绪的确认状态。
             notification?.let { request ->
                 ConfirmApprovalArbiter.open(request.confirmationId, request.nonce) { allowed ->
                     approval.decide(ApprovalChannel.NOTIFICATION, allowed)
@@ -350,7 +350,7 @@ object ConfirmOverlay {
                     )
                 }.onFailure { error ->
                     // 推不出通知不该让整条链失败：悬浮卡仍然在屏幕上，人照样能点。
-                    // 但必须留痕，否则"锁屏批准用不了"会被当成用户没看见。
+                    // 但必须留痕，否则"通知拒绝/证据提醒不可用"会被当成用户没看见。
                     android.util.Log.w("GatewayApproval", "审批通知推送失败，仅保留悬浮卡：$error")
                 }
             }

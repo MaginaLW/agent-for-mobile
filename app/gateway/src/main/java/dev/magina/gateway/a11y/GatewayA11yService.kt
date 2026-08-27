@@ -88,7 +88,7 @@ class GatewayA11yService : AccessibilityService() {
         val source: String,
     )
 
-    private val refs = HashMap<String, RefEntry>()
+    private val refs = SnapshotRefRegistry<RefEntry>()
     @Volatile private var lastSnapshotRev = -1L
     private val shotExecutor = Executors.newSingleThreadExecutor()
     private val freshVisionSession = FreshVisionSession(
@@ -366,8 +366,9 @@ class GatewayA11yService : AccessibilityService() {
     /** scope: interactive(默认，可交互 + 带文本) / full(全部有信号节点)。上限截断防 token 爆炸。 */
     @Synchronized
     fun snapshot(scope: String, maxElements: Int = 200): JSONObject {
-        refs.clear()
         lastSnapshotRev = revision
+        // 每次快照都切换命名空间；不能让上一屏的 e1/o1 在下一屏静默绑定到另一个目标。
+        val refBatch = refs.beginSnapshot(lastSnapshotRev)
         val elements = JSONArray()
         val jsonByRef = HashMap<String, JSONObject>()
         // interactive 与 full 的差异在文本截断长度：interactive 面向操作（短），full 面向阅读（长）
@@ -393,9 +394,13 @@ class GatewayA11yService : AccessibilityService() {
             if (include && node.isVisibleToUser) {
                 if (count >= maxElements) { truncated = true; return }
                 count += 1
-                val ref = "e$count"
                 val b = Rect().also { node.getBoundsInScreen(it) }
-                refs[ref] = RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y")
+                val ref = refs.bind(
+                    refBatch,
+                    UiRefSource.A11Y,
+                    count,
+                    RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y"),
+                )
                 if (inFgWin) fgCount += 1
                 val json = JSONObject()
                     .put("ref", ref)
@@ -432,9 +437,11 @@ class GatewayA11yService : AccessibilityService() {
                 for (line in shot.lines) {
                     if (truncated) break
                     // 每行都重新取候选：上一行可能刚把某个宿主变成 fused，它就不该再参与了。
-                    val hosts = refs.entries
-                        .filter { it.value.node != null }
-                        .map { FusionHost(it.key, it.value.bounds.toOcrBox(), it.value.label, it.value.desc, it.value.source) }
+                    val hosts = refs.currentEntries()
+                        .filter { it.second.node != null }
+                        .map { (ref, entry) ->
+                            FusionHost(ref, entry.bounds.toOcrBox(), entry.label, entry.desc, entry.source)
+                        }
                     when (val decision = OcrFusionPolicy.decide(
                         lineBox = line.bounds.toOcrBox(),
                         lineText = line.text,
@@ -442,8 +449,8 @@ class GatewayA11yService : AccessibilityService() {
                         normalize = OcrEngine::norm,
                     )) {
                         is FusionDecision.Fuse -> {
-                            val he = refs.getValue(decision.hostRef)
-                            refs[decision.hostRef] = he.copy(label = line.text, source = "fused")
+                            val he = checkNotNull(refs.current(decision.hostRef))
+                            check(refs.replace(decision.hostRef, he.copy(label = line.text, source = "fused")))
                             jsonByRef[decision.hostRef]
                                 ?.put("text", line.text.take(cap))
                                 ?.put("source", "fused")
@@ -456,9 +463,13 @@ class GatewayA11yService : AccessibilityService() {
                     if (count >= maxElements) { truncated = true; break }
                     count += 1
                     ocrIdx += 1
-                    val ref = "o$ocrIdx"
                     val b = Rect(line.bounds)
-                    refs[ref] = RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr")
+                    val ref = refs.bind(
+                        refBatch,
+                        UiRefSource.OCR,
+                        ocrIdx,
+                        RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr"),
+                    )
                     elements.put(
                         JSONObject()
                             .put("ref", ref)
@@ -839,11 +850,29 @@ class GatewayA11yService : AccessibilityService() {
     )
 
     /** ref → 目标；节点刷新失败/指纹不符 → E_STALE_REF（点击前二次校验，M0 误触对策）。 */
+    @Synchronized
     fun resolve(ref: String): Target {
         rejectWhileConfirming()
-        val e = refs[ref] ?: throw GatewayError(
-            ErrorCode.E_NOT_FOUND, "ref $ref 不存在（可能来自旧 snapshot）",
-            channel = "a11y", fallback = "先 ui_snapshot 再按新 ref 操作",
+        val lookup = refs.lookup(ref)
+        val e = when (lookup.state) {
+            UiRefLookupState.CURRENT -> checkNotNull(lookup.value)
+            UiRefLookupState.STALE -> throw GatewayError(
+                ErrorCode.E_STALE_REF, "ref $ref 来自旧 snapshot，拒绝重新绑定",
+                channel = "a11y", fallback = "先 ui_snapshot 再按新 ref 操作",
+            )
+            UiRefLookupState.MISSING -> throw GatewayError(
+                ErrorCode.E_NOT_FOUND, "ref $ref 不存在",
+                channel = "a11y", fallback = "先 ui_snapshot 再按新 ref 操作",
+            )
+        }
+        // 不把 live revision 与 snapRev 硬比较：确认卡自身的 add/remove window 会推进全局
+        // revision，若在这里比较，所有需要真人确认的 click 都会在确认后必然 stale。
+        // 跨快照/跨进程重绑定由 ref 的 session + generation 拒绝；同一快照内的真实目标漂移
+        // 继续由下面的 node.refresh 与文本/描述/几何指纹复核 fail-closed。
+        if (e.snapRev != lastSnapshotRev) throw GatewayError(
+            ErrorCode.E_STALE_REF, "ref $ref 不属于当前 snapshot revision",
+            channel = "a11y", retryable = true,
+            fallback = "先 ui_snapshot 再按新 ref 操作",
         )
         if (e.node == null) return resolveOcr(ref, e)
         if (!e.node.refresh()) throw GatewayError(
@@ -913,7 +942,10 @@ class GatewayA11yService : AccessibilityService() {
                 channel = "vision", fallback = "ui_snapshot 重新定位后再操作",
             )
         val b = Rect(hit.bounds).apply { offset(crop.left, crop.top) }
-        refs[ref] = e.copy(bounds = b)
+        if (!refs.replace(ref, e.copy(bounds = b))) throw GatewayError(
+            ErrorCode.E_STALE_REF, "OCR ref $ref 已被新 snapshot 取代",
+            channel = "vision", fallback = "ui_snapshot 重新定位",
+        )
         return Target(null, e.label, e.desc, b, "ocr")
     }
 

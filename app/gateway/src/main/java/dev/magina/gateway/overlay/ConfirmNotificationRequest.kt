@@ -3,9 +3,9 @@ package dev.magina.gateway.overlay
 import dev.magina.gateway.core.RiskTier
 
 /**
- * 推一条并联审批通知所需的全部信息（批次 2）。
+ * 推一条与确认卡并行显示的证据/拒绝通知所需的全部信息（批次 2）。
  *
- * [nonce] 是**一次性审批凭据**：只存在于本进程内存与 PendingIntent 的 extras 里，
+ * [nonce] 是**一次性拒绝回执凭据**：只存在于本进程内存与 PendingIntent 的 extras 里，
  * 不进 MCP 信封、不进 trace、不进审计、不进日志——大脑没有任何路径能拿到它。
  * 它与大脑调工具用的 gateway token 是两套东西，从不共用（接缝 1）。
  */
