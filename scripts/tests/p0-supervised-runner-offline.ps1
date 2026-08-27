@@ -85,7 +85,7 @@ function Assert-FixtureDispatchTreeDrainedBeforeCleanup($Fixture, [string]$Conte
     Assert-True ($order -contains 'before_device_cleanup') "$Context 未在设备 cleanup 前验证后代退出。"
     Assert-True ($order -contains 'before_lease_release') "$Context 未在 lease release 前验证后代退出。"
 
-    $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $Fixture.LocalAppData
+    $lockPath = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $Fixture.LocalAppData
     Assert-True (-not (Test-Path -LiteralPath $lockPath)) "$Context 后主机级租约文件仍未清理。"
     $after = Open-DispatchLock -Path $lockPath -Owner "after-$Context"
     try { Assert-True ($null -ne $after.Stream) "$Context 后无法重新取得设备锁。" }
@@ -332,6 +332,17 @@ function Remove-P0PrivateTemporaryFile {
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
     Copy-Item -LiteralPath $SourceDeviceLockHelper `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
+    # 生产实现必须只取 Windows Known Folder；fixture 副本用显式测试变量隔离并行离线用例。
+    $fixtureLockLibrary = Join-Path $repo 'scripts\lib\dispatch-lock.ps1'
+    $fixtureLockOverride = @'
+
+function Get-DispatchGlobalLockPath {
+    $testRoot = [Environment]::GetEnvironmentVariable('P0_TEST_ONLY_LOCALAPPDATA', 'Process')
+    if ([string]::IsNullOrWhiteSpace($testRoot)) { throw 'fixture lock root missing' }
+    return Initialize-DispatchLockParent -Path (Join-Path $testRoot 'agent-for-mobile\locks\device-v1.lock')
+}
+'@
+    [IO.File]::AppendAllText($fixtureLockLibrary, $fixtureLockOverride, [Text.UTF8Encoding]::new($false))
     # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
@@ -1011,9 +1022,7 @@ function Invoke-FixtureRunner {
         $start.ArgumentList.Add($arg)
     }
     $start.Environment['P0_FAKE_STATE'] = $Fixture.State
-    # fixture runner 仍走真实的“主机级”路径算法，但每个 fixture 用自己的伪 LOCALAPPDATA，
-    # 避免离线套件分片互相争用开发机的生产设备锁。
-    $start.Environment['LOCALAPPDATA'] = $Fixture.LocalAppData
+    $start.Environment['P0_TEST_ONLY_LOCALAPPDATA'] = $Fixture.LocalAppData
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     try {
@@ -1157,10 +1166,10 @@ try {
         Assert-NotMatches (Get-Content -LiteralPath $SourceHealthProbe -Raw) '\?\.'
         $fixtureA = New-Fixture happy
         $fixtureB = New-Fixture happy
-        # 两个不同 repo/worktree 显式共享同一个主机 LocalAppData；路径不得含任一 repo。
+        # 两个不同 repo/worktree 的测试副本显式共享同一个主机锁根；路径不得含任一 repo。
         $fixtureB.LocalAppData = $fixtureA.LocalAppData
-        $pathA = Get-DispatchGlobalLockPath -LocalAppDataPath $fixtureA.LocalAppData
-        $pathB = Get-DispatchGlobalLockPath -LocalAppDataPath $fixtureB.LocalAppData
+        $pathA = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $fixtureA.LocalAppData
+        $pathB = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $fixtureB.LocalAppData
         Assert-True ($pathA -ceq $pathB) '不同 worktree 没有解析到同一条主机级设备锁。'
         Assert-NotMatches $pathA ([regex]::Escape($fixtureA.Repo))
         Assert-NotMatches $pathB ([regex]::Escape($fixtureB.Repo))
@@ -1199,7 +1208,7 @@ try {
         $readyPath = Join-Path $root 'child-ready.txt'
         $releasePath = Join-Path $root 'release-child.txt'
         $childPidPath = Join-Path $root 'child-pid.txt'
-        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $localAppData
+        $lockPath = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $localAppData
 
         $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = $PwshPath
@@ -1407,7 +1416,7 @@ try {
         $cleanupAttempts = @(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch-resource-cleanup.log'))
         Assert-True ($cleanupAttempts -contains 'dispatch gate') 'pre-start 故障未关闭 gate。'
         Assert-True ($cleanupAttempts -contains 'job handle') 'pre-start 故障未关闭空 Job。'
-        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $fixture.LocalAppData
+        $lockPath = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $fixture.LocalAppData
         Assert-True (-not (Test-Path -LiteralPath $lockPath)) 'pre-start 故障后根 lease 未释放。'
         $after = Open-DispatchLock -Path $lockPath -Owner 'after-pre-start-failure'
         try { Assert-True ($null -ne $after.Stream) 'pre-start 故障后无法重取设备锁。' }
@@ -1423,7 +1432,7 @@ try {
         foreach ($expected in @('stdout stream','stderr stream','dispatch gate','job handle')) {
             Assert-True ($cleanupAttempts -contains $expected) "stdout Dispose 故障阻断了 $expected 的清理尝试。"
         }
-        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $fixture.LocalAppData
+        $lockPath = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $fixture.LocalAppData
         Assert-True (-not (Test-Path -LiteralPath $lockPath)) '资源 Dispose 故障后根 lease 未释放。'
         $after = Open-DispatchLock -Path $lockPath -Owner 'after-resource-cleanup-failure'
         try { Assert-True ($null -ne $after.Stream) '资源 Dispose 故障后无法重取设备锁。' }

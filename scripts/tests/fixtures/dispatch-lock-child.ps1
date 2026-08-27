@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $lease = $null
 try {
-    $path = Get-DispatchGlobalLockPath -LocalAppDataPath $LocalAppDataPath
+    $path = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $LocalAppDataPath
     # token 不在命令行；Open-DispatchLock 从直属父进程传来的进程环境自动 join。
     $lease = Open-DispatchLock -Path $path -Owner 'offline-child'
     Set-Content -LiteralPath $ReadyPath -Value $PID -Encoding ascii

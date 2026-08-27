@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . $HelperPath
 
-$path = Get-DispatchGlobalLockPath -LocalAppDataPath $LocalAppDataPath
+$path = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $LocalAppDataPath
 $lease = Open-DispatchLock -Path $path -Owner 'offline-parent'
 
 $start = [Diagnostics.ProcessStartInfo]::new()

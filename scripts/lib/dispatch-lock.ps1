@@ -3,8 +3,8 @@
 主机级设备租约（执行 harness spec §4.2）。
 
 不同 git worktree 可能同时指向同一台手机，所以锁不得放在仓库里。生产调用统一使用
-%LOCALAPPDATA%\agent-for-mobile\locks\device-v1.lock；LOCALAPPDATA 不可用时只接受
-Windows 的 LocalApplicationData known folder，二者都不可用就硬失败，绝不退回当前目录。
+Windows LocalApplicationData Known Folder 下的 agent-for-mobile\locks\device-v1.lock；生产路径
+不读取可注入的 LOCALAPPDATA 环境变量。显式替代根目录仅供离线测试，生产调用必须无参。
 
 租约文件与短时 gate 分工：
 * gate 只串行化“新建 / join / 最后一人清理”这几个很短的临界区；
@@ -188,22 +188,21 @@ function Close-DispatchLockDirectoryGuards {
 }
 
 function Get-DispatchGlobalLockPath {
-    param([AllowEmptyString()][string]$LocalAppDataPath)
+    param([AllowEmptyString()][string]$TestOnlyLocalAppDataPath)
 
-    if (-not $PSBoundParameters.ContainsKey('LocalAppDataPath')) {
-        $LocalAppDataPath = $env:LOCALAPPDATA
-        if ([string]::IsNullOrWhiteSpace($LocalAppDataPath)) {
-            $LocalAppDataPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-        }
+    if ($PSBoundParameters.ContainsKey('TestOnlyLocalAppDataPath')) {
+        $localAppDataPath = $TestOnlyLocalAppDataPath
+    } else {
+        $localAppDataPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
     }
-    if ([string]::IsNullOrWhiteSpace($LocalAppDataPath)) {
+    if ([string]::IsNullOrWhiteSpace($localAppDataPath)) {
         throw '找不到稳定的 LocalApplicationData；拒绝退回 worktree 创建设备锁。'
     }
-    if (-not [IO.Path]::IsPathFullyQualified($LocalAppDataPath)) {
+    if (-not [IO.Path]::IsPathFullyQualified($localAppDataPath)) {
         throw 'LocalApplicationData 必须是绝对路径；拒绝在 worktree 创建设备锁。'
     }
 
-    $base = [IO.Path]::GetFullPath($LocalAppDataPath)
+    $base = [IO.Path]::GetFullPath($localAppDataPath)
     $lockDir = Join-Path (Join-Path $base 'agent-for-mobile') 'locks'
     return Initialize-DispatchLockParent -Path (Join-Path $lockDir 'device-v1.lock')
 }

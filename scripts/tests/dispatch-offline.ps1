@@ -8,6 +8,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $SourceRepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $SourceDispatchPath = Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'
+$SourceLockLibraryPath = Join-Path $SourceRepoRoot 'scripts\lib\dispatch-lock.ps1'
 $TestRoot = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-dispatch-offline-" + [guid]::NewGuid().ToString('N'))
 $RepoRoot = Join-Path $TestRoot 'repo'
 $DispatchPath = Join-Path $RepoRoot 'scripts\dispatch.ps1'
@@ -111,7 +112,7 @@ function Invoke-Dispatch {
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $start.Environment['PATH'] = $FakeBin + [IO.Path]::PathSeparator + $start.Environment['PATH']
     $start.Environment['DISPATCH_TEST_SENTINEL_DIR'] = $SentinelDir
-    $start.Environment['LOCALAPPDATA'] = Join-Path $TestRoot 'localappdata'
+    $start.Environment['DISPATCH_TEST_LOCK_ROOT'] = Join-Path $TestRoot 'localappdata'
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
@@ -222,6 +223,16 @@ try {
             Copy-Item -LiteralPath $sourceDir -Destination $destinationParent -Recurse
         }
     }
+    $fixtureLockHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
+    $fixtureLockOverride = @'
+
+function Get-DispatchGlobalLockPath {
+    $testRoot = [Environment]::GetEnvironmentVariable('DISPATCH_TEST_LOCK_ROOT', 'Process')
+    if ([string]::IsNullOrWhiteSpace($testRoot)) { throw 'fixture lock root missing' }
+    return Initialize-DispatchLockParent -Path (Join-Path $testRoot 'agent-for-mobile\locks\device-v1.lock')
+}
+'@
+    [IO.File]::AppendAllText($fixtureLockHelper, $fixtureLockOverride, [Text.UTF8Encoding]::new($false))
     # DryRun 只需要配置路径，不需要配置内容；fixture 禁止复制仓库里可能存在的私密 gateway 配置。
     New-Item -ItemType Directory -Path (Join-Path $RepoRoot 'configs') -Force | Out-Null
     Assert-True ((Get-FileHash -LiteralPath $SourceDispatchPath).Hash -ceq (Get-FileHash -LiteralPath $DispatchPath).Hash) `
@@ -527,7 +538,6 @@ public static class Program {
     Assert-True (Test-Path -LiteralPath $fixtureBrainHelper -PathType Leaf) `
         '测试设施错误：fixture 缺少 dispatch brain helper。'
     . $fixtureBrainHelper
-    $fixtureLockHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
     Assert-True (Test-Path -LiteralPath $fixtureLockHelper -PathType Leaf) `
         '测试设施错误：fixture 缺少 dispatch lock helper。'
     . $fixtureLockHelper
@@ -1527,19 +1537,48 @@ session_id: offline
     }
 
     Test-Case '主机级锁拒绝 junction 且租约期间目录不可换链' {
+        . $SourceLockLibraryPath
+        try {
+        $knownFolderRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+        $expectedProductionPath = [IO.Path]::GetFullPath(
+            (Join-Path $knownFolderRoot 'agent-for-mobile\locks\device-v1.lock'))
+        $savedLocalAppData = $env:LOCALAPPDATA
+        try {
+            $env:LOCALAPPDATA = Join-Path $TestRoot 'attacker-controlled-a'
+            $productionPathA = Get-DispatchGlobalLockPath
+            $env:LOCALAPPDATA = Join-Path $TestRoot 'attacker-controlled-b'
+            $productionPathB = Get-DispatchGlobalLockPath
+        }
+        finally { $env:LOCALAPPDATA = $savedLocalAppData }
+        Assert-True ($productionPathA -ceq $expectedProductionPath) `
+            '生产设备锁路径受 LOCALAPPDATA 环境变量影响。'
+        Assert-True ($productionPathB -ceq $expectedProductionPath) `
+            '生产设备锁路径随 LOCALAPPDATA 环境变量漂移。'
+        $lockLibrarySource = Get-Content -LiteralPath $SourceLockLibraryPath -Raw
+        Assert-NotMatches $lockLibrarySource '\$env:LOCALAPPDATA'
+        foreach ($productionCaller in @(
+            (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\run-p0-safety-smoke.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\run-tablet-layout-c1b.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\tablet-layout-c1a-t0-adb-sidecar.ps1')
+        )) {
+            Assert-NotMatches (Get-Content -LiteralPath $productionCaller -Raw) `
+                'Get-DispatchGlobalLockPath\s+-TestOnlyLocalAppDataPath'
+        }
+
         $junctionBase = Join-Path $TestRoot 'junction-localappdata'
         $junctionTarget = Join-Path $TestRoot 'junction-target'
         New-Item -ItemType Directory -Path $junctionBase, $junctionTarget -Force | Out-Null
         New-Item -ItemType Junction -Path (Join-Path $junctionBase 'agent-for-mobile') `
             -Target $junctionTarget | Out-Null
         $junctionRejected = $false
-        try { $null = Get-DispatchGlobalLockPath -LocalAppDataPath $junctionBase }
+        try { $null = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $junctionBase }
         catch { $junctionRejected = $true }
         Assert-True $junctionRejected 'LocalAppData 下的 junction 绕过了设备锁路径验证。'
 
         $stableBase = Join-Path $TestRoot 'stable-localappdata'
         New-Item -ItemType Directory -Path $stableBase -Force | Out-Null
-        $stablePath = Get-DispatchGlobalLockPath -LocalAppDataPath $stableBase
+        $stablePath = Get-DispatchGlobalLockPath -TestOnlyLocalAppDataPath $stableBase
         $stableLease = Open-DispatchLock -Path $stablePath -Owner 'directory-guard-test' -LeaseToken ''
         try {
             $agentDirectory = Join-Path $stableBase 'agent-for-mobile'
@@ -1553,6 +1592,8 @@ session_id: offline
             Assert-True $renameRejected '活跃租约未用目录 guard 阻止锁路径换链。'
         }
         finally { [void](Close-DispatchLockLease -Lease $stableLease) }
+        }
+        finally { . $fixtureLockHelper }
     }
 
     Test-Case '仍被持有的锁必拒且不删锁文件' {
