@@ -1,6 +1,6 @@
 #Requires -Version 7
 [CmdletBinding()]
-param()
+param([string]$Filter = '*')
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -13,7 +13,7 @@ $RepoRoot = Join-Path $TestRoot 'repo'
 $DispatchPath = Join-Path $RepoRoot 'scripts\dispatch.ps1'
 $TracesDir = Join-Path $RepoRoot 'docs\runs\traces'
 $LedgerPath = Join-Path $RepoRoot 'docs\runs\ledger.csv'
-$LockPath = Join-Path $RepoRoot 'scripts\.dispatch.lock'
+$LockPath = Join-Path $TestRoot 'localappdata\agent-for-mobile\locks\device-v1.lock'
 $PwshPath = (Get-Process -Id $PID).Path
 
 if (-not (Test-Path -LiteralPath $SourceDispatchPath -PathType Leaf)) {
@@ -111,6 +111,7 @@ function Invoke-Dispatch {
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $start.Environment['PATH'] = $FakeBin + [IO.Path]::PathSeparator + $start.Environment['PATH']
     $start.Environment['DISPATCH_TEST_SENTINEL_DIR'] = $SentinelDir
+    $start.Environment['LOCALAPPDATA'] = Join-Path $TestRoot 'localappdata'
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
@@ -179,6 +180,7 @@ function Invoke-Dispatch {
 
 function Test-Case {
     param([string]$Name, [scriptblock]$Body)
+    if ($Name -notlike $Filter) { return }
     try {
         & $Body
         $script:Passed++
@@ -189,6 +191,23 @@ function Test-Case {
         Write-Host "FAIL  $Name" -ForegroundColor Red
         Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
     }
+}
+
+function Invoke-TranscriptFixture {
+    param(
+        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines,
+        [switch]$AllowPartial
+    )
+    $trace = Join-Path $SentinelDir ("transcript-$([guid]::NewGuid().ToString('N')).jsonl")
+    try {
+        $Lines | Set-Content -LiteralPath $trace -Encoding utf8
+        if ($AllowPartial) {
+            return Read-DispatchTraceTranscript -TracePath $trace -Brain $Brain -AllowPartial
+        }
+        return Read-DispatchTraceTranscript -TracePath $trace -Brain $Brain
+    }
+    finally { Remove-Item -LiteralPath $trace -Force -ErrorAction SilentlyContinue }
 }
 
 try {
@@ -227,6 +246,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:8848/mcp'
+                timeout = 420000
                 headers = @{ Authorization = "Bearer $testBearer" }
             }
         }
@@ -236,6 +256,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:8848/mcp'
+                timeout = 420000
                 headers = @{ Authorization = 'Bearer <GATEWAY_TOKEN>' }
             }
         }
@@ -245,6 +266,7 @@ try {
             gateway = @{
                 type = 'http'
                 url = 'http://127.0.0.1:9999/mcp'
+                timeout = 420000
                 headers = @{ Authorization = "Bearer $testBearer" }
             }
         }
@@ -256,10 +278,16 @@ try {
     $fakeAdb = @'
 @echo off
 >>"%DISPATCH_TEST_SENTINEL_DIR%\adb-called.txt" echo %*
+if /I "%1"=="get-state" (
+  echo device
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="input" if /I "%3"=="keyevent" exit /b 0
 if /I "%1"=="get-serialno" (
   echo FAKE-DISPATCH-DEVICE
   exit /b 0
 )
+if /I "%1"=="forward" exit /b 0
 exit /b 97
 '@
     Set-Content -LiteralPath (Join-Path $FakeBin 'adb.cmd') -Value $fakeAdb -Encoding ascii
@@ -272,6 +300,206 @@ exit /b 97
 "@
         Set-Content -LiteralPath (Join-Path $FakeBin "$tool.cmd") -Value $fakeTool -Encoding ascii
     }
+    $fakeClaude = @'
+@echo off
+>>"%DISPATCH_TEST_SENTINEL_DIR%\claude-called.txt" echo %*
+>"%DISPATCH_TEST_SENTINEL_DIR%\claude-lock-env.txt" echo [%AGENT_MOBILE_DEVICE_LOCK_LEASE%]
+echo {"type":"result","subtype":"success","result":"\u7ed3\u679c\uff1a\u6210\u529f","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1,"total_cost_usd":0}
+exit /b 0
+'@
+    Set-Content -LiteralPath (Join-Path $FakeBin 'claude.cmd') -Value $fakeClaude -Encoding ascii
+
+    # 真正启动一个完全离线的 fake codex.exe，锁住 argv/stdin/env/JSONL/exit-code 契约；
+    # 生产 resolver 没有测试后门，只有 TEMP fixture 的调用点被显式注入 executable+version override。
+    $fakeCodexSource = Join-Path $SentinelDir 'fake-codex.cs'
+    $fakeCodexExe = Join-Path $FakeBin 'codex.exe'
+    @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Threading;
+
+public static class Program {
+    public static int Main(string[] args) {
+        string sentinel = Environment.GetEnvironmentVariable("DISPATCH_TEST_SENTINEL_DIR");
+        if (String.IsNullOrEmpty(sentinel)) return 91;
+        if (Array.IndexOf(args, "--dispatch-flood-descendant") >= 0) {
+            string descendantScenario = Environment.GetEnvironmentVariable("DISPATCH_TEST_CODEX_SCENARIO") ?? "unknown";
+            File.WriteAllText(Path.Combine(sentinel, descendantScenario + "-descendant-started.txt"),
+                Process.GetCurrentProcess().Id.ToString(), Encoding.ASCII);
+            Thread.Sleep(2500);
+            File.WriteAllText(Path.Combine(sentinel, descendantScenario + "-descendant-survived.txt"),
+                "survived", Encoding.ASCII);
+            Thread.Sleep(10000);
+            return 0;
+        }
+        File.WriteAllLines(Path.Combine(sentinel, "codex-argv.txt"), args, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(sentinel, "codex-prompt.txt"), Console.In.ReadToEnd(), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(sentinel, "codex-cwd.txt"), Directory.GetCurrentDirectory(), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(sentinel, "codex-cwd-empty.txt"),
+            (Directory.GetFileSystemEntries(Directory.GetCurrentDirectory()).Length == 0).ToString().ToLowerInvariant(), Encoding.ASCII);
+        List<string> secretNames = new List<string>();
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
+            string name = (string)entry.Key;
+            if (name.StartsWith("AGENT_MOBILE_MCP_", StringComparison.Ordinal)) secretNames.Add(name);
+        }
+        bool secretOk = secretNames.Count == 1 &&
+            Environment.GetEnvironmentVariable(secretNames[0]) == "fixture-bearer-value-must-never-leak";
+        File.WriteAllText(Path.Combine(sentinel, "codex-secret-ok.txt"), secretOk.ToString().ToLowerInvariant(), Encoding.ASCII);
+        bool environmentOk = Environment.GetEnvironmentVariable("OPENAI_API_KEY") == null &&
+            Environment.GetEnvironmentVariable("CODEX_ACCESS_TOKEN") == null &&
+            Environment.GetEnvironmentVariable("ARBITRARY_PARENT_SECRET") == null &&
+            Environment.GetEnvironmentVariable("AGENT_MOBILE_DEVICE_LOCK_LEASE") == null &&
+            Environment.GetEnvironmentVariable("RUST_LOG") == "error" &&
+            Environment.GetEnvironmentVariable("NO_PROXY") == "127.0.0.1,localhost";
+        File.WriteAllText(Path.Combine(sentinel, "codex-environment-ok.txt"), environmentOk.ToString().ToLowerInvariant(), Encoding.ASCII);
+
+        Console.OutputEncoding = new UTF8Encoding(false);
+        string scenario = Environment.GetEnvironmentVariable("DISPATCH_TEST_CODEX_SCENARIO") ?? "success";
+        if (scenario == "stdout-flood" || scenario == "stderr-flood") {
+            ProcessStartInfo descendantInfo = new ProcessStartInfo(
+                typeof(Program).Assembly.Location, "--dispatch-flood-descendant");
+            descendantInfo.UseShellExecute = false;
+            descendantInfo.CreateNoWindow = true;
+            Process descendant = Process.Start(descendantInfo);
+            string startedPath = Path.Combine(sentinel, scenario + "-descendant-started.txt");
+            Stopwatch ready = Stopwatch.StartNew();
+            while (!File.Exists(startedPath) && ready.ElapsedMilliseconds < 3000) Thread.Sleep(10);
+            if (!File.Exists(startedPath)) return 92;
+
+            Stream flood = scenario == "stdout-flood"
+                ? Console.OpenStandardOutput()
+                : Console.OpenStandardError();
+            byte[] block = new byte[64 * 1024];
+            for (int index = 0; index < block.Length; index++) block[index] = (byte)'X';
+            while (true) flood.Write(block, 0, block.Length);
+        }
+        if (scenario == "malformed") { Console.WriteLine("{not-json"); return 0; }
+        Console.WriteLine("{\"type\":\"thread.started\",\"thread_id\":\"offline-codex-thread\"}");
+        Console.WriteLine("{\"type\":\"turn.started\"}");
+        string server = scenario == "wrong-server" ? "evil" : "gateway";
+        Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
+        if (scenario == "exit-partial") return 23;
+        string ok = scenario == "gateway-ok-false" ? "false" : "true";
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"completed\"}}");
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：成功\"}}");
+        if (scenario == "missing-usage") Console.WriteLine("{\"type\":\"turn.completed\"}");
+        else Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"cached_input_tokens\":2,\"output_tokens\":7,\"cache_write_input_tokens\":3}}");
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $fakeCodexSource -Encoding utf8
+    $cscPath = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    $compilerOutput = & $cscPath /nologo /target:exe "/out:$fakeCodexExe" $fakeCodexSource 2>&1
+    Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $fakeCodexExe -PathType Leaf)) `
+        "测试设施错误：无法编译 fake codex.exe：$compilerOutput"
+
+    # 版本探针的根进程打印版本后立刻退出，但会留下一个 30 秒 sleeper。只有根进程从出生
+    # 就在 KILL_ON_JOB_CLOSE Job 内，且成功路径也等待 Job 归零，函数返回时 sleeper 才必然消失。
+    $fakeVersionChildSource = Join-Path $SentinelDir 'fake-version-child.cs'
+    $fakeVersionChildExe = Join-Path $FakeBin 'fake-version-child.exe'
+    $fakeVersionChildPid = Join-Path $SentinelDir 'fake-version-child.pid'
+    $childPidLiteral = $fakeVersionChildPid.Replace('\', '\\').Replace('"', '\"')
+    @"
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+
+public static class Program {
+    public static int Main() {
+        File.WriteAllText("$childPidLiteral", Process.GetCurrentProcess().Id.ToString());
+        Thread.Sleep(30000);
+        return 0;
+    }
+}
+"@ | Set-Content -LiteralPath $fakeVersionChildSource -Encoding utf8
+    $compilerOutput = & $cscPath /nologo /target:exe "/out:$fakeVersionChildExe" $fakeVersionChildSource 2>&1
+    Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $fakeVersionChildExe -PathType Leaf)) `
+        "测试设施错误：无法编译 fake version child：$compilerOutput"
+
+    $fakeVersionProbeSource = Join-Path $SentinelDir 'fake-version-probe.cs'
+    $fakeVersionProbeExe = Join-Path $FakeBin 'fake-version-probe.exe'
+    $fakeVersionStdoutFloodExe = Join-Path $FakeBin 'fake-version-stdout-flood.exe'
+    $fakeVersionStderrFloodExe = Join-Path $FakeBin 'fake-version-stderr-flood.exe'
+    $childExeLiteral = $fakeVersionChildExe.Replace('\', '\\').Replace('"', '\"')
+    @"
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+
+public static class Program {
+    public static int Main(string[] args) {
+        if (args.Length != 1 || args[0] != "--version") return 94;
+        ProcessStartInfo start = new ProcessStartInfo();
+        start.FileName = "$childExeLiteral";
+        start.UseShellExecute = false;
+        Process child = Process.Start(start);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!File.Exists("$childPidLiteral") && DateTime.UtcNow < deadline) Thread.Sleep(10);
+        if (!File.Exists("$childPidLiteral")) return 95;
+        string executableName = Path.GetFileNameWithoutExtension(
+            Process.GetCurrentProcess().MainModule.FileName);
+        if (executableName.EndsWith("-flood", StringComparison.Ordinal)) {
+            Stream flood = executableName.Contains("stdout")
+                ? Console.OpenStandardOutput()
+                : Console.OpenStandardError();
+            byte[] block = new byte[64 * 1024];
+            for (int index = 0; index < block.Length; index++) block[index] = (byte)'V';
+            while (true) flood.Write(block, 0, block.Length);
+        }
+        byte[] version = new System.Text.UTF8Encoding(false).GetBytes("codex-cli 0.149.0\r\n");
+        using (Stream stdout = Console.OpenStandardOutput()) {
+            stdout.Write(version, 0, version.Length);
+            stdout.Flush();
+        }
+        return 0;
+    }
+}
+"@ | Set-Content -LiteralPath $fakeVersionProbeSource -Encoding utf8
+    foreach ($versionProbeTarget in @(
+        $fakeVersionProbeExe, $fakeVersionStdoutFloodExe, $fakeVersionStderrFloodExe
+    )) {
+        $compilerOutput = & $cscPath /nologo /target:exe "/out:$versionProbeTarget" `
+            $fakeVersionProbeSource 2>&1
+        Assert-True ($LASTEXITCODE -eq 0 -and
+            (Test-Path -LiteralPath $versionProbeTarget -PathType Leaf)) `
+            "测试设施错误：无法编译 fake version probe：$compilerOutput"
+    }
+
+    $fixtureDispatchSource = Get-Content -LiteralPath $DispatchPath -Raw -Encoding utf8
+    $codexSpecNeedle = '-WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg'
+    Assert-True $fixtureDispatchSource.Contains($codexSpecNeedle, [StringComparison]::Ordinal) `
+        '测试设施错误：无法定位 Codex launch spec seam。'
+    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
+        $codexSpecNeedle,
+        "$codexSpecNeedle -CodexExecutableOverride '$($fakeCodexExe -replace "'","''")' " +
+            "-CodexVersionOverride 'codex-cli 0.149.0'"
+    )
+    # 仅 TEMP fixture 暴露一个可执行文件路径 seam，用于证明 .cmd/.bat 的 executable
+    # 自身含 shell 元字符时也在 CreateProcess 前 fail closed；生产脚本没有该后门。
+    $claudeExecutableNeedle = '$brainExecutable = [string]$claudeBin.Source'
+    Assert-True $fixtureDispatchSource.Contains($claudeExecutableNeedle, [StringComparison]::Ordinal) `
+        '测试设施错误：无法定位 Claude executable seam。'
+    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
+        $claudeExecutableNeedle,
+        $claudeExecutableNeedle + "`n" +
+            '        if (-not [string]::IsNullOrWhiteSpace($env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE)) {' + "`n" +
+            '            $brainExecutable = [string]$env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE' + "`n" +
+            '        }'
+    )
+    $preserveNeedle = '$preserveEnvironmentNames = @()'
+    Assert-True $fixtureDispatchSource.Contains($preserveNeedle, [StringComparison]::Ordinal) `
+        '测试设施错误：无法定位 Codex wrapper environment seam。'
+    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
+        $preserveNeedle,
+        '$preserveEnvironmentNames = @(''DISPATCH_TEST_SENTINEL_DIR'',''DISPATCH_TEST_CODEX_SCENARIO'')'
+    )
+    Set-Content -LiteralPath $DispatchPath -Value $fixtureDispatchSource -Encoding utf8
 
     # 先显式执行 fake adb，证明隔离设施会记录调用；随后清掉 sentinel 再测 wrapper。
     $adbSentinel = Join-Path $SentinelDir 'adb-called.txt'
@@ -295,6 +523,593 @@ exit /b 97
     Assert-True (Test-Path -LiteralPath $fixtureLedgerHelper -PathType Leaf) `
         '测试设施错误：fixture 缺少 dispatch ledger helper。'
     . $fixtureLedgerHelper
+    $fixtureBrainHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1'
+    Assert-True (Test-Path -LiteralPath $fixtureBrainHelper -PathType Leaf) `
+        '测试设施错误：fixture 缺少 dispatch brain helper。'
+    . $fixtureBrainHelper
+    $fixtureLockHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
+    Assert-True (Test-Path -LiteralPath $fixtureLockHelper -PathType Leaf) `
+        '测试设施错误：fixture 缺少 dispatch lock helper。'
+    . $fixtureLockHelper
+
+    Test-Case 'DryRun 不创建主机级锁目录' {
+        $lockDirectory = Split-Path -Parent $LockPath
+        Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) '测试开始前锁目录已存在。'
+        $result = Invoke-Dispatch $taskArgs
+        Assert-ExitCode $result 0
+        Assert-Matches $result.Text 'budget=\$2(?:\.0)?'
+        Assert-Matches $result.Text '机械成本上限 2(?:\.0)? 美元'
+        Assert-NotMatches $result.Text '\{\{BUDGET_(?:USD|POLICY)\}\}'
+        Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) 'DryRun 创建了主机级锁目录。'
+
+        $codexDry = Invoke-Dispatch @(
+            '-Task','offline codex dry budget','-Slug','offline-codex-dry-budget',
+            '-Brain','codex','-Executor','gateway','-DryRun'
+        )
+        Assert-ExitCode $codexDry 0
+        Assert-Contains $codexDry.Text '订阅通道/无 API 硬上限'
+        Assert-Contains $codexDry.Text '走 ChatGPT 订阅通道，不提供 API 美元硬上限'
+        Assert-NotMatches $codexDry.Text 'budget=\$|≤\$'
+        Assert-NotMatches $codexDry.Text '机械成本上限\s+2(?:\.0)?|\{\{BUDGET_(?:USD|POLICY)\}\}'
+        Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) 'Codex DryRun 创建了主机级锁目录。'
+    }
+
+    Test-Case 'Codex mobile 在任何 preflight/设备副作用前 fail closed' {
+        $beforeMobile = Get-RepoEffectState
+        $result = Invoke-Dispatch @(
+            '-Task','offline codex mobile must fail closed','-Slug','offline-codex-mobile-blocked',
+            '-Brain','codex','-Executor','mobile'
+        )
+        Assert-True ($result.ExitCode -ne 0) 'Codex + mobile 未被硬拒绝。'
+        Assert-Matches $result.Text '可信 npx runtime.*仅支持 gateway'
+        Assert-NoExternalTools $result
+        Assert-NoRepoEffects $beforeMobile
+    }
+
+    Test-Case 'Codex 版本解析只接受精确验证输出' {
+        foreach ($version in @(
+            'codex-cli 0.147.0',
+            'codex-cli 0.149.0',
+            'codex-cli 0.149.0-alpha.4.1'
+        )) {
+            Assert-True (Test-DispatchSupportedCodexVersion -VersionOutput $version) `
+                "已验证 Codex 版本被误拒：$version"
+        }
+        foreach ($version in @(
+            'codex-cli 0.150.0-alpha.1',
+            'codex-cli 0.150.0',
+            'codex-cli 0.149.1',
+            "warning`ncodex-cli 0.149.0",
+            'codex-cli 0.149.0 extra',
+            ''
+        )) {
+            Assert-True (-not (Test-DispatchSupportedCodexVersion -VersionOutput $version)) `
+                "未验证或带污染的 Codex 版本被误放行：$version"
+        }
+    }
+
+    Test-Case 'Codex 版本探针 Assign 失败不遗留 suspended orphan' {
+        $failure = $null
+        $orphans = @()
+        try {
+            try {
+                Invoke-DispatchCodexVersionProbe -ExecutablePath $fakeVersionProbeExe `
+                    -ForceAssignFailureForTest | Out-Null
+            }
+            catch { $failure = $_ }
+            Assert-True ($null -ne $failure) 'Assign 失败 seam 未使版本探针 fail closed。'
+            Assert-Matches $failure.Exception.ToString() 'fixture_forced_assign_failure'
+
+            # seam 只会在 CreateProcess(CREATE_SUSPENDED) 成功后触发；若异常路径只关句柄，
+            # 这个唯一 TEMP 路径的进程会永久保持 suspended。按完整路径核对，避免误认并行 fixture。
+            $expectedPath = [IO.Path]::GetFullPath($fakeVersionProbeExe)
+            $orphans = @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($fakeVersionProbeExe)) `
+                    -ErrorAction SilentlyContinue | Where-Object {
+                    try { [IO.Path]::GetFullPath($_.Path) -ceq $expectedPath }
+                    catch { $false }
+                })
+            Assert-True ($orphans.Count -eq 0) `
+                'Assign 失败后仍遗留未入 Job 的 suspended version probe。'
+        }
+        finally {
+            # 回归失败本身也不能给开发机留下孤儿；仅清理由本次唯一 TEMP executable 派生的 PID。
+            foreach ($orphan in $orphans) {
+                try {
+                    $orphan.Kill($true)
+                    [void]$orphan.WaitForExit(5000)
+                }
+                catch { Write-Warning "清理 fake version probe orphan 失败：$($_.Exception.Message)" }
+                finally { $orphan.Dispose() }
+            }
+        }
+    }
+
+    Test-Case 'Codex 版本探针 stdout/stderr 超限时硬截断并清空后代' {
+        $probeEnvironment = @(
+            "SystemRoot=$env:SystemRoot", "WINDIR=$env:WINDIR", "ComSpec=$env:ComSpec",
+            "TEMP=$env:TEMP", "TMP=$env:TMP", "PATH=$env:PATH", "PATHEXT=$env:PATHEXT"
+        )
+        foreach ($case in @(
+            @{ Name='stdout'; Executable=$fakeVersionStdoutFloodExe },
+            @{ Name='stderr'; Executable=$fakeVersionStderrFloodExe }
+        )) {
+            Remove-Item -LiteralPath $fakeVersionChildPid -Force -ErrorAction SilentlyContinue
+            $probeStdout = Join-Path $SentinelDir "version-$($case.Name).stdout"
+            $probeStderr = Join-Path $SentinelDir "version-$($case.Name).stderr"
+            $failure = $null
+            try {
+                [void][AgentMobileDispatchVersionProbe]::Run(
+                    [IO.Path]::GetFullPath([string]$case.Executable),
+                    [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$case.Executable)),
+                    $probeStdout, $probeStderr, [string[]]$probeEnvironment,
+                    4096L, 4096L, 5000, $false)
+            }
+            catch { $failure = $_ }
+            Assert-True ($null -ne $failure) "version $($case.Name) flood 没有 fail closed。"
+            Assert-Matches $failure.Exception.ToString() 'exceeded byte limit'
+            Assert-True ((Get-Item -LiteralPath $probeStdout -Force).Length -le 4096) `
+                "version stdout 文件超过硬 cap：$((Get-Item -LiteralPath $probeStdout).Length)"
+            Assert-True ((Get-Item -LiteralPath $probeStderr -Force).Length -le 4096) `
+                "version stderr 文件超过硬 cap：$((Get-Item -LiteralPath $probeStderr).Length)"
+            Assert-True (Test-Path -LiteralPath $fakeVersionChildPid -PathType Leaf) `
+                "version $($case.Name) flood 未证明派生后代。"
+            $childPid = [int](Get-Content -LiteralPath $fakeVersionChildPid -Raw -Encoding ascii)
+            Assert-True ($null -eq (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) `
+                "version $($case.Name) flood 返回后仍有后代存活。"
+        }
+    }
+
+    Test-Case 'Codex 版本探针成功返回前机械清空快速退出根进程留下的后代' {
+        $version = Invoke-DispatchCodexVersionProbe -ExecutablePath $fakeVersionProbeExe
+        Assert-True ($version -ceq 'codex-cli 0.149.0') `
+            "fake Codex 版本探针输出未被完整保留：[$version] type=$($version.GetType().FullName) length=$($version.Length)"
+        Assert-True (Test-Path -LiteralPath $fakeVersionChildPid -PathType Leaf) `
+            'fake version child 没有在根进程退出前写入 PID sentinel。'
+        $childPid = [int](Get-Content -LiteralPath $fakeVersionChildPid -Raw -Encoding ascii)
+        Assert-True ($null -eq (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) `
+            '版本探针根进程已退出，但其后代在函数返回后仍存活。'
+    }
+
+    Test-Case 'Codex 候选按显式契约优先级而不是 mtime 或随机目录名' {
+        $selection = Select-DispatchCodexExecutableCandidate -Candidates @(
+            [pscustomobject]@{
+                Path = (Join-Path $TestRoot 'ffff-newer\codex.exe')
+                VersionOutput = 'codex-cli 0.147.0'
+                Sha256 = '47'
+                LastWriteTimeUtc = [datetime]'2099-01-01'
+            },
+            [pscustomobject]@{
+                Path = (Join-Path $TestRoot '0000-older\codex.exe')
+                VersionOutput = 'codex-cli 0.149.0'
+                Sha256 = '49'
+                LastWriteTimeUtc = [datetime]'2000-01-01'
+            },
+            [pscustomobject]@{
+                Path = (Join-Path $TestRoot 'zzzz-unknown\codex.exe')
+                VersionOutput = 'codex-cli 0.150.0-alpha.1'
+                Sha256 = '50'
+                LastWriteTimeUtc = [datetime]'2100-01-01'
+            }
+        )
+        Assert-True ($selection.VersionOutput -ceq 'codex-cli 0.149.0') `
+            'mtime 更新的旧版/未知版盖过了显式 0.149 stable 优先级。'
+        Assert-True ($selection.SelectedPath -like '*0000-older*') `
+            '候选选择仍受随机目录名或 mtime 影响。'
+        Assert-True ($selection.UnknownVersions -contains 'codex-cli 0.150.0-alpha.1') `
+            '已知与未知候选并存时没有保留未知版本诊断。'
+
+        $unknownOnlyRejected = $false
+        try {
+            $null = Select-DispatchCodexExecutableCandidate -Candidates @(
+                [pscustomobject]@{Path=(Join-Path $TestRoot 'unknown\codex.exe');VersionOutput='codex-cli 0.150.0-alpha.1';Sha256='50'}
+            )
+        }
+        catch { $unknownOnlyRejected = $_.Exception.Message -match '0\.150\.0-alpha\.1' }
+        Assert-True $unknownOnlyRejected '只有未知 0.150 候选时没有带诊断 fail closed。'
+
+        $hashConflictRejected = $false
+        try {
+            $null = Select-DispatchCodexExecutableCandidate -Candidates @(
+                [pscustomobject]@{Path=(Join-Path $TestRoot 'a\codex.exe');VersionOutput='codex-cli 0.149.0';Sha256='AA'},
+                [pscustomobject]@{Path=(Join-Path $TestRoot 'b\codex.exe');VersionOutput='codex-cli 0.149.0';Sha256='BB'}
+            )
+        }
+        catch { $hashConflictRejected = $_.Exception.Message -match '不同二进制哈希' }
+        Assert-True $hashConflictRejected '同优先级不同哈希的 Codex 候选没有 fail closed。'
+    }
+
+    Test-Case 'Codex MCP 配置拒绝顶层与字段的单元素数组降维' {
+        $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
+            -ScriptsRoot (Join-Path $RepoRoot 'scripts')
+        $configPath = Join-Path $SentinelDir 'strict-codex-mcp.json'
+        $validJson = '{"mcpServers":{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":"Bearer fixture"}}}}'
+        Set-Content -LiteralPath $configPath -Value $validJson -Encoding utf8
+        $validSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+            -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.149.0'
+        Assert-True ($validSpec.Arguments -contains 'mcp_servers.gateway.enabled=true') `
+            '严格 MCP 配置门误拒绝了合法 object/string/number token。'
+        foreach ($key in @($validSpec.SensitiveEnvironment.Keys)) {
+            $validSpec.SensitiveEnvironment[$key] = $null
+            [void]$validSpec.SensitiveEnvironment.Remove($key)
+        }
+
+        foreach ($bad in @(
+            @{ Name='top-array'; Json="[$validJson]" },
+            @{ Name='mcpServers-array'; Json='{"mcpServers":[{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":"Bearer fixture"}}}]}' },
+            @{ Name='server-array'; Json='{"mcpServers":{"gateway":[{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":"Bearer fixture"}}]}}' },
+            @{ Name='type-array'; Json='{"mcpServers":{"gateway":{"type":["http"],"url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":"Bearer fixture"}}}}' },
+            @{ Name='url-number'; Json='{"mcpServers":{"gateway":{"type":"http","url":8848,"timeout":420000,"headers":{"Authorization":"Bearer fixture"}}}}' },
+            @{ Name='timeout-string'; Json='{"mcpServers":{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":"420000","headers":{"Authorization":"Bearer fixture"}}}}' },
+            @{ Name='headers-array'; Json='{"mcpServers":{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":[{"Authorization":"Bearer fixture"}]}}}' },
+            @{ Name='authorization-array'; Json='{"mcpServers":{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":["Bearer fixture"]}}}}' }
+        )) {
+            Set-Content -LiteralPath $configPath -Value $bad.Json -Encoding utf8
+            $rejected = $false
+            try {
+                $null = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+                    -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+                    -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.149.0'
+            }
+            catch { $rejected = $true }
+            Assert-True $rejected "Codex MCP 配置 $($bad.Name) 被数组降维/类型强制转换接受。"
+        }
+    }
+
+    Test-Case 'Codex JSONL 完整与 partial 契约严格区分' {
+        $complete = @(
+            '{"type":"thread.started","thread_id":"offline-thread"}',
+            '{"type":"turn.started"}',
+            '{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{}}}',
+            '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]},"error":null,"status":"completed"}}',
+            '{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"结果：成功"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":11,"cached_input_tokens":2,"output_tokens":7,"cache_write_input_tokens":3}}'
+        )
+        $transcript = Invoke-TranscriptFixture -Brain codex -Lines $complete
+        Assert-True ($transcript.Terminal.Success -and $transcript.SessionId -ceq 'offline-thread') `
+            '完整 Codex JSONL 没有得到成功 canonical 终态。'
+        Assert-True ($transcript.Usage.InputTokens -eq 11 -and
+            $transcript.Usage.CachedInputTokens -eq 2 -and
+            $transcript.Usage.OutputTokens -eq 7 -and
+            $transcript.Usage.CacheWriteTokens -eq 3) 'Codex usage 字段映射不完整。'
+
+        foreach ($invalidUsage in @(
+            '{"input_tokens":"11","cached_input_tokens":2,"output_tokens":7}',
+            '{"input_tokens":true,"cached_input_tokens":2,"output_tokens":7}',
+            '{"input_tokens":1.5,"cached_input_tokens":2,"output_tokens":7}',
+            '{"input_tokens":[11],"cached_input_tokens":2,"output_tokens":7}',
+            '[{"input_tokens":11,"cached_input_tokens":2,"output_tokens":7}]',
+            '{"input_tokens":11,"cached_input_tokens":2,"output_tokens":7,"cache_write_input_tokens":-1}'
+        )) {
+            $badUsage = @($complete[0..4] + "{`"type`":`"turn.completed`",`"usage`":$invalidUsage}")
+            $usageRejected = $false
+            try { $null = Invoke-TranscriptFixture -Brain codex -Lines $badUsage }
+            catch { $usageRejected = $true }
+            Assert-True $usageRejected "Codex usage 原始值不是非负整数却被接受：$invalidUsage"
+        }
+
+        $businessFailure = @($complete)
+        $businessFailure[3] = '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":false}"}]},"error":null,"status":"completed"}}'
+        $businessTranscript = Invoke-TranscriptFixture -Brain codex -Lines $businessFailure
+        Assert-True ($businessTranscript.Calls.Count -eq 1 -and
+            $businessTranscript.Calls[0].Outcome -ceq 'failed') `
+            'gateway JSON boolean ok=false 被当作成功调用。'
+
+        foreach ($badResult in @(
+            '{"content":[{"type":"text","text":"[{\"ok\":true}]"}]}',
+            '{"content":[{"type":"text","text":"{\"ok\":[true]}"}]}',
+            '{"content":[{"type":"text","text":"{\"ok\":true}"}],"isError":[false]}'
+        )) {
+            $badEnvelope = @($complete)
+            $badEnvelope[3] = "{`"type`":`"item.completed`",`"item`":{`"id`":`"call-1`",`"type`":`"mcp_tool_call`",`"server`":`"gateway`",`"tool`":`"foreground_app`",`"arguments`":{},`"result`":$badResult,`"error`":null,`"status`":`"completed`"}}"
+            $envelopeRejected = $false
+            try { $null = Invoke-TranscriptFixture -Brain codex -Lines $badEnvelope }
+            catch { $envelopeRejected = $true }
+            Assert-True $envelopeRejected "Codex gateway 单元素数组降维绕过：$badResult"
+        }
+
+        $prefix = $complete[0..2]
+        $strictRejected = $false
+        try { $null = Invoke-TranscriptFixture -Brain codex -Lines $prefix }
+        catch { $strictRejected = $true }
+        Assert-True $strictRejected '缺终态 trace 被默认完整模式接受。'
+        $partial = Invoke-TranscriptFixture -Brain codex -Lines $prefix -AllowPartial
+        Assert-True ($null -eq $partial.Terminal -and $partial.Calls.Count -eq 1 -and
+            $partial.Calls[0].Outcome -ceq 'started') '合法 EOF partial 没有保留未完成尾调用。'
+
+        foreach ($bad in @(
+            @('{not-json'),
+            @($complete + $complete[-1]),
+            @($complete[0..1] + '{"type":"unknown"}')
+        )) {
+            $rejected = $false
+            try { $null = Invoke-TranscriptFixture -Brain codex -Lines $bad -AllowPartial }
+            catch { $rejected = $true }
+            Assert-True $rejected '坏帧/重复终态/未知事件在 partial 模式下被接受。'
+        }
+    }
+
+    Test-Case 'Claude gateway 结果同样要求 boolean ok=true' {
+        $prefix = @(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__gateway__foreground_app","input":{}}]}}',
+            '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":[{"type":"text","text":"{\"ok\":false}"}],"is_error":false}]}}',
+            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1,"total_cost_usd":0}'
+        )
+        $transcript = Invoke-TranscriptFixture -Brain claude -Lines $prefix
+        Assert-True ($transcript.Calls.Count -eq 1 -and $transcript.Calls[0].Outcome -ceq 'failed') `
+            'Claude gateway 的 ok=false 被当作成功调用。'
+
+        $badBoolean = @($prefix)
+        foreach ($badIsError in @('"false"','[false]')) {
+            $badBoolean[1] = "{`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"call-1`",`"content`":[{`"type`":`"text`",`"text`":`"{\`"ok\`":true}`"}],`"is_error`":$badIsError}]}}"
+            $rejected = $false
+            try { $null = Invoke-TranscriptFixture -Brain claude -Lines $badBoolean }
+            catch { $rejected = $true }
+            Assert-True $rejected "Claude tool_result 的非 boolean is_error 被接受：$badIsError"
+        }
+
+        $badCost = @($prefix)
+        $badCost[2] = '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"total_cost_usd":[0]}'
+        $costRejected = $false
+        try { $null = Invoke-TranscriptFixture -Brain claude -Lines $badCost }
+        catch { $costRejected = $true }
+        Assert-True $costRejected 'Claude total_cost_usd 单元素数组被降维接受。'
+
+        foreach ($badTerminal in @(
+            '{"type":"result","subtype":"success","result":"结果：成功","num_turns":1,"total_cost_usd":0}',
+            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"total_cost_usd":0}',
+            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"total_cost_usd":0}',
+            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1}'
+        )) {
+            $missingAccounting = @($prefix)
+            $missingAccounting[2] = $badTerminal
+            $rejected = $false
+            try { $null = Invoke-TranscriptFixture -Brain claude -Lines $missingAccounting }
+            catch { $rejected = $true }
+            Assert-True $rejected "Claude success 缺少完整 usage/num_turns/total_cost_usd 却被接受：$badTerminal"
+        }
+
+        $failureWithoutAccounting = @($prefix)
+        $failureWithoutAccounting[2] = `
+            '{"type":"result","subtype":"error","result":"结果：失败"}'
+        $failureTranscript = Invoke-TranscriptFixture -Brain claude -Lines $failureWithoutAccounting
+        Assert-True (-not $failureTranscript.Terminal.Success -and
+            $null -eq $failureTranscript.Usage.InputTokens -and $null -eq $failureTranscript.CostUsd) `
+            'Claude 失败终态被误要求 success-only 计量字段。'
+    }
+
+    Test-Case 'cmd/bat executable 与 Model 参数含 shell 元字符时 fail closed' {
+        $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        $savedOverride = $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE
+        $injectedPath = Join-Path $SentinelDir 'cmd-injected.txt'
+        try {
+            foreach ($model in @(
+                'sonnet&echo injected>%DISPATCH_TEST_SENTINEL_DIR%\cmd-injected.txt',
+                'sonnet"&echo injected>cmd-injected.txt'
+            )) {
+                Remove-Item -LiteralPath $injectedPath -Force -ErrorAction SilentlyContinue
+                $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $null
+                $slug = 'offline-cmd-arg-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+                $result = Invoke-Dispatch @(
+                    '-Task','offline cmd argument injection guard','-Slug',$slug,
+                    '-Brain','claude','-Executor','gateway','-Model',$model
+                )
+                Assert-True ($result.ExitCode -ne 0) "恶意 Model 未被拒绝：$model"
+                Assert-True (-not (Test-Path -LiteralPath $injectedPath)) '恶意 Model 执行了 cmd 注入载荷。'
+                Assert-True (-not (Test-Path -LiteralPath (Join-Path $SentinelDir 'claude-called.txt'))) `
+                    '含 shell 元字符的 Model 仍启动了 fake Claude。'
+                $errorFile = Get-ChildItem -LiteralPath $TracesDir -Filter "*-$slug-gateway-claude-leg1.err.txt" |
+                    Select-Object -Last 1
+                Assert-True ($null -ne $errorFile) 'cmd 参数拒绝路径没有留下有界 stderr。'
+                # PowerShell 的原生 stderr 在重定向时可能包成 CLIXML；匹配稳定的 ASCII 前缀，
+                # 同时由上面的进程未启动/无注入副作用断言证明这里确实 fail closed。
+                Assert-Matches (Get-Content -LiteralPath $errorFile.FullName -Raw) 'cmd/bat executable'
+            }
+
+            $unsafeDirectory = Join-Path $TestRoot 'unsafe(parent)'
+            New-Item -ItemType Directory -Path $unsafeDirectory -Force | Out-Null
+            $unsafeExecutable = Join-Path $unsafeDirectory 'claude.cmd'
+            Copy-Item -LiteralPath (Join-Path $FakeBin 'claude.cmd') -Destination $unsafeExecutable
+            $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $unsafeExecutable
+            $pathSlug = 'offline-cmd-executable-unsafe'
+            $pathResult = Invoke-Dispatch @(
+                '-Task','offline cmd executable injection guard','-Slug',$pathSlug,
+                '-Brain','claude','-Executor','gateway'
+            )
+            Assert-True ($pathResult.ExitCode -ne 0) '含括号的 .cmd executable 未被拒绝。'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $SentinelDir 'claude-called.txt'))) `
+                '含 shell 元字符的 executable 仍被启动。'
+            $pathError = Get-ChildItem -LiteralPath $TracesDir `
+                -Filter "*-$pathSlug-gateway-claude-leg1.err.txt" | Select-Object -Last 1
+            Assert-Matches (Get-Content -LiteralPath $pathError.FullName -Raw) 'cmd/bat executable'
+        }
+        finally {
+            $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $savedOverride
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-cmd-*-gateway-claude-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ((Test-Path -LiteralPath $TracesDir -PathType Container) -and
+                @(Get-ChildItem -LiteralPath $TracesDir -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $TracesDir -Force
+            }
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $gatewayConfig -Force -ErrorAction SilentlyContinue
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) {
+                [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length)
+            }
+        }
+    }
+
+    Test-Case 'fake Codex 端到端锁住 argv、环境、exit code、partial 与 usage' {
+        $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
+        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        $oldScenario = $env:DISPATCH_TEST_CODEX_SCENARIO
+        $oldOpenAiKey = $env:OPENAI_API_KEY
+        $oldCodexToken = $env:CODEX_ACCESS_TOKEN
+        $oldArbitrary = $env:ARBITRARY_PARENT_SECRET
+        $oldDeviceLease = $env:AGENT_MOBILE_DEVICE_LOCK_LEASE
+        $parentLease = $null
+        try {
+            $env:OPENAI_API_KEY = 'must-not-reach-fake-codex'
+            $env:CODEX_ACCESS_TOKEN = 'must-not-reach-fake-codex'
+            $env:ARBITRARY_PARENT_SECRET = 'must-not-reach-fake-codex'
+            $parentLease = Open-DispatchLock -Path $LockPath -Owner 'offline-parent' -LeaseToken ''
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE = $parentLease.LeaseToken
+
+            $claudeResult = Invoke-Dispatch @(
+                '-Task','offline fake claude lease isolation','-Slug','offline-claude-lease',
+                '-Brain','claude','-Executor','gateway'
+            )
+            Assert-ExitCode $claudeResult 0
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'claude-lock-env.txt') -Raw).Trim() -ceq '[]') `
+                'Claude brain 继承了 runner→dispatch 的设备 lease token。'
+
+            $cases = @(
+                @{ Scenario='success'; Exit=0; Pattern='派单结果：success' },
+                @{ Scenario='exit-partial'; Exit=1; Pattern='brain-process-exit-23.*partial-trace' },
+                @{ Scenario='malformed'; Exit=1; Pattern='trace-invalid-or-incomplete' },
+                @{ Scenario='wrong-server'; Exit=1; Pattern='unauthorized-mcp-server' },
+                @{ Scenario='gateway-ok-false'; Exit=1; Pattern='mcp-transport-failure' },
+                @{ Scenario='missing-usage'; Exit=1; Pattern='trace-invalid-or-incomplete' }
+            )
+            foreach ($case in $cases) {
+                $env:DISPATCH_TEST_CODEX_SCENARIO = $case.Scenario
+                $slug = "offline-codex-$($case.Scenario)"
+                $result = Invoke-Dispatch @(
+                    '-Task','offline fake codex contract','-Slug',$slug,
+                    '-Brain','codex','-Executor','gateway'
+                )
+                Assert-ExitCode $result $case.Exit
+                Assert-Matches $result.Text $case.Pattern
+                Assert-NotMatches $result.Text 'fixture-bearer-value-must-never-leak|must-not-reach-fake-codex'
+            }
+            Assert-Contains (Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-prompt.txt') -Raw) `
+                'offline fake codex contract'
+
+            foreach ($flood in @(
+                @{ Scenario='stdout-flood'; Slug='offline-codex-stdout-flood'; Cap=16L*1024L*1024L; Extension='.jsonl' },
+                @{ Scenario='stderr-flood'; Slug='offline-codex-stderr-flood'; Cap=4L*1024L*1024L; Extension='.err.txt' }
+            )) {
+                $env:DISPATCH_TEST_CODEX_SCENARIO = $flood.Scenario
+                $watch = [Diagnostics.Stopwatch]::StartNew()
+                $floodResult = Invoke-Dispatch @(
+                    '-Task','offline fake codex output flood','-Slug',$flood.Slug,
+                    '-Brain','codex','-Executor','gateway'
+                )
+                $watch.Stop()
+                Assert-ExitCode $floodResult 1
+                Assert-Contains $floodResult.Text 'brain-output-limit'
+                Assert-Contains $floodResult.Text '订阅通道/无 API 硬上限'
+                Assert-True ($watch.Elapsed.TotalSeconds -lt 10) `
+                    "$($flood.Scenario) 没有快速失败，耗时 $([math]::Round($watch.Elapsed.TotalSeconds, 2))s。"
+
+                $trace = Get-ChildItem -LiteralPath $TracesDir `
+                    -Filter "*-$($flood.Slug)-gateway-codex-leg1.jsonl" | Select-Object -Last 1
+                $error = Get-ChildItem -LiteralPath $TracesDir `
+                    -Filter "*-$($flood.Slug)-gateway-codex-leg1.err.txt" | Select-Object -Last 1
+                Assert-True ($null -ne $trace -and $null -ne $error) '泛洪路径缺少 stdout/stderr 证据文件。'
+                Assert-True ($trace.Length -le 16L * 1024L * 1024L) `
+                    "stdout 超过 16 MiB：$($trace.Length)"
+                Assert-True ($error.Length -le 4L * 1024L * 1024L) `
+                    "stderr 超过 4 MiB：$($error.Length)"
+                $cappedFile = if ($flood.Extension -ceq '.jsonl') { $trace } else { $error }
+                Assert-True ($cappedFile.Length -eq [long]$flood.Cap) `
+                    "$($flood.Scenario) 未在精确 cap 触发：$($cappedFile.Length) / $($flood.Cap)"
+
+                $startedPath = Join-Path $SentinelDir "$($flood.Scenario)-descendant-started.txt"
+                $survivedPath = Join-Path $SentinelDir "$($flood.Scenario)-descendant-survived.txt"
+                Assert-True (Test-Path -LiteralPath $startedPath -PathType Leaf) '泛洪前没有真正派生后代。'
+                $descendantPid = [int](Get-Content -LiteralPath $startedPath -Raw)
+                Assert-True ($null -eq (Get-Process -Id $descendantPid -ErrorAction SilentlyContinue)) `
+                    '输出超限返回后仍有 Job 后代存活。'
+                Assert-True (-not (Test-Path -LiteralPath $survivedPath)) `
+                    '输出超限后代活到延迟 sentinel，Job 未及时收口。'
+            }
+
+            $argv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
+            foreach ($required in @('exec','--json','--ephemeral','--ignore-user-config','--strict-config','read-only')) {
+                Assert-Contains $argv $required
+            }
+            Assert-NotMatches $argv '(?m)^--model\s*$|(?m)^sonnet\s*$|fixture-bearer-value-must-never-leak'
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-cwd-empty.txt') -Raw).Trim() -ceq 'true') `
+                'Codex 没有在 repo 外的空 workspace 启动。'
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-secret-ok.txt') -Raw).Trim() -ceq 'true') `
+                'gateway bearer 没有只经随机 child env 传递。'
+            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-environment-ok.txt') -Raw).Trim() -ceq 'true') `
+                'Codex child 环境未按 allowlist 清理。'
+            $successTrace = Get-ChildItem -LiteralPath $TracesDir -Filter '*-offline-codex-success-gateway-codex-leg1.jsonl'
+            Assert-True ($successTrace.Count -eq 1) '成功 fake Codex trace 未按 brain basename 落盘。'
+            $rows = @(Import-Csv -LiteralPath $LedgerPath)
+            $successRow = @($rows | Where-Object { $_.slug -ceq 'offline-codex-success' } | Select-Object -Last 1)
+            Assert-True ($successRow.Count -eq 1 -and $successRow[0].brain -ceq 'codex' -and
+                $successRow[0].model -ceq '' -and $successRow[0].turns -ceq '1' -and
+                $successRow[0].in_tok -ceq '11' -and $successRow[0].cache_read -ceq '2' -and
+                $successRow[0].out_tok -ceq '7' -and $successRow[0].cache_write -ceq '3' -and
+                $successRow[0].cost_usd -ceq '') 'Codex usage/订阅成本没有严格写入台账。'
+            $partialRow = @($rows | Where-Object { $_.slug -ceq 'offline-codex-exit-partial' } | Select-Object -Last 1)
+            Assert-True ($partialRow.Count -eq 1 -and $partialRow[0].result -ceq 'fail' -and
+                $partialRow[0].in_tok -ceq '' -and $partialRow[0].out_tok -ceq '') `
+                'partial/非零退出被伪造为成功 usage。'
+            foreach ($floodSlug in @('offline-codex-stdout-flood','offline-codex-stderr-flood')) {
+                $floodRow = @($rows | Where-Object { $_.slug -ceq $floodSlug } | Select-Object -Last 1)
+                Assert-True ($floodRow.Count -eq 1 -and $floodRow[0].result -ceq 'fail' -and
+                    $floodRow[0].note -match 'brain-output-limit') `
+                    "$floodSlug 未稳定记为 brain-output-limit。"
+            }
+        }
+        finally {
+            $env:DISPATCH_TEST_CODEX_SCENARIO = $oldScenario
+            $env:OPENAI_API_KEY = $oldOpenAiKey
+            $env:CODEX_ACCESS_TOKEN = $oldCodexToken
+            $env:ARBITRARY_PARENT_SECRET = $oldArbitrary
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE = $oldDeviceLease
+            if ($null -ne $parentLease) { [void](Close-DispatchLockLease -Lease $parentLease) }
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-codex-*-gateway-codex-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-claude-lease-gateway-claude-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ((Test-Path -LiteralPath $TracesDir -PathType Container) -and
+                @(Get-ChildItem -LiteralPath $TracesDir -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $TracesDir -Force
+            }
+            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $gatewayConfig -Force -ErrorAction SilentlyContinue
+            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) {
+                [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length)
+            }
+        }
+    }
+
+    Test-Case 'TimeoutMin 非正值与溢出值在任何外部调用前拒绝' {
+        foreach ($badTimeout in @('0','-1','61','2147483647')) {
+            $result = Invoke-Dispatch @('-Task','offline timeout guard','-Slug','offline-timeout','-TimeoutMin',$badTimeout)
+            Assert-True ($result.ExitCode -ne 0) "TimeoutMin=$badTimeout 不得进入预检或派单。"
+            Assert-Matches $result.Text 'TimeoutMin|1.*60'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
+        }
+    }
+
+    Test-Case 'MaxBudgetUsd 非正值与非有限值在任何外部调用前拒绝' {
+        foreach ($badBudget in @('0','-1','NaN','Infinity','-Infinity')) {
+            $result = Invoke-Dispatch @(
+                '-Task','offline budget guard','-Slug','offline-budget','-MaxBudgetUsd',$badBudget
+            )
+            Assert-True ($result.ExitCode -ne 0) "MaxBudgetUsd=$badBudget 不得进入预检或派单。"
+            Assert-Matches $result.Text 'MaxBudgetUsd|大于 0|有限数字'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
+        }
+    }
 
     Test-Case '执行器拒绝名单覆盖本机 shell、派生执行体与汇报类工具' {
         $src = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8
@@ -667,10 +1482,6 @@ session_id: offline
     }
 
     # ── 单机单派锁（残锁自清 vs 活锁必拒）────────────────────────────────────
-    $fixtureLockHelper = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
-    Assert-True (Test-Path -LiteralPath $fixtureLockHelper -PathType Leaf) `
-        '测试设施错误：fixture 缺少 dispatch lock helper。'
-    . $fixtureLockHelper
     $lockProbeDir = Join-Path $TestRoot 'lock-probe'
     New-Item -ItemType Directory -Path $lockProbeDir -Force | Out-Null
 
@@ -682,7 +1493,7 @@ session_id: offline
             $holder = Get-DispatchLockHolder -Path $path
             Assert-True $holder.Active '自己持有句柄期间应判为活锁。'
         }
-        finally { $stream.Close(); Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        finally { [void](Close-DispatchLockLease -Lease $stream) }
     }
 
     Test-Case '崩溃残留的锁自动清理后取锁成功' {
@@ -692,13 +1503,56 @@ session_id: offline
         $stream = Open-DispatchLock -Path $path -Owner 'offline/leg1/gateway'
         try {
             Assert-True ($null -ne $stream) '残锁未被自动清理。'
+            $metadata = Read-DispatchLockMetadata -Stream $stream.Stream
         }
-        finally { $stream.Close() }
-        # 持锁期间独占，内容只能等释放后核对：旧残锁已被换成本次派单的记录。
-        $content = [IO.File]::ReadAllText($path)
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        Assert-Contains $content 'owner=offline/leg1/gateway'
-        Assert-NotMatches $content 'crashed'
+        finally { [void](Close-DispatchLockLease -Lease $stream) }
+        Assert-True ($metadata.schema_version -eq 1 -and
+            -not [string]::IsNullOrWhiteSpace([string]$metadata.owner_fingerprint)) `
+            '残锁没有被替换成结构化租约元数据。'
+        Assert-NotMatches ($metadata | ConvertTo-Json -Compress) 'crashed'
+    }
+
+    Test-Case '设备锁 hardlink 必须 fail closed 且不覆写目标' {
+        $victim = Join-Path $lockProbeDir 'victim.txt'
+        $path = Join-Path $lockProbeDir 'hardlink.lock'
+        [IO.File]::WriteAllText($victim, 'victim-must-remain-byte-identical', [Text.UTF8Encoding]::new($false))
+        New-Item -ItemType HardLink -Path $path -Target $victim | Out-Null
+        $beforeVictim = [Convert]::ToHexString([IO.File]::ReadAllBytes($victim))
+        $threw = $false
+        try { Open-DispatchLock -Path $path -Owner 'must-not-overwrite-victim' -LeaseToken '' | Out-Null }
+        catch { $threw = $true }
+        Assert-True $threw 'hardlink 设备锁未 fail closed。'
+        Assert-True ([Convert]::ToHexString([IO.File]::ReadAllBytes($victim)) -ceq $beforeVictim) `
+            'hardlink 设备锁覆写了目标文件。'
+    }
+
+    Test-Case '主机级锁拒绝 junction 且租约期间目录不可换链' {
+        $junctionBase = Join-Path $TestRoot 'junction-localappdata'
+        $junctionTarget = Join-Path $TestRoot 'junction-target'
+        New-Item -ItemType Directory -Path $junctionBase, $junctionTarget -Force | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $junctionBase 'agent-for-mobile') `
+            -Target $junctionTarget | Out-Null
+        $junctionRejected = $false
+        try { $null = Get-DispatchGlobalLockPath -LocalAppDataPath $junctionBase }
+        catch { $junctionRejected = $true }
+        Assert-True $junctionRejected 'LocalAppData 下的 junction 绕过了设备锁路径验证。'
+
+        $stableBase = Join-Path $TestRoot 'stable-localappdata'
+        New-Item -ItemType Directory -Path $stableBase -Force | Out-Null
+        $stablePath = Get-DispatchGlobalLockPath -LocalAppDataPath $stableBase
+        $stableLease = Open-DispatchLock -Path $stablePath -Owner 'directory-guard-test' -LeaseToken ''
+        try {
+            $agentDirectory = Join-Path $stableBase 'agent-for-mobile'
+            $movedDirectory = Join-Path $stableBase 'agent-for-mobile-moved'
+            $renameRejected = $false
+            try { [IO.Directory]::Move($agentDirectory, $movedDirectory) }
+            catch { $renameRejected = $true }
+            if (-not $renameRejected -and (Test-Path -LiteralPath $movedDirectory)) {
+                [IO.Directory]::Move($movedDirectory, $agentDirectory)
+            }
+            Assert-True $renameRejected '活跃租约未用目录 guard 阻止锁路径换链。'
+        }
+        finally { [void](Close-DispatchLockLease -Lease $stableLease) }
     }
 
     Test-Case '仍被持有的锁必拒且不删锁文件' {
@@ -709,7 +1563,7 @@ session_id: offline
             try { Open-DispatchLock -Path $path -Owner 'offline/leg1/gateway' | Out-Null }
             catch {
                 $threw = $true
-                Assert-Contains $_.Exception.Message '疑似另一次派单进行中'
+                Assert-Matches $_.Exception.Message '疑似另一次.*任务进行中|设备任务进行中'
             }
             Assert-True $threw '活锁未被拒绝。'
             Assert-True (Test-Path -LiteralPath $path -PathType Leaf) '活锁被错误删除。'

@@ -41,22 +41,29 @@ scripts/dispatch.ps1 -Task "<内联任务>" | -TaskFile scripts/tasks/xxx.md
 中文任务文本一律建议走 `-TaskFile`（规避 PowerShell 参数编码坑，且任务卡进 git 可复用）；M0 五个验收任务各建一张任务卡。
 
 `-Executor` 省略时默认 `mobile`，保持既有 M0 命令和回归基线不变；自研网关必须显式传 `-Executor gateway`。
+Codex 通道当前只冻结了 gateway 契约，因此必须显式写 `-Brain codex -Executor gateway`；
+`Codex + mobile` 在任何锁、ADB 或大脑进程启动前 fail closed，直到 node/npm/npx 与包内容有完整的可信运行时证明链。
 
 ### 4.2 调用链
 
 ```
-选择 executor profile → 预检（零 token）→ 组装提示词（对应站规 + 任务卡）→
-claude -p --output-format stream-json --verbose --strict-mcp-config
-  --mcp-config <profile.config> --allowedTools <profile.allowedTools>
-  --max-budget-usd B --model M
-→ stdout 逐行落 trace → 解析末行 result 事件 → 台账追加 + 摘要打印
+取得主机级设备 lease → 选择 executor profile → 预检（零 token）→
+组装提示词（对应站规 + 任务卡）→ 受 Job Object 约束的 brain/MCP 进程树 →
+有硬字节上限的 stdout/stderr pump → 严格解析终态 → 原子追加台账 + 摘要打印
 ```
+
+- Claude：`claude -p --output-format stream-json --verbose --strict-mcp-config`，并传
+  `--mcp-config`、`--allowedTools`、`--max-budget-usd` 与 model。
+- Codex：仅从官方桌面应用 bundled 路径选择精确 allowlist 版本并校验 OpenAI 签名；
+  `codex exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config` 在 repo 外空目录、
+  `read-only` sandbox 和环境 allowlist 中运行，只启用选中的本机 gateway MCP。
 
 - `--strict-mcp-config`：屏蔽用户级 MCP 配置，执行会话只看选中 profile 的一个 server（确定性 + 防串台）。mobile 使用 `configs/mobile-mcp.json` / `mcp__mobile`；gateway 使用本地忽略的 `configs/gateway-mcp.json` / `mcp__gateway`。
 - **实施注记（2026-07-17，claude 2.1.206 实测）**：`--max-turns` 已被 CLI 移除，机械上限改用 `--max-budget-usd`——比轮数更贴上限的本意（成本护栏）；轮数预算降级为站规软约束（25 轮写进站规）。`--verbose`/`stream-json`/`--strict-mcp-config`/`--allowedTools` 均在位；兜底仍是 M0 已验证的 `--output-format json`（只有终态，无过程 trace）。
-- 共同预检项：`adb get-state` 有设备；`input keyevent KEYCODE_WAKEUP` 点亮屏幕。mobile profile 另检 npx 在位；gateway profile 另检本地私密配置并建立端口转发。任一失败 fail-fast，不进大脑。（对照：M0 用 LLM 做预检花了 $0.76，脚本化后这笔钱永久省掉。）**实施注记**：mobile 原设计的 npm registry 解析探测取消——国内网络下假阴性比假阳性多；版本由 configs/mobile-mcp.json 锁定，server 启动失败会体现为首轮 fail，代价可忽略。
-- **环境卫生**：从 Claude 会话内派单时，wrapper 清掉子进程的 `CLAUDE*` 环境变量（子会话按普通 headless 跑，不受宿主会话干扰）；`ANTHROPIC_BASE_URL` 有意保留——它是回落通道的合法开关（主设计 §5），派单认证异常时先查它。
-- **单机单派锁**：lock 文件防并发派单——一台手机同时只能被一个执行会话驾驶。
+- 共同预检项：`adb get-state` 有设备；`input keyevent KEYCODE_WAKEUP` 点亮屏幕。Claude mobile profile 另检 npx 在位；gateway profile 另检本地私密配置并建立端口转发。任一失败 fail-fast，不进大脑。（对照：M0 用 LLM 做预检花了 $0.76，脚本化后这笔钱永久省掉。）**实施注记**：mobile 原设计的 npm registry 解析探测取消——国内网络下假阴性比假阳性多；版本由 configs/mobile-mcp.json 锁定，server 启动失败会体现为首轮 fail，代价可忽略。Codex mobile 不复用这条宿主 PATH 信任假设，当前直接拒绝。
+- **环境卫生**：从 Claude 会话内派单时，wrapper 清掉子进程的 `CLAUDE*` 环境变量（子会话按普通 headless 跑，不受宿主会话干扰）；`ANTHROPIC_BASE_URL` 有意保留——它是回落通道的合法开关（主设计 §5），派单认证异常时先查它。Codex child 改用环境 allowlist；gateway Bearer 只经随机名的一次性 child env 传入，API key 与设备 lease token 不下传。
+- **单机单派锁**：固定的 `%LOCALAPPDATA%\agent-for-mobile\locks\device-v1.lock` 防跨 worktree 并发；runner 与直属 dispatch child 可加入同一 lease，最后一个 holder 退出才释放。
+- **进程与输出收口**：wrapper 在放行 brain 前把根进程加入 `KILL_ON_JOB_CLOSE` Job；超时、异常和正常终态都先终止并确认整棵进程树归零，再释放设备 lease。stdout 最多 16 MiB、stderr 最多 4 MiB，达到上限的 pump 立即终止 Job 并记 `brain-output-limit`，不会靠事后检查文件大小。
 - **双 profile 实施注记（2026-07-19）**：gateway 非 DryRun 预检在启动大脑前校验私密配置的 JSON/profile/URL/Bearer 占位符，再做 `adb forward tcp:8848 tcp:8848`；token 不得进入输出、trace、ledger 或测试夹具。两套 profile 都用独立 allowed-tools 和站规。
 - **DryRun 实施注记（2026-07-19）**：DryRun 分支位于 adb、私密配置读取、锁、trace/暂停件/ledger 落盘之前；只组装并打印 profile、允许工具和提示词，因此无手机、无真实 token 时也能离线验契约。
 
@@ -154,19 +161,25 @@ runner 每腿动态生成带随机 marker 的任务卡，再调用既有 `dispat
 
 `-Provision` 经 `run-as` 读取 app 私有 token，只在内存中组装本地 gitignored 配置且不打印敏感值；结束时恢复原配置。debug `test-control.json` 只武装证据与确认后 stale 故障注入，不含确认决定；确认状态只有只读通道，`allowed/denied` 仍只来自手机按钮。`finally` 清控制文件/截图/中转文件、恢复原 IME、移除端口转发、恢复私密配置、删除临时任务并释放锁；任何清理失败都会将整组改判失败。
 
+runner 在放行 dispatch 入口前先把 gate host 加入自己的 `KILL_ON_JOB_CLOSE` Job；正常结束、确认超时和启动后异常都先终止 Job，并以 `ActiveProcesses == 0` 证明全部后代归零，随后才允许设备恢复与主机级租约释放。只等待 dispatch 根进程不构成清理证明。
+
 ## 7. 失败与上限
 
 - **无自动重试**【决策点 2】：手机态非幂等（盲重试可能重复发送/下单），额度又贵。失败的处置永远是人（或派单方会话）读摘要后有意识地重新派单；wrapper 不提供 -Retry。
 - gateway safety 终态禁止同腿重试和第二腿恢复；如需修权限或环境，先人工修复并重新建立任务上下文，再由人有意识地发起一条全新测试，新的危险调用仍须再次通过手机确认卡。
-- 机械上限 `--max-budget-usd` 默认 $2（M0 数据：正常任务 ≤$1.26、病态排障 $6.44——$2 正好砍在两者之间），单次可覆写；轮数 25 为站规软预算。触限 → result=step-cap（语义=预算触顶）。
+- Claude 的机械上限 `--max-budget-usd` 默认 $2（M0 数据：正常任务 ≤$1.26、病态排障 $6.44——$2 正好砍在两者之间），单次可覆写，但必须是大于 0 的有限数字；轮数 25 为站规软预算。触限 → result=step-cap（语义=预算触顶）。Codex 走 ChatGPT 订阅通道，不提供等价的美元硬上限；摘要、提示词与 DryRun 必须明确显示这一点，不得把 `MaxBudgetUsd` 冒充为 Codex 护栏。
 - 墙钟默认 15 分钟，超时杀进程 → result=timeout。
+- 输出硬上限为 stdout 16 MiB / stderr 4 MiB；任一达到上限立即终止 Job → result=fail、note=`brain-output-limit`。
+- Codex `--version` 探针的 stdout/stderr 各有 4 KiB 流式硬上限；触限时同样终止并排空探针 Job，不能先让未知可执行体无界写临时文件再事后检查。
 - 预检失败 → result=preflight-fail，零成本。
 
-## 8. Codex 对照通道（接口先行，实现后置）
+## 8. Codex 对照通道（2026-08-28 已实现 gateway 冻结契约）
 
-- 同一 wrapper `-Brain codex` → `codex exec` 走 ChatGPT Plus 额度；mobile server 在 `~/.codex/config.toml` 的 `[mcp_servers.mobile]` 配置（与 configs/mobile-mcp.json 同参数）。
-- 输出解析按 brain 分小函数，归一到同一台账 schema（brain 列区分）。
-- **实现时机**【决策点 4】：本次只定接口与台账兼容性，代码推迟到第一次真实对照需求（如 M1 验收要双脑成绩单）再写——codex exec 的 JSON 事件格式与审批 flag 需实测，现在写是无靶开发。
+- 同一 wrapper 显式传 `-Brain codex -Executor gateway` → 官方 `codex exec` 走 ChatGPT 订阅额度；不读取用户 config/rules，不提供 shell、浏览器、插件、多 agent 或 repo 工作区。
+- 只接受代码中精确列出的 CLI 版本输出；候选来自官方桌面应用 bundled 目录，签名、版本和 SHA-256 在解析与启动边界重复核对。未知新版默认拒绝，完成一轮离线契约审查后才加入 allowlist。
+- gateway 配置只接受原始 JSON token 类型正确的 object/string/number、`http://127.0.0.1:8848/mcp` 与有效 Bearer；数组或字符串不得借 PowerShell 单元素展开/强制转换冒充标量。token 从配置对象转移到随机 child env 后清掉重复引用。Codex mobile/stdio MCP 尚未建立可信宿主运行时契约，当前不可用。
+- JSONL 解析按 brain 分函数并归一到同一台账 schema；只接受完整 lifecycle、已知事件、严格 JSON 类型、合法 usage 与 gateway `ok=true`。Claude success 必须同时携带完整 usage、`num_turns` 与 `total_cost_usd`；非零退出只可保留合法 partial，不得伪造成成功或完整 usage。
+- Codex 的 `cost_usd` 留空，tokens/轮次照记；它没有 `MaxBudgetUsd` 等价护栏，仍受墙钟、Job 进程树和输出字节上限约束。
 
 ## 9. 风险
 

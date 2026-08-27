@@ -21,8 +21,12 @@ $SourceRunner = Join-Path $SourceRepoRoot 'scripts\run-p0-safety-smoke.ps1'
 $SourceProvisioner = Join-Path $SourceRepoRoot 'scripts\lib\p0-device-provision.ps1'
 $SourceHealthProbe = Join-Path $SourceRepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
 $SourceTaskTemplateHelper = Join-Path $SourceRepoRoot 'scripts\lib\p0-task-template.ps1'
+$SourceDeviceLockHelper = Join-Path $SourceRepoRoot 'scripts\lib\dispatch-lock.ps1'
+$SourceLockParentFixture = Join-Path $SourceRepoRoot 'scripts\tests\fixtures\dispatch-lock-parent.ps1'
+$SourceLockChildFixture = Join-Path $SourceRepoRoot 'scripts\tests\fixtures\dispatch-lock-child.ps1'
 $SourceTaskTemplateDir = Join-Path $SourceRepoRoot 'scripts\tasks'
 . $SourceTaskTemplateHelper
+. $SourceDeviceLockHelper
 . (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1')
 $PwshPath = (Get-Process -Id $PID).Path
 $script:Passed = 0
@@ -60,6 +64,32 @@ function Assert-Contains([string]$Actual, [string]$Expected) {
 
 function Assert-NotMatches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -notmatch $Pattern) "不应匹配 /$Pattern/：`n$Actual"
+}
+
+function Assert-FixtureDispatchTreeDrainedBeforeCleanup($Fixture, [string]$Context) {
+    Assert-True (Test-Path -LiteralPath (Join-Path $Fixture.State 'dispatch-descendant-ready.txt') -PathType Leaf) `
+        "$Context 的持活后代未完成启动握手。"
+    foreach ($pidFile in @('dispatch-child-pid.txt','dispatch-descendant-pid.txt')) {
+        $pidPath = Join-Path $Fixture.State $pidFile
+        Assert-True (Test-Path -LiteralPath $pidPath -PathType Leaf) "$Context 未启动 $pidFile 对应进程。"
+        $fixturePid = [int](Get-Content -LiteralPath $pidPath -Raw)
+        $alive = $null -ne (Get-Process -Id $fixturePid -ErrorAction SilentlyContinue)
+        Assert-True (-not $alive) "$Context 返回时 $pidFile 对应进程仍存活。"
+    }
+
+    $violationPath = Join-Path $Fixture.State 'dispatch-descendant-order-violation.txt'
+    Assert-True (-not (Test-Path -LiteralPath $violationPath)) "$Context 在 dispatch 后代存活时开始了设备/lease cleanup。"
+    $orderPath = Join-Path $Fixture.State 'dispatch-descendant-order.log'
+    Assert-True (Test-Path -LiteralPath $orderPath -PathType Leaf) "$Context 未记录 cleanup 顺序证明。"
+    $order = @(Get-Content -LiteralPath $orderPath)
+    Assert-True ($order -contains 'before_device_cleanup') "$Context 未在设备 cleanup 前验证后代退出。"
+    Assert-True ($order -contains 'before_lease_release') "$Context 未在 lease release 前验证后代退出。"
+
+    $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $Fixture.LocalAppData
+    Assert-True (-not (Test-Path -LiteralPath $lockPath)) "$Context 后主机级租约文件仍未清理。"
+    $after = Open-DispatchLock -Path $lockPath -Owner "after-$Context"
+    try { Assert-True ($null -ne $after.Stream) "$Context 后无法重新取得设备锁。" }
+    finally { [void](Close-DispatchLockLease -Lease $after) }
 }
 
 # 假 adb 把整条命令原样记进 keyevent.log；一次 `input keyevent` 可带多个键码，因此按 token 数。
@@ -134,7 +164,8 @@ function New-Fixture {
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
-        'decided_via_notification'
+        'decided_via_notification', 'dispatch_post_start_failure',
+        'dispatch_pre_start_failure', 'dispatch_resource_cleanup_failure'
     )][string]$Scenario)
 
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -143,15 +174,113 @@ function New-Fixture {
     $repo = Join-Path $root 'repo'
     $state = Join-Path $root 'state'
     $bin = Join-Path $root 'bin'
+    $localAppData = Join-Path $root 'local-app-data'
     @(
         'scripts\lib', 'scripts\tasks', 'docs\runs\traces', 'docs\runs\evidence',
         'configs', 'app\gateway\build\outputs\apk\debug', 'device\files', 'device\cache'
     ) | ForEach-Object { New-Item -ItemType Directory -Force -Path (Join-Path $repo $_) | Out-Null }
-    New-Item -ItemType Directory -Force -Path $state, $bin | Out-Null
+    New-Item -ItemType Directory -Force -Path $state, $bin, $localAppData | Out-Null
 
     $fixtureRunner = Join-Path $repo 'scripts\run-p0-safety-smoke.ps1'
     Copy-Item -LiteralPath $SourceRunner -Destination $fixtureRunner
     Copy-Item -LiteralPath $SourceProvisioner -Destination (Join-Path $repo 'scripts\lib\p0-device-provision.ps1')
+    if ($Scenario -eq 'dispatch_post_start_failure') {
+        # 精确把故障打在 gate host 已入 Job、gate 已放行、调用者尚未拿到 Handle 的窗口；
+        # 先等 fake dispatch 完成 lease join 并派生持活后代，覆盖初始化抛错后的整树收口。
+        $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
+        $needle = @'
+        if (-not $gate.Set()) { throw 'P0 dispatch 启动 gate 放行失败。' }
+'@.TrimEnd("`r", "`n")
+        $fault = @'
+        if (-not $gate.Set()) { throw 'P0 dispatch 启动 gate 放行失败。' }
+        $fixtureReady = Join-Path $env:P0_FAKE_STATE 'dispatch-child-ready.txt'
+        $fixtureDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not (Test-Path -LiteralPath $fixtureReady) -and [DateTime]::UtcNow -lt $fixtureDeadline) {
+            Start-Sleep -Milliseconds 20
+        }
+        if (-not (Test-Path -LiteralPath $fixtureReady)) { throw 'fixture dispatch child did not join lease' }
+        throw 'fixture dispatch post-start init failure'
+'@
+        if (-not $runnerSource.Contains($needle, [StringComparison]::Ordinal)) {
+            throw '测试设施错误：无法定位 dispatch post-start 故障注入点。'
+        }
+        $runnerSource = $runnerSource.Replace($needle, $fault.TrimEnd("`r", "`n"))
+        Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
+    }
+    if ($Scenario -in @('timeout','dispatch_post_start_failure')) {
+        # 仅在 fixture 副本中把顺序断言钉到真实 cleanup 边界：返回后查 PID 只能证明“最终死了”，
+        # 这两道守卫证明设备恢复与根 lease 释放发生时，Job 内持活后代已经死亡。
+        $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
+        $guard = @'
+        $fixtureDescendantPidPath = Join-Path $env:P0_FAKE_STATE 'dispatch-descendant-pid.txt'
+        if (-not (Test-Path -LiteralPath $fixtureDescendantPidPath -PathType Leaf)) {
+            throw 'fixture dispatch descendant PID missing before __PHASE__'
+        }
+        $fixtureDescendantPid = [int](Get-Content -LiteralPath $fixtureDescendantPidPath -Raw)
+        if ($null -ne (Get-Process -Id $fixtureDescendantPid -ErrorAction SilentlyContinue)) {
+            Set-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'dispatch-descendant-order-violation.txt') `
+                -Value '__PHASE__' -Encoding ascii
+            throw 'fixture dispatch descendant alive before __PHASE__'
+        }
+        Add-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'dispatch-descendant-order.log') `
+            -Value '__PHASE__' -Encoding ascii
+'@
+        $deviceNeedle = '        try { $cleanupErrors += @(Stop-P0DeviceProvision -Session $session) }'
+        $leaseNeedle = '        try { [void](Close-DispatchLockLease -Lease $lockLease) }'
+        foreach ($injection in @(
+            [pscustomobject]@{ Needle = $deviceNeedle; Phase = 'before_device_cleanup' },
+            [pscustomobject]@{ Needle = $leaseNeedle; Phase = 'before_lease_release' }
+        )) {
+            $needle = [string]$injection.Needle
+            $phase = [string]$injection.Phase
+            if (-not $runnerSource.Contains($needle, [StringComparison]::Ordinal)) {
+                throw "测试设施错误：无法定位 $phase 顺序断言点。"
+            }
+            $injectedGuard = $guard.Replace('__PHASE__', $phase).TrimEnd("`r", "`n")
+            $runnerSource = $runnerSource.Replace($needle, "$injectedGuard`r`n$needle")
+        }
+        Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
+    }
+    if ($Scenario -in @('dispatch_pre_start_failure','dispatch_resource_cleanup_failure')) {
+        # 在 fixture 副本内记录每一项资源关闭尝试；stdout Dispose 故障必须被聚合，不能阻断
+        # stderr/gate/Job。pre-start 则把故障打在空 Job+gate 已创建、Process.Start 尚未执行处。
+        $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
+        $disposeNeedle = '        try { $entry.Resource.Dispose() }'
+        $disposeReplacement = @'
+        try {
+            Add-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'dispatch-resource-cleanup.log') `
+                -Value ([string]$entry.Name) -Encoding ascii
+            if (__FAIL_STDOUT__ -and $entry.Name -ceq 'stdout stream') {
+                throw 'fixture stdout dispose failure'
+            }
+            $entry.Resource.Dispose()
+        }
+'@.Replace('__FAIL_STDOUT__', $(if ($Scenario -eq 'dispatch_resource_cleanup_failure') { '$true' } else { '$false' })).TrimEnd("`r", "`n")
+        $jobNeedle = '            [AgentMobileP0RunnerJob]::Close($JobHandle)'
+        $jobReplacement = @'
+            Add-Content -LiteralPath (Join-Path $env:P0_FAKE_STATE 'dispatch-resource-cleanup.log') `
+                -Value 'job handle' -Encoding ascii
+            [AgentMobileP0RunnerJob]::Close($JobHandle)
+'@.TrimEnd("`r", "`n")
+        foreach ($replacement in @(
+            [pscustomobject]@{ Needle = $disposeNeedle; Value = $disposeReplacement },
+            [pscustomobject]@{ Needle = $jobNeedle; Value = $jobReplacement }
+        )) {
+            if (-not $runnerSource.Contains($replacement.Needle, [StringComparison]::Ordinal)) {
+                throw '测试设施错误：无法定位 dispatch resource cleanup 注入点。'
+            }
+            $runnerSource = $runnerSource.Replace($replacement.Needle, $replacement.Value)
+        }
+        if ($Scenario -eq 'dispatch_pre_start_failure') {
+            $startNeedle = "        if (-not `$process.Start()) { throw 'dispatch 子进程启动失败。' }"
+            $startReplacement = "        throw 'fixture dispatch pre-start init failure'`r`n$startNeedle"
+            if (-not $runnerSource.Contains($startNeedle, [StringComparison]::Ordinal)) {
+                throw '测试设施错误：无法定位 dispatch pre-start 故障注入点。'
+            }
+            $runnerSource = $runnerSource.Replace($startNeedle, $startReplacement)
+        }
+        Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
+    }
     if ($Scenario -in @('token_temp_cleanup_failure','restore_temp_cleanup_failure')) {
         $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
         $faultHook = @'
@@ -201,6 +330,8 @@ function Remove-P0PrivateTemporaryFile {
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
+    Copy-Item -LiteralPath $SourceDeviceLockHelper `
+        -Destination (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
     # 带外判据是纯函数，fixture 跑的必须是真机上会用的同一份（同任务模板不用假货的理由）。
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\p0-oob-verify.ps1')
@@ -492,6 +623,51 @@ $repo = Split-Path $PSScriptRoot -Parent
 $state = $env:P0_FAKE_STATE
 $scenario = (Get-Content -LiteralPath (Join-Path $state 'scenario.txt') -Raw).Trim()
 $fixtureToken = (Get-Content -LiteralPath (Join-Path $state 'token.txt') -Raw).Trim()
+$fixtureLease = $null
+$fixtureDescendant = $null
+function Start-FixtureDispatchDescendant {
+    $readyPath = Join-Path $state 'dispatch-descendant-ready.txt'
+    $holdScript = @(
+        'Set-Content -LiteralPath $env:P0_FIXTURE_DESCENDANT_READY -Value ''ready'' -Encoding ascii',
+        'Start-Sleep -Seconds 60'
+    ) -join "`r`n"
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = (Get-Process -Id $PID).Path
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.Environment['P0_FIXTURE_DESCENDANT_READY'] = $readyPath
+    $encodedHoldScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holdScript))
+    foreach ($arg in @('-NoProfile','-NonInteractive','-EncodedCommand',$encodedHoldScript)) {
+        $start.ArgumentList.Add($arg)
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    if (-not $process.Start()) { throw 'fixture descendant failed to start' }
+    Set-Content -LiteralPath (Join-Path $state 'dispatch-descendant-pid.txt') -Value $process.Id -Encoding ascii
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while (-not (Test-Path -LiteralPath $readyPath) -and -not $process.HasExited -and
+        [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 20
+    }
+    if ($process.HasExited -or -not (Test-Path -LiteralPath $readyPath -PathType Leaf)) {
+        throw 'fixture descendant exited before readiness'
+    }
+    return $process
+}
+if ($scenario -in @('timeout','dispatch_post_start_failure')) {
+    . (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
+    $fixtureLease = Open-DispatchLock -Path (Get-DispatchGlobalLockPath) -Owner 'fixture-dispatch-child'
+    Set-Content -LiteralPath (Join-Path $state 'dispatch-child-pid.txt') -Value $PID -Encoding ascii
+    $fixtureDescendant = Start-FixtureDispatchDescendant
+}
+if ($scenario -eq 'dispatch_post_start_failure') {
+    try {
+        Set-Content -LiteralPath (Join-Path $state 'dispatch-child-ready.txt') -Value 'ready' -Encoding ascii
+        Start-Sleep -Seconds 20
+    }
+    finally { [void](Close-DispatchLockLease -Lease $fixtureLease) }
+    exit 91
+}
 if ($scenario -in @('stdout_secret','existing_config_stdout_secret')) { Write-Output "token=$fixtureToken" }
 if ($scenario -eq 'stderr_bearer') { [Console]::Error.WriteLine('Authorization: Bearer stderr-fixture-secret') }
 Add-Content -LiteralPath (Join-Path $state 'dispatch.log') -Value $Slug
@@ -541,7 +717,8 @@ if ($scenario -eq 'decided_via_notification') { $confirm.decided_via = 'notifica
 if ($scenario -eq 'timeout') {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
-    Start-Sleep -Seconds 20
+    try { Start-Sleep -Seconds 20 }
+    finally { if ($null -ne $fixtureLease) { [void](Close-DispatchLockLease -Lease $fixtureLease) } }
     exit 9
 }
 $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
@@ -801,6 +978,7 @@ exit $exit
         Dispatch = $fakeDispatch
         Precheck = $fakePrecheck
         Token = $fakeToken
+        LocalAppData = $localAppData
     }
 }
 
@@ -833,6 +1011,9 @@ function Invoke-FixtureRunner {
         $start.ArgumentList.Add($arg)
     }
     $start.Environment['P0_FAKE_STATE'] = $Fixture.State
+    # fixture runner 仍走真实的“主机级”路径算法，但每个 fixture 用自己的伪 LOCALAPPDATA，
+    # 避免离线套件分片互相争用开发机的生产设备锁。
+    $start.Environment['LOCALAPPDATA'] = $Fixture.LocalAppData
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     try {
@@ -868,6 +1049,8 @@ try {
         Assert-True (Test-Path -LiteralPath $SourceHealthProbe -PathType Leaf) "缺少健康探针：$SourceHealthProbe"
         Assert-True (Test-Path -LiteralPath $SourceTaskTemplateHelper -PathType Leaf) `
             "缺少任务模板装配器：$SourceTaskTemplateHelper"
+        Assert-True (Test-Path -LiteralPath $SourceDeviceLockHelper -PathType Leaf) `
+            "缺少主机级设备锁 helper：$SourceDeviceLockHelper"
     }
 
     Test-Case '派发正文与模板抽取前逐字一致（黄金回归）' {
@@ -951,36 +1134,121 @@ try {
 
     Test-Case 'DryRun 零 adb、零 dispatch、零落盘' {
         $evidenceBefore = @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'docs\runs\evidence') -Recurse -File -ErrorAction SilentlyContinue).Count
-        $lockPath = Join-Path $SourceRepoRoot 'scripts\.p0-safety-smoke.lock'
-        $output = & $PwshPath -NoProfile -File $SourceRunner -Legs 'Stale,Allow' -DryRun `
-            -AdbPath 'definitely-missing-adb' -DispatchPath 'definitely-missing-dispatch' 2>&1
+        $dryLocalAppData = Join-Path ([IO.Path]::GetTempPath()) (
+            'agent-mobile-p0-dry-lock-' + [guid]::NewGuid().ToString('N'))
+        $script:TestRoots.Add($dryLocalAppData)
+        New-Item -ItemType Directory -Force -Path $dryLocalAppData | Out-Null
+        $lockPath = Join-Path $dryLocalAppData 'agent-for-mobile\locks\device-v1.lock'
+        $savedLocalAppData = $env:LOCALAPPDATA
+        try {
+            $env:LOCALAPPDATA = $dryLocalAppData
+            $output = & $PwshPath -NoProfile -File $SourceRunner -Legs 'Stale,Allow' -DryRun `
+                -AdbPath 'definitely-missing-adb' -DispatchPath 'definitely-missing-dispatch' 2>&1
+        }
+        finally { $env:LOCALAPPDATA = $savedLocalAppData }
         Assert-True ($LASTEXITCODE -eq 0) "DryRun 失败：$($output -join "`n")"
         Assert-Contains ($output -join "`n") 'legs=Allow,Stale'
-        Assert-True (-not (Test-Path -LiteralPath $lockPath)) 'DryRun 创建了 runner 锁。'
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) 'DryRun 创建了主机级设备锁。'
         $evidenceAfter = @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'docs\runs\evidence') -Recurse -File -ErrorAction SilentlyContinue).Count
         Assert-True ($evidenceAfter -eq $evidenceBefore) 'DryRun 写入了 evidence。'
     }
 
-    Test-Case 'health probe 兼容 PowerShell 7.0 且 runner 锁验证 PID 与进程启动时间' {
+    Test-Case 'health probe 兼容 PowerShell 7.0 且 runner 使用跨 worktree 主机级租约' {
         Assert-NotMatches (Get-Content -LiteralPath $SourceHealthProbe -Raw) '\?\.'
-        foreach ($kind in @('crashed','pid_reused')) {
-            $fixture = New-Fixture happy
-            $lockPath = Join-Path $fixture.Repo 'scripts\.p0-safety-smoke.lock'
-            $pidValue = if ($kind -eq 'crashed') { 2147483000 } else { $PID }
-            $ticks = if ($kind -eq 'crashed') { 1 } else { (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks + 1 }
-            @{pid=$pidValue;run_id="stale-$kind";process_start_ticks=$ticks} | ConvertTo-Json -Compress |
-                Set-Content -LiteralPath $lockPath -Encoding utf8
-            $result = Invoke-FixtureRunner $fixture @('Allow')
-            Assert-True ($result.ExitCode -eq 0) "$kind 陈旧锁必须安全清除：$($result.Text)"
-            Assert-True (-not (Test-Path -LiteralPath $lockPath)) "$kind 结束后锁仍存在。"
+        $fixtureA = New-Fixture happy
+        $fixtureB = New-Fixture happy
+        # 两个不同 repo/worktree 显式共享同一个主机 LocalAppData；路径不得含任一 repo。
+        $fixtureB.LocalAppData = $fixtureA.LocalAppData
+        $pathA = Get-DispatchGlobalLockPath -LocalAppDataPath $fixtureA.LocalAppData
+        $pathB = Get-DispatchGlobalLockPath -LocalAppDataPath $fixtureB.LocalAppData
+        Assert-True ($pathA -ceq $pathB) '不同 worktree 没有解析到同一条主机级设备锁。'
+        Assert-NotMatches $pathA ([regex]::Escape($fixtureA.Repo))
+        Assert-NotMatches $pathB ([regex]::Escape($fixtureB.Repo))
+
+        $leaseA = Open-DispatchLock -Path $pathA -Owner 'fixture-a'
+        try {
+            $resultB = Invoke-FixtureRunner $fixtureB @('Allow')
+            Assert-True ($resultB.ExitCode -ne 0) 'worktree A 持锁时 worktree B 的 runner 仍然启动。'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureB.State 'adb.log'))) `
+                '主机级锁拒绝之前已经触碰 adb/设备。'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureB.State 'dispatch.log'))) `
+                '主机级锁拒绝之前已经启动 dispatch。'
         }
-        $activeFixture = New-Fixture happy
-        $activeLock = Join-Path $activeFixture.Repo 'scripts\.p0-safety-smoke.lock'
-        @{pid=$PID;run_id='active-owner';process_start_ticks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks} |
-            ConvertTo-Json -Compress | Set-Content -LiteralPath $activeLock -Encoding utf8
-        $activeResult = Invoke-FixtureRunner $activeFixture @('Allow')
-        Assert-True ($activeResult.ExitCode -ne 0) '活锁必须阻止第二个 runner。'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $activeFixture.State 'dispatch.log'))) '活锁存在时仍启动了 dispatch。'
+        finally { [void](Close-DispatchLockLease -Lease $leaseA) }
+
+        $resultAfterRelease = Invoke-FixtureRunner $fixtureB @('Allow')
+        Assert-True ($resultAfterRelease.ExitCode -eq 0) `
+            "最终 holder 释放后新 runner 应正常取得锁：$($resultAfterRelease.Text)"
+        Assert-True (-not (Test-Path -LiteralPath $pathB)) '最终 holder 退出后租约文件仍未清理。'
+
+        # 残锁按“是否仍有共享句柄”判断，不信 pid/时间戳，也不把一个普通残留文件误判成活锁。
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($pathB))
+        Set-Content -LiteralPath $pathB -Value '{"schema_version":1,"lease_hash":"stale"}' -Encoding utf8
+        $staleRecovered = Open-DispatchLock -Path $pathB -Owner 'stale-recovery'
+        try { Assert-True ($null -ne $staleRecovered.Stream) '无句柄残锁没有被自动接管。' }
+        finally { [void](Close-DispatchLockLease -Lease $staleRecovered) }
+        Assert-True (-not (Test-Path -LiteralPath $pathB)) '残锁接管后的最终释放没有清理文件。'
+    }
+
+    Test-Case '父进程退出后已 join 的子进程继续持锁，最终 holder 退出才释放' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) (
+            'agent-mobile-lock-tree-' + [guid]::NewGuid().ToString('N'))
+        $script:TestRoots.Add($root)
+        $localAppData = Join-Path $root 'local-app-data'
+        New-Item -ItemType Directory -Force -Path $localAppData | Out-Null
+        $readyPath = Join-Path $root 'child-ready.txt'
+        $releasePath = Join-Path $root 'release-child.txt'
+        $childPidPath = Join-Path $root 'child-pid.txt'
+        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $localAppData
+
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = $PwshPath
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        foreach ($argument in @(
+            '-NoProfile', '-File', $SourceLockParentFixture,
+            '-HelperPath', $SourceDeviceLockHelper,
+            '-ChildScriptPath', $SourceLockChildFixture,
+            '-LocalAppDataPath', $localAppData,
+            '-ReadyPath', $readyPath,
+            '-ReleasePath', $releasePath,
+            '-ChildPidPath', $childPidPath
+        )) {
+            $start.ArgumentList.Add($argument)
+        }
+
+        $parent = [Diagnostics.Process]::new()
+        $parent.StartInfo = $start
+        $childProcess = $null
+        try {
+            Assert-True ($parent.Start()) '无法启动父进程退出测试。'
+            Assert-True $parent.WaitForExit(15000) '父进程退出测试超时。'
+            Assert-True ($parent.ExitCode -eq 0) "父进程 fixture 失败，exit=$($parent.ExitCode)。"
+            Assert-True (Test-Path -LiteralPath $readyPath -PathType Leaf) '子进程未完成 lease join。'
+            $childPid = [int](Get-Content -LiteralPath $childPidPath -Raw)
+            $childProcess = Get-Process -Id $childPid -ErrorAction Stop
+
+            $blocked = $false
+            try { Open-DispatchLock -Path $lockPath -Owner 'outside-worktree' -LeaseToken '' | Out-Null }
+            catch {
+                $blocked = $true
+                Assert-Contains $_.Exception.Message '另一次设备任务进行中'
+            }
+            Assert-True $blocked '初始父进程已退出但子进程仍活着时，外来 worktree 取得了锁。'
+        }
+        finally {
+            Set-Content -LiteralPath $releasePath -Value 'release' -Encoding ascii
+            if ($null -ne $childProcess) {
+                if (-not $childProcess.WaitForExit(10000)) { $childProcess.Kill($true) }
+                $childProcess.Dispose()
+            }
+            $parent.Dispose()
+        }
+
+        $afterTree = Open-DispatchLock -Path $lockPath -Owner 'after-process-tree'
+        try { Assert-True ($null -ne $afterTree.Stream) '进程树全部退出后仍拿不到设备锁。' }
+        finally { [void](Close-DispatchLockLease -Lease $afterTree) }
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) '进程树最终退出后锁文件仍存在。'
     }
 
     Test-Case '私密配置临时文件名均被 gitignore 覆盖' {
@@ -1112,9 +1380,54 @@ try {
 
     Test-Case '确认超时失败并终止子进程' {
         $fixture = New-Fixture timeout
-        $result = Invoke-FixtureRunner $fixture @('Allow') 1
+        $result = Invoke-FixtureRunner $fixture @('Allow') 2
         Assert-True ($result.ExitCode -ne 0) '确认超时必须失败。'
         Assert-Contains $result.Text '确认超时'
+        Assert-FixtureDispatchTreeDrainedBeforeCleanup $fixture 'confirmation-timeout'
+    }
+
+    Test-Case 'dispatch 启动后初始化失败会终止已 join 租约的子进程' {
+        $fixture = New-Fixture dispatch_post_start_failure
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        $watch.Stop()
+        Assert-True ($result.ExitCode -ne 0) 'dispatch post-start 初始化失败却返回成功。'
+        Assert-Contains $result.Text 'fixture dispatch post-start init failure'
+        Assert-True ($watch.Elapsed.TotalSeconds -lt 12) 'runner 等待了本应被立即终止的 dispatch child。'
+        Assert-FixtureDispatchTreeDrainedBeforeCleanup $fixture 'post-start-failure'
+    }
+
+    Test-Case 'dispatch 启动前失败会关闭空 Job 与 gate' {
+        $fixture = New-Fixture dispatch_pre_start_failure
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'dispatch pre-start 初始化失败却返回成功。'
+        Assert-Contains $result.Text 'fixture dispatch pre-start init failure'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch-child-pid.txt'))) `
+            'pre-start 故障仍启动了 fake dispatch。'
+        $cleanupAttempts = @(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch-resource-cleanup.log'))
+        Assert-True ($cleanupAttempts -contains 'dispatch gate') 'pre-start 故障未关闭 gate。'
+        Assert-True ($cleanupAttempts -contains 'job handle') 'pre-start 故障未关闭空 Job。'
+        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $fixture.LocalAppData
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) 'pre-start 故障后根 lease 未释放。'
+        $after = Open-DispatchLock -Path $lockPath -Owner 'after-pre-start-failure'
+        try { Assert-True ($null -ne $after.Stream) 'pre-start 故障后无法重取设备锁。' }
+        finally { [void](Close-DispatchLockLease -Lease $after) }
+    }
+
+    Test-Case 'dispatch 资源释放单项失败不阻断其余资源与根 lease' {
+        $fixture = New-Fixture dispatch_resource_cleanup_failure
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) 'stdout Dispose 故障未使 runner 报错。'
+        Assert-Contains $result.Text '关闭 stdout stream 失败'
+        $cleanupAttempts = @(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch-resource-cleanup.log'))
+        foreach ($expected in @('stdout stream','stderr stream','dispatch gate','job handle')) {
+            Assert-True ($cleanupAttempts -contains $expected) "stdout Dispose 故障阻断了 $expected 的清理尝试。"
+        }
+        $lockPath = Get-DispatchGlobalLockPath -LocalAppDataPath $fixture.LocalAppData
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) '资源 Dispose 故障后根 lease 未释放。'
+        $after = Open-DispatchLock -Path $lockPath -Owner 'after-resource-cleanup-failure'
+        try { Assert-True ($null -ne $after.Stream) '资源 Dispose 故障后无法重取设备锁。' }
+        finally { [void](Close-DispatchLockLease -Lease $after) }
     }
 
     Test-Case '截图证据缺失不得判通过' {
@@ -2249,6 +2562,9 @@ if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-marker.ps1'),
+            $SourceDeviceLockHelper,
+            $SourceLockParentFixture,
+            $SourceLockChildFixture,
             (Join-Path $SourceRepoRoot 'scripts\p0-foreground-bootstrap-check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\check.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
@@ -2256,7 +2572,8 @@ if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
         )) {
             $tokens = $null; $errors = $null
             [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
-            Assert-True ($errors.Count -eq 0) "$path 解析失败：$($errors | ForEach-Object Message -join '; ')"
+            $parseErrorText = (($errors | ForEach-Object { $_.Message }) -join '; ')
+            Assert-True ($errors.Count -eq 0) "$path 解析失败：$parseErrorText"
         }
     }
 }

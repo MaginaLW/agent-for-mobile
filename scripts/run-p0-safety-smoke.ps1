@@ -45,6 +45,7 @@ $ProvisionerPath = Join-Path $RepoRoot 'scripts\lib\p0-device-provision.ps1'
 $TaskTemplateHelperPath = Join-Path $RepoRoot 'scripts\lib\p0-task-template.ps1'
 # 终态报告的匹配模式与 dispatch 共用一份，避免两边对"什么算成功"的判据漂移。
 $LedgerHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-ledger.ps1'
+$DeviceLockHelperPath = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
 $TaskTemplateDir = Join-Path $RepoRoot 'scripts\tasks'
 if ([string]::IsNullOrWhiteSpace($HealthProbePath)) {
     $HealthProbePath = Join-Path $RepoRoot 'scripts\lib\p0-gateway-health-probe.ps1'
@@ -105,12 +106,198 @@ if (-not (Test-Path -LiteralPath $DispatchPath -PathType Leaf)) { throw "缺少 
 if (-not (Test-Path -LiteralPath $TaskTemplateHelperPath -PathType Leaf)) {
     throw "缺少任务模板装配器：$TaskTemplateHelperPath"
 }
+if (-not (Test-Path -LiteralPath $DeviceLockHelperPath -PathType Leaf)) {
+    throw "缺少主机级设备锁 helper：$DeviceLockHelperPath"
+}
 . $ProvisionerPath
 . $TaskTemplateHelperPath
+. $DeviceLockHelperPath
 if (-not (Test-Path -LiteralPath $LedgerHelperPath -PathType Leaf)) {
     throw "缺少台账/终态判据 helper：$LedgerHelperPath"
 }
 . $LedgerHelperPath
+
+# runner 必须自己持有一层不允许 breakaway 的 Job。只设 KILL_ON_JOB_CLOSE，不设置
+# BREAKAWAY_OK / SILENT_BREAKAWAY_OK；因此 gate host 及其 dispatch 后代构成一个不可逃逸的
+# 生命周期单位。DryRun 已在上方退出，所以这段原生类型加载不会破坏 DryRun 的零写/零副作用。
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class AgentMobileP0RunnerJob {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job, int infoClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION info, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr job, int infoClass, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info,
+        uint length, IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static IntPtr CreateKillOnClose() {
+        // 匿名 Job 不给同 session 的其他进程留下按名称打开/干扰的入口；handle 只由 runner 持有。
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        // 刻意只有 KILL_ON_JOB_CLOSE：不允许任何成员用 CREATE_BREAKAWAY_FROM_JOB 逃逸。
+        info.BasicLimitInformation.LimitFlags = 0x00002000;
+        if (!SetInformationJobObject(job, 9, ref info,
+            (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())) {
+            int error = Marshal.GetLastWin32Error();
+            CloseHandle(job);
+            throw new Win32Exception(error);
+        }
+        return job;
+    }
+
+    public static void Assign(IntPtr job, IntPtr process) {
+        if (!AssignProcessToJobObject(job, process)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static void Terminate(IntPtr job) {
+        if (!TerminateJobObject(job, 1)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static bool WaitEmpty(IntPtr job, uint milliseconds) {
+        // Job handle 的 signaled 状态不代表通用归零，必须直接读取 ActiveProcesses。
+        System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (true) {
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
+            if (!QueryInformationJobObject(job, 1, out info,
+                (uint)Marshal.SizeOf<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>(), IntPtr.Zero)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            if (info.ActiveProcesses == 0) return true;
+            if ((ulong)stopwatch.ElapsedMilliseconds >= milliseconds) return false;
+            System.Threading.Thread.Sleep(10);
+        }
+    }
+
+    public static void Close(IntPtr job) {
+        if (job != IntPtr.Zero && !CloseHandle(job)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+}
+'@
+
+function Stop-P0DispatchJobOrFailFast {
+    param(
+        [Parameter(Mandatory)][IntPtr]$JobHandle,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+
+    try {
+        [AgentMobileP0RunnerJob]::Terminate($JobHandle)
+        if (-not [AgentMobileP0RunnerJob]::WaitEmpty($JobHandle, 15000)) {
+            # 第二次 Terminate 后仍不归零时不能返回 PowerShell finally；否则它会继续恢复设备并放 lease。
+            [AgentMobileP0RunnerJob]::Terminate($JobHandle)
+            if (-not [AgentMobileP0RunnerJob]::WaitEmpty($JobHandle, 15000)) {
+                throw 'dispatch Job 终止后 ActiveProcesses 仍不为零。'
+            }
+        }
+    }
+    catch {
+        # FailFast 由 OS 关闭 runner 独占的 Job handle；KILL_ON_JOB_CLOSE 是最后一道机械收口。
+        [Environment]::FailFast($FailureMessage, $_.Exception)
+    }
+}
+
+function Close-P0DispatchResources {
+    param(
+        $StdoutStream,
+        $StderrStream,
+        $Gate,
+        [IntPtr]$JobHandle = [IntPtr]::Zero
+    )
+
+    $issues = [Collections.Generic.List[Exception]]::new()
+    foreach ($entry in @(
+        [pscustomobject]@{ Name = 'stdout stream'; Resource = $StdoutStream },
+        [pscustomobject]@{ Name = 'stderr stream'; Resource = $StderrStream },
+        [pscustomobject]@{ Name = 'dispatch gate'; Resource = $Gate }
+    )) {
+        if ($null -eq $entry.Resource) { continue }
+        try { $entry.Resource.Dispose() }
+        catch {
+            [void]$issues.Add([Exception]::new("关闭 $($entry.Name) 失败。", $_.Exception))
+        }
+    }
+
+    $jobClosed = ($JobHandle -eq [IntPtr]::Zero)
+    if (-not $jobClosed) {
+        try {
+            [AgentMobileP0RunnerJob]::Close($JobHandle)
+            $jobClosed = $true
+        }
+        catch {
+            [void]$issues.Add([Exception]::new('关闭 dispatch Job handle 失败。', $_.Exception))
+        }
+    }
+    return [pscustomobject]@{ Issues = $issues; JobClosed = $jobClosed }
+}
 
 function New-P0DispatchProcess {
     param(
@@ -121,57 +308,197 @@ function New-P0DispatchProcess {
         [Parameter(Mandatory)][string]$StderrPath
     )
 
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = (Get-Process -Id $PID).Path
-    $start.WorkingDirectory = $RepoRoot
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    # 同 New-P0StartInfo：stdin 重定向后立刻关掉，子进程读到 EOF 而不是挂在继承来的句柄上。
-    # 监督式跑测禁用 -Confirm，dispatch 这条腿本就不该等键盘输入；真等上了也只能是挂死。
-    $start.RedirectStandardInput = $true
-    foreach ($arg in @(
-        '-NoProfile','-File',$ScriptPath,'-TaskFile',$TaskFile,'-Slug',$Slug,
-        '-Executor',$Executor,'-Brain',$Brain,'-TimeoutMin',"$DispatchTimeoutMin"
-    )) {
-        $start.ArgumentList.Add($arg)
+    $jobHandle = [IntPtr]::Zero
+    $gate = $null
+    $start = $null
+    $process = $null
+    $started = $false
+    $assigned = $false
+    $stdoutStream = $null
+    $stderrStream = $null
+    $stdoutCopy = $null
+    $stderrCopy = $null
+    try {
+        # Job/gate 的创建与之后每一步准备都在同一个异常域；即使 Process.Start 前失败，
+        # catch 也会逐项关闭空 Job、gate、stream 和 Process 对象。
+        $payload = [ordered]@{
+            script_path = $ScriptPath
+            task_file = $TaskFile
+            slug = $Slug
+            executor = $Executor
+            brain = $Brain
+            timeout_min = $DispatchTimeoutMin
+        } | ConvertTo-Json -Compress -Depth 3
+        $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+        $wrapper = @'
+$ErrorActionPreference = 'Stop'
+$gate = [Threading.EventWaitHandle]::OpenExisting($env:AGENT_MOBILE_P0_DISPATCH_GATE)
+try {
+    if (-not $gate.WaitOne(30000)) { throw 'P0 dispatch launch gate timeout' }
+}
+finally { $gate.Dispose() }
+$payload = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String($env:AGENT_MOBILE_P0_DISPATCH_PAYLOAD)) | ConvertFrom-Json
+Remove-Item Env:AGENT_MOBILE_P0_DISPATCH_GATE -ErrorAction SilentlyContinue
+Remove-Item Env:AGENT_MOBILE_P0_DISPATCH_PAYLOAD -ErrorAction SilentlyContinue
+$dispatchParameters = @{
+    TaskFile = [string]$payload.task_file
+    Slug = [string]$payload.slug
+    Executor = [string]$payload.executor
+    Brain = [string]$payload.brain
+    TimeoutMin = [int]$payload.timeout_min
+}
+& ([string]$payload.script_path) @dispatchParameters
+if (-not $?) { exit 1 }
+exit 0
+'@
+        $wrapperEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = (Get-Process -Id $PID).Path
+        $start.WorkingDirectory = $RepoRoot
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        # 同 New-P0StartInfo：stdin 重定向后立刻关掉，子进程读到 EOF 而不是挂在继承来的句柄上。
+        # 监督式跑测禁用 -Confirm，dispatch 这条腿本就不该等键盘输入；真等上了也只能是挂死。
+        $start.RedirectStandardInput = $true
+        # runner 已在任何 adb/端口操作之前取得主机级设备租约；真实 dispatch 必须加入同一
+        # lease，而不是与自己的父进程争锁。token 只进直属子进程环境，不进参数或日志。
+        Set-DispatchLockLeaseEnvironment -StartInfo $start -Lease $script:P0DeviceLockLease
+        foreach ($arg in @('-NoProfile','-NonInteractive','-EncodedCommand',$wrapperEncoded)) {
+            $start.ArgumentList.Add($arg)
+        }
+        $gateName = "Local\AgentMobileP0Dispatch-$PID-$([guid]::NewGuid().ToString('N'))"
+        $start.Environment['AGENT_MOBILE_P0_DISPATCH_GATE'] = $gateName
+        $start.Environment['AGENT_MOBILE_P0_DISPATCH_PAYLOAD'] = $payloadBase64
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $start
+
+        $jobHandle = [AgentMobileP0RunnerJob]::CreateKillOnClose()
+        $createdNew = $false
+        $gate = [Threading.EventWaitHandle]::new(
+            $false, [Threading.EventResetMode]::ManualReset, $gateName, [ref]$createdNew)
+        if (-not $createdNew) { throw '无法建立 P0 dispatch 启动 gate。' }
+        if (-not $process.Start()) { throw 'dispatch 子进程启动失败。' }
+        $started = $true
+        # gate host 此刻只能 WaitOne；它在 Job 内之前没有路径执行 dispatch 或派生设备后代。
+        [AgentMobileP0RunnerJob]::Assign($jobHandle, $process.Handle)
+        $assigned = $true
+        $process.StandardInput.Close()
+        $stdoutStream = [IO.File]::Open($StdoutPath, 'Create', 'Write', 'Read')
+        $stderrStream = [IO.File]::Open($StderrPath, 'Create', 'Write', 'Read')
+        $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
+        $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+        if (-not $gate.Set()) { throw 'P0 dispatch 启动 gate 放行失败。' }
+        return [pscustomobject]@{
+            Process = $process
+            JobHandle = $jobHandle
+            Gate = $gate
+            StdoutStream = $stdoutStream
+            StderrStream = $stderrStream
+            StdoutCopy = $stdoutCopy
+            StderrCopy = $stderrCopy
+            StartedUtc = [DateTime]::UtcNow
+            Drained = $false
+            Closed = $false
+        }
     }
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    if (-not $process.Start()) { throw 'dispatch 子进程启动失败。' }
-    $process.StandardInput.Close()
-    $stdoutStream = [IO.File]::Open($StdoutPath, 'Create', 'Write', 'Read')
-    $stderrStream = [IO.File]::Open($StderrPath, 'Create', 'Write', 'Read')
-    $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
-    $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
-    return [pscustomobject]@{
-        Process = $process
-        StdoutStream = $stdoutStream
-        StderrStream = $stderrStream
-        StdoutCopy = $stdoutCopy
-        StderrCopy = $stderrCopy
-        StartedUtc = [DateTime]::UtcNow
+    catch {
+        $startupFailure = $_
+        $cleanupFailures = [Collections.Generic.List[Exception]]::new()
+        # Start 成功后的任何初始化失败都发生在调用者拿到 Handle 之前。这里必须自己收掉
+        # 整棵 dispatch 树；否则 child 会继续持有 joined device lease，而外层 finally 只看见 null。
+        try {
+            if ($assigned) {
+                Stop-P0DispatchJobOrFailFast -JobHandle $jobHandle `
+                    -FailureMessage 'dispatch 启动后初始化失败，且无法确认其 Job 已归零。'
+            }
+            elseif ($started) {
+                try {
+                    # 未 Assign 就绝不曾 signal；可信 wrapper 仍在 gate 上，尚没有 dispatch 后代。
+                    if (-not $process.HasExited) { $process.Kill() }
+                    $process.WaitForExit()
+                    if (-not $process.HasExited -or
+                        -not [AgentMobileP0RunnerJob]::WaitEmpty($jobHandle, 0)) {
+                        throw '未分配的 dispatch gate host 退出状态不可确认。'
+                    }
+                }
+                catch {
+                    [Environment]::FailFast('dispatch 启动 gate 分配失败，且无法确认 host 已退出。', $_.Exception)
+                }
+            }
+            foreach ($copy in @($stdoutCopy, $stderrCopy)) {
+                if ($null -ne $copy) {
+                    try { [void]$copy.GetAwaiter().GetResult() }
+                    catch { [void]$cleanupFailures.Add($_.Exception) }
+                }
+            }
+        }
+        finally {
+            $resourceResult = Close-P0DispatchResources -StdoutStream $stdoutStream `
+                -StderrStream $stderrStream -Gate $gate -JobHandle $jobHandle
+            foreach ($issue in $resourceResult.Issues) { [void]$cleanupFailures.Add($issue) }
+            if ($null -ne $process) {
+                try { $process.Dispose() }
+                catch { [void]$cleanupFailures.Add($_.Exception) }
+            }
+        }
+        if ($cleanupFailures.Count -gt 0) {
+            $allFailures = [Collections.Generic.List[Exception]]::new()
+            [void]$allFailures.Add($startupFailure.Exception)
+            foreach ($failure in $cleanupFailures) { [void]$allFailures.Add($failure) }
+            throw [AggregateException]::new('dispatch 启动失败且资源清理不完整。', $allFailures.ToArray())
+        }
+        throw $startupFailure
+    }
+    finally {
+        # Process.Start 已取得环境快照；父进程不再保留 lease token 或一次性 gate payload。
+        if ($null -ne $start) {
+            [void]$start.Environment.Remove($script:DispatchLockLeaseEnvironmentVariable)
+            [void]$start.Environment.Remove('AGENT_MOBILE_P0_DISPATCH_GATE')
+            [void]$start.Environment.Remove('AGENT_MOBILE_P0_DISPATCH_PAYLOAD')
+        }
     }
 }
 
 function Stop-P0DispatchProcess {
     param($Handle, [switch]$Kill)
-    if ($null -eq $Handle) { return }
+    if ($null -eq $Handle -or $Handle.Closed) { return }
+    $safeToClose = $false
+    $operationFailure = $null
+    $resourceResult = $null
     try {
-        if ($Kill -and -not $Handle.Process.HasExited) {
-            $Handle.Process.Kill($true)
-            [void]$Handle.Process.WaitForExit(5000)
+        if (-not $Handle.Drained -and -not $Kill -and -not $Handle.Process.HasExited) {
+            throw 'dispatch 尚未退出，不能按正常完成路径收集输出。'
         }
-        elseif (-not $Handle.Process.HasExited) {
-            [void]$Handle.Process.WaitForExit(5000)
+        if (-not $Handle.Drained) {
+            # 正常 root 退出也不代表后代退出；所有收口路径都 Terminate 整个 Job，再查 ActiveProcesses。
+            Stop-P0DispatchJobOrFailFast -JobHandle $Handle.JobHandle `
+                -FailureMessage '无法确认 dispatch Job 已归零；保留设备租约并中止 runner。'
+            $Handle.Drained = $true
         }
+        $safeToClose = $true
+        $Handle.Process.WaitForExit()
         [void]$Handle.StdoutCopy.GetAwaiter().GetResult()
         [void]$Handle.StderrCopy.GetAwaiter().GetResult()
     }
+    catch { $operationFailure = $_ }
     finally {
-        $Handle.StdoutStream.Dispose()
-        $Handle.StderrStream.Dispose()
+        if ($safeToClose -or $Handle.Drained) {
+            $resourceResult = Close-P0DispatchResources -StdoutStream $Handle.StdoutStream `
+                -StderrStream $Handle.StderrStream -Gate $Handle.Gate -JobHandle $Handle.JobHandle
+            if ($resourceResult.JobClosed) { $Handle.Closed = $true }
+        }
+    }
+    $failures = [Collections.Generic.List[Exception]]::new()
+    if ($null -ne $operationFailure) { [void]$failures.Add($operationFailure.Exception) }
+    if ($null -ne $resourceResult) {
+        foreach ($issue in $resourceResult.Issues) { [void]$failures.Add($issue) }
+    }
+    if ($failures.Count -eq 1) { throw $failures[0] }
+    if ($failures.Count -gt 1) {
+        throw [AggregateException]::new('dispatch 收口时发生多个错误。', $failures.ToArray())
     }
 }
 
@@ -1079,80 +1406,11 @@ function New-P0SensitiveRedactedManifest {
     }
 }
 
-function Test-P0RunnerLockActive {
-    param([Parameter(Mandatory)][string]$Path)
-    try {
-        $metadata = Get-Content -LiteralPath $Path -Raw -Encoding utf8 | ConvertFrom-Json
-        $pidProperty = $metadata.PSObject.Properties['pid']
-        $runProperty = $metadata.PSObject.Properties['run_id']
-        $startProperty = $metadata.PSObject.Properties['process_start_ticks']
-        if ($null -eq $pidProperty -or $null -eq $runProperty -or $null -eq $startProperty -or
-            [int64]$pidProperty.Value -le 0 -or [string]::IsNullOrWhiteSpace([string]$runProperty.Value) -or
-            [int64]$startProperty.Value -le 0) {
-            throw 'invalid lock metadata'
-        }
-        try { $owner = Get-Process -Id ([int]$pidProperty.Value) -ErrorAction Stop }
-        catch { return $false }
-        return $owner.StartTime.ToUniversalTime().Ticks -eq [int64]$startProperty.Value
-    }
-    catch {
-        try {
-            $probe = [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-            $probe.Dispose()
-            return $false
-        }
-        catch { return $true }
-    }
-}
-
-function New-P0RunnerLock {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$RunId
-    )
-    for ($attempt = 0; $attempt -lt 2; $attempt++) {
-        try {
-            $stream = [IO.File]::Open($Path, 'CreateNew', 'ReadWrite', 'Read')
-            try {
-                $owner = Get-Process -Id $PID -ErrorAction Stop
-                $metadata = [ordered]@{
-                    pid = $PID
-                    run_id = $RunId
-                    process_start_ticks = $owner.StartTime.ToUniversalTime().Ticks
-                } | ConvertTo-Json -Compress
-                $bytes = [Text.UTF8Encoding]::new($false).GetBytes($metadata)
-                try {
-                    $stream.Write($bytes, 0, $bytes.Length)
-                    $stream.Flush($true)
-                }
-                finally { [Array]::Clear($bytes, 0, $bytes.Length) }
-                return $stream
-            }
-            catch {
-                $stream.Dispose()
-                try { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop } catch {}
-                throw 'runner 锁元数据写入失败。'
-            }
-        }
-        catch {
-            if ($_.Exception.Message -eq 'runner 锁元数据写入失败。') { throw }
-            if (-not (Test-Path -LiteralPath $Path)) { continue }
-            if (Test-P0RunnerLockActive -Path $Path) { throw '疑似另一次 P0 runner 正在运行。' }
-            try {
-                $probe = [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-                $probe.Dispose()
-                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-            }
-            catch { throw '疑似另一次 P0 runner 正在运行。' }
-        }
-    }
-    throw '无法建立 P0 runner 锁。'
-}
-
 $runId = (Get-Date -Format 'yyyyMMddTHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $evidenceRoot = Join-Path $RepoRoot "docs\runs\evidence\$runId"
-$lockPath = Join-Path $RepoRoot 'scripts\.p0-safety-smoke.lock'
-$lockStream = $null
+$lockPath = Get-DispatchGlobalLockPath
+$lockLease = $null
+$script:P0DeviceLockLease = $null
 $session = $null
 $dispatchHandle = $null
 $activeLegRecord = $null
@@ -1175,7 +1433,10 @@ $manifest = [ordered]@{
 }
 
 try {
-    $lockStream = New-P0RunnerLock -Path $lockPath -RunId $runId
+    # 必须早于 provision、健康探针、端口转发和任何 adb 调用。保守按“一台主机一台设备”
+    # 互斥；不同 worktree 与直接 dispatch 都争同一条租约。
+    $lockLease = Open-DispatchLock -Path $lockPath -Owner "p0-runner/$runId"
+    $script:P0DeviceLockLease = $lockLease
     New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
     $session = Start-P0DeviceProvision -RepoRoot $RepoRoot -AdbPath $AdbPath -Provision:$Provision `
         -HealthProbePath $HealthProbePath -A11yBindTimeoutSec $A11yBindTimeoutSec
@@ -1547,9 +1808,10 @@ finally {
         try { Remove-Item -LiteralPath $taskPath -Force -ErrorAction Stop }
         catch { $cleanupErrors += 'remove_local_task_file' }
     }
-    if ($null -ne $lockStream) {
-        try { $lockStream.Dispose() } catch { $cleanupErrors += '释放 runner 锁句柄失败' }
-        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { $cleanupErrors += '删除 runner 锁失败' }
+    if ($null -ne $lockLease) {
+        try { [void](Close-DispatchLockLease -Lease $lockLease) }
+        catch { $cleanupErrors += '释放主机级设备租约失败' }
+        $script:P0DeviceLockLease = $null
     }
     if ($null -ne $session) {
         $ledgerPathForScan = Join-Path $RepoRoot 'docs\runs\ledger.csv'

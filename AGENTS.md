@@ -10,7 +10,7 @@
 | 项 | Codex 侧的实际情况 |
 |---|---|
 | 订阅与通道 | ChatGPT Plus 只经 **Codex CLI 官方登录**；永不逆向网页端私有接口。这是铁律 1 在 Codex 侧的形态，红线本身不变。 |
-| 派单 | `scripts/dispatch.ps1 -Brain codex`；harness 与 Claude 侧共用同一套 trace / ledger / 两段式确认。 |
+| 派单 | `scripts/dispatch.ps1 -Brain codex -Executor gateway`；harness 与 Claude 侧共用同一套 trace / ledger / 两段式确认。 |
 | 临时单跑真机 | mobile MCP 的 `configs/mobile-mcp.json` 是 **Claude Code 的 `--mcp-config` 格式**，Codex CLI 不吃这份文件；Codex 侧走 dispatch wrapper，不要照抄那条命令。 |
 | 额度 | 见 [docs/knowledge/brain/cost.md](docs/knowledge/brain/cost.md)。 |
 
