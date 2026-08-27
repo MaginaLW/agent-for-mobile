@@ -144,6 +144,13 @@ Invoke-Check '派单离线测试' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'dispatch-offline.log')
 }
 
+Invoke-Check '派单台账离线测试' {
+    Invoke-Logged -LogName 'dispatch-ledger-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-ledger-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'dispatch-ledger-offline.log')
+}
+
 if ($SkipGradle) {
     Write-Host '跳过 gradle（-SkipGradle）：Kotlin 侧未验证。' -ForegroundColor Yellow
     $results.Add([pscustomobject]@{ Name = 'gateway JVM 单测与构建'; Ok = $null; Seconds = 0; Detail = '已跳过' })

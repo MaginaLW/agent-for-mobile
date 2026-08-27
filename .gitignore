@@ -1,5 +1,7 @@
 # 执行 harness（spec §6，决策点 1）：原始 trace / 暂停件 / 组装提示词只做本地归档，不进 git
 docs/runs/traces/
+docs/runs/ledger.csv.write.lock
+docs/runs/ledger.csv.tmp.*
 docs/runs/evidence/
 
 # 派单并发锁

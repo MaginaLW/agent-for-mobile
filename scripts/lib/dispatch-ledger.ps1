@@ -36,9 +36,146 @@ function Get-P0FinalVerdictPattern {
 $P0LedgerHeader = 'time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason'
 
 function ConvertTo-P0CsvField {
-    param([AllowEmptyString()][AllowNull()][string]$Value)
-    $text = [string]$Value
+    param([AllowEmptyString()][AllowNull()][object]$Value)
+    $text = if ($null -eq $Value) { '' } else {
+        [Convert]::ToString($Value, [Globalization.CultureInfo]::InvariantCulture)
+    }
+    # CSV 语法正确不等于用表格软件打开时安全。任何可在前导空白后被解释成公式的
+    # 单元格都加一个文字前缀；台账是证据，不允许 slug/model/fail_reason 变成可执行公式。
+    if ($text -match '^[\s\p{Cf}]*[=+\-@]') { $text = "'$text" }
     if ($text -match '[",\r\n]') { return '"' + $text.Replace('"', '""') + '"' }
+    return $text
+}
+
+function Open-P0LedgerWriteLock {
+    param(
+        [Parameter(Mandatory)][string]$LedgerPath,
+        [ValidateRange(1, 60000)][int]$TimeoutMs = 10000
+    )
+    $lockPath = "$LedgerPath.write.lock"
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        if (Test-Path -LiteralPath $lockPath) {
+            $lockItem = Get-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+            if ($lockItem.PSIsContainer -or
+                ($lockItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "台账写锁路径不是普通文件：$lockPath"
+            }
+        }
+        try {
+            return [IO.File]::Open(
+                $lockPath,
+                [IO.FileMode]::OpenOrCreate,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::None
+            )
+        }
+        catch [IO.IOException] {
+            if ($watch.ElapsedMilliseconds -ge $TimeoutMs) {
+                throw "等待台账独占写锁超时（${TimeoutMs}ms）：$LedgerPath"
+            }
+            Start-Sleep -Milliseconds 25
+        }
+    }
+}
+
+function Assert-P0LedgerCsvContract {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes,
+        [Parameter(Mandatory)][string]$LedgerPath
+    )
+    if ($Bytes.Length -eq 0) { return '' }
+    # StreamReader 的 BOM 自动探测会把 UTF-16 文件“正常”读出，随后再追加 UTF-8，生成
+    # 混合编码证据。台账契约只接受无 BOM 的严格 UTF-8。
+    $bomPrefixes = @(
+        [byte[]](0xEF,0xBB,0xBF), [byte[]](0xFF,0xFE), [byte[]](0xFE,0xFF),
+        [byte[]](0xFF,0xFE,0x00,0x00), [byte[]](0x00,0x00,0xFE,0xFF)
+    )
+    foreach ($prefix in $bomPrefixes) {
+        if ($Bytes.Length -ge $prefix.Length) {
+            $matches = $true
+            for ($i = 0; $i -lt $prefix.Length; $i++) {
+                if ($Bytes[$i] -ne $prefix[$i]) { $matches = $false; break }
+            }
+            if ($matches) { throw "台账必须是无 BOM 的 UTF-8，拒绝混合编码：$LedgerPath" }
+        }
+    }
+    $encoding = [Text.UTF8Encoding]::new($false, $true)
+    try { $text = $encoding.GetString($Bytes) }
+    catch { throw "台账不是严格 UTF-8，拒绝追加：$LedgerPath" }
+    if (-not $text.EndsWith("`n", [StringComparison]::Ordinal)) {
+        throw "台账尾部不是完整换行记录，疑似中断写入，拒绝追加：$LedgerPath"
+    }
+    $firstLineEnd = $text.IndexOf("`n", [StringComparison]::Ordinal)
+    $header = $text.Substring(0, $firstLineEnd).TrimEnd("`r")
+    if ($header -cne $P0LedgerHeader) {
+        throw "台账表头与当前契约不一致，拒绝追加：$LedgerPath"
+    }
+
+    # 严格扫描 RFC 4180 子集。ConvertFrom-Csv 会吞掉未闭合引号，不能用来证明尾行完整。
+    $recordFieldCounts = [Collections.Generic.List[int]]::new()
+    $fieldCount = 1
+    $atFieldStart = $true
+    $inQuotes = $false
+    $quoteClosed = $false
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $character = $text[$i]
+        if ($inQuotes) {
+            if ($character -eq '"') {
+                if ($i + 1 -lt $text.Length -and $text[$i + 1] -eq '"') { $i++ }
+                else { $inQuotes = $false; $quoteClosed = $true }
+            }
+            continue
+        }
+        if ($quoteClosed) {
+            if ($character -eq ',') {
+                $fieldCount++; $atFieldStart = $true; $quoteClosed = $false; continue
+            }
+            if ($character -eq "`r") {
+                if ($i + 1 -ge $text.Length -or $text[$i + 1] -ne "`n") {
+                    throw "台账含裸 CR，拒绝追加：$LedgerPath"
+                }
+                continue
+            }
+            if ($character -eq "`n") {
+                $recordFieldCounts.Add($fieldCount)
+                $fieldCount = 1; $atFieldStart = $true; $quoteClosed = $false; continue
+            }
+            throw "台账引号字段闭合后含非法字符，拒绝追加：$LedgerPath"
+        }
+        switch ($character) {
+            '"' {
+                if (-not $atFieldStart) { throw "台账未转义引号，拒绝追加：$LedgerPath" }
+                $inQuotes = $true
+            }
+            ',' { $fieldCount++; $atFieldStart = $true }
+            "`r" {
+                if ($i + 1 -ge $text.Length -or $text[$i + 1] -ne "`n") {
+                    throw "台账含裸 CR，拒绝追加：$LedgerPath"
+                }
+            }
+            "`n" {
+                $recordFieldCounts.Add($fieldCount)
+                $fieldCount = 1; $atFieldStart = $true
+            }
+            default { $atFieldStart = $false }
+        }
+    }
+    if ($inQuotes -or $quoteClosed -or $fieldCount -ne 1 -or -not $atFieldStart) {
+        throw "台账尾行不完整，拒绝追加：$LedgerPath"
+    }
+    if ($recordFieldCounts.Count -lt 1 -or $recordFieldCounts[0] -ne 17) {
+        throw "台账表头列数不为 17，拒绝追加：$LedgerPath"
+    }
+    # 历史行早于 fail_reason 列，只含 16 列；新行必须由本函数写成 17 列。
+    $seenCurrentSchema = $false
+    foreach ($count in $recordFieldCounts | Select-Object -Skip 1) {
+        if ($count -eq 17) { $seenCurrentSchema = $true; continue }
+        if ($count -ne 16) { throw "台账历史行列数非法（$count），拒绝追加：$LedgerPath" }
+        if ($seenCurrentSchema) {
+            throw "台账在 17 列新记录之后再次出现 16 列旧记录，拒绝追加：$LedgerPath"
+        }
+    }
     return $text
 }
 
@@ -66,16 +203,50 @@ function Add-P0LedgerRow {
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
         New-Item -ItemType Directory -Force -Path $directory | Out-Null
     }
-    if (-not (Test-Path -LiteralPath $LedgerPath)) {
-        Set-Content -LiteralPath $LedgerPath -Value $P0LedgerHeader -Encoding utf8
-    }
-    $row = @(
-        (Get-Date -Format 's'), (ConvertTo-P0CsvField $Slug), $Leg, $Brain, $Model,
+    $fields = @(
+        (Get-Date -Format 's'), $Slug, $Leg, $Brain, $Model,
         $Turns, $InTok, $OutTok, $CacheRead, $CacheWrite, $CostUsd, $DurS,
-        $Result, $SessionId, (ConvertTo-P0CsvField $TraceFile),
-        (ConvertTo-P0CsvField $Note), $FailReason
-    ) -join ','
-    Add-Content -LiteralPath $LedgerPath -Value $row -Encoding utf8
+        $Result, $SessionId, $TraceFile, $Note, $FailReason
+    )
+    $row = ($fields | ForEach-Object { ConvertTo-P0CsvField $_ }) -join ','
+    $encoding = [Text.UTF8Encoding]::new($false, $true)
+    $writeLock = $null
+    $temporary = "$LedgerPath.tmp.$PID.$([guid]::NewGuid().ToString('N'))"
+    try {
+        $writeLock = Open-P0LedgerWriteLock -LedgerPath $LedgerPath
+
+        [byte[]]$existingBytes = @()
+        if (Test-Path -LiteralPath $LedgerPath -PathType Leaf) {
+            $item = Get-Item -LiteralPath $LedgerPath -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "台账不得是 reparse point：$LedgerPath"
+            }
+            $existingBytes = [IO.File]::ReadAllBytes($LedgerPath)
+        }
+        try {
+            $existingText = Assert-P0LedgerCsvContract -Bytes $existingBytes -LedgerPath $LedgerPath
+        }
+        finally { if ($existingBytes.Length -gt 0) { [Array]::Clear($existingBytes, 0, $existingBytes.Length) } }
+        $nextText = if ([string]::IsNullOrEmpty($existingText)) {
+            $P0LedgerHeader + [Environment]::NewLine + $row + [Environment]::NewLine
+        }
+        else { $existingText + $row + [Environment]::NewLine }
+        $nextBytes = $encoding.GetBytes($nextText)
+        try {
+            $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $stream.Write($nextBytes, 0, $nextBytes.Length)
+                $stream.Flush($true)
+            }
+            finally { $stream.Dispose() }
+            [IO.File]::Move($temporary, $LedgerPath, $true)
+        }
+        finally { [Array]::Clear($nextBytes, 0, $nextBytes.Length) }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        if ($null -ne $writeLock) { $writeLock.Dispose() }
+    }
 }
 
 <#
