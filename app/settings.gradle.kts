@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "mobile-agent-gateway"
 include(":gateway")
+include(":tablet-c1b-probe")
