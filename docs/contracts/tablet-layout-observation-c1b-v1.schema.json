@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-for-mobile.local/contracts/tablet-layout-observation-c1b-v1.schema.json",
+  "title": "Tablet T-L1 C1b v1 pure-a11y topology diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "run_id", "captured_at", "mode", "expected_title_hash", "provenance",
+    "upstream_t0", "route", "privacy", "frames", "consistency", "diagnostic_status",
+    "reason_codes", "layout_accepted", "wechat_layout_verified", "editor_action_ready",
+    "p0_capability", "p0_blockers", "execution_grant"
+  ],
+  "properties": {
+    "schema": { "const": "tablet-layout-observation/c1b-v1" },
+    "run_id": { "$ref": "#/$defs/safeId" },
+    "captured_at": { "$ref": "#/$defs/timestamp" },
+    "mode": { "const": "c1b_pure_a11y_diagnostic" },
+    "expected_title_hash": { "$ref": "#/$defs/hash" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "upstream_t0": { "$ref": "#/$defs/upstreamT0" },
+    "route": { "$ref": "#/$defs/route" },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "frames": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": { "$ref": "#/$defs/frame" }
+    },
+    "consistency": { "$ref": "#/$defs/consistency" },
+    "diagnostic_status": { "const": "blocked" },
+    "reason_codes": {
+      "type": "array", "minItems": 4, "maxItems": 64, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/reasonCode" },
+      "allOf": [
+        { "contains": { "const": "tablet_layout_diagnostic_only" } },
+        { "contains": { "const": "pane_semantic_roles_unverified" } },
+        { "contains": { "const": "target_conversation_unverified" } },
+        { "contains": { "const": "target_regions_unverified" } }
+      ]
+    },
+    "layout_accepted": { "const": false },
+    "wechat_layout_verified": { "const": false },
+    "editor_action_ready": { "const": false },
+    "p0_capability": { "const": "unsupported" },
+    "p0_blockers": {
+      "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true,
+      "items": {
+        "enum": [
+          "tablet_c1b_diagnostic_only", "upstream_t0_readiness_blocked",
+          "tablet_landscape_p0_unimplemented", "tablet_tl2_unverified"
+        ]
+      },
+      "allOf": [
+        { "contains": { "const": "tablet_c1b_diagnostic_only" } },
+        { "contains": { "const": "upstream_t0_readiness_blocked" } },
+        { "contains": { "const": "tablet_landscape_p0_unimplemented" } },
+        { "contains": { "const": "tablet_tl2_unverified" } }
+      ]
+    },
+    "execution_grant": { "const": false }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string", "minLength": 1, "maxLength": 80,
+      "pattern": "^(?![\\s\\S]*[\\r\\n])[a-z0-9][a-z0-9._-]{0,79}$"
+    },
+    "hash": {
+      "type": "string", "minLength": 71, "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": {
+      "type": "string", "minLength": 28, "maxLength": 28, "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"
+    },
+    "reasonCode": {
+      "enum": [
+        "runtime_producer_unavailable", "fixture_origin_required", "route_contract_violation",
+        "safety_constants_invalid", "privacy_contract_violation", "raw_identity_persisted",
+        "chat_plaintext_persisted", "chat_content_digest_persisted", "duplicate_json_property",
+        "json_number_not_int64", "json_schema_validation_failed", "capture_order_invalid",
+        "capture_in_future", "capture_stale", "capture_span_exceeded", "atomic_capture_revision_invalid",
+        "display_unknown", "not_landscape", "multi_display_blocked", "window_inventory_truncated",
+        "window_count_not_two", "window_label_invalid", "window_label_duplicate",
+        "window_identity_replacement", "window_geometry_invalid", "window_root_owner_conflict",
+        "window_type_invalid", "root_window_binding_invalid", "subtree_capture_incomplete",
+        "subtree_counts_invalid", "semantic_subtree_opaque", "window_title_probe_invalid",
+        "pane_projection_invalid", "window_root_projection_invalid", "pane_semantic_roles_unverified",
+        "node_binding_invalid", "focus_inventory_invalid", "ime_inventory_invalid",
+        "ime_hidden_unverified", "capture_semantics_drift", "consistency_declared_mismatch",
+        "declared_status_mismatch", "declared_reasons_incomplete", "tablet_layout_diagnostic_only",
+        "target_conversation_unverified", "target_regions_unverified", "validation_exception"
+      ]
+    },
+    "windowLabel": { "type": "string", "pattern": "^aw[1-9][0-9]{0,2}$" },
+    "paneLabel": { "type": "string", "pattern": "^ap[1-9][0-9]{0,2}$" },
+    "nodeLabel": { "type": "string", "pattern": "^an[1-9][0-9]{0,3}$" },
+    "captureToken": { "type": "string", "pattern": "^c[12]$" },
+    "nullableWindowLabel": { "oneOf": [{ "$ref": "#/$defs/windowLabel" }, { "type": "null" }] },
+    "nullableNodeLabel": { "oneOf": [{ "$ref": "#/$defs/nodeLabel" }, { "type": "null" }] },
+    "nullableSafeId": { "oneOf": [{ "$ref": "#/$defs/safeId" }, { "type": "null" }] },
+    "size": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      }
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "top": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "right": { "type": "integer", "minimum": -32768, "maximum": 32768 },
+        "bottom": { "type": "integer", "minimum": -32768, "maximum": 32768 }
+      }
+    },
+    "nullableRect": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "version", "producer_commit_sha", "producer_artifact_sha256", "runtime_attested"],
+      "properties": {
+        "kind": { "enum": ["offline_fixture", "gateway_runtime_probe"] },
+        "name": { "$ref": "#/$defs/safeId" },
+        "version": { "const": "c1b-v1" },
+        "producer_commit_sha": { "$ref": "#/$defs/gitSha" },
+        "producer_artifact_sha256": { "$ref": "#/$defs/hash" },
+        "runtime_attested": { "const": false }
+      }
+    },
+    "upstreamT0": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "source_kind", "schema_version", "run_id", "captured_at", "artifact_sha256",
+        "producer_commit_sha", "device_profile_hash", "intake_status", "readiness_status",
+        "readiness_reasons", "p0_capability", "p0_unsupported_reasons"
+      ],
+      "properties": {
+        "source_kind": { "enum": ["offline_fixture", "trusted_runtime"] },
+        "schema_version": { "const": 5 },
+        "run_id": { "$ref": "#/$defs/safeId" },
+        "captured_at": { "$ref": "#/$defs/timestamp" },
+        "artifact_sha256": { "$ref": "#/$defs/hash" },
+        "producer_commit_sha": { "$ref": "#/$defs/gitSha" },
+        "device_profile_hash": { "$ref": "#/$defs/hash" },
+        "intake_status": { "const": "accepted" },
+        "readiness_status": { "const": "blocked" },
+        "readiness_reasons": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "p0_capability": { "const": "unsupported" },
+        "p0_unsupported_reasons": {
+          "type": "array", "minItems": 2, "maxItems": 64, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" },
+          "allOf": [
+            { "contains": { "const": "wechat_layout_unverified" } },
+            { "contains": { "const": "tablet_landscape_p0_unimplemented" } }
+          ]
+        }
+      }
+    },
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "settings_mutation_allowed", "device_action_allowed", "screenshot_allowed", "ocr_allowed"],
+      "properties": {
+        "kind": { "const": "probe_only" },
+        "settings_mutation_allowed": { "const": false },
+        "device_action_allowed": { "const": false },
+        "screenshot_allowed": { "const": false },
+        "ocr_allowed": { "const": false }
+      }
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "hash_algorithm", "raw_window_identity_persisted", "raw_root_identity_persisted",
+        "raw_node_identity_persisted", "window_title_plaintext_persisted", "chat_plaintext_persisted",
+        "chat_content_digest_persisted", "raw_screenshot_persisted", "raw_dump_persisted",
+        "whole_screen_ocr_persisted"
+      ],
+      "properties": {
+        "hash_algorithm": { "const": "sha256" },
+        "raw_window_identity_persisted": { "const": false },
+        "raw_root_identity_persisted": { "const": false },
+        "raw_node_identity_persisted": { "const": false },
+        "window_title_plaintext_persisted": { "const": false },
+        "chat_plaintext_persisted": { "const": false },
+        "chat_content_digest_persisted": { "const": false },
+        "raw_screenshot_persisted": { "const": false },
+        "raw_dump_persisted": { "const": false },
+        "whole_screen_ocr_persisted": { "const": false }
+      }
+    },
+    "frame": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "capture_id", "captured_at", "capture", "display", "a11y_windows", "windows_truncated",
+        "panes", "panes_truncated", "node_observations", "nodes_truncated", "focus", "ime"
+      ],
+      "properties": {
+        "capture_id": { "$ref": "#/$defs/safeId" },
+        "captured_at": { "$ref": "#/$defs/timestamp" },
+        "capture": { "$ref": "#/$defs/capture" },
+        "display": { "$ref": "#/$defs/display" },
+        "a11y_windows": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/a11yWindow" } },
+        "windows_truncated": { "type": "boolean" },
+        "panes": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/pane" } },
+        "panes_truncated": { "type": "boolean" },
+        "node_observations": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/node" } },
+        "nodes_truncated": { "type": "boolean" },
+        "focus": { "$ref": "#/$defs/focus" },
+        "ime": { "$ref": "#/$defs/ime" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capture": {
+                "properties": { "token": { "const": "c1" } },
+                "required": ["token"]
+              }
+            },
+            "required": ["capture"]
+          },
+          "then": {
+            "properties": {
+              "ime": {
+                "properties": { "capture_token": { "const": "c1" } },
+                "required": ["capture_token"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "capture": {
+                "properties": { "token": { "const": "c2" } },
+                "required": ["token"]
+              }
+            },
+            "required": ["capture"]
+          },
+          "then": {
+            "properties": {
+              "ime": {
+                "properties": { "capture_token": { "const": "c2" } },
+                "required": ["capture_token"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token", "revision_before", "revision_after", "layout_revision", "ime_revision"],
+      "properties": {
+        "token": { "$ref": "#/$defs/captureToken" },
+        "revision_before": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "revision_after": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "layout_revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "ime_revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+      }
+    },
+    "display": {
+      "type": "object", "additionalProperties": false,
+      "required": ["display_id_status", "display_id", "effective_size", "orientation"],
+      "properties": {
+        "display_id_status": { "enum": ["known", "unknown"] },
+        "display_id": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0, "maximum": 16 },
+            { "type": "null" }
+          ]
+        },
+        "effective_size": {
+          "oneOf": [{ "$ref": "#/$defs/size" }, { "type": "null" }]
+        },
+        "orientation": { "enum": ["landscape", "portrait", "unknown"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "display_id_status": { "const": "known" } } },
+          "then": {
+            "properties": {
+              "display_id": { "type": "integer", "minimum": 0, "maximum": 16 },
+              "effective_size": { "$ref": "#/$defs/size" },
+              "orientation": { "enum": ["landscape", "portrait"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "display_id_status": { "const": "unknown" } } },
+          "then": {
+            "properties": {
+              "display_id": { "type": "null" },
+              "effective_size": { "type": "null" },
+              "orientation": { "const": "unknown" }
+            }
+          }
+        }
+      ]
+    },
+    "subtree": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "status", "root_child_count", "visited_node_count", "positive_visible_geometry_node_count",
+        "focused_editable_node_count", "read_error_count", "budget_exhausted"
+      ],
+      "properties": {
+        "status": { "enum": ["complete", "truncated", "read_error", "not_attempted"] },
+        "root_child_count": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 512 }, { "type": "null" }] },
+        "visited_node_count": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "positive_visible_geometry_node_count": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "focused_editable_node_count": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "read_error_count": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "budget_exhausted": { "type": "boolean" }
+      }
+    },
+    "a11yWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "window_label", "identity_namespace", "display_id", "platform_type_code", "type",
+        "root_handle_status", "root_package", "root_window_binding", "subtree_capture",
+        "expected_window_title_match", "layer", "bounds", "touchable_bounds", "active", "focused"
+      ],
+      "properties": {
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "identity_namespace": { "const": "a11y_run_local" },
+        "display_id": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "platform_type_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "type": {
+          "enum": [
+            "application", "input_method", "accessibility_overlay", "system",
+            "split_screen_divider", "magnification_overlay", "window_control", "unknown"
+          ]
+        },
+        "root_handle_status": { "enum": ["readable", "absent", "unreadable"] },
+        "root_package": { "$ref": "#/$defs/nullableSafeId" },
+        "root_window_binding": { "enum": ["exact", "mismatch", "unknown"] },
+        "subtree_capture": { "$ref": "#/$defs/subtree" },
+        "expected_window_title_match": {
+          "enum": ["match", "no_match", "absent", "over_budget", "read_error", "not_attempted"]
+        },
+        "layer": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+        "bounds": { "$ref": "#/$defs/nullableRect" },
+        "touchable_bounds": { "$ref": "#/$defs/nullableRect" },
+        "active": { "type": "boolean" },
+        "focused": { "type": "boolean" }
+      }
+    },
+    "pane": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pane_label", "window_label", "bounds", "projection_binding", "semantic_role", "semantic_evidence"],
+      "properties": {
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "projection_binding": { "enum": ["root_subtree", "unknown"] },
+        "semantic_role": { "const": "unknown" },
+        "semantic_evidence": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "node_label", "window_label", "pane_label", "source", "is_root", "window_id_binding",
+        "semantic_role", "geometry_status", "bounds", "visible", "enabled", "editable", "scrollable", "focused"
+      ],
+      "properties": {
+        "node_label": { "$ref": "#/$defs/nodeLabel" },
+        "window_label": { "$ref": "#/$defs/windowLabel" },
+        "pane_label": { "$ref": "#/$defs/paneLabel" },
+        "source": { "const": "root_subtree" },
+        "is_root": { "type": "boolean" },
+        "window_id_binding": { "enum": ["exact", "mismatch", "unknown"] },
+        "semantic_role": { "const": "unknown" },
+        "geometry_status": { "enum": ["positive", "degenerate", "unavailable"] },
+        "bounds": { "$ref": "#/$defs/nullableRect" },
+        "visible": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "editable": { "type": "boolean" },
+        "scrollable": { "type": "boolean" },
+        "focused": { "type": "boolean" }
+      }
+    },
+    "focus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "window_label", "node_label", "source"],
+      "properties": {
+        "status": { "enum": ["absent", "window_only", "editor_known", "conflict", "unknown"] },
+        "window_label": { "$ref": "#/$defs/nullableWindowLabel" },
+        "node_label": { "$ref": "#/$defs/nullableNodeLabel" },
+        "source": { "const": "a11y_inventory" }
+      }
+    },
+    "ime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["visible", "mode", "bounds", "binding", "editor_node_label", "capture_token"],
+      "properties": {
+        "visible": { "type": "boolean" },
+        "mode": { "enum": ["none", "docked", "floating", "unknown"] },
+        "bounds": { "$ref": "#/$defs/nullableRect" },
+        "binding": { "enum": ["not_active", "editor_known", "unknown"] },
+        "editor_node_label": { "$ref": "#/$defs/nullableNodeLabel" },
+        "capture_token": { "$ref": "#/$defs/captureToken" }
+      }
+    },
+    "consistency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sample_count", "minimum_interval_ms", "stable", "reason_codes"],
+      "properties": {
+        "sample_count": { "const": 2 },
+        "minimum_interval_ms": { "type": "integer", "minimum": 900, "maximum": 60000 },
+        "stable": { "type": "boolean" },
+        "reason_codes": {
+          "type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/reasonCode" }
+        }
+      }
+    }
+  }
+}

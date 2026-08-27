@@ -1,7 +1,70 @@
+import java.util.zip.ZipFile
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+private val c1aGitHead = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.get().trim().also { value ->
+    check(Regex("[0-9a-f]{40}").matches(value)) {
+        "T-L1 C1a requires a full lowercase Git HEAD"
+    }
+}
+
+private val c1aExpectedGitHead = providers.environmentVariable("TL1_C1A_EXPECTED_COMMIT_SHA")
+    .orNull
+    ?.also { value ->
+        check(Regex("[0-9a-f]{40}").matches(value)) {
+            "TL1_C1A_EXPECTED_COMMIT_SHA must be a full lowercase Git SHA"
+        }
+        check(value == c1aGitHead) {
+            "TL1_C1A_EXPECTED_COMMIT_SHA does not match the checked-out Git HEAD"
+        }
+    }
+
+private val c1aBuildChallenge = providers.environmentVariable("TABLET_C1A_BUILD_CHALLENGE")
+    .orElse("offline-placeholder-do-not-attest")
+    .get()
+    .also { value ->
+        check(Regex("[a-z0-9][a-z0-9._-]{15,95}").matches(value)) {
+            "TABLET_C1A_BUILD_CHALLENGE must be a 16..96 character safe lowercase token"
+        }
+    }
+
+private val c1bGitHead = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.get().trim().also { value ->
+    check(Regex("[0-9a-f]{40}").matches(value)) {
+        "T-L1 C1b requires a full lowercase Git HEAD"
+    }
+}
+
+private val c1bExpectedGitHead = providers.environmentVariable("TL1_C1B_EXPECTED_COMMIT_SHA")
+    .orNull
+    ?.also { value ->
+        check(Regex("[0-9a-f]{40}").matches(value)) {
+            "TL1_C1B_EXPECTED_COMMIT_SHA must be a full lowercase Git SHA"
+        }
+        check(value == c1bGitHead) {
+            "TL1_C1B_EXPECTED_COMMIT_SHA does not match the checked-out Git HEAD"
+        }
+    }
+
+private val c1bBuildChallenge = providers.environmentVariable("TABLET_C1B_BUILD_CHALLENGE")
+    .orElse("offline-c1b-placeholder-do-not-attest")
+    .get()
+    .also { value ->
+        check(Regex("[a-z0-9][a-z0-9._-]{15,95}").matches(value)) {
+            "TABLET_C1B_BUILD_CHALLENGE must be a 16..96 character safe lowercase token"
+        }
+    }
+
+private fun quotedBuildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
     namespace = "dev.magina.gateway"
@@ -13,6 +76,28 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-m1a"
+
+    }
+
+    buildTypes {
+        getByName("debug") {
+            buildConfigField("String", "TABLET_C1A_GIT_HEAD", quotedBuildConfigString(c1aGitHead))
+            buildConfigField(
+                "String",
+                "TABLET_C1A_BUILD_CHALLENGE",
+                quotedBuildConfigString(c1aBuildChallenge),
+            )
+            buildConfigField("String", "TABLET_C1B_GIT_HEAD", quotedBuildConfigString(c1bGitHead))
+            buildConfigField(
+                "String",
+                "TABLET_C1B_BUILD_CHALLENGE",
+                quotedBuildConfigString(c1bBuildChallenge),
+            )
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -24,6 +109,144 @@ android {
     }
     packaging {
         resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
+    }
+}
+
+/**
+ * Release 产物的三重机械防线：merged manifest、DEX catalog、静态 source-set 都不能出现
+ * debug-only C1a package。任务不依赖设备，也不会读取或写入任何设备状态。
+ */
+tasks.register("verifyTabletC1aReleaseAbsence") {
+    group = "verification"
+    description = "Verify that the T-L1 C1a provider is absent from release artifacts"
+    dependsOn("processReleaseMainManifest", "assembleRelease")
+
+    doLast {
+        val c1aPackageDotPrefix = "dev.magina.gateway.tablet.c1a"
+        val c1aPackageSlashPrefix = "dev/magina/gateway/tablet/c1a"
+        val forbidden = listOf(
+            c1aPackageDotPrefix,
+            c1aPackageSlashPrefix,
+            "TABLET_C1A_",
+        )
+
+        val mergedManifests = fileTree(layout.buildDirectory.dir("intermediates")) {
+            include("**/release/**/AndroidManifest.xml")
+        }.files.filter { file -> file.path.contains("merged", ignoreCase = true) }
+        check(mergedManifests.isNotEmpty()) { "release merged manifest was not generated" }
+        mergedManifests.forEach { manifest ->
+            val text = manifest.readText(Charsets.UTF_8)
+            check(forbidden.none(text::contains)) {
+                "debug-only C1a package leaked into release merged manifest: $manifest"
+            }
+        }
+
+        val releaseApks = fileTree(layout.buildDirectory.dir("outputs/apk/release")) {
+            include("*.apk")
+        }.files
+        check(releaseApks.isNotEmpty()) { "release APK was not generated" }
+        releaseApks.forEach { apk ->
+            ZipFile(apk).use { zip ->
+                val dexEntries = zip.entries().asSequence().filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }
+                    .toList()
+                check(dexEntries.isNotEmpty()) { "release APK has no DEX catalog: $apk" }
+                dexEntries.forEach { entry ->
+                    val dex = zip.getInputStream(entry).use { it.readBytes() }
+                    check(forbidden.none { needle -> dex.containsAscii(needle) }) {
+                        "debug-only C1a package leaked into release DEX catalog: ${entry.name}"
+                    }
+                }
+            }
+        }
+
+        listOf(file("src/main"), file("src/release")).forEach { sourceRoot ->
+            if (sourceRoot.exists()) {
+                sourceRoot.walkTopDown().filter(File::isFile).forEach { source ->
+                    val bytes = source.readBytes()
+                    check(forbidden.none { needle -> bytes.containsAscii(needle) }) {
+                        "debug-only C1a package leaked into non-debug source set: $source"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * C1b 的 model/source/probe 是可发布的纯只读 producer；只有 debug runtime/provider/protocol 与其
+ * BuildConfig 绑定必须从 release 消失。authority 因与 main package 同名，仅在 merged manifest 检查。
+ */
+tasks.register("verifyTabletC1bReleaseAbsence") {
+    group = "verification"
+    description = "Verify that the T-L1 C1b debug runtime is absent while the read-only producer may remain"
+    dependsOn("processReleaseMainManifest", "assembleRelease")
+
+    doLast {
+        val authority = "dev.magina.gateway.tablet.c1b"
+        val debugClassNames = listOf(
+            "TabletC1bContentProvider",
+            "TabletC1bProtocol",
+            "TabletC1bReadCoordinator",
+            "TabletC1bRuntimeController",
+            "C1bPendingStartRegistry",
+            "TrustedRuntimeContextFactory",
+        )
+        val buildConfigNames = listOf(
+            "TABLET_C1B_GIT_HEAD",
+            "TABLET_C1B_BUILD_CHALLENGE",
+        )
+        val dexForbidden = debugClassNames.map { name ->
+            "dev/magina/gateway/tablet/c1b/$name"
+        } + buildConfigNames
+        val sourceForbidden = debugClassNames + buildConfigNames
+
+        val mergedManifests = fileTree(layout.buildDirectory.dir("intermediates")) {
+            include("**/release/**/AndroidManifest.xml")
+        }.files.filter { file -> file.path.contains("merged", ignoreCase = true) }
+        check(mergedManifests.isNotEmpty()) { "release merged manifest was not generated" }
+        mergedManifests.forEach { manifest ->
+            val text = manifest.readText(Charsets.UTF_8)
+            check(authority !in text && debugClassNames.none(text::contains)) {
+                "debug-only C1b provider leaked into release merged manifest: $manifest"
+            }
+        }
+
+        val releaseApks = fileTree(layout.buildDirectory.dir("outputs/apk/release")) {
+            include("*.apk")
+        }.files
+        check(releaseApks.isNotEmpty()) { "release APK was not generated" }
+        releaseApks.forEach { apk ->
+            ZipFile(apk).use { zip ->
+                val dexEntries = zip.entries().asSequence().filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }
+                    .toList()
+                check(dexEntries.isNotEmpty()) { "release APK has no DEX catalog: $apk" }
+                dexEntries.forEach { entry ->
+                    val dex = zip.getInputStream(entry).use { it.readBytes() }
+                    check(dexForbidden.none { needle -> dex.containsAscii(needle) }) {
+                        "debug-only C1b runtime leaked into release DEX catalog: ${entry.name}"
+                    }
+                }
+            }
+        }
+
+        listOf(file("src/main"), file("src/release")).forEach { sourceRoot ->
+            if (sourceRoot.exists()) {
+                sourceRoot.walkTopDown().filter(File::isFile).forEach { source ->
+                    val bytes = source.readBytes()
+                    check(sourceForbidden.none { needle -> bytes.containsAscii(needle) }) {
+                        "debug-only C1b runtime leaked into non-debug source set: $source"
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun ByteArray.containsAscii(value: String): Boolean {
+    val needle = value.toByteArray(Charsets.US_ASCII)
+    if (needle.isEmpty() || needle.size > size) return false
+    return (0..size - needle.size).any { offset ->
+        needle.indices.all { index -> this[offset + index] == needle[index] }
     }
 }
 

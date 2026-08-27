@@ -100,14 +100,30 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   unknown window 诊断 block，未改变结论。r2/r3 evidence 分别为 main `d076345` / `bd64ea5`。
 - **T-L1（微信横屏 window/pane 只读探针）**：v1 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
   归档为旧单窗合成门。v2 diagnostic-only 契约、schema、validator、对抗 fixture 与 gate 已以 main
-  `589421a` 冻结：从 fresh blocked T0 只路由 `probe_only`，以 2–4 帧、全部 interactive window、唯一
+  `589421a` 冻结：从 fresh blocked T0 只路由 `probe_only`，离线合同允许 2–4 帧、全部 interactive window、唯一
   target window/pane、title/input/message/toolbar、focus/IME/overlay/display 与精确 capture epoch 建模 vivo
   同 App 双 OS window；只落 run-local label、bounds、run-salted hash、reason，不落 raw identity/聊天明文。
   gate self-test 5/5、cases/coverage 24/24；runtime/layout/微信验证/P0/执行授权恒 false。隔离 producer 候选
   `b5769df7baba075fda47aec17f249a5caa124b92`（`codex/tablet-tl1-v2`）专项 33/33、Debug 350/350、
   Release 259/259、assembleDebug 通过且独审 0/0/0；未接 ToolRegistry/MCP、production 固定 unavailable，
-  app 未合 main；下一步先补独立受控 runner/attest、独审并钉 descendant SHA，再另行授权保持 vivo 应用多窗
-  开启的只读 C1a。
+  app 未合 main。首个 fixed candidate `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的 pre-C 全门与跨层独审
+  已通过，但首个授权轮在安装阶段超时，`run_id=none`、无采集/无 evidence；用户另行明确授权重试后，唯一
+  run `tl1-c1a-20260826t114535z-63667b68ce4f` 仅执行 c1/c2 各一次、间隔 1982.304 ms、无补拍，最终
+  trusted-runtime validation 失败并冻结。origin 未成立，runtime/layout/P0/execution 仍为 false/unsupported；
+  失败记录见 [`2026-08-26-T-L1-C1a只读取证失败.md`](runs/2026-08-26-T-L1-C1a只读取证失败.md)。A 道已修复
+  Windows `adb shell` stdin 的 CRLF 归一化与静态页 raw revision 15/15 的假顺序阻断，不改 producer/T0 六个
+  baseline blob，也不删除真实 pane/title/focus/node/region blocker。标准全门与独审通过后固定
+  `4b96f89a6622eb8b5fe04bd249571c7d77936b25`；唯一成功 run
+  `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，success sidecar 证明 origin binding/read-only，T0
+  23,865 bytes/747 CRLF 原样转发，c1/c2 各一次、delta 2023.223 ms、recapture=0、cleanup=`not_required`。
+  两帧横屏 2800×1968 且两个稳定 `com.tencent.mm` application window，但七项真实 blocker 全部保留，
+  diagnostic 仍 blocked，runtime/layout/微信/editor/execution=false、P0 unsupported，故 T-L1 未通过。
+  成功记录见 [`2026-08-26-T-L1-C1a只读取证成功.md`](runs/2026-08-26-T-L1-C1a只读取证成功.md)；C1a app
+  未合 main，也不进入 T-L2。A3/C1b 已按真实 opaque root 形态另开 pure-a11y 合同、producer、受控 runner
+  与 closed success sidecar：observation 49/49、coverage 89/89、self 5/5，host fake-ADB 26/26，Android
+  Debug 71/71、Release 33/33，v2/C1a 回归全绿，独审 P0/P1/P2=0。第一批最多验证 origin、微信
+  window ownership、root projection、application topology 与 hidden IME；所有语义/布局/动作结论仍固定
+  false/unsupported。本轮 real ADB=0，C1a 授权不复用；提交固定新 SHA 后才向用户请求一次 C1b 授权。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -137,7 +153,8 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
-| **Tablet T-L1 v2（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；C1a SHA 待钉 | `codex/tablet-tl1-v2` | **A2 producer 已冻结；受控 runner/attest 待补，C1a 未入队，app 未合 main** | 离线契约/gate 已合 main `589421a`；production unavailable；runner 独审后另钉 descendant SHA 并申请真机授权，保持 vivo 应用多窗开启；P0/execution 仍恒 false |
+| **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 本轮提交 HEAD（完整 SHA 见任务交接） | `codex/tablet-tl1-c1b` | **A 道无机完成；尚未真机，待新授权** | observation 49/49、coverage 89/89、self 5/5；host fake-ADB 26/26、real ADB=0；Android Debug 71/71、Release 33/33；独审 0/0/0。一次 build/install/T0/c1/c2/result runner 已由 fake-ADB E2E 覆盖；不放行语义/layout/P0/execution |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

@@ -1,0 +1,747 @@
+{
+  "schema_version": 5,
+  "run_id": "tl1-c1a-20260826t114535z-63667b68ce4f",
+  "captured_at_utc": "2026-08-26T11:45:57.8293489Z",
+  "device": {
+    "serial_hash": "sha256:7c883b430943c320285b802d6a40abd360bf550d40ef35a6eb6e9e376539a045",
+    "brand": "vivo",
+    "manufacturer": "vivo",
+    "model": "PA2553",
+    "product": "DPD2437",
+    "device": "DPD2437",
+    "android_release": "16",
+    "api_level": 36,
+    "abi": [
+      "arm64-v8a"
+    ],
+    "fingerprint_hash": "sha256:32f9f96874c3fc6dc5a532dcbba3cec18337376ef44b27cb9dbcdd67ccbe54df"
+  },
+  "display": {
+    "physical_size": {
+      "width": 1968,
+      "height": 2800
+    },
+    "override_size": null,
+    "current_size": null,
+    "physical_density_dpi": 400,
+    "override_density_dpi": null,
+    "smallest_width_dp": 787,
+    "smallest_width_dp_status": "known",
+    "smallest_width_dp_source": "am_config",
+    "rotation": null,
+    "rotation_status": "ambiguous",
+    "rotation_source": "none",
+    "orientation": "unknown",
+    "current_size_source": "unknown",
+    "aspect_4_3": null
+  },
+  "state": {
+    "screen_awake": true,
+    "keyguard_locked": false,
+    "zen_mode": 0,
+    "default_ime": "com.vivo.ai.ime.pad/com.vivo.ai.ime.main.IMEService"
+  },
+  "observations": {
+    "initial": {
+      "foreground": {
+        "status": "known",
+        "source": "top_resumed_activity",
+        "package": "com.tencent.mm",
+        "activity": ".ui.chatting.ChattingUI",
+        "top_resumed": {
+          "assignment_count": 1,
+          "valid_count": 1,
+          "absent_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0
+        },
+        "resumed_fallback": {
+          "assignment_count": 0,
+          "valid_count": 0,
+          "absent_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0
+        }
+      },
+      "rotation": {
+        "status": "ambiguous",
+        "source": "none",
+        "value": null,
+        "assignment_count": 49,
+        "valid_count": 7,
+        "malformed_count": 42,
+        "conflict_count": 2,
+        "default_scoped_count": 2,
+        "unscoped_count": 47,
+        "non_default_count": 0
+      },
+      "current_size": {
+        "status": "unknown",
+        "source": "unknown",
+        "wm_size_source": "physical",
+        "value": null,
+        "reason_codes": [
+          "rotation_not_absent",
+          "visible_unknown_type_present",
+          "window_field_malformed",
+          "base_window_count_not_one"
+        ]
+      },
+      "windows": {
+        "parse_status": "known",
+        "block_count": 20,
+        "application_window_count": 2,
+        "strong_visible_count": 6,
+        "weak_visibility_count": 0,
+        "visible_overlay_count": 0,
+        "visible_other_application_count": 0,
+        "visible_unknown_type_count": 4,
+        "visible_ime_count": 0,
+        "visible_system_window_count": 0,
+        "visible_unsafe_other_count": 0,
+        "identity_missing_count": 0,
+        "identity_conflict_count": 0,
+        "duplicate_identity_count": 0,
+        "display_unknown_count": 0,
+        "non_default_display_count": 0,
+        "visibility_ambiguous_count": 0,
+        "malformed_field_count": 18,
+        "focus": {
+          "status": "absent",
+          "assignment_count": 0,
+          "distinct_count": 0,
+          "mapped_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0,
+          "window_label": null,
+          "type": "unknown",
+          "owner_matches_foreground": null
+        },
+        "windows": [
+          {
+            "window_label": "w4",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w7",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w16",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w17",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w15",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w14",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w13",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w6",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w5",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w9",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application_overlay",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w8",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application_overlay",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w3",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w10",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "input_method",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w1",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w18",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w2",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w12",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w11",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w0",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": false,
+            "focused": false
+          },
+          {
+            "window_label": "w19",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          }
+        ]
+      },
+      "state": {
+        "screen_awake": true,
+        "keyguard_locked": false,
+        "zen_mode": 0,
+        "input_method": {
+          "session_active": false,
+          "visible": false,
+          "floating": false,
+          "bounds": null
+        }
+      }
+    },
+    "final": {
+      "foreground": {
+        "status": "known",
+        "source": "top_resumed_activity",
+        "package": "com.tencent.mm",
+        "activity": ".ui.chatting.ChattingUI",
+        "top_resumed": {
+          "assignment_count": 1,
+          "valid_count": 1,
+          "absent_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0
+        },
+        "resumed_fallback": {
+          "assignment_count": 0,
+          "valid_count": 0,
+          "absent_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0
+        }
+      },
+      "rotation": {
+        "status": "ambiguous",
+        "source": "none",
+        "value": null,
+        "assignment_count": 49,
+        "valid_count": 7,
+        "malformed_count": 42,
+        "conflict_count": 2,
+        "default_scoped_count": 2,
+        "unscoped_count": 47,
+        "non_default_count": 0
+      },
+      "current_size": {
+        "status": "unknown",
+        "source": "unknown",
+        "wm_size_source": "physical",
+        "value": null,
+        "reason_codes": [
+          "rotation_not_absent",
+          "visible_unknown_type_present",
+          "window_field_malformed",
+          "base_window_count_not_one"
+        ]
+      },
+      "windows": {
+        "parse_status": "known",
+        "block_count": 20,
+        "application_window_count": 2,
+        "strong_visible_count": 6,
+        "weak_visibility_count": 0,
+        "visible_overlay_count": 0,
+        "visible_other_application_count": 0,
+        "visible_unknown_type_count": 4,
+        "visible_ime_count": 0,
+        "visible_system_window_count": 0,
+        "visible_unsafe_other_count": 0,
+        "identity_missing_count": 0,
+        "identity_conflict_count": 0,
+        "duplicate_identity_count": 0,
+        "display_unknown_count": 0,
+        "non_default_display_count": 0,
+        "visibility_ambiguous_count": 0,
+        "malformed_field_count": 18,
+        "focus": {
+          "status": "absent",
+          "assignment_count": 0,
+          "distinct_count": 0,
+          "mapped_count": 0,
+          "malformed_count": 0,
+          "conflict_count": 0,
+          "window_label": null,
+          "type": "unknown",
+          "owner_matches_foreground": null
+        },
+        "windows": [
+          {
+            "window_label": "w4",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w7",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w16",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w17",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w15",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w14",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w13",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w6",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w5",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w9",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application_overlay",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w8",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application_overlay",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w3",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w10",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "input_method",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w1",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w18",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "strong_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w2",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "multi_landscape",
+            "owner_matches_foreground": true,
+            "focused": false
+          },
+          {
+            "window_label": "w12",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w11",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": null,
+            "focused": false
+          },
+          {
+            "window_label": "w0",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "base_application",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": "fullscreen",
+            "owner_matches_foreground": false,
+            "focused": false
+          },
+          {
+            "window_label": "w19",
+            "identity_status": "known",
+            "display_status": "known",
+            "display_id": 0,
+            "type": "unknown",
+            "visibility": "not_visible",
+            "bounds": null,
+            "windowing_mode": null,
+            "owner_matches_foreground": null,
+            "focused": false
+          }
+        ]
+      },
+      "state": {
+        "screen_awake": true,
+        "keyguard_locked": false,
+        "zen_mode": 0,
+        "input_method": {
+          "session_active": false,
+          "visible": false,
+          "floating": false,
+          "bounds": null
+        }
+      }
+    }
+  },
+  "input_method": {
+    "session_active": false,
+    "visible": false,
+    "floating": false,
+    "bounds": null
+  },
+  "assessment": {
+    "tablet_threshold_dp": 600,
+    "readiness_orientation_baseline": "landscape",
+    "device_class": "tablet",
+    "intake_status": "accepted",
+    "capture_consistent": null,
+    "capture_consistency_status": "unknown",
+    "capture_consistency_reasons": [
+      "rotation_unreliable",
+      "current_size_unknown",
+      "window_identity_unreliable"
+    ],
+    "readiness_status": "blocked",
+    "readiness_block_reasons": [
+      "orientation_unknown",
+      "aspect_unknown",
+      "capture_consistency_unknown",
+      "application_window_count_not_one",
+      "visible_window_type_unknown",
+      "window_field_malformed",
+      "focus_absent"
+    ],
+    "p0_capability": "unsupported",
+    "p0_unsupported_reasons": [
+      "orientation_unknown",
+      "aspect_unknown",
+      "capture_consistency_unknown",
+      "application_window_count_not_one",
+      "visible_window_type_unknown",
+      "window_field_malformed",
+      "focus_absent",
+      "wechat_layout_unverified",
+      "tablet_landscape_p0_unimplemented"
+    ]
+  }
+}

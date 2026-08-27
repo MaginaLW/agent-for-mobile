@@ -1,0 +1,329 @@
+{
+  "schema": "tablet-layout-observation/c1b-v1",
+  "run_id": "tl1-c1b-fixture-real-shape",
+  "captured_at": "2026-08-26T00:00:02.0000000Z",
+  "mode": "c1b_pure_a11y_diagnostic",
+  "expected_title_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "provenance": {
+    "kind": "offline_fixture",
+    "name": "tablet-layout-c1b-fixture",
+    "version": "c1b-v1",
+    "producer_commit_sha": "0000000000000000000000000000000000000000",
+    "producer_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runtime_attested": false
+  },
+  "upstream_t0": {
+    "source_kind": "offline_fixture",
+    "schema_version": 5,
+    "run_id": "tl1-c1b-fixture-real-shape",
+    "captured_at": "2026-08-26T00:00:00.0000000Z",
+    "artifact_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "producer_commit_sha": "4ca32b131007df58f7752c5ee9b2d049cb1cd54e",
+    "device_profile_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "intake_status": "accepted",
+    "readiness_status": "blocked",
+    "readiness_reasons": [
+      "application_window_count_not_one",
+      "focus_absent"
+    ],
+    "p0_capability": "unsupported",
+    "p0_unsupported_reasons": [
+      "application_window_count_not_one",
+      "focus_absent",
+      "wechat_layout_unverified",
+      "tablet_landscape_p0_unimplemented"
+    ]
+  },
+  "route": {
+    "kind": "probe_only",
+    "settings_mutation_allowed": false,
+    "device_action_allowed": false,
+    "screenshot_allowed": false,
+    "ocr_allowed": false
+  },
+  "privacy": {
+    "hash_algorithm": "sha256",
+    "raw_window_identity_persisted": false,
+    "raw_root_identity_persisted": false,
+    "raw_node_identity_persisted": false,
+    "window_title_plaintext_persisted": false,
+    "chat_plaintext_persisted": false,
+    "chat_content_digest_persisted": false,
+    "raw_screenshot_persisted": false,
+    "raw_dump_persisted": false,
+    "whole_screen_ocr_persisted": false
+  },
+  "frames": [
+    {
+      "capture_id": "capture-c1",
+      "captured_at": "2026-08-26T00:00:01.0000000Z",
+      "capture": {
+        "token": "c1",
+        "revision_before": 10,
+        "revision_after": 10,
+        "layout_revision": 10,
+        "ime_revision": 10
+      },
+      "display": {
+        "display_id_status": "known",
+        "display_id": 0,
+        "effective_size": { "width": 2800, "height": 1968 },
+        "orientation": "landscape"
+      },
+      "a11y_windows": [
+        {
+          "window_label": "aw1", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 1, "type": "application", "root_handle_status": "readable",
+          "root_package": "com.tencent.mm", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "complete", "root_child_count": 0, "visited_node_count": 1,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "absent", "layer": 0,
+          "bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw2", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 1, "type": "application", "root_handle_status": "readable",
+          "root_package": "com.tencent.mm", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "complete", "root_child_count": 0, "visited_node_count": 1,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "absent", "layer": 1,
+          "bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "active": true, "focused": true
+        },
+        {
+          "window_label": "aw3", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "com.android.systemui", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 3,
+          "bounds": { "left": 0, "top": 0, "right": 2800, "bottom": 95 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 2800, "bottom": 95 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw4", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "com.vivo.upslide", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 4,
+          "bounds": { "left": 0, "top": 1923, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 1923, "right": 2800, "bottom": 1968 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw5", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "android", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 2,
+          "bounds": { "left": 942, "top": 879, "right": 1032, "bottom": 1089 },
+          "touchable_bounds": { "left": 942, "top": 879, "right": 1032, "bottom": 1089 },
+          "active": false, "focused": false
+        }
+      ],
+      "windows_truncated": false,
+      "panes": [
+        {
+          "pane_label": "ap1", "window_label": "aw1",
+          "bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "projection_binding": "root_subtree", "semantic_role": "unknown", "semantic_evidence": []
+        },
+        {
+          "pane_label": "ap2", "window_label": "aw2",
+          "bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "projection_binding": "root_subtree", "semantic_role": "unknown", "semantic_evidence": []
+        }
+      ],
+      "panes_truncated": false,
+      "node_observations": [
+        {
+          "node_label": "an1", "window_label": "aw1", "pane_label": "ap1", "source": "root_subtree",
+          "is_root": true, "window_id_binding": "exact", "semantic_role": "unknown",
+          "geometry_status": "degenerate", "bounds": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "visible": false, "enabled": false, "editable": false, "scrollable": false, "focused": false
+        },
+        {
+          "node_label": "an2", "window_label": "aw2", "pane_label": "ap2", "source": "root_subtree",
+          "is_root": true, "window_id_binding": "exact", "semantic_role": "unknown",
+          "geometry_status": "degenerate", "bounds": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "visible": false, "enabled": false, "editable": false, "scrollable": false, "focused": false
+        }
+      ],
+      "nodes_truncated": false,
+      "focus": { "status": "window_only", "window_label": "aw2", "node_label": null, "source": "a11y_inventory" },
+      "ime": {
+        "visible": false, "mode": "none", "bounds": null, "binding": "not_active",
+        "editor_node_label": null, "capture_token": "c1"
+      }
+    },
+    {
+      "capture_id": "capture-c2",
+      "captured_at": "2026-08-26T00:00:02.0000000Z",
+      "capture": {
+        "token": "c2",
+        "revision_before": 11,
+        "revision_after": 11,
+        "layout_revision": 11,
+        "ime_revision": 11
+      },
+      "display": {
+        "display_id_status": "known",
+        "display_id": 0,
+        "effective_size": { "width": 2800, "height": 1968 },
+        "orientation": "landscape"
+      },
+      "a11y_windows": [
+        {
+          "window_label": "aw1", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 1, "type": "application", "root_handle_status": "readable",
+          "root_package": "com.tencent.mm", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "complete", "root_child_count": 0, "visited_node_count": 1,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "absent", "layer": 0,
+          "bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw2", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 1, "type": "application", "root_handle_status": "readable",
+          "root_package": "com.tencent.mm", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "complete", "root_child_count": 0, "visited_node_count": 1,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "absent", "layer": 1,
+          "bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "active": true, "focused": true
+        },
+        {
+          "window_label": "aw3", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "com.android.systemui", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 3,
+          "bounds": { "left": 0, "top": 0, "right": 2800, "bottom": 95 },
+          "touchable_bounds": { "left": 0, "top": 0, "right": 2800, "bottom": 95 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw4", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "com.vivo.upslide", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 4,
+          "bounds": { "left": 0, "top": 1923, "right": 2800, "bottom": 1968 },
+          "touchable_bounds": { "left": 0, "top": 1923, "right": 2800, "bottom": 1968 },
+          "active": false, "focused": false
+        },
+        {
+          "window_label": "aw5", "identity_namespace": "a11y_run_local", "display_id": 0,
+          "platform_type_code": 3, "type": "system", "root_handle_status": "readable",
+          "root_package": "android", "root_window_binding": "exact",
+          "subtree_capture": {
+            "status": "not_attempted", "root_child_count": null, "visited_node_count": 0,
+            "positive_visible_geometry_node_count": 0, "focused_editable_node_count": 0,
+            "read_error_count": 0, "budget_exhausted": false
+          },
+          "expected_window_title_match": "not_attempted", "layer": 2,
+          "bounds": { "left": 942, "top": 879, "right": 1032, "bottom": 1089 },
+          "touchable_bounds": { "left": 942, "top": 879, "right": 1032, "bottom": 1089 },
+          "active": false, "focused": false
+        }
+      ],
+      "windows_truncated": false,
+      "panes": [
+        {
+          "pane_label": "ap1", "window_label": "aw1",
+          "bounds": { "left": 0, "top": 0, "right": 985, "bottom": 1968 },
+          "projection_binding": "root_subtree", "semantic_role": "unknown", "semantic_evidence": []
+        },
+        {
+          "pane_label": "ap2", "window_label": "aw2",
+          "bounds": { "left": 989, "top": 0, "right": 2800, "bottom": 1968 },
+          "projection_binding": "root_subtree", "semantic_role": "unknown", "semantic_evidence": []
+        }
+      ],
+      "panes_truncated": false,
+      "node_observations": [
+        {
+          "node_label": "an1", "window_label": "aw1", "pane_label": "ap1", "source": "root_subtree",
+          "is_root": true, "window_id_binding": "exact", "semantic_role": "unknown",
+          "geometry_status": "degenerate", "bounds": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "visible": false, "enabled": false, "editable": false, "scrollable": false, "focused": false
+        },
+        {
+          "node_label": "an2", "window_label": "aw2", "pane_label": "ap2", "source": "root_subtree",
+          "is_root": true, "window_id_binding": "exact", "semantic_role": "unknown",
+          "geometry_status": "degenerate", "bounds": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "visible": false, "enabled": false, "editable": false, "scrollable": false, "focused": false
+        }
+      ],
+      "nodes_truncated": false,
+      "focus": { "status": "window_only", "window_label": "aw2", "node_label": null, "source": "a11y_inventory" },
+      "ime": {
+        "visible": false, "mode": "none", "bounds": null, "binding": "not_active",
+        "editor_node_label": null, "capture_token": "c2"
+      }
+    }
+  ],
+  "consistency": {
+    "sample_count": 2,
+    "minimum_interval_ms": 1000,
+    "stable": true,
+    "reason_codes": []
+  },
+  "diagnostic_status": "blocked",
+  "reason_codes": [
+    "pane_semantic_roles_unverified",
+    "semantic_subtree_opaque",
+    "tablet_layout_diagnostic_only",
+    "target_conversation_unverified",
+    "target_regions_unverified"
+  ],
+  "layout_accepted": false,
+  "wechat_layout_verified": false,
+  "editor_action_ready": false,
+  "p0_capability": "unsupported",
+  "p0_blockers": [
+    "tablet_c1b_diagnostic_only",
+    "upstream_t0_readiness_blocked",
+    "tablet_landscape_p0_unimplemented",
+    "tablet_tl2_unverified"
+  ],
+  "execution_grant": false
+}

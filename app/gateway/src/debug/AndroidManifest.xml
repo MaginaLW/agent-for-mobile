@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!--
+            T-L1 C1a 的唯一进程外入口。它只存在于 debug variant；manifest permission 与
+            provider 内 callingUid 双重限制为 adb shell，且不允许 URI grant 转授。
+        -->
+        <provider
+            android:name=".tablet.c1a.TabletC1aContentProvider"
+            android:authorities="dev.magina.gateway.tablet.c1a"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP" />
+
+        <!-- C1b is an independent read-only diagnostic producer with its own closed pipe protocol. -->
+        <provider
+            android:name=".tablet.c1b.TabletC1bContentProvider"
+            android:authorities="dev.magina.gateway.tablet.c1b"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP" />
+    </application>
+</manifest>
