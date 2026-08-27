@@ -11,8 +11,20 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <!-- 先自用 sideload，不过商店审查 -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!--
+        app_launch 只需要解析技能包 apps.json 已登记目标的 launcher activity；精确包查询
+        与 aliases 保持一一对应（由 PackageVisibilityManifestTest 钉住），不授予全量应用可见性。
+    -->
+    <queries>
+        <package android:name="com.tencent.mm" />
+        <package android:name="com.xingin.xhs" />
+        <package android:name="com.jingdong.app.mall" />
+        <package android:name="com.taobao.taobao" />
+        <package android:name="com.tmall.wireless" />
+        <package android:name="com.eg.android.AlipayGphone" />
+        <package android:name="com.android.settings" />
+        <package android:name="com.vivo.gallery" />
+    </queries>
 
     <application
         android:label="执行网关"

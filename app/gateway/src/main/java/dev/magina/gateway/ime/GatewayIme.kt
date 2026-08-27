@@ -75,8 +75,12 @@ class GatewayIme : InputMethodService() {
         super.onFinishInput()
     }
 
-    // 不显示输入视图：注入通道不需要可见键盘（也避免键盘弹出高度扰动布局）
-    override fun onEvaluateInputViewShown(): Boolean = false
+    // 不显示输入视图：注入通道不需要可见键盘（也避免键盘弹出高度扰动布局）。
+    // InputMethodService 要求调用父实现；这里只执行其框架评估，最终结果仍固定为 false。
+    override fun onEvaluateInputViewShown(): Boolean {
+        super.onEvaluateInputViewShown()
+        return false
+    }
 }
 
 /**
