@@ -220,22 +220,40 @@ function Invoke-TL1C1aGit {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string[]]$Arguments,
+        [ValidateNotNullOrEmpty()][string]$GitPath = 'git.exe',
         [switch]$AllowFailure
     )
-    $result = Invoke-TL1C1aProcess -FilePath 'git.exe' -Arguments (@('-C', $RepoRoot) + $Arguments) `
-        -Operation 'Git provenance 复核' -TimeoutSec 30 -AllowFailure:$AllowFailure
+    $gitArguments = @(
+        '--no-optional-locks',
+        '-c', 'core.fsmonitor=false',
+        '-c', 'core.untrackedCache=false',
+        '-c', 'core.hooksPath=NUL',
+        '-C', $RepoRoot
+    ) + $Arguments
+    $gitEnvironment = @{
+        GIT_CONFIG_NOSYSTEM = '1'
+        GIT_CONFIG_GLOBAL = 'NUL'
+        GIT_OPTIONAL_LOCKS = '0'
+        GIT_TERMINAL_PROMPT = '0'
+    }
+    $result = Invoke-TL1C1aProcess -FilePath $GitPath -Arguments $gitArguments `
+        -Operation 'Git provenance 复核' -Environment $gitEnvironment -TimeoutSec 30 -AllowFailure:$AllowFailure
     return $result
 }
 
 function Assert-TL1C1aGitProvenance {
-    param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string]$ExpectedCommitSha)
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$ExpectedCommitSha,
+        [ValidateNotNullOrEmpty()][string]$GitPath = 'git.exe'
+    )
     if ($ExpectedCommitSha -cnotmatch '^[0-9a-f]{40}$') { throw '-ExpectedCommitSha 必须是完整小写 40 位 Git SHA。' }
-    $head = (Invoke-TL1C1aGit $RepoRoot @('rev-parse','HEAD')).Text.Trim()
+    $head = (Invoke-TL1C1aGit $RepoRoot @('rev-parse','HEAD') -GitPath $GitPath).Text.Trim()
     if ($head -cne $ExpectedCommitSha) { throw "HEAD 与 -ExpectedCommitSha 不一致（HEAD=$head）。" }
-    $status = (Invoke-TL1C1aGit $RepoRoot @('status','--porcelain=v1','--untracked-files=all')).Text
+    $status = (Invoke-TL1C1aGit $RepoRoot @('status','--porcelain=v1','--untracked-files=all') -GitPath $GitPath).Text
     if (-not [string]::IsNullOrWhiteSpace($status)) { throw '工作树不干净，拒绝构建或连接设备。' }
     foreach ($baseline in @($script:TL1C1aProducerBaseline, $script:TL1C1aT0Baseline)) {
-        $object = Invoke-TL1C1aGit $RepoRoot @('cat-file','-e',"$baseline^{commit}") -AllowFailure
+        $object = Invoke-TL1C1aGit $RepoRoot @('cat-file','-e',"$baseline^{commit}") -GitPath $GitPath -AllowFailure
         if ($object.ExitCode -ne 0) { throw "缺少受信 baseline commit object：$baseline。" }
     }
     foreach ($entry in $script:TL1C1aTrustedBlobs.GetEnumerator()) {
@@ -244,9 +262,9 @@ function Assert-TL1C1aGitProvenance {
         $baseline = if ($path.StartsWith('app/', [StringComparison]::Ordinal)) {
             $script:TL1C1aProducerBaseline
         } else { $script:TL1C1aT0Baseline }
-        $baselineBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$baseline`:$path")).Text.Trim()
-        $headBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$ExpectedCommitSha`:$path")).Text.Trim()
-        $workingBlob = (Invoke-TL1C1aGit $RepoRoot @('hash-object','--',(Join-Path $RepoRoot ($path -replace '/','\')))).Text.Trim()
+        $baselineBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$baseline`:$path") -GitPath $GitPath).Text.Trim()
+        $headBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$ExpectedCommitSha`:$path") -GitPath $GitPath).Text.Trim()
+        $workingBlob = (Invoke-TL1C1aGit $RepoRoot @('hash-object','--',(Join-Path $RepoRoot ($path -replace '/','\'))) -GitPath $GitPath).Text.Trim()
         if ($baselineBlob -cne $expectedBlob -or $headBlob -cne $expectedBlob -or $workingBlob -cne $expectedBlob) {
             throw "受信 blob 漂移：$path。"
         }

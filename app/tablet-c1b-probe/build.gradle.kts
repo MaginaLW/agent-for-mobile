@@ -21,7 +21,25 @@ private val C1B_AAPT2_RELATIVE_PATH = "build-tools/35.0.0/aapt2.exe"
 private val C1B_AAPT2_SHA256 =
     "sha256:cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564"
 
-private val c1bGitHead = providers.exec {
+private val c1bExpectedGitHead = providers.environmentVariable("TL1_C1B_EXPECTED_COMMIT_SHA")
+    .orNull
+    ?.also { value ->
+        check(Regex("[0-9a-f]{40}").matches(value)) {
+            "TL1_C1B_EXPECTED_COMMIT_SHA must be a full lowercase Git SHA"
+        }
+    }
+
+private val c1bIsolatedBuild = providers.gradleProperty("tabletC1bIsolatedBuild").orNull
+if (c1bExpectedGitHead != null) {
+    check(c1bIsolatedBuild == "true") {
+        "controlled T-L1 C1b builds require -PtabletC1bIsolatedBuild=true"
+    }
+}
+
+// The controlled runner has already verified the clean checkout through its held, absolute Git
+// trust binding. In that path Gradle consumes the exact SHA and must not resolve another `git`
+// executable through PATH. The fallback exists only for ordinary local/offline module builds.
+private val c1bGitHead = c1bExpectedGitHead ?: providers.exec {
     workingDir(rootProject.projectDir)
     commandLine("git", "rev-parse", "HEAD")
 }.standardOutput.asText.get().trim().also { value ->
@@ -29,17 +47,6 @@ private val c1bGitHead = providers.exec {
         "T-L1 C1b read-only artifact requires a full lowercase Git HEAD"
     }
 }
-
-private val c1bExpectedGitHead = providers.environmentVariable("TL1_C1B_EXPECTED_COMMIT_SHA")
-    .orNull
-    ?.also { value ->
-        check(Regex("[0-9a-f]{40}").matches(value)) {
-            "TL1_C1B_EXPECTED_COMMIT_SHA must be a full lowercase Git SHA"
-        }
-        check(value == c1bGitHead) {
-            "TL1_C1B_EXPECTED_COMMIT_SHA does not match the checked-out Git HEAD"
-        }
-    }
 
 private val c1bBuildChallenge = providers.environmentVariable("TABLET_C1B_BUILD_CHALLENGE")
     .orElse("offline-c1b-read-only-placeholder")
@@ -615,6 +622,11 @@ tasks.register("verifyTabletC1bReadOnlyArtifact") {
     outputs.upToDateWhen { false }
 
     doLast {
+        if (c1bExpectedGitHead != null) {
+            check(rootProject.findProject(":gateway") == null) {
+                "controlled T-L1 C1b builds must not configure the gateway project"
+            }
+        }
         val repositoryRoot = rootProject.projectDir.parentFile.canonicalFile
         fun repoRelative(file: File): String = repositoryRoot.toPath()
             .relativize(file.canonicalFile.toPath())
