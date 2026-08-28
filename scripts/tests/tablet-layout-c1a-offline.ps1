@@ -11,6 +11,7 @@ $RepoRoot = [IO.Path]::GetFullPath((Split-Path (Split-Path $PSScriptRoot -Parent
 $LibraryPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1a.ps1'
 $T0SidecarPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1a-t0-adb-sidecar.ps1'
 $T0SidecarCmdPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1a-t0-adb-sidecar.cmd'
+$DispatchLockPath = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
 $RunnerPath = Join-Path $RepoRoot 'scripts\run-tablet-layout-c1a.ps1'
 $ValidatorPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-observation-v2-validator.ps1'
 $PublicValidatorPath = Join-Path $RepoRoot 'scripts\validate-tablet-layout-observation-v2.ps1'
@@ -33,7 +34,9 @@ $script:RequiredCoverage = [string[]]@(
     'content_remote_shell_literal', 'content_t0_binary_stdin', 'content_stderr_empty', 'stdin_overall_deadline',
     'installed_host_stream_pre_post', 'installed_stderr_cap_after_eof', 'installed_path_closed', 'post_apk_binding',
     'control_json_types_exact', 'a11y_bound_wait_vivo', 'implementation_hash_postcheck',
-    'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate'
+    'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate',
+    'device_global_lease_before_adb', 'production_knownfolder_lock_path', 't0_device_lease_join',
+    'success_publish_after_lease_cleanup'
 )
 
 function Assert-True { param([bool]$Value,[string]$Message) if (-not $Value) { throw $Message } }
@@ -249,7 +252,9 @@ if($LASTEXITCODE-ne0-or-not(Test-Path -LiteralPath $script:FakeAdbShimPath -Path
 
 try {
     Test-Case '入口参数在任何设备访问前 fail closed' @(
-        'entry_absolute_adb','entry_full_sha','entry_explicit_provision'
+        'entry_absolute_adb','entry_full_sha','entry_explicit_provision',
+        'device_global_lease_before_adb','production_knownfolder_lock_path',
+        'success_publish_after_lease_cleanup'
     ) {
         $source = Get-Content -LiteralPath $RunnerPath -Raw
         Assert-True ($source -match 'if \(-not \$Provision\)') '缺少显式 Provision 门'
@@ -258,13 +263,67 @@ try {
         $result = & $PwshPath -NoProfile -File $RunnerPath -AdbPath '.\adb.exe' `
             -ExpectedCommitSha ('a' * 40) -Provision 2>&1
         Assert-True ($LASTEXITCODE -ne 0) 'relative adb 不得成功'
+
+        $tokens=$null;$parseErrors=$null
+        $ast=[Management.Automation.Language.Parser]::ParseFile(
+            $RunnerPath,[ref]$tokens,[ref]$parseErrors)
+        Assert-Equal @($parseErrors).Count 0 'C1a runner AST parse 失败'
+        $outerTry=@($ast.EndBlock.Statements|Where-Object{
+            $_ -is [Management.Automation.Language.TryStatementAst] -and $null-ne$_.Finally
+        })
+        Assert-Equal $outerTry.Count 1 'C1a runner 顶层 try/finally 数量漂移'
+        Assert-True ($null-ne$outerTry[0].Finally) 'C1a runner 缺少顶层 finally'
+        Assert-True ($outerTry[0].Finally.Extent.Text -match 'Close-DispatchLockLease\s+-Lease\s+\$deviceLease') `
+            '设备租约未在顶层 finally 释放'
+        Assert-True ($outerTry[0].Body.Extent.Text -notmatch '\bexit\s+(0|2)\b') `
+            'try 内 success/needs-user exit 会绕过 cleanup 失败状态'
+        Assert-True ($source -notmatch 'TestOnlyLocalAppDataPath') 'production runner 不得使用测试锁路径覆盖'
+        Assert-True ($source -match '\.\s+\$DispatchLockPath') 'production dispatch-lock 未加载'
+        Assert-True ($source -match 'Open-DispatchLock\s+-Path\s+\(Get-DispatchGlobalLockPath\)') `
+            '未使用无参 KnownFolder global device lease'
+        $openIndex=$source.IndexOf('$deviceLease = Open-DispatchLock',[StringComparison]::Ordinal)
+        $firstAdbIndex=$source.IndexOf('$serial = Get-TL1C1aSingleDevice',[StringComparison]::Ordinal)
+        $closeIndex=$source.IndexOf('Close-DispatchLockLease -Lease $deviceLease',[StringComparison]::Ordinal)
+        $publishIndex=$source.IndexOf('Write-TL1C1aBytesAtomic -RepoRoot $RepoRoot -Destination $sidecarPath',[StringComparison]::Ordinal)
+        Assert-True ($openIndex-ge0-and$firstAdbIndex-gt$openIndex) 'global lease 未先于任何 adb 建立'
+        Assert-True ($closeIndex-ge0-and$publishIndex-gt$closeIndex) 'success sidecar 未后置到 lease cleanup 之后'
+        Assert-True ($source -match 'if \(-not \(Close-DispatchLockLease[^\r\n]+\)\)') `
+            '设备租约仍被持有时未 fail closed'
+        Assert-True ($source -match '\$exitCode\s*=\s*1[\s\S]+?if \(\$exitCode -eq 0\)[\s\S]+?-Destination \$sidecarPath') `
+            'cleanup failure 与 success sidecar 发布门未绑定'
     }
 
     Test-Case 'clean-port provenance 精确钉六个 blob' @('head_clean_exact','clean_port_blob_attest') {
         Assert-Equal $script:TL1C1aTrustedBlobs.Count 6 '受信 blob 数漂移'
         foreach ($entry in $script:TL1C1aTrustedBlobs.GetEnumerator()) {
-            $working = (& git -C $RepoRoot hash-object -- (Join-Path $RepoRoot ($entry.Key -replace '/','\'))).Trim()
+            $working = Get-TL1C1aWorkingTextBlobSha1 `
+                -Path (Join-Path $RepoRoot ($entry.Key -replace '/','\')) `
+                -Operation "offline working blob $($entry.Key)"
             Assert-Equal $working $entry.Value "working blob 漂移 $($entry.Key)"
+        }
+        $lfPath = Join-Path $TestRoot 'working-blob-lf.txt'
+        $crlfPath = Join-Path $TestRoot 'working-blob-crlf.txt'
+        [IO.File]::WriteAllBytes($lfPath,
+            [Text.UTF8Encoding]::new($false).GetBytes("alpha`nbeta`n"))
+        [IO.File]::WriteAllBytes($crlfPath,
+            [Text.UTF8Encoding]::new($false).GetBytes("alpha`r`nbeta`r`n"))
+        $expectedCanonicalBlob = 'fbbee861521bd5355538b096fa3998541cd33909'
+        Assert-Equal (Get-TL1C1aWorkingTextBlobSha1 $lfPath) `
+            $expectedCanonicalBlob 'LF working blob SHA-1 漂移'
+        Assert-Equal (Get-TL1C1aWorkingTextBlobSha1 $crlfPath) `
+            $expectedCanonicalBlob 'CRLF 未与 LF 规范等价'
+        foreach ($invalid in @(
+            [pscustomobject]@{ Name='bom'; Bytes=[byte[]](0xef,0xbb,0xbf,0x61) },
+            [pscustomobject]@{ Name='nul'; Bytes=[byte[]](0x61,0x00,0x62) },
+            [pscustomobject]@{ Name='invalid-utf8'; Bytes=[byte[]](0xc3,0x28) },
+            [pscustomobject]@{ Name='isolated-cr'; Bytes=[byte[]](0x61,0x0d,0x62) }
+        )) {
+            $invalidPath = Join-Path $TestRoot ("working-blob-$($invalid.Name).txt")
+            [IO.File]::WriteAllBytes($invalidPath, $invalid.Bytes)
+            $rejected = $false
+            try { [void](Get-TL1C1aWorkingTextBlobSha1 $invalidPath) }
+            catch { $rejected = $true }
+            Assert-True $rejected "working blob 未拒绝 $($invalid.Name)"
         }
         $source = Get-Content -LiteralPath $LibraryPath -Raw
         Assert-True ($source -notmatch 'merge-base') 'clean-port 不得伪称 ancestor'
@@ -540,18 +599,43 @@ try {
         Assert-True (@([regex]::Matches($source,'Test-TL1C1aDeviceBinding')).Count -eq 2) '设备绑定不是前后两次'
     }
 
-    Test-Case 'T0 sidecar 缓存 devices 且只转发固定 -s 查询' @('post_discovery_serial','argv_allowlist','t0_sidecar_stderr_empty') {
+    Test-Case 'T0 sidecar 缓存 devices 且只转发固定 -s 查询' @(
+        'post_discovery_serial','argv_allowlist','t0_sidecar_stderr_empty','t0_device_lease_join'
+    ) {
+        $runnerSource=Get-Content -LiteralPath $RunnerPath -Raw
+        Assert-True ($runnerSource -match 'TL1_C1A_DISPATCH_LOCK_LIBRARY\s*=\s*\$DispatchLockPath') `
+            'fresh T0 未绑定 production dispatch-lock library'
+        Assert-True ($runnerSource -match 'AGENT_MOBILE_DEVICE_LOCK_LEASE\s*=\s*\[string\]\$deviceLease\.LeaseToken') `
+            'fresh T0 未传父进程 device lease token'
         $fake=New-FakeTools
         $prior=@(
             $env:TL1_C1A_REAL_ADB_PATH,$env:TL1_C1A_BOUND_SERIAL,$env:TL1_C1A_T0_LIBRARY_PATH,
             $env:TABLET_C1A_FAKE_STATE,$env:TL1_C1A_PWSH_PATH,$env:TL1_C1A_T0_SIDECAR_SCRIPT,
-            $env:TABLET_C1A_FAKE_QUERY_STDERR
+            $env:TABLET_C1A_FAKE_QUERY_STDERR,$env:TL1_C1A_DISPATCH_LOCK_LIBRARY,
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE
         )
+        $lease=$null
         try{
+            . $DispatchLockPath
+            $lockRoot=Join-Path $fake.State 'localappdata';[void](New-Item -ItemType Directory -Path $lockRoot)
+            $testLockPath=Join-Path $lockRoot 'agent-for-mobile\locks\device-v1.lock'
+            $testDispatchLockPath=Join-Path $fake.State 'dispatch-lock-test-double.ps1'
+            $escapedTestLockPath=$testLockPath.Replace("'","''")
+            $testDispatchSource=(Get-Content -LiteralPath $DispatchLockPath -Raw)+@"
+
+function Get-DispatchGlobalLockPath {
+    return Initialize-DispatchLockParent -Path '$escapedTestLockPath'
+}
+"@
+            [IO.File]::WriteAllText($testDispatchLockPath,$testDispatchSource,[Text.UTF8Encoding]::new($false))
+            . $testDispatchLockPath
+            $lease=Open-DispatchLock -Path (Get-DispatchGlobalLockPath) -Owner 'c1a-offline-t0-sidecar' -LeaseToken ''
             $env:TL1_C1A_REAL_ADB_PATH=$fake.Adb;$env:TL1_C1A_BOUND_SERIAL='FAKE123'
             $env:TL1_C1A_T0_LIBRARY_PATH=Join-Path $RepoRoot 'scripts\lib\tablet-intake.ps1'
             $env:TABLET_C1A_FAKE_STATE=$fake.State
             $env:TL1_C1A_PWSH_PATH=$PwshPath;$env:TL1_C1A_T0_SIDECAR_SCRIPT=$T0SidecarPath
+            $env:TL1_C1A_DISPATCH_LOCK_LIBRARY=$testDispatchLockPath
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE=[string]$lease.LeaseToken
             $devices=(Invoke-TL1C1aProcess -FilePath $T0SidecarCmdPath -Arguments @('devices') -Operation fake-t0-sidecar).Text
             Assert-True ($devices -match 'FAKE123') 'sidecar cached devices 错误'
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $fake.State 'adb-argv.jsonl'))) 'cached devices 误触真实 adb'
@@ -564,10 +648,13 @@ try {
             & $PwshPath -NoProfile -File $T0SidecarPath -s FAKE123 shell input tap 1 1 2>$null | Out-Null
             Assert-True ($LASTEXITCODE -ne 0) 'sidecar 放过 input'
         }finally{
+            if($null-ne$lease){[void](Close-DispatchLockLease -Lease $lease)}
             $env:TL1_C1A_REAL_ADB_PATH=$prior[0];$env:TL1_C1A_BOUND_SERIAL=$prior[1]
             $env:TL1_C1A_T0_LIBRARY_PATH=$prior[2];$env:TABLET_C1A_FAKE_STATE=$prior[3]
             $env:TL1_C1A_PWSH_PATH=$prior[4];$env:TL1_C1A_T0_SIDECAR_SCRIPT=$prior[5]
-            $env:TABLET_C1A_FAKE_QUERY_STDERR=$prior[6]
+            $env:TABLET_C1A_FAKE_QUERY_STDERR=$prior[6];$env:TL1_C1A_DISPATCH_LOCK_LIBRARY=$prior[7]
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE=$prior[8]
+            . $DispatchLockPath
         }
     }
 

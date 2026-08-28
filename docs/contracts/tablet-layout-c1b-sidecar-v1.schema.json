@@ -3,16 +3,19 @@
   "$id": "https://agent-for-mobile.local/contracts/tablet-layout-c1b-sidecar-v1.schema.json",
   "title": "Tablet T-L1 C1b v1 independently bound trusted-runtime sidecar",
   "type": "object", "additionalProperties": false,
-  "required": ["schema","run_id","completed_at_utc","expected_commit_sha","capture_scope","provenance_strategy","static_read_only_policy_version","implementation_hashes","transport","apk","device","upstream_t0","provider","capture","artifacts","read_only_counts","attestations","claims","cleanup"],
+  "required": ["schema","run_id","completed_at_utc","expected_commit_sha","capture_scope","provenance_strategy","static_read_only_policy_version","implementation_hashes","build_environment","transport","apk","device","upstream_t0","provider","capture","artifacts","read_only_counts","read_only_proof","attestations","claims","cleanup"],
   "properties": {
     "schema": { "const": "tablet-layout-c1b-sidecar/v1" }, "run_id": { "$ref": "#/$defs/safeId" },
     "completed_at_utc": { "$ref": "#/$defs/timestamp" }, "expected_commit_sha": { "$ref": "#/$defs/gitSha" },
     "capture_scope": { "const": "pure_a11y" }, "provenance_strategy": { "const": "clean_content_provider_independently_attested" },
-    "static_read_only_policy_version": { "const": "tl1-c1b-read-only/v1" },
-    "implementation_hashes": { "$ref": "#/$defs/implementationHashes" }, "transport": { "$ref": "#/$defs/transport" }, "apk": { "$ref": "#/$defs/apk" },
+    "static_read_only_policy_version": { "const": "tl1-c1b-read-only/v2" },
+    "implementation_hashes": { "$ref": "#/$defs/implementationHashes" },
+    "build_environment": { "$ref": "#/$defs/buildEnvironment" },
+    "transport": { "$ref": "#/$defs/transport" }, "apk": { "$ref": "#/$defs/apk" },
     "device": { "$ref": "#/$defs/device" }, "upstream_t0": { "$ref": "#/$defs/upstreamT0" },
     "provider": { "$ref": "#/$defs/provider" }, "capture": { "$ref": "#/$defs/capture" },
     "artifacts": { "$ref": "#/$defs/artifacts" }, "read_only_counts": { "$ref": "#/$defs/readOnlyCounts" },
+    "read_only_proof": { "$ref": "#/$defs/readOnlyProof" },
     "attestations": { "$ref": "#/$defs/attestations" }, "claims": { "$ref": "#/$defs/claims" },
     "cleanup": { "$ref": "#/$defs/cleanup" }
   },
@@ -23,32 +26,260 @@
     "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "timestamp": { "type": "string", "minLength": 28, "maxLength": 28, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$" },
     "relativeJsonPath": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]{0,199}\\.json$" },
+    "relativeArtifactPath": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\\.(?:json|apk|xml)$" },
     "implementationHashes": {
       "type": "object", "additionalProperties": false,
-      "required": ["runner_sha256","c1b_library_sha256","c1a_low_level_library_sha256","t0_runner_sha256","t0_library_sha256","t0_adb_sidecar_cmd_sha256","t0_adb_sidecar_script_sha256","validator_sha256","native_path_validator_sha256","observation_schema_sha256","sidecar_schema_sha256","android_model_sha256","android_probe_sha256","android_source_sha256","android_provider_sha256","android_protocol_sha256","android_coordinator_sha256","android_controller_sha256","android_context_sha256","android_pending_registry_sha256","debug_manifest_sha256","gateway_build_gradle_sha256"],
+      "required": ["runner_sha256","c1b_library_sha256","c1b_read_only_library_sha256","c1b_artifact_proof_library_sha256","c1b_aapt2_library_sha256","c1b_build_environment_library_sha256","c1b_adb_server_library_sha256","dispatch_lock_library_sha256","c1a_low_level_library_sha256","t0_runner_sha256","t0_library_sha256","t0_adb_sidecar_cmd_sha256","t0_adb_sidecar_script_sha256","validator_sha256","native_path_validator_sha256","observation_schema_sha256","sidecar_schema_sha256","artifact_proof_schema_sha256","android_layout_probe_sha256","android_layout_probe_model_sha256","android_model_sha256","android_probe_sha256","android_source_sha256","android_provider_sha256","android_protocol_sha256","android_coordinator_sha256","android_controller_sha256","android_context_sha256","android_pending_registry_sha256","app_build_gradle_sha256","app_settings_gradle_sha256","app_gradle_properties_sha256","app_gradlew_bat_sha256","app_gradle_wrapper_jar_sha256","app_gradle_wrapper_properties_sha256","app_gradle_verification_metadata_sha256","probe_build_gradle_sha256","probe_manifest_sha256","probe_service_sha256","probe_a11y_config_sha256","probe_strings_sha256"],
       "properties": {
         "runner_sha256": { "$ref": "#/$defs/hash" }, "c1b_library_sha256": { "$ref": "#/$defs/hash" },
+        "c1b_read_only_library_sha256": { "$ref": "#/$defs/hash" }, "c1b_artifact_proof_library_sha256": { "$ref": "#/$defs/hash" },
+        "c1b_aapt2_library_sha256": { "$ref": "#/$defs/hash" },
+        "c1b_build_environment_library_sha256": { "$ref": "#/$defs/hash" },
+        "c1b_adb_server_library_sha256": { "$ref": "#/$defs/hash" },
+        "dispatch_lock_library_sha256": { "$ref": "#/$defs/hash" },
         "c1a_low_level_library_sha256": { "$ref": "#/$defs/hash" }, "t0_runner_sha256": { "$ref": "#/$defs/hash" },
         "t0_library_sha256": { "$ref": "#/$defs/hash" }, "t0_adb_sidecar_cmd_sha256": { "$ref": "#/$defs/hash" },
         "t0_adb_sidecar_script_sha256": { "$ref": "#/$defs/hash" }, "validator_sha256": { "$ref": "#/$defs/hash" }, "native_path_validator_sha256": { "$ref": "#/$defs/hash" },
         "observation_schema_sha256": { "$ref": "#/$defs/hash" }, "sidecar_schema_sha256": { "$ref": "#/$defs/hash" },
+        "artifact_proof_schema_sha256": { "$ref": "#/$defs/hash" },
+        "android_layout_probe_sha256": { "$ref": "#/$defs/hash" }, "android_layout_probe_model_sha256": { "$ref": "#/$defs/hash" },
         "android_model_sha256": { "$ref": "#/$defs/hash" }, "android_probe_sha256": { "$ref": "#/$defs/hash" },
         "android_source_sha256": { "$ref": "#/$defs/hash" }, "android_provider_sha256": { "$ref": "#/$defs/hash" },
         "android_protocol_sha256": { "$ref": "#/$defs/hash" }, "android_coordinator_sha256": { "$ref": "#/$defs/hash" },
         "android_controller_sha256": { "$ref": "#/$defs/hash" }, "android_context_sha256": { "$ref": "#/$defs/hash" },
-        "android_pending_registry_sha256": { "$ref": "#/$defs/hash" }, "debug_manifest_sha256": { "$ref": "#/$defs/hash" },
-        "gateway_build_gradle_sha256": { "$ref": "#/$defs/hash" }
+        "android_pending_registry_sha256": { "$ref": "#/$defs/hash" },
+        "app_build_gradle_sha256": { "$ref": "#/$defs/hash" }, "app_settings_gradle_sha256": { "$ref": "#/$defs/hash" },
+        "app_gradle_properties_sha256": { "$ref": "#/$defs/hash" }, "app_gradlew_bat_sha256": { "$ref": "#/$defs/hash" },
+        "app_gradle_wrapper_jar_sha256": { "$ref": "#/$defs/hash" }, "app_gradle_wrapper_properties_sha256": { "$ref": "#/$defs/hash" },
+        "app_gradle_verification_metadata_sha256": { "$ref": "#/$defs/hash" }, "probe_build_gradle_sha256": { "$ref": "#/$defs/hash" },
+        "probe_manifest_sha256": { "$ref": "#/$defs/hash" }, "probe_service_sha256": { "$ref": "#/$defs/hash" },
+        "probe_a11y_config_sha256": { "$ref": "#/$defs/hash" }, "probe_strings_sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "buildEnvironment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","platform","threat_boundary","java_home_explicit","gradle_home_explicit","gradle_user_home_fresh","project_cache_fresh","kotlin_runtime_fresh","module_build_output_fresh","inherited_injection_variables_absent","repo_local_properties_empty_guarded","repo_implicit_build_logic_absent","path_chain_directories_deny_rename","concurrency_guard","recovery_journal","debug_keystore","host_process","repository_inputs","jdk","git","android_sdk","gradle"],
+      "properties": {
+        "schema": { "const": "tablet-layout-c1b-build-environment-trust/v1" },
+        "platform": { "const": "windows" },
+        "threat_boundary": { "const": "filesystem-and-environment integrity after guard establishment; excludes same-user process-memory injection, pre-existing writable handles/mappings, ACL/ownership takeover, and same-user concurrent mutation of all intentionally writable fresh build working state (including dependency/project/Kotlin caches, process temp, Gradle daemon/native/transform state, and module outputs) during Gradle execution and the post-exit-to-final-guard window" },
+        "java_home_explicit": { "const": true }, "gradle_home_explicit": { "const": true },
+        "gradle_user_home_fresh": { "const": true }, "project_cache_fresh": { "const": true },
+        "kotlin_runtime_fresh": { "const": true }, "module_build_output_fresh": { "const": true },
+        "inherited_injection_variables_absent": { "const": true },
+        "repo_local_properties_empty_guarded": { "const": true },
+        "repo_implicit_build_logic_absent": { "const": true },
+        "path_chain_directories_deny_rename": { "const": true },
+        "concurrency_guard": { "$ref": "#/$defs/buildEnvironmentConcurrency" },
+        "recovery_journal": { "$ref": "#/$defs/buildEnvironmentRecovery" },
+        "debug_keystore": { "$ref": "#/$defs/buildEnvironmentDebugKeystore" },
+        "host_process": { "$ref": "#/$defs/buildEnvironmentHostProcess" },
+        "repository_inputs": { "$ref": "#/$defs/buildEnvironmentRepositoryInputs" },
+        "jdk": { "$ref": "#/$defs/buildEnvironmentJdk" },
+        "git": { "$ref": "#/$defs/buildEnvironmentGit" },
+        "android_sdk": { "$ref": "#/$defs/buildEnvironmentAndroidSdk" },
+        "gradle": { "$ref": "#/$defs/buildEnvironmentGradle" }
+      }
+    },
+    "buildEnvironmentConcurrency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scope","canonical_trust_tuple_sha256","named_mutex_held"],
+      "properties": {
+        "scope": { "const": "windows-logon-session-all-c1b-builds" },
+        "canonical_trust_tuple_sha256": { "$ref": "#/$defs/hash" },
+        "named_mutex_held": { "const": true }
+      }
+    },
+    "buildEnvironmentRecovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","directory_entry_count","sha256","file_deny_write_delete"],
+      "properties": {
+        "schema": { "const": "tablet-layout-c1b-build-environment-acl-recovery/v1" },
+        "directory_entry_count": { "type": "integer", "minimum": 1, "maximum": 20000 },
+        "sha256": { "$ref": "#/$defs/hash" }, "file_deny_write_delete": { "const": true }
+      }
+    },
+    "buildEnvironmentDebugKeystore": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sha256","source_ordinary_single_link_guarded","isolated_copy_equal","isolated_user_home_other_config_absent","files_deny_write_delete","directories_acl_protected"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/hash" },
+        "source_ordinary_single_link_guarded": { "const": true }, "isolated_copy_equal": { "const": true },
+        "isolated_user_home_other_config_absent": { "const": true },
+        "files_deny_write_delete": { "const": true }, "directories_acl_protected": { "const": true }
+      }
+    },
+    "buildEnvironmentHostProcess": {
+      "type": "object", "additionalProperties": false,
+      "description": "These launcher claims apply only to the runner's direct GradleMain and ApkSignerTool launches; they do not claim that T0, ADB, aapt2, or descendant processes never use cmd.exe.",
+      "required": ["windows_system_directory_api_trust_root","host_launcher_cmd_not_executed","runner_direct_launcher_is_java","comspec_is_os_trust_root","wrapper_not_executed","gradle_entrypoint","minimal_path","fresh_process_temp"],
+      "properties": {
+        "windows_system_directory_api_trust_root": { "const": true },
+        "host_launcher_cmd_not_executed": { "const": true, "description": "The runner launches Gradle and APK signer directly with java.exe rather than cmd.exe." },
+        "runner_direct_launcher_is_java": { "const": true, "description": "The direct host launchers for GradleMain and ApkSignerTool are the guarded java.exe." },
+        "comspec_is_os_trust_root": { "const": true }, "wrapper_not_executed": { "const": true },
+        "gradle_entrypoint": { "const": "org.gradle.launcher.GradleMain" },
+        "minimal_path": { "const": true }, "fresh_process_temp": { "const": true }
+      }
+    },
+    "buildEnvironmentRepositoryInputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file_count","catalog_sha256","directory_root_count","protected_directory_count","files_deny_write_delete","directories_acl_protected"],
+      "properties": {
+        "file_count": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "catalog_sha256": { "$ref": "#/$defs/hash" },
+        "directory_root_count": { "const": 3 },
+        "protected_directory_count": { "type": "integer", "minimum": 3, "maximum": 2000 },
+        "files_deny_write_delete": { "const": true }, "directories_acl_protected": { "const": true }
+      }
+    },
+    "buildEnvironmentJdk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["vendor","version","archive_sha256","file_count","catalog_sha256","java_sha256","jvm_sha256","release_sha256","modules_sha256","signature_status","signature_subject","signature_certificate_sha256","tree_files_deny_write_delete","tree_directories_acl_protected"],
+      "properties": {
+        "vendor": { "const": "Oracle Corporation" }, "version": { "const": "21.0.5" },
+        "archive_sha256": { "const": "sha256:6cce98ce38b86737c63912fd1df9ecfee1fe209ab08c0e1e16500f054e67de48" },
+        "file_count": { "const": 418 },
+        "catalog_sha256": { "const": "sha256:6426cb4a162d91e6b9069014d9ab9e3e7ff79635fe85e66b03e8e1b1c3265ca9" },
+        "java_sha256": { "const": "sha256:e66f719f6cfedc986d5f30012793d61ee4b26673de00cb9d28353a1b8833b496" },
+        "jvm_sha256": { "const": "sha256:d56cf961f03e1af960b390103b3f03e27faf324a1ffb801e84155b4386dc47a6" },
+        "release_sha256": { "const": "sha256:66815dfd67d03fa9f48a4268296ff18baf3bfbb287b1898f00acd17dc55a4bde" },
+        "modules_sha256": { "const": "sha256:9372088036cfd572a9636e0df08960ac8d4de2aa0c772e08608c0abf50f13edd" },
+        "signature_status": { "const": "Valid" },
+        "signature_subject": { "const": "CN=\"Oracle America, Inc.\", O=\"Oracle America, Inc.\", L=Redwood City, S=California, C=US" },
+        "signature_certificate_sha256": { "const": "sha256:4b59d847d7187ed910590d52798fd7e6fcb13396092fdbc1fe43b2311aab6eeb" },
+        "tree_files_deny_write_delete": { "const": true }, "tree_directories_acl_protected": { "const": true }
+      }
+    },
+    "buildEnvironmentGit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version","file_count","identity_count","internal_hardlink_group_count","catalog_sha256","cmd_git_sha256","mingw64_bin_git_sha256","mingw64_libexec_git_core_git_sha256","libcurl_sha256","libssl_sha256","libcrypto_sha256","signature_status","signature_subject","signature_certificate_sha256","child_environment_cleared","minimal_path","system_and_global_config_disabled","hardlink_topology_internal","tree_files_deny_write_delete","tree_directories_acl_protected"],
+      "properties": {
+        "version": { "const": "2.55.0.windows.3" },
+        "file_count": { "const": 9576 }, "identity_count": { "const": 9489 },
+        "internal_hardlink_group_count": { "const": 85 },
+        "catalog_sha256": { "const": "sha256:4c5e585b10f371f181b42b60948a883409c0efda910b869ff98c2e5604267458" },
+        "cmd_git_sha256": { "const": "sha256:7b7971dd13f0c3a284e538601f2f9770b3a87dfaccb5fb52d68141c67ed22364" },
+        "mingw64_bin_git_sha256": { "const": "sha256:1a0043555d254618f2d56c936c3d9a1fbfb878bc878416a133c346bc7835eda9" },
+        "mingw64_libexec_git_core_git_sha256": { "const": "sha256:1a0043555d254618f2d56c936c3d9a1fbfb878bc878416a133c346bc7835eda9" },
+        "libcurl_sha256": { "const": "sha256:799f7eefc3c9da9c80ec5aea221a02b3afe2c5350c6b45fd5a4865e7e2d4e574" },
+        "libssl_sha256": { "const": "sha256:feb5b300e0b3a021fed481178f3d66896426576d4d13b85a304d2a3809b25bfd" },
+        "libcrypto_sha256": { "const": "sha256:0330b5f558996f297d687e1a2b2fcc2cacf883b16baef74aaef35285d7c1231c" },
+        "signature_status": { "const": "Valid" },
+        "signature_subject": { "const": "CN=Johannes Schindelin, O=Johannes Schindelin, L=Bruehl, C=DE" },
+        "signature_certificate_sha256": { "const": "sha256:1668941fff36fec818a596ffde6589f34daa6c6434069e60f356b7755f084e63" },
+        "child_environment_cleared": { "const": true }, "minimal_path": { "const": true },
+        "system_and_global_config_disabled": { "const": true },
+        "hardlink_topology_internal": { "const": true },
+        "tree_files_deny_write_delete": { "const": true },
+        "tree_directories_acl_protected": { "const": true }
+      }
+    },
+    "buildEnvironmentAndroidSdk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["build_tools","platform","platform_tools","isolated","source_trees_files_deny_write_delete","child_uses_only_isolated_sdk","tree_files_deny_write_delete","tree_directories_acl_protected"],
+      "properties": {
+        "build_tools": { "$ref": "#/$defs/buildEnvironmentAndroidBuildTools" },
+        "platform": { "$ref": "#/$defs/buildEnvironmentAndroidPlatform" },
+        "platform_tools": { "$ref": "#/$defs/buildEnvironmentAndroidPlatformTools" },
+        "isolated": { "$ref": "#/$defs/buildEnvironmentAndroidIsolated" },
+        "source_trees_files_deny_write_delete": { "const": true },
+        "child_uses_only_isolated_sdk": { "const": true },
+        "tree_files_deny_write_delete": { "const": true },
+        "tree_directories_acl_protected": { "const": true }
+      }
+    },
+    "buildEnvironmentAndroidBuildTools": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version","file_count","catalog_sha256","source_properties_sha256","package_xml_sha256","apksigner_jar_sha256"],
+      "properties": {
+        "version": { "const": "35.0.0" }, "file_count": { "const": 170 },
+        "catalog_sha256": { "const": "sha256:a832390563b10614954d13f682e2848bd4d9815480c6fe3ef8a42361a356e782" },
+        "source_properties_sha256": { "const": "sha256:084847d70abc41284feee7ea717e7c92eab0d1be05f048c27445a359cfe109d8" },
+        "package_xml_sha256": { "const": "sha256:43b68163de67b4ef1816059a6934d819fa951688433bc2fac849b825eeeaaf3c" },
+        "apksigner_jar_sha256": { "const": "sha256:00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7" }
+      }
+    },
+    "buildEnvironmentAndroidPlatform": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version","file_count","catalog_sha256","android_jar_sha256","source_properties_sha256","package_xml_sha256","framework_aidl_sha256","core_for_system_modules_jar_sha256"],
+      "properties": {
+        "version": { "const": "android-35" }, "file_count": { "const": 11163 },
+        "catalog_sha256": { "const": "sha256:33a80cd529f09e178d1202351e8cf14d6ab2cb21b931b085194a5d7fe3156248" },
+        "android_jar_sha256": { "const": "sha256:4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b" },
+        "source_properties_sha256": { "const": "sha256:2c3764446f335ad2cc44383a0360fe247620b7c774ec100d5087771ac8ed3b28" },
+        "package_xml_sha256": { "const": "sha256:d1d333d5cf7f7be677871ab043cdd10665bd1636cdb7d8d173561ea0e4554435" },
+        "framework_aidl_sha256": { "const": "sha256:732ec4d49719b7473549d2010d37380946b52bfc2600b5f7fcecf549017e88b2" },
+        "core_for_system_modules_jar_sha256": { "const": "sha256:4279b723c69c851cea46a36d75ffd294649ec041176c0b786bafe62d1d1af1a6" }
+      }
+    },
+    "buildEnvironmentAndroidPlatformTools": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version","file_count","catalog_sha256","source_properties_sha256","package_xml_sha256"],
+      "properties": {
+        "version": { "const": "37.0.1" }, "file_count": { "const": 15 },
+        "catalog_sha256": { "const": "sha256:98c794076c786c9d7f921d419ae87f5c8a93601e5f149a8dbcb3be1570a3866b" },
+        "source_properties_sha256": { "const": "sha256:2dccd788c0234d8cf7f7457377e57f57527a86a629c6ed54feb8af0f549dac38" },
+        "package_xml_sha256": { "const": "sha256:55d46ccebf3bba4ad4349d3747643bb0ed38aac843ce6c87782b009328f73e1e" }
+      }
+    },
+    "buildEnvironmentAndroidIsolated": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file_count","catalog_sha256","package_roots","dot_known_packages_absent","tools_package_xml_absent","emulator_package_xml_absent"],
+      "properties": {
+        "file_count": { "const": 11348 },
+        "catalog_sha256": { "const": "sha256:09a7cb46fef3c2b505330e4dfa09abbe4ba739412e8450e97b3458ddbaf473d8" },
+        "package_roots": {
+          "type": "array", "minItems": 3, "maxItems": 3,
+          "prefixItems": [{ "const": "build-tools/35.0.0" },{ "const": "platform-tools" },{ "const": "platforms/android-35" }],
+          "items": false
+        },
+        "dot_known_packages_absent": { "const": true },
+        "tools_package_xml_absent": { "const": true },
+        "emulator_package_xml_absent": { "const": true }
+      }
+    },
+    "buildEnvironmentGradle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version","distribution","file_count","catalog_sha256","wrapper_not_executed","entrypoint","cli_main_jar","cli_main_jar_sha256","instrumentation_agent_sha256","tree_files_deny_write_delete","tree_directories_acl_protected","init_d_acl_protected"],
+      "properties": {
+        "version": { "const": "8.9" }, "distribution": { "const": "gradle-8.9-bin" },
+        "file_count": { "const": 299 },
+        "catalog_sha256": { "const": "sha256:d0974b974d9471723cccf083f59e8772448b5bb6672f479bddd63897ba665189" },
+        "wrapper_not_executed": { "const": true }, "entrypoint": { "const": "org.gradle.launcher.GradleMain" },
+        "cli_main_jar": { "const": "lib/gradle-gradle-cli-main-8.9.jar" },
+        "cli_main_jar_sha256": { "const": "sha256:3a4ccf05dec4dda1a5bc44b6639542b4fb9100b78b6d610517db16c6bbe26137" },
+        "instrumentation_agent_sha256": { "const": "sha256:56e23876af24d37a597a820d4e6f866dceac8ab5f1c3450a8132c31c7ce0f6c0" },
+        "tree_files_deny_write_delete": { "const": true },
+        "tree_directories_acl_protected": { "const": true }, "init_d_acl_protected": { "const": true }
       }
     },
     "transport": {
       "type": "object", "additionalProperties": false,
-      "required": ["trust_root","canonical_relative_path","sdk_roots_equal","executable_sha256_before","executable_sha256_after","version_output_sha256_before","version_output_sha256_after","protocol_version","package_version","installed_as_canonical"],
+      "required": ["trust_root","canonical_relative_path","sdk_roots_equal","executable_sha256_before","executable_sha256_after","version_output_sha256_before","version_output_sha256_after","signature_status","signature_subject","signature_certificate_sha256_before","signature_certificate_sha256_after","protocol_version","package_version","installed_as_canonical","server_schema","server_mode","server_socket","server_executable_sha256","job_kill_on_close","listener_pid_verified","server_status_executable_path_verified","server_ready_verified","server_cleanup_verified","private_kill_server_requested","graceful_exit_verified","job_fallback_used","port_rebind_verified","default_server_used"],
       "properties": {
         "trust_root": { "const": "android_sdk_platform_tools" }, "canonical_relative_path": { "const": "platform-tools/adb.exe" },
         "sdk_roots_equal": { "const": true }, "executable_sha256_before": { "$ref": "#/$defs/hash" }, "executable_sha256_after": { "$ref": "#/$defs/hash" },
         "version_output_sha256_before": { "$ref": "#/$defs/hash" }, "version_output_sha256_after": { "$ref": "#/$defs/hash" },
+        "signature_status": { "const": "Valid" },
+        "signature_subject": { "const": "CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US" },
+        "signature_certificate_sha256_before": { "$ref": "#/$defs/hash" }, "signature_certificate_sha256_after": { "$ref": "#/$defs/hash" },
         "protocol_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }, "package_version": { "$ref": "#/$defs/safeVersion" },
-        "installed_as_canonical": { "const": true }
+        "installed_as_canonical": { "const": true },
+        "server_schema": { "const": "tablet-layout-c1b-private-adb-server/v1" },
+        "server_mode": { "const": "private_nodaemon" },
+        "server_socket": { "type": "string", "pattern": "^tcp:127\\.0\\.0\\.1:(?:491(?:5[2-9]|[6-9][0-9])|49[2-9][0-9]{2}|5[0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$", "minLength": 19, "maxLength": 19 },
+        "server_executable_sha256": { "$ref": "#/$defs/hash" },
+        "job_kill_on_close": { "const": true },
+        "listener_pid_verified": { "const": true },
+        "server_status_executable_path_verified": { "const": true },
+        "server_ready_verified": { "const": true },
+        "server_cleanup_verified": { "const": true },
+        "private_kill_server_requested": { "const": true },
+        "graceful_exit_verified": { "type": "boolean" },
+        "job_fallback_used": { "type": "boolean" },
+        "port_rebind_verified": { "const": true },
+        "default_server_used": { "const": false }
       }
     },
     "apk": {
@@ -107,8 +338,29 @@
         "c1_requests_accepted": { "const": 1 }, "c2_requests_accepted": { "const": 1 }, "result_read_count": { "const": 1 }, "recapture_count": { "const": 0 }
       }
     },
-    "artifact": { "type": "object", "additionalProperties": false, "required": ["relative_path","sha256"], "properties": { "relative_path": { "$ref": "#/$defs/relativeJsonPath" }, "sha256": { "$ref": "#/$defs/hash" } } },
-    "artifacts": { "type": "object", "additionalProperties": false, "required": ["upstream_t0","observation","validation"], "properties": { "upstream_t0": { "$ref": "#/$defs/artifact" }, "observation": { "$ref": "#/$defs/artifact" }, "validation": { "$ref": "#/$defs/artifact" } } },
+    "artifact": { "type": "object", "additionalProperties": false, "required": ["relative_path","sha256"], "properties": { "relative_path": { "$ref": "#/$defs/relativeArtifactPath" }, "sha256": { "$ref": "#/$defs/hash" } } },
+    "artifacts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["upstream_t0","observation","validation","artifact_proof","debug_apk","release_apk","debug_merged_manifest","release_merged_manifest"],
+      "properties": {
+        "upstream_t0": { "$ref": "#/$defs/artifact" }, "observation": { "$ref": "#/$defs/artifact" }, "validation": { "$ref": "#/$defs/artifact" },
+        "artifact_proof": { "$ref": "#/$defs/artifact" }, "debug_apk": { "$ref": "#/$defs/artifact" }, "release_apk": { "$ref": "#/$defs/artifact" },
+        "debug_merged_manifest": { "$ref": "#/$defs/artifact" }, "release_merged_manifest": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "aapt2Trust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","trust_root","build_tools_version","canonical_relative_path","sdk_roots_equal","executable_sha256","signature_status","signature_subject","signature_certificate_sha256"],
+      "properties": {
+        "schema": { "const": "tablet-layout-c1b-aapt2-trust/v1" },
+        "trust_root": { "const": "android_sdk_build_tools" }, "build_tools_version": { "const": "35.0.0" },
+        "canonical_relative_path": { "const": "build-tools/35.0.0/aapt2.exe" }, "sdk_roots_equal": { "const": true },
+        "executable_sha256": { "const": "sha256:cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564" },
+        "signature_status": { "const": "Valid" },
+        "signature_subject": { "const": "CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US" },
+        "signature_certificate_sha256": { "const": "sha256:7d3d117664f121e592ef897973ef9c159150e3d736326e9cd2755f71e0febc0c" }
+      }
+    },
     "readOnlyCounts": {
       "type": "object", "additionalProperties": false,
       "required": ["a11y_frame_capture_count","recapture_count","display_screenshot_call_count","window_screenshot_call_count","ocr_invocation_count","action_call_count","gesture_call_count","input_call_count","settings_mutation_count","target_app_start_count","mcp_call_count","dispatch_call_count"],
@@ -119,10 +371,36 @@
         "target_app_start_count": { "const": 0 }, "mcp_call_count": { "const": 0 }, "dispatch_call_count": { "const": 0 }
       }
     },
+    "readOnlyProof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","policy_version","artifact_module","artifact_proof_relative_path","artifact_proof_sha256","runner_ast_sha256","t0_runner_ast_sha256","t0_library_ast_sha256","host_forbidden_command_count","axml_parser","packaged_axml_exact_verified","dependency_artifact_catalog_sha256","debug_apk_sha256","debug_merged_manifest_sha256","debug_packaged_manifest_sha256","debug_packaged_manifest_axml_dump_sha256","debug_packaged_a11y_axml_dump_sha256","debug_dex_entry_count","debug_dex_sha256","debug_dex_catalog_sha256","release_apk_sha256","release_merged_manifest_sha256","release_packaged_manifest_sha256","release_packaged_manifest_axml_dump_sha256","release_packaged_a11y_axml_dump_sha256","release_dex_entry_count","release_dex_sha256","release_dex_catalog_sha256","artifact_forbidden_match_count","manifest_mutating_capability_count","manifest_extra_component_count","dependency_allowlist_verified"],
+      "properties": {
+        "schema": { "const": "tablet-layout-c1b-read-only-proof/v1" }, "policy_version": { "const": "tl1-c1b-read-only/v2" },
+        "artifact_module": { "const": ":tablet-c1b-probe" },
+        "artifact_proof_relative_path": { "const": "app/tablet-c1b-probe/build/reports/tablet-c1b-read-only-artifact-proof.json" },
+        "artifact_proof_sha256": { "$ref": "#/$defs/hash" }, "runner_ast_sha256": { "$ref": "#/$defs/hash" },
+        "t0_runner_ast_sha256": { "$ref": "#/$defs/hash" }, "t0_library_ast_sha256": { "$ref": "#/$defs/hash" },
+        "host_forbidden_command_count": { "const": 0 },
+        "axml_parser": { "$ref": "#/$defs/aapt2Trust" }, "packaged_axml_exact_verified": { "const": true },
+        "dependency_artifact_catalog_sha256": { "$ref": "#/$defs/hash" },
+        "debug_apk_sha256": { "$ref": "#/$defs/hash" }, "debug_merged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "debug_packaged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "debug_packaged_manifest_axml_dump_sha256": { "$ref": "#/$defs/hash" }, "debug_packaged_a11y_axml_dump_sha256": { "$ref": "#/$defs/hash" },
+        "debug_dex_entry_count": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "debug_dex_sha256": { "$ref": "#/$defs/hash" }, "debug_dex_catalog_sha256": { "$ref": "#/$defs/hash" },
+        "release_apk_sha256": { "$ref": "#/$defs/hash" }, "release_merged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "release_packaged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "release_packaged_manifest_axml_dump_sha256": { "$ref": "#/$defs/hash" }, "release_packaged_a11y_axml_dump_sha256": { "$ref": "#/$defs/hash" },
+        "release_dex_entry_count": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "release_dex_sha256": { "$ref": "#/$defs/hash" }, "release_dex_catalog_sha256": { "$ref": "#/$defs/hash" },
+        "artifact_forbidden_match_count": { "const": 0 }, "manifest_mutating_capability_count": { "const": 0 },
+        "manifest_extra_component_count": { "const": 0 }, "dependency_allowlist_verified": { "const": true }
+      }
+    },
     "attestations": {
       "type": "object", "additionalProperties": false,
-      "required": ["full_clean_head_verified","implementation_hashes_verified","origin_binding_verified","probe_entrypoint_read_only","observation_schema_valid","artifact_hashes_recomputed"],
-      "properties": { "full_clean_head_verified": { "const": true }, "implementation_hashes_verified": { "const": true }, "origin_binding_verified": { "const": true }, "probe_entrypoint_read_only": { "const": true }, "observation_schema_valid": { "const": true }, "artifact_hashes_recomputed": { "const": true } }
+      "required": ["full_clean_head_verified","implementation_hashes_verified","origin_binding_verified","probe_entrypoint_read_only","dedicated_read_only_artifact_verified","host_read_only_ast_verified","observation_schema_valid","artifact_hashes_recomputed"],
+      "properties": { "full_clean_head_verified": { "const": true }, "implementation_hashes_verified": { "const": true }, "origin_binding_verified": { "const": true }, "probe_entrypoint_read_only": { "const": true }, "dedicated_read_only_artifact_verified": { "const": true }, "host_read_only_ast_verified": { "const": true }, "observation_schema_valid": { "const": true }, "artifact_hashes_recomputed": { "const": true } }
     },
     "claims": {
       "type": "object", "additionalProperties": false,

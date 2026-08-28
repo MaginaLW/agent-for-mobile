@@ -11,6 +11,7 @@ $OutputEncoding=[Text.Encoding]::UTF8
 $RepoRoot=[IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $Checks=Join-Path $RepoRoot '.checks'
 $SuitePath=Join-Path $PSScriptRoot 'tests\tablet-layout-c1a-offline.ps1'
+$SidecarSuitePath=Join-Path $PSScriptRoot 'tests\tablet-layout-c1a-t0-adb-sidecar-offline.ps1'
 $SuiteSummaryPath=Join-Path $Checks 'tablet-layout-c1a-offline-suite-summary.json'
 $GateSummaryPath=Join-Path $Checks 'tablet-layout-c1a-offline-gate.summary.json'
 $LogPath=Join-Path $Checks 'tablet-layout-c1a-offline.log'
@@ -27,7 +28,9 @@ $Required=[string[]]@(
     'content_remote_shell_literal', 'content_t0_binary_stdin', 'content_stderr_empty', 'stdin_overall_deadline',
     'installed_host_stream_pre_post', 'installed_stderr_cap_after_eof', 'installed_path_closed', 'post_apk_binding',
     'control_json_types_exact', 'a11y_bound_wait_vivo', 'implementation_hash_postcheck',
-    'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate'
+    'published_evidence_postcheck', 't0_sidecar_stderr_empty', 'release_absence_gate',
+    'device_global_lease_before_adb', 'production_knownfolder_lock_path',
+    't0_device_lease_join', 'success_publish_after_lease_cleanup'
 )
 
 function Assert-ChecksDirectory {
@@ -74,7 +77,7 @@ $astFiles=@(
     (Join-Path $PSScriptRoot 'lib\tablet-layout-c1a.ps1'),
     (Join-Path $PSScriptRoot 'lib\tablet-layout-c1a-t0-adb-sidecar.ps1'),
     (Join-Path $PSScriptRoot 'lib\tablet-layout-observation-v2-validator.ps1'),
-    (Join-Path $PSScriptRoot 'run-tablet-layout-c1a.ps1'),$SuitePath,$PSCommandPath,
+    (Join-Path $PSScriptRoot 'run-tablet-layout-c1a.ps1'),$SuitePath,$SidecarSuitePath,$PSCommandPath,
     (Join-Path $PSScriptRoot 'check.ps1')
 )
 foreach($file in $astFiles){
@@ -84,6 +87,30 @@ foreach($file in $astFiles){
 }
 $sidecarSchema=Join-Path $RepoRoot 'docs\contracts\tablet-layout-c1a-sidecar-v1.schema.json'
 try{Get-Content -LiteralPath $sidecarSchema -Raw -Encoding utf8|ConvertFrom-Json -Depth 100|Out-Null}catch{throw 'C1a sidecar schema 不是合法 JSON。'}
+$sidecarStart=[Diagnostics.ProcessStartInfo]::new();$sidecarStart.FileName=$PwshPath
+$sidecarStart.WorkingDirectory=$RepoRoot;$sidecarStart.UseShellExecute=$false
+$sidecarStart.CreateNoWindow=$true;$sidecarStart.RedirectStandardInput=$true
+$sidecarStart.RedirectStandardOutput=$true;$sidecarStart.RedirectStandardError=$true
+foreach($arg in @('-NoProfile','-File',$SidecarSuitePath)){$sidecarStart.ArgumentList.Add($arg)}
+$sidecarProcess=[Diagnostics.Process]::new();$sidecarProcess.StartInfo=$sidecarStart
+try{
+    if(-not$sidecarProcess.Start()){throw '无法启动 C1a T0 adb sidecar offline suite。'}
+    $sidecarProcess.StandardInput.Close()
+    $sidecarOut=$sidecarProcess.StandardOutput.ReadToEndAsync()
+    $sidecarErr=$sidecarProcess.StandardError.ReadToEndAsync()
+    if(-not$sidecarProcess.WaitForExit(60000)){
+        $sidecarProcess.Kill($true);[void]$sidecarProcess.WaitForExit(5000)
+        throw 'C1a T0 adb sidecar offline suite 超时。'
+    }
+    $sidecarExit=$sidecarProcess.ExitCode
+    $sidecarLog=$sidecarOut.GetAwaiter().GetResult()+$sidecarErr.GetAwaiter().GetResult()
+}finally{$sidecarProcess.Dispose()}
+$sidecarSummary=@($sidecarLog-split'\r?\n'|Where-Object{$_-cne''})|Select-Object -Last 1
+if($sidecarExit-ne0-or$sidecarSummary-cne
+    'tablet-layout-c1a T0 adb sidecar offline: 7 passed, 0 failed, real adb/JDK/Gradle executions=0'){
+    throw "C1a T0 adb sidecar offline suite 失败或 summary 欺骗：$sidecarSummary"
+}
+$sidecarPassed=7L
 $start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=$PwshPath;$start.WorkingDirectory=$RepoRoot
 $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardInput=$true
 $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
@@ -116,7 +143,7 @@ $gate=[ordered]@{
     schema_version=1;gate='tablet_layout_c1a_offline_gate';run_id=('c1a-gate-'+[guid]::NewGuid().ToString('N'))
     generated_at_utc=[DateTime]::UtcNow.ToString('o');status='passed';device_access='none_fake_only'
     cases=[long]$summary.selected;passed=[long]$summary.passed;required_coverage=$Required.Count
-    coverage_passed=$Required.Count;self_tests_passed=$selfPassed
+    coverage_passed=$Required.Count;t0_sidecar_cases=$sidecarPassed;self_tests_passed=$selfPassed
     runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false
     editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false
 }
@@ -130,10 +157,10 @@ try{
     if((Get-FileHash -Algorithm SHA256 -LiteralPath $GateSummaryPath).Hash -cne
         [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($gateBytes))){throw 'gate summary 发布后 hash 漂移。'}
     $published=[Text.UTF8Encoding]::new($false,$true).GetString($publishedBytes)|ConvertFrom-Json -Depth 20
-    $expectedFields='schema_version,gate,run_id,generated_at_utc,status,device_access,cases,passed,required_coverage,coverage_passed,self_tests_passed,runtime_evidence,layout_accepted,wechat_layout_verified,editor_action_ready,p0_capability,execution_grant'
+    $expectedFields='schema_version,gate,run_id,generated_at_utc,status,device_access,cases,passed,required_coverage,coverage_passed,t0_sidecar_cases,self_tests_passed,runtime_evidence,layout_accepted,wechat_layout_verified,editor_action_ready,p0_capability,execution_grant'
     if(($published.PSObject.Properties.Name-join',')-cne$expectedFields-or
         $published.run_id-cne$gate.run_id-or$published.status-cne'passed'-or
         $published.runtime_evidence-ne$false-or$published.execution_grant-ne$false){throw 'gate summary 写后读回复核失败。'}
 }
 finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}}
-Write-Host "tablet T-L1 C1a offline gate：$($gate.passed)/$($gate.cases) cases，$($gate.coverage_passed)/$($gate.required_coverage) coverage，self=$selfPassed/3"
+Write-Host "tablet T-L1 C1a offline gate：$($gate.passed)/$($gate.cases) cases，$($gate.coverage_passed)/$($gate.required_coverage) coverage，T0 sidecar=$sidecarPassed/7，self=$selfPassed/3"

@@ -124,6 +124,7 @@ function Invoke-TL1C1aProcess {
         [Parameter(Mandatory)][string]$Operation,
         [byte[]]$InputBytes,
         [hashtable]$Environment,
+        [switch]$ClearEnvironment,
         [ValidateRange(1, 300)][int]$TimeoutSec = 30,
         [switch]$AllowFailure
     )
@@ -135,6 +136,7 @@ function Invoke-TL1C1aProcess {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
+    if ($ClearEnvironment) { $start.Environment.Clear() }
     if ($null -ne $Environment) {
         foreach ($name in $Environment.Keys) { $start.Environment[[string]$name] = [string]$Environment[$name] }
     }
@@ -221,6 +223,8 @@ function Invoke-TL1C1aGit {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string[]]$Arguments,
         [ValidateNotNullOrEmpty()][string]$GitPath = 'git.exe',
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment,
         [switch]$AllowFailure
     )
     $gitArguments = @(
@@ -230,30 +234,96 @@ function Invoke-TL1C1aGit {
         '-c', 'core.hooksPath=NUL',
         '-C', $RepoRoot
     ) + $Arguments
-    $gitEnvironment = @{
-        GIT_CONFIG_NOSYSTEM = '1'
-        GIT_CONFIG_GLOBAL = 'NUL'
-        GIT_OPTIONAL_LOCKS = '0'
-        GIT_TERMINAL_PROMPT = '0'
+    $gitEnvironment = @{}
+    if ($null -ne $ProcessEnvironment) {
+        foreach ($name in $ProcessEnvironment.Keys) {
+            $gitEnvironment[[string]$name] = [string]$ProcessEnvironment[$name]
+        }
     }
+    $gitEnvironment['GIT_CONFIG_NOSYSTEM'] = '1'
+    $gitEnvironment['GIT_CONFIG_GLOBAL'] = 'NUL'
+    $gitEnvironment['GIT_CONFIG_COUNT'] = '0'
+    $gitEnvironment['GIT_OPTIONAL_LOCKS'] = '0'
+    $gitEnvironment['GIT_TERMINAL_PROMPT'] = '0'
+    $gitEnvironment['GCM_INTERACTIVE'] = 'Never'
     $result = Invoke-TL1C1aProcess -FilePath $GitPath -Arguments $gitArguments `
-        -Operation 'Git provenance 复核' -Environment $gitEnvironment -TimeoutSec 30 -AllowFailure:$AllowFailure
+        -Operation 'Git provenance 复核' -Environment $gitEnvironment `
+        -ClearEnvironment:$ClearEnvironment -TimeoutSec 30 -AllowFailure:$AllowFailure
     return $result
+}
+
+function Get-TL1C1aWorkingTextBlobSha1 {
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Path,
+        [ValidateNotNullOrEmpty()][string]$Operation = 'Git working text blob'
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $bytes = [IO.File]::ReadAllBytes($fullPath)
+    $normalizedBytes = $null
+    $headerBytes = $null
+    $hasher = $null
+    try {
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and
+            $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf) {
+            throw "$Operation 含 UTF-8 BOM。"
+        }
+        if ([Array]::IndexOf[byte]($bytes, [byte]0) -ge 0) {
+            throw "$Operation 含 NUL。"
+        }
+        try {
+            $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+        }
+        catch {
+            throw "$Operation 不是 strict UTF-8。"
+        }
+        if ($text -cmatch "`r(?!`n)") {
+            throw "$Operation 含孤立 CR。"
+        }
+        $normalized = $text.Replace("`r`n", "`n")
+        $normalizedBytes = [Text.UTF8Encoding]::new($false, $true).GetBytes($normalized)
+        $headerBytes = [Text.Encoding]::ASCII.GetBytes(
+            "blob $($normalizedBytes.Length)$([char]0)")
+        $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
+            [Security.Cryptography.HashAlgorithmName]::SHA1)
+        $hasher.AppendData($headerBytes)
+        $hasher.AppendData($normalizedBytes)
+        return [Convert]::ToHexString($hasher.GetHashAndReset()).ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        if ($bytes.Length -ne 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+        if ($null -ne $normalizedBytes -and $normalizedBytes.Length -ne 0) {
+            [Array]::Clear($normalizedBytes, 0, $normalizedBytes.Length)
+        }
+        if ($null -ne $headerBytes -and $headerBytes.Length -ne 0) {
+            [Array]::Clear($headerBytes, 0, $headerBytes.Length)
+        }
+    }
 }
 
 function Assert-TL1C1aGitProvenance {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$ExpectedCommitSha,
-        [ValidateNotNullOrEmpty()][string]$GitPath = 'git.exe'
+        [ValidateNotNullOrEmpty()][string]$GitPath = 'git.exe',
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment
     )
     if ($ExpectedCommitSha -cnotmatch '^[0-9a-f]{40}$') { throw '-ExpectedCommitSha 必须是完整小写 40 位 Git SHA。' }
-    $head = (Invoke-TL1C1aGit $RepoRoot @('rev-parse','HEAD') -GitPath $GitPath).Text.Trim()
+    $gitParameters = @{
+        GitPath = $GitPath
+        ProcessEnvironment = $ProcessEnvironment
+        ClearEnvironment = [bool]$ClearEnvironment
+    }
+    $head = (Invoke-TL1C1aGit $RepoRoot @('rev-parse','HEAD') @gitParameters).Text.Trim()
     if ($head -cne $ExpectedCommitSha) { throw "HEAD 与 -ExpectedCommitSha 不一致（HEAD=$head）。" }
-    $status = (Invoke-TL1C1aGit $RepoRoot @('status','--porcelain=v1','--untracked-files=all') -GitPath $GitPath).Text
+    $status = (Invoke-TL1C1aGit $RepoRoot `
+        @('status','--porcelain=v1','--untracked-files=all') @gitParameters).Text
     if (-not [string]::IsNullOrWhiteSpace($status)) { throw '工作树不干净，拒绝构建或连接设备。' }
     foreach ($baseline in @($script:TL1C1aProducerBaseline, $script:TL1C1aT0Baseline)) {
-        $object = Invoke-TL1C1aGit $RepoRoot @('cat-file','-e',"$baseline^{commit}") -GitPath $GitPath -AllowFailure
+        $object = Invoke-TL1C1aGit $RepoRoot `
+            @('cat-file','-e',"$baseline^{commit}") @gitParameters -AllowFailure
         if ($object.ExitCode -ne 0) { throw "缺少受信 baseline commit object：$baseline。" }
     }
     foreach ($entry in $script:TL1C1aTrustedBlobs.GetEnumerator()) {
@@ -262,9 +332,13 @@ function Assert-TL1C1aGitProvenance {
         $baseline = if ($path.StartsWith('app/', [StringComparison]::Ordinal)) {
             $script:TL1C1aProducerBaseline
         } else { $script:TL1C1aT0Baseline }
-        $baselineBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$baseline`:$path") -GitPath $GitPath).Text.Trim()
-        $headBlob = (Invoke-TL1C1aGit $RepoRoot @('rev-parse',"$ExpectedCommitSha`:$path") -GitPath $GitPath).Text.Trim()
-        $workingBlob = (Invoke-TL1C1aGit $RepoRoot @('hash-object','--',(Join-Path $RepoRoot ($path -replace '/','\'))) -GitPath $GitPath).Text.Trim()
+        $baselineBlob = (Invoke-TL1C1aGit $RepoRoot `
+            @('rev-parse',"$baseline`:$path") @gitParameters).Text.Trim()
+        $headBlob = (Invoke-TL1C1aGit $RepoRoot `
+            @('rev-parse',"$ExpectedCommitSha`:$path") @gitParameters).Text.Trim()
+        $workingBlob = Get-TL1C1aWorkingTextBlobSha1 `
+            -Path (Join-Path $RepoRoot ($path -replace '/','\')) `
+            -Operation "受信 working blob $path"
         if ($baselineBlob -cne $expectedBlob -or $headBlob -cne $expectedBlob -or $workingBlob -cne $expectedBlob) {
             throw "受信 blob 漂移：$path。"
         }
@@ -361,9 +435,59 @@ function Write-TL1C1aJsonAtomic {
     finally { if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) } }
 }
 
+function Get-TL1C1aAdbClientArguments {
+    param([AllowNull()][hashtable]$ProcessEnvironment)
+
+    if ($null -eq $ProcessEnvironment -or
+        -not $ProcessEnvironment.ContainsKey('ADB_SERVER_SOCKET')) {
+        return [string[]]@()
+    }
+    $socket = [string]$ProcessEnvironment['ADB_SERVER_SOCKET']
+    $match = [regex]::Match(
+        $socket,
+        '\Atcp:127\.0\.0\.1:([0-9]{5})\z',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    $port = 0
+    if (-not $match.Success -or
+        -not [int]::TryParse(
+            $match.Groups[1].Value,
+            [Globalization.NumberStyles]::None,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [ref]$port) -or
+        $port -lt 49152 -or $port -gt 65535 -or
+        $socket -cne "tcp:127.0.0.1:$port") {
+        throw 'ADB_SERVER_SOCKET 必须是 exact tcp:127.0.0.1:<49152..65535>。'
+    }
+    return [string[]]@(
+        '-H', '127.0.0.1',
+        '-P', $port.ToString([Globalization.CultureInfo]::InvariantCulture))
+}
+
 function Get-TL1C1aSingleDevice {
-    param([Parameter(Mandatory)][string]$AdbPath)
-    $result = Invoke-TL1C1aProcess -FilePath $AdbPath -Arguments @('devices') -Operation '唯一设备发现'
+    param(
+        [Parameter(Mandatory)][string]$AdbPath,
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment,
+        [AllowNull()]$PrivateAdbServerGuard
+    )
+    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
+    if (@($clientArguments).Count -ne 0) {
+        if ($null -eq $PrivateAdbServerGuard) {
+            throw 'private ADB endpoint 必须提供 server Guard。'
+        }
+        $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
+            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
+            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
+            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+            -TimeoutSec 30 -ClientKind Adb
+    } else {
+        if ($null -ne $PrivateAdbServerGuard) {
+            throw 'server Guard 不得绑定非 private ADB endpoint。'
+        }
+        $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
+            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
+            -Environment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
+    }
     $rows = [Collections.Generic.List[object]]::new()
     $headerSeen = $false
     foreach ($line in ($result.Text -split "`r?`n")) {
@@ -452,7 +576,10 @@ function Invoke-TL1C1aAdb {
         [string]$Value,
         [byte[]]$InputBytes,
         [int]$TimeoutSec = 30,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment,
+        [AllowNull()]$PrivateAdbServerGuard
     )
     $contentNames = @('content_t0','content_status','content_c1','content_c2','content_result','content_abort')
     $contentUriArgument = if ($contentNames -ccontains $Name) {
@@ -478,8 +605,27 @@ function Invoke-TL1C1aAdb {
     }
     if ($Name -eq 'install' -and (-not [IO.Path]::IsPathFullyQualified($Value) -or
         -not (Test-Path -LiteralPath $Value -PathType Leaf))) { throw '安装 APK 路径必须是存在的绝对文件。' }
-    $result = Invoke-TL1C1aProcess -FilePath $AdbPath -Arguments (@('-s',$Serial) + $tail) `
-        -Operation "C1a adb/$Name" -InputBytes $InputBytes -TimeoutSec $TimeoutSec -AllowFailure:$AllowFailure
+    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
+    if (@($clientArguments).Count -ne 0) {
+        if ($null -eq $PrivateAdbServerGuard) {
+            throw 'private ADB endpoint 必须提供 server Guard。'
+        }
+        $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
+            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
+            -Arguments ($clientArguments + @('-s',$Serial) + $tail) `
+            -Operation "C1a adb/$Name" -InputBytes $InputBytes `
+            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+            -TimeoutSec $TimeoutSec -AllowFailure:$AllowFailure -ClientKind Adb
+    } else {
+        if ($null -ne $PrivateAdbServerGuard) {
+            throw 'server Guard 不得绑定非 private ADB endpoint。'
+        }
+        $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
+            -Arguments ($clientArguments + @('-s',$Serial) + $tail) `
+            -Operation "C1a adb/$Name" -InputBytes $InputBytes -TimeoutSec $TimeoutSec `
+            -AllowFailure:$AllowFailure -Environment $ProcessEnvironment `
+            -ClearEnvironment:$ClearEnvironment
+    }
     if ($contentNames -ccontains $Name -and $result.Stderr.Length -ne 0) {
         throw "C1a adb/$Name stderr 必须 exact empty。"
     }
@@ -707,10 +853,33 @@ function Get-TL1C1aInstalledApkHostSha256 {
         [Parameter(Mandatory)][string]$AdbPath,
         [Parameter(Mandatory)][string]$Serial,
         [Parameter(Mandatory)][string]$RemotePath,
-        [ValidateRange(1,300)][int]$TimeoutSec = 180
+        [ValidateRange(1,300)][int]$TimeoutSec = 180,
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment,
+        [AllowNull()]$PrivateAdbServerGuard
     )
     [void](Assert-TL1C1aInstalledApkRemotePath $RemotePath)
     if ($Serial -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$') { throw 'installed APK serial 格式不安全。' }
+    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
+    if (@($clientArguments).Count -ne 0) {
+        if ($null -eq $PrivateAdbServerGuard) {
+            throw 'private ADB endpoint 必须提供 server Guard。'
+        }
+        $guarded = Invoke-TL1C1bPrivateAdbGuardedProcess `
+            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
+            -Arguments ($clientArguments + @('-s',$Serial,'exec-out','cat',$RemotePath)) `
+            -Operation 'installed base.apk 流式读取' `
+            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+            -TimeoutSec $TimeoutSec -OutputMode Sha256 `
+            -MaximumOutputBytes $script:TL1C1aMaximumInstalledApkBytes -ClientKind Adb
+        if ($guarded.Stderr.Length -ne 0 -or $guarded.ByteCount -lt 1) {
+            throw 'installed base.apk 流式读取失败。'
+        }
+        return [string]$guarded.Sha256
+    }
+    if ($null -ne $PrivateAdbServerGuard) {
+        throw 'server Guard 不得绑定非 private ADB endpoint。'
+    }
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $AdbPath
     $start.UseShellExecute = $false
@@ -718,7 +887,11 @@ function Get-TL1C1aInstalledApkHostSha256 {
     $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in @('-s',$Serial,'exec-out','cat',$RemotePath)) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @($clientArguments + @('-s',$Serial,'exec-out','cat',$RemotePath))) {
+        $start.ArgumentList.Add($argument)
+    }
+    if($ClearEnvironment){$start.Environment.Clear()}
+    if($null-ne$ProcessEnvironment){foreach($name in $ProcessEnvironment.Keys){$start.Environment[[string]$name]=[string]$ProcessEnvironment[$name]}}
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     $stderr = [IO.MemoryStream]::new()
@@ -887,9 +1060,14 @@ function Wait-TL1C1aA11yReady {
         [Parameter(Mandatory)][string]$AdbPath,
         [Parameter(Mandatory)][string]$Serial,
         [ValidateRange(1,45)][int]$MaximumWaitSec = 45,
-        [ValidateRange(50,1000)][int]$PollIntervalMs = 1000
+        [ValidateRange(50,1000)][int]$PollIntervalMs = 1000,
+        [hashtable]$ProcessEnvironment,
+        [switch]$ClearEnvironment,
+        [AllowNull()]$PrivateAdbServerGuard
     )
-    $enabledText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_enabled).Text
+    $enabledText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_enabled `
+        -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+        -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
     $enabledState = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText ''
     if (-not $enabledState.Enabled) {
         return [pscustomobject]@{ Enabled=$false; Bound=$false; Ready=$false; Attempts=0; WaitMs=0L }
@@ -898,7 +1076,9 @@ function Wait-TL1C1aA11yReady {
     $attempts = 0
     while ($true) {
         $attempts++
-        $boundText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_bound).Text
+        $boundText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_bound `
+            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+            -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
         $state = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText $boundText
         if ($state.Ready -or $watch.Elapsed.TotalSeconds -ge $MaximumWaitSec) {
             return [pscustomobject]@{

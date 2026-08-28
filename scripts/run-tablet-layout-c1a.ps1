@@ -25,6 +25,7 @@ $T0RunnerPath = Join-Path $PSScriptRoot 'run-tablet-intake.ps1'
 $T0LibraryPath = Join-Path $PSScriptRoot 'lib\tablet-intake.ps1'
 $T0AdbSidecarPath = Join-Path $PSScriptRoot 'lib\tablet-layout-c1a-t0-adb-sidecar.cmd'
 $T0AdbSidecarScriptPath = Join-Path $PSScriptRoot 'lib\tablet-layout-c1a-t0-adb-sidecar.ps1'
+$DispatchLockPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
 $GradlePath = Join-Path $RepoRoot 'app\gradlew.bat'
 $ApkPath = Join-Path $RepoRoot 'app\gateway\build\outputs\apk\debug\gateway-debug.apk'
 $EvidenceRoot = Join-Path $RepoRoot 'docs\runs\evidence'
@@ -51,6 +52,13 @@ $expectedArtifactSha = $null
 $buildChallenge = $null
 $failure = $null
 $implementationHashes = $null
+$dispatchLockSha256 = $null
+$deviceLease = $null
+$needsUserPayload = $null
+$sidecarPath = $null
+$sidecarBytes = $null
+$successDiagnostic = $null
+$exitCode = 1
 
 function Get-ControlRaw {
     param([Parameter(Mandatory)]$Result)
@@ -75,9 +83,19 @@ function Assert-C1aImplementationHashSnapshot {
     }
 }
 
+function Assert-C1aDispatchLockHashSnapshot {
+    if ([string]::IsNullOrWhiteSpace($dispatchLockSha256)) {
+        throw 'C1a dispatch-lock hash snapshot 未冻结。'
+    }
+    if ((Get-TL1C1aFileSha256 $DispatchLockPath) -cne $dispatchLockSha256) {
+        throw 'C1a production dispatch-lock 漂移。'
+    }
+}
+
 function Assert-C1aFrozenLocalState {
     [void](Assert-TL1C1aGitProvenance -RepoRoot $RepoRoot -ExpectedCommitSha $ExpectedCommitSha)
     Assert-C1aImplementationHashSnapshot
+    Assert-C1aDispatchLockHashSnapshot
 }
 
 function Write-C1aFailureEvidence {
@@ -120,7 +138,7 @@ try {
     }
     foreach ($required in @(
         $LibraryPath,$ValidatorPath,$T0RunnerPath,$T0LibraryPath,$T0AdbSidecarPath,
-        $T0AdbSidecarScriptPath,$GradlePath,$SidecarSchemaPath
+        $T0AdbSidecarScriptPath,$DispatchLockPath,$GradlePath,$SidecarSchemaPath
     )) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "缺少 C1a 依赖：$required" }
         if (((Get-Item -LiteralPath $required -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -134,6 +152,11 @@ try {
     [void](Assert-TL1C1aGitProvenance -RepoRoot $RepoRoot -ExpectedCommitSha $ExpectedCommitSha)
     $implementationHashes = Get-C1aImplementationHashSnapshot
     Assert-C1aImplementationHashSnapshot
+    $dispatchLockSha256 = Get-TL1C1aFileSha256 $DispatchLockPath
+    . $DispatchLockPath
+    Assert-C1aFrozenLocalState
+    $deviceLease = Open-DispatchLock -Path (Get-DispatchGlobalLockPath) `
+        -Owner "tablet-layout-c1a:$ExpectedCommitSha" -LeaseToken ''
     $apksigner = Find-TL1C1aApkSigner
     $buildChallenge = 'c1a-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16)).ToLowerInvariant()
     $buildStarted = [DateTime]::UtcNow
@@ -173,14 +196,14 @@ try {
 
     $a11y = Wait-TL1C1aA11yReady -AdbPath $AdbPath -Serial $serial
     if (-not $a11y.Ready) {
-        [pscustomobject][ordered]@{
+        $needsUserPayload = [pscustomobject][ordered]@{
             schema = 'tablet-layout-c1a-needs-user/v1'
             status = 'needs-user'
             reason_code = 'a11y_service_not_enabled_or_bound'
             settings_changed = $false
             retry_allowed_after_user_action = $true
-        } | ConvertTo-Json -Compress
-        exit 2
+        }
+        throw 'C1a 需要用户启用并绑定无障碍服务。'
     }
 
     $runId = New-TL1C1aRunId
@@ -195,6 +218,8 @@ try {
         TL1_C1A_REAL_ADB_PATH = $AdbPath
         TL1_C1A_BOUND_SERIAL = $serial
         TL1_C1A_T0_LIBRARY_PATH = $T0LibraryPath
+        TL1_C1A_DISPATCH_LOCK_LIBRARY = $DispatchLockPath
+        AGENT_MOBILE_DEVICE_LOCK_LEASE = [string]$deviceLease.LeaseToken
     } -TimeoutSec 180
     [void]$t0
     $t0Path = Assert-TL1C1aOrdinaryPath -RepoRoot $RepoRoot -Path (Join-Path $runDirectory 'tablet-profile.json')
@@ -431,27 +456,14 @@ try {
     if (-not ($sidecarRaw | Test-Json -SchemaFile $SidecarSchemaPath -ErrorAction SilentlyContinue)) {
         throw 'C1a sidecar 未通过固定 schema。'
     }
+    # 成功 sidecar 只暂存在内存；设备租约在 finally 中完整释放后才允许发布。
     $sidecarBytes = [Text.UTF8Encoding]::new($false).GetBytes($sidecarRaw)
-    try {
-        [void](Write-TL1C1aBytesAtomic -RepoRoot $RepoRoot -Destination $sidecarPath -Bytes $sidecarBytes `
-            -PostWriteValidation {
-                Assert-C1aFrozenLocalState
-                if ((Get-TL1C1aFileSha256 $ApkPath) -cne $expectedArtifactSha) {
-                    throw 'local APK 在 sidecar 发布后漂移。'
-                }
-                Assert-TL1C1aPublishedEvidenceBinding -RepoRoot $RepoRoot `
-                    -T0Path $validatorT0Path -T0Sha256 $t0ArtifactSha `
-                    -ObservationPath $observationPath -ObservationSha256 $observationSha `
-                    -ValidationPath $validationPath -ValidationSha256 $validationSha
-            })
-    }
-    finally { if ($sidecarBytes.Length -gt 0) { [Array]::Clear($sidecarBytes, 0, $sidecarBytes.Length) } }
-    Write-Host "T-L1 C1a 只读采集完成：$sidecarPath"
-    Write-Host "diagnostic_status=$($validation.diagnostic_status) runtime_evidence=false layout=false P0=unsupported exec=false"
-    exit 0
+    $successDiagnostic = [string]$validation.diagnostic_status
+    $exitCode = 0
 }
 catch {
-    $failure = $_.Exception.Message
+    if ($null -ne $needsUserPayload) { $exitCode = 2 }
+    else { $failure = $_.Exception.Message; $exitCode = 1 }
 }
 finally {
     if ($sessionStarted -and -not $sessionConsumed -and -not $abortAttempted -and
@@ -469,8 +481,61 @@ finally {
             $abortSucceeded = $false
             if ([string]::IsNullOrWhiteSpace($failure)) { $failure = 'C1a cleanup 失败。' }
             else { $failure += '；且 C1a cleanup 失败。' }
+            $exitCode = 1
+            $needsUserPayload = $null
         }
     }
+    if ($null -ne $deviceLease) {
+        try {
+            if (-not (Close-DispatchLockLease -Lease $deviceLease)) {
+                throw '仍有子进程持有同一设备租约。'
+            }
+            $deviceLease = $null
+        }
+        catch {
+            if ([string]::IsNullOrWhiteSpace($failure)) { $failure = 'C1a device lease cleanup 失败。' }
+            else { $failure += '；且 device lease cleanup 失败。' }
+            $exitCode = 1
+            $needsUserPayload = $null
+        }
+    }
+}
+
+if ($exitCode -eq 0) {
+    try {
+        if ($null -eq $sidecarBytes -or [string]::IsNullOrWhiteSpace($sidecarPath)) {
+            throw 'C1a success sidecar 未完成内存暂存。'
+        }
+        [void](Write-TL1C1aBytesAtomic -RepoRoot $RepoRoot -Destination $sidecarPath -Bytes $sidecarBytes `
+            -PostWriteValidation {
+                Assert-C1aFrozenLocalState
+                if ((Get-TL1C1aFileSha256 $ApkPath) -cne $expectedArtifactSha) {
+                    throw 'local APK 在 sidecar 发布后漂移。'
+                }
+                Assert-TL1C1aPublishedEvidenceBinding -RepoRoot $RepoRoot `
+                    -T0Path $validatorT0Path -T0Sha256 $t0ArtifactSha `
+                    -ObservationPath $observationPath -ObservationSha256 $observationSha `
+                    -ValidationPath $validationPath -ValidationSha256 $validationSha
+            })
+    }
+    catch {
+        $failure = "C1a success sidecar 发布失败：$($_.Exception.Message)"
+        $exitCode = 1
+    }
+}
+if ($null -ne $sidecarBytes -and $sidecarBytes.Length -gt 0) {
+    [Array]::Clear($sidecarBytes, 0, $sidecarBytes.Length)
+}
+$sidecarBytes = $null
+
+if ($exitCode -eq 0) {
+    Write-Host "T-L1 C1a 只读采集完成：$sidecarPath"
+    Write-Host "diagnostic_status=$successDiagnostic runtime_evidence=false layout=false P0=unsupported exec=false"
+    exit 0
+}
+if ($exitCode -eq 2 -and $null -ne $needsUserPayload) {
+    $needsUserPayload | ConvertTo-Json -Compress
+    exit 2
 }
 
 try { Write-C1aFailureEvidence -ReasonCode 'c1a_runner_failed' }

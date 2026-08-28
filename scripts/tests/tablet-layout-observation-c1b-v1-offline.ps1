@@ -11,8 +11,11 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repoRoot 'scripts\lib\tablet-layout-observation-c1b-v1-offline-gate.ps1')
+. (Join-Path $repoRoot 'scripts\lib\tablet-layout-c1a.ps1')
+. (Join-Path $repoRoot 'scripts\lib\tablet-layout-c1b.ps1')
 
 $fixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-observation\c1b-v1\real-shape-topology-only.json'
+$buildEnvironmentFixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-c1b-build-environment.json'
 $baseRaw = [IO.File]::ReadAllText($fixturePath, [Text.UTF8Encoding]::new($false, $true))
 $tempRoot = [IO.Directory]::CreateTempSubdirectory('tl1c1bv1-offline-')
 $script:CaseCount = 0
@@ -453,30 +456,35 @@ try {
     $sidecarSchema = Join-Path $repoRoot 'docs\contracts\tablet-layout-c1b-sidecar-v1.schema.json'
     $hash = 'sha256:' + ('a' * 64)
     $implementationHashes=[ordered]@{};foreach($name in @(
-        'runner_sha256','c1b_library_sha256','c1a_low_level_library_sha256','t0_runner_sha256','t0_library_sha256',
-        't0_adb_sidecar_cmd_sha256','t0_adb_sidecar_script_sha256','validator_sha256','native_path_validator_sha256',
-        'observation_schema_sha256','sidecar_schema_sha256','android_model_sha256','android_probe_sha256','android_source_sha256',
-        'android_provider_sha256','android_protocol_sha256','android_coordinator_sha256','android_controller_sha256',
-        'android_context_sha256','android_pending_registry_sha256','debug_manifest_sha256','gateway_build_gradle_sha256'
+        'runner_sha256','c1b_library_sha256','c1b_read_only_library_sha256','c1b_artifact_proof_library_sha256','c1b_aapt2_library_sha256','c1b_build_environment_library_sha256','c1b_adb_server_library_sha256','dispatch_lock_library_sha256','c1a_low_level_library_sha256',
+        't0_runner_sha256','t0_library_sha256','t0_adb_sidecar_cmd_sha256','t0_adb_sidecar_script_sha256','validator_sha256','native_path_validator_sha256',
+        'observation_schema_sha256','sidecar_schema_sha256','artifact_proof_schema_sha256','android_layout_probe_sha256','android_layout_probe_model_sha256','android_model_sha256','android_probe_sha256','android_source_sha256',
+        'android_provider_sha256','android_protocol_sha256','android_coordinator_sha256','android_controller_sha256','android_context_sha256','android_pending_registry_sha256',
+        'app_build_gradle_sha256','app_settings_gradle_sha256','app_gradle_properties_sha256','app_gradlew_bat_sha256','app_gradle_wrapper_jar_sha256','app_gradle_wrapper_properties_sha256','app_gradle_verification_metadata_sha256','probe_build_gradle_sha256','probe_manifest_sha256','probe_service_sha256','probe_a11y_config_sha256','probe_strings_sha256'
     )){$implementationHashes[$name]=$hash}
+    $buildEnvironment=Get-Content -LiteralPath $buildEnvironmentFixturePath -Raw | ConvertFrom-Json -Depth 100 -DateKind String
+    $buildEnvironment.repository_inputs.file_count=[long]$implementationHashes.Count
+    $buildEnvironment.repository_inputs.catalog_sha256=Get-TL1C1bImplementationCatalogSha256 $implementationHashes
     $at=[DateTimeOffset]::UtcNow.UtcDateTime.ToString($script:TL1C1BV1TimestampFormat,[Globalization.CultureInfo]::InvariantCulture)
     $sidecar = [ordered]@{
         schema='tablet-layout-c1b-sidecar/v1'; run_id='tl1-c1b-sidecar-fixture'
-        completed_at_utc=$at;expected_commit_sha=('b'*40);capture_scope='pure_a11y';provenance_strategy='clean_content_provider_independently_attested';static_read_only_policy_version='tl1-c1b-read-only/v1';implementation_hashes=$implementationHashes
-        transport=[ordered]@{trust_root='android_sdk_platform_tools';canonical_relative_path='platform-tools/adb.exe';sdk_roots_equal=$true;executable_sha256_before=$hash;executable_sha256_after=$hash;version_output_sha256_before=$hash;version_output_sha256_after=$hash;protocol_version='1.0.41';package_version='36.0.0-13206524';installed_as_canonical=$true}
+        completed_at_utc=$at;expected_commit_sha=('b'*40);capture_scope='pure_a11y';provenance_strategy='clean_content_provider_independently_attested';static_read_only_policy_version='tl1-c1b-read-only/v2';implementation_hashes=$implementationHashes
+        build_environment=$buildEnvironment
+        transport=[ordered]@{trust_root='android_sdk_platform_tools';canonical_relative_path='platform-tools/adb.exe';sdk_roots_equal=$true;executable_sha256_before=$hash;executable_sha256_after=$hash;version_output_sha256_before=$hash;version_output_sha256_after=$hash;signature_status='Valid';signature_subject='CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US';signature_certificate_sha256_before=$hash;signature_certificate_sha256_after=$hash;protocol_version='1.0.41';package_version='36.0.0-13206524';installed_as_canonical=$true;server_schema='tablet-layout-c1b-private-adb-server/v1';server_mode='private_nodaemon';server_socket='tcp:127.0.0.1:55001';server_executable_sha256=$hash;job_kill_on_close=$true;listener_pid_verified=$true;server_status_executable_path_verified=$true;server_ready_verified=$true;server_cleanup_verified=$true;private_kill_server_requested=$true;graceful_exit_verified=$true;job_fallback_used=$false;port_rebind_verified=$true;default_server_used=$false}
         apk=[ordered]@{fresh_build=$true;install_attempt_count=1;uninstall_count=0;automatic_retry_count=0;local_sha256_before=$hash;local_sha256_after=$hash;installed_base_apk_path_hash_before=$hash;installed_base_apk_path_hash_after=$hash;installed_base_apk_sha256_before=$hash;installed_base_apk_sha256_after=$hash;signer_certificate_sha256=$hash;package_name_before='dev.magina.gateway';package_name_after='dev.magina.gateway';version_name_before='1.0';version_name_after='1.0';version_code_before=1;version_code_after=1}
         device=[ordered]@{serial_hash_before=$hash;serial_hash_after=$hash;fingerprint_hash_before=$hash;fingerprint_hash_after=$hash;boot_id_hash_before=$hash;boot_id_hash_after=$hash;unique_device_before_after=$true}
         upstream_t0=[ordered]@{producer_commit_sha='4ca32b131007df58f7752c5ee9b2d049cb1cd54e';original_relative_path='docs/runs/evidence/tl1-c1b-sidecar-fixture/tablet-profile.json';original_sha256=$hash;original_byte_count=10;original_crlf_count=1;original_bytes_forwarded=$true;exec_in_write_count=1;device_binding_verified=$true}
         provider=[ordered]@{authority='dev.magina.gateway.tablet.c1b';protocol_version='1';package_name='dev.magina.gateway';version_name='1.0';version_code=1;embedded_git_head=('b'*40);build_challenge_hash=$hash;expected_title_hash='sha256:5d3510ec998c991305fcede15b32be9ea1c4061d82ab15a3994a38faa243311c';producer_artifact_sha256=$hash;a11y_service_ready=$true;control_transcript_sha256=$hash;endpoint_set_sha256=$hash}
         capture=[ordered]@{generation=1;c1_requested_at_utc=$at;c1_committed_at_utc=$at;c2_requested_at_utc=$at;c2_committed_at_utc=$at;host_wait_ms=900;total_span_ms=1000;status_poll_count=1;c1_requests_accepted=1;c2_requests_accepted=1;result_read_count=1;recapture_count=0}
-        artifacts=[ordered]@{upstream_t0=[ordered]@{relative_path='upstream-t0-v5.json';sha256=$hash};observation=[ordered]@{relative_path='tablet-layout-observation-c1b-v1.json';sha256=$hash};validation=[ordered]@{relative_path='tablet-layout-observation-validation-c1b-v1.json';sha256=$hash}}
+        artifacts=[ordered]@{upstream_t0=[ordered]@{relative_path='upstream-t0-v5.json';sha256=$hash};observation=[ordered]@{relative_path='tablet-layout-observation-c1b-v1.json';sha256=$hash};validation=[ordered]@{relative_path='tablet-layout-observation-validation-c1b-v1.json';sha256=$hash};artifact_proof=[ordered]@{relative_path='tablet-c1b-read-only-artifact-proof-v1.json';sha256=$hash};debug_apk=[ordered]@{relative_path='tablet-c1b-probe-debug.apk';sha256=$hash};release_apk=[ordered]@{relative_path='tablet-c1b-probe-release-unsigned.apk';sha256=$hash};debug_merged_manifest=[ordered]@{relative_path='tablet-c1b-probe-debug-merged-AndroidManifest.xml';sha256=$hash};release_merged_manifest=[ordered]@{relative_path='tablet-c1b-probe-release-merged-AndroidManifest.xml';sha256=$hash}}
         read_only_counts=[ordered]@{
             a11y_frame_capture_count=2; recapture_count=0; display_screenshot_call_count=0
             window_screenshot_call_count=0; ocr_invocation_count=0; action_call_count=0
             gesture_call_count=0; input_call_count=0; settings_mutation_count=0
             target_app_start_count=0; mcp_call_count=0; dispatch_call_count=0
         }
-        attestations=[ordered]@{full_clean_head_verified=$true;implementation_hashes_verified=$true;origin_binding_verified=$true;probe_entrypoint_read_only=$true;observation_schema_valid=$true;artifact_hashes_recomputed=$true}
+        read_only_proof=[ordered]@{schema='tablet-layout-c1b-read-only-proof/v1';policy_version='tl1-c1b-read-only/v2';artifact_module=':tablet-c1b-probe';artifact_proof_relative_path='app/tablet-c1b-probe/build/reports/tablet-c1b-read-only-artifact-proof.json';artifact_proof_sha256=$hash;runner_ast_sha256=$hash;t0_runner_ast_sha256=$hash;t0_library_ast_sha256=$hash;host_forbidden_command_count=0;axml_parser=[ordered]@{schema='tablet-layout-c1b-aapt2-trust/v1';trust_root='android_sdk_build_tools';build_tools_version='35.0.0';canonical_relative_path='build-tools/35.0.0/aapt2.exe';sdk_roots_equal=$true;executable_sha256='sha256:cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564';signature_status='Valid';signature_subject='CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US';signature_certificate_sha256='sha256:7d3d117664f121e592ef897973ef9c159150e3d736326e9cd2755f71e0febc0c'};packaged_axml_exact_verified=$true;dependency_artifact_catalog_sha256=$hash;debug_apk_sha256=$hash;debug_merged_manifest_sha256=$hash;debug_packaged_manifest_sha256=$hash;debug_packaged_manifest_axml_dump_sha256=$hash;debug_packaged_a11y_axml_dump_sha256=$hash;debug_dex_entry_count=6;debug_dex_sha256=$hash;debug_dex_catalog_sha256=$hash;release_apk_sha256=$hash;release_merged_manifest_sha256=$hash;release_packaged_manifest_sha256=$hash;release_packaged_manifest_axml_dump_sha256=$hash;release_packaged_a11y_axml_dump_sha256=$hash;release_dex_entry_count=1;release_dex_sha256=$hash;release_dex_catalog_sha256=$hash;artifact_forbidden_match_count=0;manifest_mutating_capability_count=0;manifest_extra_component_count=0;dependency_allowlist_verified=$true}
+        attestations=[ordered]@{full_clean_head_verified=$true;implementation_hashes_verified=$true;origin_binding_verified=$true;probe_entrypoint_read_only=$true;dedicated_read_only_artifact_verified=$true;host_read_only_ast_verified=$true;observation_schema_valid=$true;artifact_hashes_recomputed=$true}
         claims=[ordered]@{
             runtime_origin_verified=$true; runtime_evidence=$true
             wechat_window_ownership_observed=$true; wechat_window_ownership_verified=$true

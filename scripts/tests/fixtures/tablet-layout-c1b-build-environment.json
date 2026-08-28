@@ -1,0 +1,143 @@
+{
+  "schema": "tablet-layout-c1b-build-environment-trust/v1",
+  "platform": "windows",
+  "threat_boundary": "filesystem-and-environment integrity after guard establishment; excludes same-user process-memory injection, pre-existing writable handles/mappings, ACL/ownership takeover, and same-user concurrent mutation of all intentionally writable fresh build working state (including dependency/project/Kotlin caches, process temp, Gradle daemon/native/transform state, and module outputs) during Gradle execution and the post-exit-to-final-guard window",
+  "java_home_explicit": true,
+  "gradle_home_explicit": true,
+  "gradle_user_home_fresh": true,
+  "project_cache_fresh": true,
+  "kotlin_runtime_fresh": true,
+  "module_build_output_fresh": true,
+  "inherited_injection_variables_absent": true,
+  "repo_local_properties_empty_guarded": true,
+  "repo_implicit_build_logic_absent": true,
+  "path_chain_directories_deny_rename": true,
+  "concurrency_guard": {
+    "scope": "windows-logon-session-all-c1b-builds",
+    "canonical_trust_tuple_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "named_mutex_held": true
+  },
+  "recovery_journal": {
+    "schema": "tablet-layout-c1b-build-environment-acl-recovery/v1",
+    "directory_entry_count": 8,
+    "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "file_deny_write_delete": true
+  },
+  "debug_keystore": {
+    "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "source_ordinary_single_link_guarded": true,
+    "isolated_copy_equal": true,
+    "isolated_user_home_other_config_absent": true,
+    "files_deny_write_delete": true,
+    "directories_acl_protected": true
+  },
+  "host_process": {
+    "windows_system_directory_api_trust_root": true,
+    "host_launcher_cmd_not_executed": true,
+    "runner_direct_launcher_is_java": true,
+    "comspec_is_os_trust_root": true,
+    "wrapper_not_executed": true,
+    "gradle_entrypoint": "org.gradle.launcher.GradleMain",
+    "minimal_path": true,
+    "fresh_process_temp": true
+  },
+  "repository_inputs": {
+    "file_count": 41,
+      "catalog_sha256": "sha256:1b2982d977d72192edde4d3bca9c3d9cbb9978c569ab699c6d17cd1125ee3cc1",
+    "directory_root_count": 3,
+    "protected_directory_count": 8,
+    "files_deny_write_delete": true,
+    "directories_acl_protected": true
+  },
+  "jdk": {
+    "vendor": "Oracle Corporation",
+    "version": "21.0.5",
+    "archive_sha256": "sha256:6cce98ce38b86737c63912fd1df9ecfee1fe209ab08c0e1e16500f054e67de48",
+    "file_count": 418,
+    "catalog_sha256": "sha256:6426cb4a162d91e6b9069014d9ab9e3e7ff79635fe85e66b03e8e1b1c3265ca9",
+    "java_sha256": "sha256:e66f719f6cfedc986d5f30012793d61ee4b26673de00cb9d28353a1b8833b496",
+    "jvm_sha256": "sha256:d56cf961f03e1af960b390103b3f03e27faf324a1ffb801e84155b4386dc47a6",
+    "release_sha256": "sha256:66815dfd67d03fa9f48a4268296ff18baf3bfbb287b1898f00acd17dc55a4bde",
+    "modules_sha256": "sha256:9372088036cfd572a9636e0df08960ac8d4de2aa0c772e08608c0abf50f13edd",
+    "signature_status": "Valid",
+    "signature_subject": "CN=\"Oracle America, Inc.\", O=\"Oracle America, Inc.\", L=Redwood City, S=California, C=US",
+    "signature_certificate_sha256": "sha256:4b59d847d7187ed910590d52798fd7e6fcb13396092fdbc1fe43b2311aab6eeb",
+    "tree_files_deny_write_delete": true,
+    "tree_directories_acl_protected": true
+  },
+  "git": {
+    "version": "2.55.0.windows.3",
+    "file_count": 9576,
+    "identity_count": 9489,
+    "internal_hardlink_group_count": 85,
+    "catalog_sha256": "sha256:4c5e585b10f371f181b42b60948a883409c0efda910b869ff98c2e5604267458",
+    "cmd_git_sha256": "sha256:7b7971dd13f0c3a284e538601f2f9770b3a87dfaccb5fb52d68141c67ed22364",
+    "mingw64_bin_git_sha256": "sha256:1a0043555d254618f2d56c936c3d9a1fbfb878bc878416a133c346bc7835eda9",
+    "mingw64_libexec_git_core_git_sha256": "sha256:1a0043555d254618f2d56c936c3d9a1fbfb878bc878416a133c346bc7835eda9",
+    "libcurl_sha256": "sha256:799f7eefc3c9da9c80ec5aea221a02b3afe2c5350c6b45fd5a4865e7e2d4e574",
+    "libssl_sha256": "sha256:feb5b300e0b3a021fed481178f3d66896426576d4d13b85a304d2a3809b25bfd",
+    "libcrypto_sha256": "sha256:0330b5f558996f297d687e1a2b2fcc2cacf883b16baef74aaef35285d7c1231c",
+    "signature_status": "Valid",
+    "signature_subject": "CN=Johannes Schindelin, O=Johannes Schindelin, L=Bruehl, C=DE",
+    "signature_certificate_sha256": "sha256:1668941fff36fec818a596ffde6589f34daa6c6434069e60f356b7755f084e63",
+    "child_environment_cleared": true,
+    "minimal_path": true,
+    "system_and_global_config_disabled": true,
+    "hardlink_topology_internal": true,
+    "tree_files_deny_write_delete": true,
+    "tree_directories_acl_protected": true
+  },
+  "android_sdk": {
+    "build_tools": {
+      "version": "35.0.0",
+      "file_count": 170,
+      "catalog_sha256": "sha256:a832390563b10614954d13f682e2848bd4d9815480c6fe3ef8a42361a356e782",
+      "source_properties_sha256": "sha256:084847d70abc41284feee7ea717e7c92eab0d1be05f048c27445a359cfe109d8",
+      "package_xml_sha256": "sha256:43b68163de67b4ef1816059a6934d819fa951688433bc2fac849b825eeeaaf3c",
+      "apksigner_jar_sha256": "sha256:00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7"
+    },
+    "platform": {
+      "version": "android-35",
+      "file_count": 11163,
+      "catalog_sha256": "sha256:33a80cd529f09e178d1202351e8cf14d6ab2cb21b931b085194a5d7fe3156248",
+      "android_jar_sha256": "sha256:4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b",
+      "source_properties_sha256": "sha256:2c3764446f335ad2cc44383a0360fe247620b7c774ec100d5087771ac8ed3b28",
+      "package_xml_sha256": "sha256:d1d333d5cf7f7be677871ab043cdd10665bd1636cdb7d8d173561ea0e4554435",
+      "framework_aidl_sha256": "sha256:732ec4d49719b7473549d2010d37380946b52bfc2600b5f7fcecf549017e88b2",
+      "core_for_system_modules_jar_sha256": "sha256:4279b723c69c851cea46a36d75ffd294649ec041176c0b786bafe62d1d1af1a6"
+    },
+    "platform_tools": {
+      "version": "37.0.1",
+      "file_count": 15,
+      "catalog_sha256": "sha256:98c794076c786c9d7f921d419ae87f5c8a93601e5f149a8dbcb3be1570a3866b",
+      "source_properties_sha256": "sha256:2dccd788c0234d8cf7f7457377e57f57527a86a629c6ed54feb8af0f549dac38",
+      "package_xml_sha256": "sha256:55d46ccebf3bba4ad4349d3747643bb0ed38aac843ce6c87782b009328f73e1e"
+    },
+    "isolated": {
+      "file_count": 11348,
+      "catalog_sha256": "sha256:09a7cb46fef3c2b505330e4dfa09abbe4ba739412e8450e97b3458ddbaf473d8",
+      "package_roots": ["build-tools/35.0.0", "platform-tools", "platforms/android-35"],
+      "dot_known_packages_absent": true,
+      "tools_package_xml_absent": true,
+      "emulator_package_xml_absent": true
+    },
+    "source_trees_files_deny_write_delete": true,
+    "child_uses_only_isolated_sdk": true,
+    "tree_files_deny_write_delete": true,
+    "tree_directories_acl_protected": true
+  },
+  "gradle": {
+    "version": "8.9",
+    "distribution": "gradle-8.9-bin",
+    "file_count": 299,
+    "catalog_sha256": "sha256:d0974b974d9471723cccf083f59e8772448b5bb6672f479bddd63897ba665189",
+    "wrapper_not_executed": true,
+    "entrypoint": "org.gradle.launcher.GradleMain",
+    "cli_main_jar": "lib/gradle-gradle-cli-main-8.9.jar",
+    "cli_main_jar_sha256": "sha256:3a4ccf05dec4dda1a5bc44b6639542b4fb9100b78b6d610517db16c6bbe26137",
+    "instrumentation_agent_sha256": "sha256:56e23876af24d37a597a820d4e6f866dceac8ab5f1c3450a8132c31c7ce0f6c0",
+    "tree_files_deny_write_delete": true,
+    "tree_directories_acl_protected": true,
+    "init_d_acl_protected": true
+  }
+}

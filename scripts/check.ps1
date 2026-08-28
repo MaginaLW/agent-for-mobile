@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.5
 <#
 提交前一键校验。
 
@@ -174,19 +174,23 @@ Invoke-Check '派单台账离线测试' {
 
 if ($SkipGradle) {
     Write-Host '跳过 gradle（-SkipGradle）：Kotlin 侧未验证。' -ForegroundColor Yellow
-    $results.Add([pscustomobject]@{ Name = 'gateway JVM 单测与构建'; Ok = $null; Seconds = 0; Detail = '已跳过' })
+    $results.Add([pscustomobject]@{ Name = 'Android JVM/Lint/构建'; Ok = $null; Seconds = 0; Detail = '已跳过' })
 }
 else {
-    Invoke-Check 'gateway JVM 单测与构建' {
+    Invoke-Check 'Android JVM/Lint/构建' {
         $gradlew = Join-Path $RepoRoot 'app\gradlew.bat'
         if (-not (Test-Path -LiteralPath $gradlew -PathType Leaf)) { throw "缺少 gradle wrapper：$gradlew" }
         Invoke-Logged -LogName 'gradle.log' -FilePath $gradlew -Arguments @(
             '-p', (Join-Path $RepoRoot 'app'),
-            ':gateway:testDebugUnitTest', ':gateway:testReleaseUnitTest', ':gateway:assembleDebug',
+            ':gateway:testDebugUnitTest', ':gateway:testReleaseUnitTest',
+            ':gateway:lintDebug', ':gateway:lintRelease', ':gateway:assembleDebug', ':gateway:assembleRelease',
             ':gateway:verifyTabletC1aReleaseAbsence', ':gateway:verifyTabletC1bReleaseAbsence',
-            '--console=plain'
+            ':tablet-c1b-probe:testDebugUnitTest', ':tablet-c1b-probe:testReleaseUnitTest',
+            ':tablet-c1b-probe:lintDebug', ':tablet-c1b-probe:lintRelease',
+            ':tablet-c1b-probe:verifyTabletC1bReadOnlyArtifact',
+            '--dependency-verification=strict', '--console=plain'
         ) | Out-Null
-        'testDebug + testRelease + assembleDebug + C1a/C1b release absence'
+        'gateway/probe testDebug + testRelease + lintDebug/lintRelease + assembleDebug/assembleRelease + release absence/artifact proof'
     }
 }
 

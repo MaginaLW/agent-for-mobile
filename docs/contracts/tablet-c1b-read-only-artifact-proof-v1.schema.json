@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-for-mobile.local/contracts/tablet-c1b-read-only-artifact-proof-v1.schema.json",
+  "title": "Tablet T-L1 C1b dedicated read-only APK proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "policy", "git_sha", "build_challenge_sha256", "application_id",
+    "accessibility_service_component", "provider_component", "provider_authority",
+    "forbidden_match_count", "manifest_mutating_capability_count",
+    "manifest_extra_component_count", "dependency_allowlist", "axml_parser", "named_read_only_waivers",
+    "dex_dependency_string_waivers", "scanned_sources", "scanned_build_inputs", "variants"
+  ],
+  "properties": {
+    "schema": { "const": "tablet-c1b-read-only-artifact-proof/v1" },
+    "policy": { "const": "tl1-c1b-read-only/v2" },
+    "git_sha": { "$ref": "#/$defs/gitSha" },
+    "build_challenge_sha256": { "$ref": "#/$defs/hash" },
+    "application_id": { "const": "dev.magina.gateway" },
+    "accessibility_service_component": { "const": "dev.magina.gateway.a11y.GatewayA11yService" },
+    "provider_component": { "const": "dev.magina.gateway.tablet.c1b.TabletC1bContentProvider" },
+    "provider_authority": { "const": "dev.magina.gateway.tablet.c1b" },
+    "forbidden_match_count": { "const": 0 },
+    "manifest_mutating_capability_count": { "const": 0 },
+    "manifest_extra_component_count": { "const": 0 },
+    "dependency_allowlist": { "$ref": "#/$defs/dependencyAllowlist" },
+    "axml_parser": { "$ref": "#/$defs/axmlParser" },
+    "named_read_only_waivers": {
+      "const": [{
+        "id": "accessibility-node-refresh-read-freshness",
+        "relative_path": "app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt",
+        "exact_invocation": "node.androidNode.refresh()",
+        "count": 1
+      }]
+    },
+    "dex_dependency_string_waivers": {
+      "const": ["FileOutputStream", "forName", "getMethod", "java/lang/Runtime", "java/lang/reflect", "java/nio/file/Files"]
+    },
+    "scanned_sources": {
+      "type": "array", "minItems": 12, "maxItems": 12, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/sourceProof" }
+    },
+    "scanned_build_inputs": {
+      "type": "array", "minItems": 11, "maxItems": 11, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/sourceProof" }
+    },
+    "variants": {
+      "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/variantProof" }
+    }
+  },
+  "$defs": {
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "hash": { "type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}$" },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[A-Za-z0-9._/-]+$" },
+    "coordinate": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$" },
+    "dependencyArtifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coordinate", "artifact_sha256"],
+      "properties": {
+        "coordinate": { "$ref": "#/$defs/coordinate" },
+        "artifact_sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "dependencyAllowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["passed", "resolved_artifacts"],
+      "properties": {
+        "passed": { "const": true },
+        "resolved_artifacts": {
+          "const": [
+            {
+              "coordinate": "org.jetbrains.kotlin:kotlin-stdlib:2.0.20",
+              "artifact_sha256": "sha256:fb169596659a518357c4b2c16f43dc75ab1c4980565ed4b4a317a050e5e39006"
+            },
+            {
+              "coordinate": "org.jetbrains:annotations:13.0",
+              "artifact_sha256": "sha256:ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478"
+            }
+          ]
+        }
+      }
+    },
+    "axmlParser": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tool", "build_tools_version", "aapt2_relative_path", "aapt2_sha256"],
+      "properties": {
+        "tool": { "const": "aapt2" },
+        "build_tools_version": { "const": "35.0.0" },
+        "aapt2_relative_path": { "const": "build-tools/35.0.0/aapt2.exe" },
+        "aapt2_sha256": { "const": "sha256:cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564" }
+      }
+    },
+    "sourceProof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256"],
+      "properties": {
+        "relative_path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "dexProof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256"],
+      "properties": {
+        "relative_path": { "type": "string", "pattern": "^classes(?:[2-9]|[1-9][0-9]+)?\\.dex$" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "variantProof": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "apk_relative_path", "apk_sha256", "merged_manifest_sha256", "packaged_manifest_sha256", "packaged_manifest_axml_dump_sha256", "packaged_a11y_axml_dump_sha256", "packaged_manifest_exact_tree_verified", "packaged_a11y_exact_tree_verified", "dex_entries"],
+      "properties": {
+        "name": { "enum": ["debug", "release"] },
+        "apk_relative_path": { "$ref": "#/$defs/relativePath" },
+        "apk_sha256": { "$ref": "#/$defs/hash" },
+        "merged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "packaged_manifest_sha256": { "$ref": "#/$defs/hash" },
+        "packaged_manifest_axml_dump_sha256": { "$ref": "#/$defs/hash" },
+        "packaged_a11y_axml_dump_sha256": { "$ref": "#/$defs/hash" },
+        "packaged_manifest_exact_tree_verified": { "const": true },
+        "packaged_a11y_exact_tree_verified": { "const": true },
+        "dex_entries": {
+          "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/dexProof" }
+        }
+      }
+    }
+  }
+}
