@@ -343,7 +343,7 @@ execution` 早就把它钉住了，其中 `confirmerCalls == 0` 正是"卡从未
 又被用户明示决定不声明。**用一个语义不符的 category 去换排序权重，从一开始就没换到。**
 已去掉；紧急度本来就由通道 `IMPORTANCE_HIGH` 提供。
 
-## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28，无机）
+## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
 
 “命令参数是受控的”还不足以证明宿主执行闭包。C1b 把固定 HEAD 的 implementation/build inputs 收敛为
 恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序、逐文件 hash，再动态重算
@@ -357,6 +357,13 @@ fresh user/project/Kotlin cache 与 strict dependency verification 是同一条�
 已钉定依赖，所以这是“允许联网的严格验证构建”，不是 offline dependency build；恢复 `--offline` 会把环境
 偶然缓存状态误写进可重复性条件。专用 probe 同轮构建 Debug/Release，artifact proof 必须再从 merged manifest、
 DEX、依赖闭包与受控 aapt2 输出交叉证明，而不能把“Debug APK 存在”当作 probe 已进入两个变体。
+
+调试签名的合法写入窗口也必须进入协议。受控 build child environment 设置 fresh `ANDROID_USER_HOME`；
+`debug.keystore.lock` 在 Gradle 前预创建为空 ordinary file，只有 Gradle 阶段允许同一 identity 受控可写，返回后立即
+seal。pre/post binding 只允许 `post_gradle_lock_sealed_achieved` 从 false 到 true；canonical token topology、
+TrustGuard/creation-time nested guard 引用身份、workspace `user.home` 与 pre-seal binding 一起固定 build→seal
+邻接，防止移动调用、shadow/rebind 或等值 guard 替换。清理 Gradle zip-cache 时可在 cleanup-only inventory
+接受合法 `=` 文件名，但证据 catalog 继续拒绝这个未转义分隔符。
 
 清空继承环境不是删除几个危险变量：Git 调用由 guard 重建 exact 15-key environment；Gradle、签名器、ADB、
 aapt2、T0 则使用各自显式受控 environment，所有启动均启用 `ClearEnvironment`。source SDK 只作被冻结输入，
@@ -372,14 +379,16 @@ success sidecar 应当最后发布：先暂存并完成全部验证，再关闭 
 sidecar。这条顺序让“成功”
 同时证明没有活跃 guard/lease 残留，而不只是业务校验曾经到过绿色分支。
 
-当前无机机械证据为 build-env 23/23、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
-7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 最终稳定复跑通过：fake ADB total 219 = valid 211 +
+full offline gate 已通过（host coverage 26/26）；当前专项机械证据为 build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
+7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB total 219 = valid 211 +
 rejected 8；valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device
-子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，real
-ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
+子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
+E2E 内 real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
 auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无锁、listener、server、build-root
-等残留。它支持
+等残留。另行 real isolated host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool
+1 次、real ADB 0、repository inputs 41；独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b
+build/install/runner 或真机取证。它支持
 的主张严格限于 guard 建立后的 filesystem-and-environment integrity；不覆盖同用户进程内存注入、预先持有
 的可写 handle/mapping、
-ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。本轮没有执行真实受控构建、
-最终独审或平板取证；新 fixed HEAD 仍需单独的 C1b build/install/只读授权。
+ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。本轮没有访问平板；新 fixed HEAD
+仍需单独的 C1b build/install/只读授权，C1a 授权不可复用。

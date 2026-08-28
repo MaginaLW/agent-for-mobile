@@ -8,12 +8,13 @@
 > `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
 > 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
 > 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成
-> 无机候选：observation 49/49、coverage 89/89、host-only 26/26；build-env 23/23、artifact 32/32、ADB
-> provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E
+> 无机候选：observation 49/49、coverage 89/89，full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB
+> provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E
 > 最终稳定复跑通过，fake ADB 219（211 valid + 8 rejected）、runner process 7、fake Gradle 6、fake signer
-> 10、real ADB/JDK/Gradle 0，escaped child/listener/side-effect 0、cleanup 无残留。
-> real isolated host build smoke、最终独审和平板取证均未执行；下一步
-> 提交并固定新 HEAD，再针对该 HEAD 单独取得一次 C1b build/install/只读授权，C1a 授权不可复用。
+> 10、synthetic E2E 内 real ADB/JDK/Gradle executions 0，escaped child/listener/side-effect 0、cleanup 无残留。另行 real isolated
+> host build smoke 已完整退出 0（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审
+> P0/P1/P2=0；它不构成 fixed-SHA C1b build/install/runner 或平板取证。下一步固定最终 clean HEAD，再针对
+> 该 HEAD 单独取得一次 C1b build/install/只读授权，C1a 授权不可复用。
 
 ## 当前能力边界
 
@@ -203,13 +204,20 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   guards 与 device lease cleanup 都成功后才原子发布并读回。环境主张只覆盖 guard 建立后的 filesystem-and-environment
   integrity，不覆盖同用户内存注入、预先存在的可写 handle/mapping、ACL/ownership takeover，或对刻意可写
   fresh build state 的同用户并发篡改。
-- **当前只有无机证明（2026-08-28）**：build-env 23/23、artifact 32/32、ADB provenance 6/6、private
-  ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 最终稳定复跑通过：fake
+- **调试签名锁必须把合法写入窗口显式化（C1b 复核，2026-08-28）**：受控 build child environment 设置
+  fresh `ANDROID_USER_HOME`。在启动 Gradle 前预创建空 `debug.keystore.lock` 并保存 creation-time guard/
+  `user.home` anchor；只有 Gradle 期间允许同一 identity 受控可写，进程返回后紧邻 seal。pre/post binding 除
+  `post_gradle_lock_sealed_achieved=false -> true` 外不得变化；canonical token topology 先于语义 AST 校验，
+  因而移动调用、shadow/rebind 与 nested guard 等值替换都不能绕过。cleanup 按引用去重并关闭 anchor/current；
+  证据 catalog 仍拒绝 `=` 分隔符，只给清理 Gradle zip-cache 的 inventory 开放合法 `=` 文件名。
+- **当前 A 道证明（2026-08-28）**：build-env 27/27、artifact 32/32、ADB provenance 6/6、private
+  ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake
   ADB 219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是
   device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，
-  real ADB/JDK/Gradle 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
-  attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。本轮没有访问平板，也没有执行 real
-  isolated host build smoke、真实受控 C 道构建或最终独审，不能复用 C1a 授权。
+  synthetic E2E 内 real ADB/JDK/Gradle executions 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
+  auto-start attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。另行 real isolated host build
+  smoke 已完整退出 0：JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41；独立复审 P0/P1/P2=0。
+  该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证；本轮没有访问平板，不能复用 C1a 授权。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧

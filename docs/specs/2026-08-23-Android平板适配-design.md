@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer、受控 runner 与 synthetic gates 已形成候选，真实受控构建、最终独审与平板取证尚未执行，待提交并固定新 HEAD 后取得单独授权
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer、受控 runner、synthetic gates、real isolated host build smoke 与独立复审已完成，fixed-SHA build/install/runner 和真机取证尚未执行，待固定最终 clean HEAD 后取得单独授权
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -160,13 +160,14 @@ A3/C1b 已按上述真实形态另开 `tablet-layout-observation/c1b-v1`，没�
 闭合保存 platform window type、root handle/binding、subtree completeness、run-local projection pane、direct focus
 与 IME inventory；任何 display/type/layer/touchable/active/focused 结构读取失败都不得以默认值冒充稳定窗口，
 opaque subtree、截断 window inventory 或未知 window type 也不能提升 focus/hidden IME。observation gate 49/49、coverage
-89/89、self 5/5、host-only 26/26 已通过；build-env 23/23、artifact 32/32、ADB provenance 6/6、private
-ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 最终稳定复跑通过：fake ADB
+89/89、self 5/5、full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB provenance 6/6、private
+ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB
 219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是 device
-子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，real
-ADB/JDK/Gradle 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
-attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。这些均是无机证据，
-不代表已完成真实受控构建、最终独审或平板取证。
+子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
+E2E 内 real ADB/JDK/Gradle 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
+attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。另行 real isolated host build smoke 已完整
+退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、repository inputs 41；独立复审
+P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner 或平板取证。
 
 C1b 受控构建把固定 HEAD 的 implementation/build inputs 收敛为 41 个普通文件（新增 private ADB server
 module），并以动态重算的
@@ -183,6 +184,11 @@ sidecar 只在 private server、build/artifact guards 与 device lease 全部 cl
 主张只覆盖 guard 建立后的文件系统与环境
 完整性，不覆盖同用户进程内存注入、预先持有的可写 handle/mapping、ACL/ownership takeover，或对刻意保留
 可写的 fresh build state 的同用户并发篡改。
+
+受控 build child environment 设置 fresh `ANDROID_USER_HOME`。`debug.keystore.lock` 在 Gradle 前预创建为空文件，
+只有 Gradle 期间允许同一 identity 受控可写，返回后立即封印；pre/post binding 只允许 achieved false→true。runner 的
+canonical token topology 与 guard/anchor/pre-seal 三重绑定固定 build→seal 邻接并拒绝 shadow/rebind/equal-swap。
+证据 catalog 继续拒绝未转义 `=`，仅 cleanup inventory 接受 Gradle zip-cache 的合法 `=` 文件名。
 
 本轮尚未访问平板，C1a 授权已消费且不能复用。下一步是提交并固定完整新 HEAD，再针对该 HEAD 单独取得
 一次 C1b build/install/只读采集授权。
@@ -222,7 +228,8 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    T-L1/P0/execution 未通过。
 4. **A3/C1b 只读契约**：保持 v2 contract/schema/validator/fixture 原样冻结，另建 C1b pure-a11y
    diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。41-file closure、专用 probe 的
-   Debug/Release artifact proof 和 host synthetic gates 已闭合；真实受控构建、最终独审与平板取证仍未执行。
+   Debug/Release artifact proof、host synthetic gates、real isolated host build smoke 与独立复审已闭合；fixed-SHA
+   build/install/runner 与平板取证仍未执行。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
    topology 成立，T-L1 语义布局与 P0 仍未通过。固定新 HEAD 后必须另取一次 C1b build/install/只读授权。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
@@ -282,10 +289,12 @@ coverage 45/45、self 3/3，Debug 373/373、Release 261/261，标准全门通过
 标准全门为 C1a 15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、
 runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。fixed SHA
 `4b96f89...` 已完成唯一 origin/read-only C1a；diagnostic 仍 blocked，runtime/layout/P0/execution 不放行。
-C1b observation 49/49、coverage 89/89、self 5/5、host-only 26/26；build-env 23/23、artifact 32/32、ADB
-provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E
+C1b observation 49/49、coverage 89/89、self 5/5，full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB
+provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E
 稳定复跑通过，fake ADB 219（211 valid + 8 rejected；server start/status/kill/exit 6/6/4/6、device 195/T0
-4）、runner process 7、fake Gradle 6、fake signer 10、repository inputs 41、real ADB/JDK/Gradle 0；Job
+4）、runner process 7、fake Gradle 6、fake signer 10、repository inputs 41、E2E 内 real ADB/JDK/Gradle 0；Job
 limits 1/4、auto-start attempts 2、escaped effects 0、cleanup 无残留。41-file
-implementation/build-input catalog 与专用 Debug/Release artifact proof 已纳入候选，但真实受控构建、最终独审
-和平板取证仍未执行；下一步提交并固定 C1b 新 HEAD，再单独取得该 HEAD 的 build/install/只读授权。
+implementation/build-input catalog 与专用 Debug/Release artifact proof 已纳入候选。另行 real isolated host build
+smoke 已通过（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审 P0/P1/P2=0；它不构成
+fixed-SHA C1b build/install/runner 或平板取证。下一步固定最终 clean HEAD，再单独取得该 HEAD 的
+build/install/只读授权。

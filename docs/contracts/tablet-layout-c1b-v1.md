@@ -15,18 +15,19 @@ A 道公共入口 `scripts/run-tablet-layout-observation-c1b-v1-offline-gate.ps1
 exact case/coverage、Kotlin direct-focus 跨层 requirement 与永久 false/unsupported 安全结论原子写入固定
 `.checks/tablet-tl1-c1b-v1-offline-gate.summary.json`；consumer 只接受本次 run id 且两分钟内完成的摘要。
 
-宿主 runner 的独立 fake-ADB 门是 `scripts/run-tablet-layout-c1b-offline-gate.ps1`，固定输出
+宿主 runner 的 full offline gate 入口是 `scripts/run-tablet-layout-c1b-offline-gate.ps1`，本轮已通过并固定输出
 `.checks/tablet-tl1-c1b-host-v1-offline-gate.summary.json`。其 summary 是 closed、单行 strict JSON，绑定 fresh
 gate run id、两分钟 freshness/span、26 个 exact coverage、`fake_adb=true`、`real_adb_call_count=0`，并固定所有
 runtime/layout/action 结论为 false/unsupported；不能把旧摘要、删减 coverage 或自报成功当作门通过。
-完整 synthetic runner E2E 的 5 个场景已最终稳定复跑通过：fake ADB total 219 = valid 211 + rejected 8；
+完整 synthetic runner E2E 的 5 个场景已稳定复跑通过：fake ADB total 219 = valid 211 + rejected 8；
 valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device 子集，另观测
-server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，real ADB/JDK/Gradle
+server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic E2E 内 real ADB/JDK/Gradle
 executions 全为 0。direct client Job active limit 固定为 1，T0 四层 Job 链 limit 固定为 4；两次
 official-style auto-start attempts 均未逃逸，escaped child/listener/side-effect 为 0，正常 cleanup 无锁、
-listener、server、build-root 等残留。这些计数只证明 host orchestration，没有执行真实 JDK/Gradle build 或
-访问平板。专项门为 build-env 23/23、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
-7/7、aapt2 15/15、readonly 67/67。
+listener、server、build-root 等残留。这些计数只证明 host orchestration。另行 real isolated host build smoke
+已完整退出 0，并按实际运行证据记录受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、
+repository inputs 41；它不构成 fixed-SHA C1b build/install/runner 或真机取证。专项门为 build-env 27/27、
+artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。
 
 ## 构建与宿主信任闭包
 
@@ -49,7 +50,13 @@ build-environment guard 固定以下 filesystem-and-environment 输入：
   再复制为仅含这三包的 11,348-file isolated SDK，catalog SHA-256 固定为
   `sha256:09a7cb46fef3c2b505330e4dfa09abbe4ba739412e8450e97b3458ddbaf473d8`；
 - fresh Gradle user home、`user.home`、project/Kotlin cache、process temp、module build output 与固定 debug
-  keystore copy；仓库 `local.properties` 必须为空，隐式 `buildSrc/build-logic` 必须不存在；
+  keystore copy；受控 build child environment 显式把 `ANDROID_USER_HOME` 指向 fresh
+  `user.home/.android`，不设置 `ANDROID_PREFS_ROOT`；仓库 `local.properties` 必须为空，隐式
+  `buildSrc/build-logic` 必须不存在；
+- fresh `user.home/.android/debug.keystore.lock` 必须在 Gradle 前以空 ordinary file 预创建；只有 Gradle 阶段允许
+  该既有 identity 受控可写，进程返回后立即封印为不可写 held handle。pre/post binding 除
+  `post_gradle_lock_sealed_achieved=false -> true` 外必须 byte-for-byte 相同；TrustGuard、creation-time
+  DebugKeystoreGuard anchor、workspace `user.home` 与 pre-seal binding 必须全部按原引用/原值绑定；
 - source/input tree 的 file deny-write/delete、directory ACL/identity guards、recovery journal，以及同一 Windows
   logon session 内覆盖全部 C1b build 的全局互斥。
 
@@ -58,12 +65,17 @@ metadata、artifact allowlist/hash、fresh caches、no build/configuration cache
 专用 `:tablet-c1b-probe` 必须同时产生 Debug APK、Release unsigned APK 与
 `tablet-c1b-read-only-artifact-proof/v1`。宿主独立复核 proof 的 exact 12-file source allowlist、11-file build-input
 allowlist、dependency catalog、Debug/Release merged manifest、packaged manifest/a11y XML exact tree、连续编号 DEX
-entries/catalog，以及受信 aapt2 binding；不能用 gateway legacy APK 代替。
+entries/catalog，以及受信 aapt2 binding；不能用 gateway legacy APK 代替。证据 catalog 的相对路径仍拒绝未转义
+`=` 分隔符；只有删除 fresh module build output 的 cleanup inventory 可接受 Gradle zip-cache 的合法 `=` 文件名。
 
 Git child process 必须传 exact 15-key controlled environment 与 `ClearEnvironment`，禁用 system/global config
 并使用 minimal `PATH`；Gradle/apksigner、ADB、aapt2 与 T0 的所有 child process 也必须传各自显式受控
 environment 与 `ClearEnvironment`。Windows host paths 来自系统 API；全局 device lease path 只来自 Windows KnownFolder API，
 不能信任 `LOCALAPPDATA`。T0 sidecar 必须用 lease token 加入 runner 已持有的同一锁。
+
+runner 在任何语义 AST 检查前必须先匹配冻结的 canonical PowerShell token-topology SHA-256，并机械要求真实
+GradleMain 调用后紧邻且恰好一次三参数 keystore-lock seal。函数/alias/变量动态重绑定、同名调用点交换、
+guard 或 nested guard 的等值替换都必须 fail closed；cleanup 要按引用去重并同时关闭 creation-time anchor 与当前引用。
 
 sidecar 的 `threat_boundary` 必须 exact 为：
 

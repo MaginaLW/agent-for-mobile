@@ -125,21 +125,28 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   DEX catalog 与 aapt2 exact-tree
   证明。guard 冻结 Oracle JDK/Gradle、完整 ProgramFiles/Git 安装树与 source SDK，并只向 fresh isolated
   SDK/caches 构建；Git closure 为 9,576 paths、9,489 identities、85 个内部 hardlink groups 与 6 个关键 hash。
+  受控 build child environment 设置 fresh `ANDROID_USER_HOME`；空 `debug.keystore.lock` 在 Gradle 前预创建，
+  只有 Gradle 阶段允许该 lock 受控写入，返回后立即封印，binding 只允许
+  `post_gradle_lock_sealed_achieved` 从 false 迁移为 true。runner 的 canonical
+  token topology、guard/anchor 引用身份和 pre-seal binding 共同钉住 build→seal 邻接；cleanup-only inventory
+  允许 Gradle 合法的 `=` 文件名，但证据 catalog 仍拒绝这个未转义分隔符。
   依赖使用 strict verification 且允许联网，不再使用 `--offline`。Git 调用以 exact 15-key environment + `ClearEnvironment`
   启动；Gradle/签名器/ADB/aapt2/T0 使用各自受控 child environment + `ClearEnvironment`。全局设备 lease 只信
   Windows KnownFolder。全部设备命令只走随机 `49152..65535` loopback private `server nodaemon`，显式
   `-H/-P` + `ADB_SERVER_SOCKET`，证明 listener
   owner PID、server-status executable、job membership、cleanup 与 port rebind，default 5037 永不使用；success sidecar
   在 private server、build/artifact guards 与 device lease 全部 cleanup 后才原子发布。observation 49/49、coverage
-  89/89、self 5/5，host-only 26/26；build-env 23/23、artifact 32/32、ADB provenance 6/6、private ADB
-  16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 最终稳定复跑通过：fake ADB
+  89/89、self 5/5，full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
+  16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB
   219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是 device
-  子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，real
-  ADB/JDK/Gradle 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
-  attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。
+  子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
+  E2E 内 real ADB/JDK/Gradle 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
+  attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated host build smoke 已完整
+  退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、repository inputs 41；独立复审
+  P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证。
   第一批最多验证 origin、微信 window ownership、root projection、application topology 与 hidden IME；所有
-  语义/布局/动作结论仍固定 false/unsupported。新的受控真实构建、最终审查与平板访问尚未执行；C1a 授权
-  不复用，只有提交并固定新 HEAD 后才能向用户请求一次 C1b build/install/只读采集授权。
+  语义/布局/动作结论仍固定 false/unsupported。fixed-SHA C1b build/install/runner 与平板访问尚未执行；C1a
+  授权不复用，只有固定最终 clean HEAD 后才能向用户请求一次 C1b build/install/只读采集授权。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -170,7 +177,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 待提交并固定的新 HEAD | `codex/security-hardening` | **A 道实现、专项 synthetic 与 private-server E2E 完成；real isolated build smoke/终审/真机未做，待新授权** | 41-file catalog；private ADB 16/16、T0 sidecar 7/7、readonly 67/67；五场景 E2E 稳定复跑通过，fake ADB 219（211 valid + 8 rejected；server 6/6/4/6、device 195/T0 4）、runner process 7、fake Gradle 6、fake signer 10、real ADB/JDK/Gradle 0；Job limits 1/4、auto-start attempts 2、escaped effects 0、cleanup 无残留。不放行语义/layout/P0/execution |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 待本分支收尾后固定的新 HEAD | `codex/security-hardening` | **A 道实现、full offline gate、real isolated host build smoke 与独立复审完成；fixed-SHA build/install/runner 与真机取证未执行，待新授权** | host coverage 26/26、build-env 27/27、private ADB 16/16、T0 sidecar 7/7、readonly 70/70；五场景 synthetic E2E 稳定复跑通过，fake ADB 219（211 valid + 8 rejected；server 6/6/4/6、device 195/T0 4）、runner process 7、fake Gradle 6、fake signer 10、E2E 内 real ADB/JDK/Gradle 0；另行 smoke 为 JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41；独立复审 P0/P1/P2=0。不放行语义/layout/P0/execution |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

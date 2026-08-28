@@ -15,18 +15,19 @@ false/unsupported。
 通知用户连接平板前，必须同时满足：
 
 1. 工作树 clean，并把完整 40 位 commit SHA 固定到本次候选；
-2. C1b observation gate、host-only fake-ADB gate、五场景 host E2E 与旧 v2/C1a 回归全部通过；
+2. C1b observation gate、full offline gate（host coverage 26/26）、五场景 host E2E、real isolated host build smoke 与旧 v2/C1a 回归全部通过；
 3. build-env、artifact proof、ADB、aapt2、readonly 专项 gate 与凭据扫描全部通过；
 4. 独立审查无 P0/P1；
 5. 用户针对该 C1b SHA 明确授权一次真机 build/install/只读采集。C1a 授权不能复用。
 
-当前只完成无机实现与 synthetic 验证：build-env 23/23、artifact 32/32、ADB provenance 6/6、private ADB
-16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 已最终稳定复跑通过：fake ADB
+当前 A 道实现与验证已完成：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
+16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 已稳定复跑通过：fake ADB
 total 219 = valid 211 + rejected 8；valid 为 private server start/status/kill 6/6/4 + device calls 195，T0
 calls 4 是 device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository
-inputs 41，real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
-official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。它不证明真实
-JDK/Gradle build、真实 APK 或平板采集已经发生；ignored real isolated host build smoke 仍待执行。
+inputs 41，synthetic E2E 内 real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
+official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated
+host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、inputs 41；
+独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner、真实 APK 安装或平板采集。
 
 ## 受控构建与宿主边界
 
@@ -42,9 +43,14 @@ build-environment guard 冻结 JDK/Gradle 完整树、Windows Program Files Know
 Git tree binding 固定 9,576 paths、9,489 file identities、85 个内部 hardlink groups 与 6 个关键文件 hash；
 不能只冻结入口 executable。
 Gradle user home、`user.home`、project/Kotlin cache、process temp 与专用 module build output 都必须 fresh；
+受控 build child environment 把 `ANDROID_USER_HOME` 指向 fresh `user.home/.android`。runner 在 Gradle 前
+预创建空 `debug.keystore.lock`；只有 Gradle 阶段允许既有 identity 受控可写，返回后紧邻执行唯一 seal；pre/post binding
+只允许 `post_gradle_lock_sealed_achieved` 从 false 迁移为 true。canonical token topology、TrustGuard/creation-time
+anchor 引用身份和 pre-seal binding 共同阻止移动 seal、shadow/rebind 与等值 guard 替换。
 wrapper 不执行，由 held Java 直接启动 `GradleMain` 与 `ApkSignerTool`。构建允许联网，命令不得带
 `--offline`，但必须保留 `--dependency-verification=strict`、fresh caches、no build/configuration cache、
-rerun 与 no-daemon 约束。
+rerun 与 no-daemon 约束。证据 catalog 继续拒绝未转义 `=`；只有 cleanup inventory 可接受 Gradle zip-cache 的
+合法 `=` 文件名，以便安全盘点并删除 fresh module output。
 
 Git 调用必须使用 exact 15-key environment 并传 `ClearEnvironment`，同时禁用 system/global config、限制
 `PATH`；Gradle/apksigner、ADB、aapt2 与 T0 使用各自显式受控 child environment 并传 `ClearEnvironment`。
