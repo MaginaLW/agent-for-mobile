@@ -24,6 +24,7 @@ $DispatchLockLibrary=Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
 $Validator=Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v1-validator.ps1'
 $NativePathValidator=Join-Path $PSScriptRoot 'lib\tablet-layout-observation-v2-validator.ps1'
 $SidecarSchema=Join-Path $RepoRoot 'docs\contracts\tablet-layout-c1b-sidecar-v1.schema.json'
+$AttemptFailureSchema=Join-Path $RepoRoot 'docs\contracts\tablet-layout-c1b-attempt-failure-v1.schema.json'
 $ArtifactProofSchema=Join-Path $RepoRoot 'docs\contracts\tablet-c1b-read-only-artifact-proof-v1.schema.json'
 $ObservationSchema=Join-Path $RepoRoot 'docs\contracts\tablet-layout-observation-c1b-v1.schema.json'
 $T0Runner=Join-Path $PSScriptRoot 'run-tablet-intake.ps1'
@@ -42,7 +43,8 @@ $ImplementationPaths=[ordered]@{
     c1a_low_level_library_sha256=$C1aLibrary
     t0_runner_sha256=$T0Runner; t0_library_sha256=$T0Library; t0_adb_sidecar_cmd_sha256=$T0AdbCmd
     t0_adb_sidecar_script_sha256=$T0AdbScript; validator_sha256=$Validator; native_path_validator_sha256=$NativePathValidator
-    observation_schema_sha256=$ObservationSchema;sidecar_schema_sha256=$SidecarSchema;artifact_proof_schema_sha256=$ArtifactProofSchema
+    observation_schema_sha256=$ObservationSchema;sidecar_schema_sha256=$SidecarSchema
+    attempt_failure_schema_sha256=$AttemptFailureSchema;artifact_proof_schema_sha256=$ArtifactProofSchema
     android_layout_probe_sha256=(Join-Path $RepoRoot 'app\gateway\src\main\java\dev\magina\gateway\tablet\TabletLayoutProbe.kt')
     android_layout_probe_model_sha256=(Join-Path $RepoRoot 'app\gateway\src\main\java\dev\magina\gateway\tablet\TabletLayoutProbeModel.kt')
     android_model_sha256=(Join-Path $RepoRoot 'app\gateway\src\main\java\dev\magina\gateway\tablet\c1b\TabletC1bModel.kt')
@@ -67,7 +69,7 @@ $ImplementationPaths=[ordered]@{
     probe_a11y_config_sha256=(Join-Path $RepoRoot 'app\tablet-c1b-probe\src\main\res\xml\a11y_config.xml')
     probe_strings_sha256=(Join-Path $RepoRoot 'app\tablet-c1b-probe\src\main\res\values\strings.xml')
 }
-$runId=$null;$runDirectory=$null;$c1bDirectory=$null;$serial=$null;$nonce=$null;$buildChallenge=$null
+$attemptId=$null;$runId=$null;$runDirectory=$null;$c1bDirectory=$null;$serial=$null;$nonce=$null;$buildChallenge=$null
 $expectedArtifactSha=$null;$sessionStarted=$false;$sessionConsumed=$false;$abortAttempted=$false;$abortSucceeded=$false
 $failure=$null;$implementationHashes=$null;$adbTrustBefore=$null;$artifactProofBinding=$null
 $staticReadOnlyProof=$null;$t0ReadOnlyProof=$null;$readOnlyCounts=$null
@@ -75,6 +77,9 @@ $deviceLease=$null;$buildEnvironmentGuard=$null;$buildEnvironmentGuardAnchor=$nu
 $buildEnvironmentBinding=$null;$buildEnvironmentBindingRaw=$null;$buildEnvironmentPreSealBindingRaw=$null
 $buildEnvironment=$null;$gitEnvironment=$null;$adbTrustEnvironment=$null;$adbEnvironment=$null;$Java=$null;$signerArguments=$null;$archivedSignerSha=$null
 $adbServerGuard=$null;$adbServerBinding=$null;$adbServerBindingRaw=$null;$adbServerCleanupBinding=$null
+$privateAdbStartupDiagnostic=$null;$buildCompleted=$false;$artifactChecksCompleted=$false
+$privateAdbGuardCleanup='not_acquired';$artifactGuardsCleanup='not_acquired'
+$buildEnvironmentCleanup='not_acquired';$deviceLeaseCleanup='not_acquired'
 $aapt2TrustGuard=$null;$aapt2TrustBinding=$null
 $debugAxmlDumpBinding=$null;$releaseAxmlDumpBinding=$null
 $artifactProofGuard=$null;$debugApkGuard=$null;$releaseApkGuard=$null
@@ -231,13 +236,69 @@ function Assert-C1bHostReadOnlyFrozenState {
     }
 }
 function Write-C1bFailureEvidence([string]$ReasonCode) {
-    if([string]::IsNullOrWhiteSpace($c1bDirectory)-or -not(Test-Path -LiteralPath $c1bDirectory -PathType Container)){return}
-    $path=Join-Path $c1bDirectory 'tablet-layout-c1b-failure.json';if(Test-Path -LiteralPath $path){return}
-    $payload=[ordered]@{schema='tablet-layout-c1b-failure/v1';run_id=$runId;status='failed';reason_code=$ReasonCode
-        cleanup=if(-not $sessionStarted-or$sessionConsumed){'not_required'}elseif($abortAttempted-and$abortSucceeded){'completed'}else{'failed'}
+    if(-not[string]::IsNullOrWhiteSpace($c1bDirectory)-and(Test-Path -LiteralPath $c1bDirectory -PathType Container)){
+        $path=Join-Path $c1bDirectory 'tablet-layout-c1b-failure.json';if(Test-Path -LiteralPath $path){return}
+        $payload=[ordered]@{schema='tablet-layout-c1b-failure/v1';run_id=$runId;status='failed';reason_code=$ReasonCode
+            cleanup=if(-not $sessionStarted-or$sessionConsumed){'not_required'}elseif($abortAttempted-and$abortSucceeded){'completed'}else{'failed'}
+            runtime_origin_verified=$false;runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false
+            editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false}
+        [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload);return
+    }
+    if(-not[string]::IsNullOrWhiteSpace($runId)-or[string]::IsNullOrWhiteSpace($attemptId)-or
+       $null-eq$privateAdbStartupDiagnostic){return}
+    $startupCleanup='not_acquired'
+    if([int]$privateAdbStartupDiagnostic.server_attempt_count-gt0){
+        $startupCleanup='completed'
+        foreach($startupAttempt in $privateAdbStartupDiagnostic.attempts){
+            $serverProcess=$startupAttempt.server_process
+            $started=$null-ne$serverProcess-and[bool]$serverProcess.started
+            if([string]$startupAttempt.cleanup.status-cne'completed'-or
+               ($started-and-not[bool]$startupAttempt.cleanup.process_exit_observed)-or
+               -not[bool]$startupAttempt.cleanup.streams_drained-or
+               -not[bool]$startupAttempt.cleanup.port_rebind_verified){$startupCleanup='failed';break}
+            foreach($statusClient in $startupAttempt.status_clients){
+                $clientProcess=$statusClient.process
+                $clientStarted=$null-ne$clientProcess-and[bool]$clientProcess.started
+                if([string]$statusClient.cleanup.status-cne'completed'-or
+                   [string]$statusClient.cleanup.endpoint_contained-ceq'unverified'-or
+                   ($clientStarted-and-not[bool]$clientProcess.exit_observed)){
+                    $startupCleanup='failed';break
+                }
+            }
+            if($startupCleanup-ceq'failed'){break}
+        }
+    }
+    $overallCleanup=if($startupCleanup-cin@('not_acquired','completed')-and$artifactGuardsCleanup-ceq'completed'-and
+        $buildEnvironmentCleanup-ceq'completed'-and$deviceLeaseCleanup-ceq'completed'){'completed'}
+        elseif($startupCleanup-ceq'failed'-or$artifactGuardsCleanup-ceq'failed'-or
+        $buildEnvironmentCleanup-ceq'failed'-or$deviceLeaseCleanup-ceq'failed'){'failed'}else{'unverified'}
+    $payload=[ordered]@{
+        schema='tablet-layout-c1b-attempt-failure/v1';attempt_id=$attemptId;run_id=$null;status='failed'
+        reason_code='private_adb_startup_failed';failure_stage='private_adb_startup'
+        expected_commit_sha=$ExpectedCommitSha;commit_verified=$true;recorded_at_utc=Get-C1bTimestamp
+        runner_invocation_count=1;automatic_runner_retry_count=0
+        pre_device_operations=[ordered]@{build_completed=[bool]$buildCompleted;artifact_checks_completed=[bool]$artifactChecksCompleted
+            private_adb_guard_created=$false;device_discovery_count=0;install_count=0;t0_count=0;c1_count=0;c2_count=0
+            result_count=0;abort_count=0;capture_count=0}
+        private_adb_startup=$privateAdbStartupDiagnostic
+        cleanup=[ordered]@{provider_session='not_required';private_adb_startup=$startupCleanup
+            private_adb_guard='not_acquired';artifact_guards=$artifactGuardsCleanup
+            build_environment=$buildEnvironmentCleanup;device_lease=$deviceLeaseCleanup;overall=$overallCleanup}
         runtime_origin_verified=$false;runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false
-        editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false}
-    [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)
+        editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false
+    }
+    $raw=$payload|ConvertTo-Json -Depth 30 -Compress
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes($raw)
+    try{
+        if($bytes.Length-notin 1..65536){throw 'C1b early failure evidence byte count 越界。'}
+        if(-not($raw|Test-Json -SchemaFile $AttemptFailureSchema -ErrorAction SilentlyContinue)){
+            throw 'C1b early failure evidence schema 失败。'
+        }
+        Assert-TL1C1bAttemptFailureCrossBindings $payload
+        $path=Join-Path $EvidenceRoot ("tablet-layout-c1b-attempt-$attemptId.json")
+        if(Test-Path -LiteralPath $path){throw 'C1b early failure evidence 拒绝覆盖既有 attempt id。'}
+        [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)
+    }finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}
 }
 function Read-C1bControl([string]$Name,[string]$Uri) {
     $result=Invoke-TL1C1bAdb -AdbPath $AdbPath -Serial $serial -Name $Name -Value $Uri -TimeoutSec 30 `
@@ -279,6 +340,7 @@ try {
     $staticReadOnlyProof=Assert-TL1C1bRunnerReadOnlyAst $PSCommandPath
     $t0ReadOnlyProof=Assert-TL1C1bT0ReadOnlySurface $T0Runner $T0Library
     Assert-C1bHostReadOnlyFrozenState
+    $attemptId=(New-TL1C1aRunId)-replace'c1a','c1b'
     $deviceLease=Open-DispatchLock -Path (Get-DispatchGlobalLockPath) `
         -Owner "tablet-layout-c1b:$ExpectedCommitSha"
     $gitPath=Find-C1bTrustedGitPath
@@ -367,6 +429,7 @@ try {
     }
     $buildEnvironmentBindingRaw=$buildEnvironmentBinding|ConvertTo-Json -Depth 20 -Compress
     Assert-C1bFrozenState
+    $buildCompleted=$true
     foreach($freshPath in @($Apk,$ReleaseApk,$ArtifactProof)){
         if(-not(Test-Path -LiteralPath $freshPath -PathType Leaf)){throw "fresh C1b dedicated artifact 缺失：$freshPath。"}
         $freshItem=Get-Item $freshPath -Force
@@ -401,6 +464,7 @@ try {
         -Operation 'C1b debug APK signer 证书复核' -Environment $buildEnvironment `
         -ClearEnvironment -TimeoutSec 60
     $signerSha=ConvertFrom-C1bSignerDigest $signerResult.Text
+    $artifactChecksCompleted=$true
 
     $adbServerGuard=Open-TL1C1bPrivateAdbServerGuard `
         -AdbPath $AdbPath -ProcessEnvironment $adbTrustEnvironment
@@ -429,7 +493,7 @@ try {
         throw 'C1b 需要用户启用并绑定无障碍服务。'
     }
 
-    $runId=(New-TL1C1aRunId)-replace'c1a','c1b';$runDirectory=Join-Path $EvidenceRoot $runId
+    $runId=$attemptId;$runDirectory=Join-Path $EvidenceRoot $runId
     $pwsh=(Get-Process -Id $PID).Path
     $t0Environment=[hashtable]$adbEnvironment.Clone()
     $t0Environment['TL1_C1A_PWSH_PATH']=$pwsh;$t0Environment['TL1_C1A_T0_SIDECAR_SCRIPT']=$T0AdbScript
@@ -629,22 +693,36 @@ try {
     $pendingSidecarBytes=[Text.UTF8Encoding]::new($false).GetBytes($sidecarRaw)
     $successMessage="T-L1 C1b 受控只读采集完成：$sidecarPath";$exitCode=0
 }catch{
+    if($null-ne$_.Exception.Data['TL1C1bPrivateAdbStartupDiagnostic']){
+        $privateAdbStartupDiagnostic=$_.Exception.Data['TL1C1bPrivateAdbStartupDiagnostic']
+    }
     if($null-ne$needsUserPayload){$exitCode=2}else{$failure=$_.Exception.Message;$exitCode=1}
 }
 finally{
     if($sessionStarted-and-not$sessionConsumed-and-not$abortAttempted-and$serial-and$nonce){$abortAttempted=$true;try{$abort=Read-C1bControl content_abort $uris.abort;Assert-TL1C1bAbortTerminalControl $abort $abortExpectedGeneration $abortExpectedC1Count $abortExpectedC2Count $abortExpectedCommitted;$abortSucceeded=$true}catch{$abortSucceeded=$false}}
     $cleanupFailures=[Collections.Generic.List[string]]::new()
     if($null-ne$adbServerGuard-and-not[bool]$adbServerGuard.Disposed){
+        $privateAdbGuardCleanup='completed'
         try{$adbServerCleanupBinding=Close-TL1C1bPrivateAdbServerGuard $adbServerGuard}
-        catch{$cleanupFailures.Add($_.Exception.Message)}
+        catch{$privateAdbGuardCleanup='failed';$cleanupFailures.Add($_.Exception.Message)}
     }
+    $artifactGuardSeen=$false;$artifactGuardsCleanup='not_acquired'
     foreach($guard in @(
         $archivedReleaseManifestGuard,$archivedDebugManifestGuard,$archivedReleaseApkGuard,$archivedDebugApkGuard,$archivedProofGuard,
         $releaseMergedManifestGuard,$debugMergedManifestGuard,$releaseApkGuard,$debugApkGuard,$artifactProofGuard,
         $aapt2TrustGuard
-    )){if($null-ne$guard){try{$guard.Guard.Dispose()}catch{$cleanupFailures.Add($_.Exception.Message)}}}
-    if($null-ne$buildEnvironmentGuard){try{Close-TL1C1bBuildEnvironmentTrustGuard $buildEnvironmentGuard}catch{$cleanupFailures.Add($_.Exception.Message)}}
-    if($null-ne$deviceLease){try{[void](Close-DispatchLockLease -Lease $deviceLease)}catch{$cleanupFailures.Add($_.Exception.Message)}}
+    )){if($null-ne$guard){$artifactGuardSeen=$true;try{$guard.Guard.Dispose()}catch{$artifactGuardsCleanup='failed';$cleanupFailures.Add($_.Exception.Message)}}}
+    if($artifactGuardSeen-and$artifactGuardsCleanup-cne'failed'){$artifactGuardsCleanup='completed'}
+    if($null-ne$buildEnvironmentGuard){$buildEnvironmentCleanup='completed';try{Close-TL1C1bBuildEnvironmentTrustGuard $buildEnvironmentGuard}catch{$buildEnvironmentCleanup='failed';$cleanupFailures.Add($_.Exception.Message)}}
+    if($null-ne$deviceLease){
+        $deviceLeaseCleanup='completed'
+        try{
+            if((($deviceLeaseCloseResult=Close-DispatchLockLease -Lease $deviceLease)-isnot[bool])-or
+               -not$deviceLeaseCloseResult){
+                $deviceLeaseCleanup='failed';$cleanupFailures.Add('C1b global device lease 未完成最终清理。')
+            }
+        }catch{$deviceLeaseCleanup='failed';$cleanupFailures.Add($_.Exception.Message)}
+    }
     if($cleanupFailures.Count-ne0){
         $cleanupFailure='C1b guard cleanup 未完整完成：'+($cleanupFailures-join' | ')
         if([string]::IsNullOrWhiteSpace($failure)){$failure=$cleanupFailure}else{$failure+='；'+$cleanupFailure}

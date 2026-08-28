@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-for-mobile.local/contracts/tablet-layout-c1b-attempt-failure-v1.schema.json",
+  "title": "Tablet T-L1 C1b failure before run-id promotion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "attempt_id", "run_id", "status", "reason_code", "failure_stage",
+    "expected_commit_sha", "commit_verified", "recorded_at_utc",
+    "runner_invocation_count", "automatic_runner_retry_count", "pre_device_operations",
+    "private_adb_startup", "cleanup", "runtime_origin_verified", "runtime_evidence",
+    "layout_accepted", "wechat_layout_verified", "editor_action_ready", "p0_capability",
+    "execution_grant"
+  ],
+  "properties": {
+    "schema": { "const": "tablet-layout-c1b-attempt-failure/v1" },
+    "attempt_id": { "$ref": "#/$defs/attemptId" },
+    "run_id": { "type": "null" },
+    "status": { "const": "failed" },
+    "reason_code": { "const": "private_adb_startup_failed" },
+    "failure_stage": { "const": "private_adb_startup" },
+    "expected_commit_sha": { "$ref": "#/$defs/gitSha" },
+    "commit_verified": { "const": true },
+    "recorded_at_utc": { "$ref": "#/$defs/timestamp" },
+    "runner_invocation_count": { "const": 1 },
+    "automatic_runner_retry_count": { "const": 0 },
+    "pre_device_operations": { "$ref": "#/$defs/preDeviceOperations" },
+    "private_adb_startup": { "$ref": "#/$defs/startupDiagnostic" },
+    "cleanup": { "$ref": "#/$defs/hostCleanup" },
+    "runtime_origin_verified": { "const": false },
+    "runtime_evidence": { "const": false },
+    "layout_accepted": { "const": false },
+    "wechat_layout_verified": { "const": false },
+    "editor_action_ready": { "const": false },
+    "p0_capability": { "const": "unsupported" },
+    "execution_grant": { "const": false }
+  },
+  "$defs": {
+    "attemptId": {
+      "type": "string",
+      "minLength": 37,
+      "maxLength": 37,
+      "pattern": "^tl1-c1b-[0-9]{8}t[0-9]{6}z-[0-9a-f]{12}$"
+    },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "hash": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 28,
+      "maxLength": 28,
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"
+    },
+    "cleanupState": {
+      "type": "string",
+      "enum": ["not_acquired", "not_required", "completed", "failed", "unverified"]
+    },
+    "preDeviceOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build_completed", "artifact_checks_completed", "private_adb_guard_created",
+        "device_discovery_count", "install_count", "t0_count", "c1_count", "c2_count",
+        "result_count", "abort_count", "capture_count"
+      ],
+      "properties": {
+        "build_completed": { "const": true },
+        "artifact_checks_completed": { "const": true },
+        "private_adb_guard_created": { "const": false },
+        "device_discovery_count": { "const": 0 },
+        "install_count": { "const": 0 },
+        "t0_count": { "const": 0 },
+        "c1_count": { "const": 0 },
+        "c2_count": { "const": 0 },
+        "result_count": { "const": 0 },
+        "abort_count": { "const": 0 },
+        "capture_count": { "const": 0 }
+      }
+    },
+    "startupDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "outcome", "final_substage", "server_attempt_count", "attempts"],
+      "properties": {
+        "schema": { "const": "tablet-layout-c1b-private-adb-startup-diagnostic/v1" },
+        "outcome": { "const": "failed" },
+        "final_substage": { "$ref": "#/$defs/startupSubstage" },
+        "server_attempt_count": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "attempts": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/serverAttempt" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "server_attempt_count": { "const": 0 } },
+            "required": ["server_attempt_count"]
+          },
+          "then": {
+            "properties": { "final_substage": { "const": "port_selection_timeout" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "final_substage": { "const": "port_selection_timeout" } },
+            "required": ["final_substage"]
+          },
+          "then": {
+            "properties": {
+              "server_attempt_count": { "const": 0 },
+              "attempts": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "final_substage": { "not": { "const": "port_selection_timeout" } }
+            },
+            "required": ["final_substage"]
+          },
+          "then": {
+            "properties": { "attempts": { "minItems": 1 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "final_substage": { "const": "server_attempt_cleanup" } },
+            "required": ["final_substage"]
+          },
+          "then": {
+            "properties": {
+              "server_attempt_count": { "minimum": 1 },
+              "attempts": {
+                "minItems": 1,
+                "contains": {
+                  "type": "object",
+                  "properties": {
+                    "terminal_substage": {
+                      "not": {
+                        "enum": ["port_selection_timeout", "server_attempt_cleanup"]
+                      }
+                    },
+                    "cleanup": {
+                      "type": "object",
+                      "properties": { "status": { "const": "failed" } },
+                      "required": ["status"]
+                    }
+                  },
+                  "required": ["terminal_substage", "cleanup"]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "startupSubstage": {
+      "type": "string",
+      "enum": [
+        "server_job_create", "server_process_start", "server_stream_drain",
+        "server_job_membership", "server_process_exit_before_ready",
+        "server_process_exit_during_status", "server_output_overflow", "listener_ownership",
+        "server_status_client", "server_status_contract", "server_ready_recheck",
+        "startup_timeout", "server_attempt_cleanup", "port_selection_timeout",
+        "unexpected_failure"
+      ]
+    },
+    "serverAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal", "terminal_substage", "listener_observed", "server_process",
+        "status_clients", "cleanup"
+      ],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "terminal_substage": { "$ref": "#/$defs/startupSubstage" },
+        "listener_observed": { "type": "boolean" },
+        "server_process": { "$ref": "#/$defs/nullableProcess" },
+        "status_clients": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/statusClient" }
+        },
+        "cleanup": { "$ref": "#/$defs/attemptCleanup" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status_clients": { "minItems": 1 } },
+            "required": ["status_clients"]
+          },
+          "then": {
+            "properties": {
+              "terminal_substage": {
+                "enum": ["server_status_client", "server_process_exit_during_status"]
+              },
+              "listener_observed": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "terminal_substage": {
+                "enum": ["server_status_client", "server_process_exit_during_status"]
+              }
+            },
+            "required": ["terminal_substage"]
+          },
+          "then": {
+            "properties": {
+              "status_clients": { "minItems": 1 },
+              "listener_observed": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "cleanup": {
+                "properties": { "status": { "const": "completed" } },
+                "required": ["status"]
+              }
+            },
+            "required": ["cleanup"]
+          },
+          "then": {
+            "properties": { "server_process": { "type": "object" } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "cleanup": {
+                "properties": { "status": { "const": "completed" } },
+                "required": ["status"]
+              },
+              "server_process": {
+                "type": "object",
+                "properties": { "started": { "const": true } },
+                "required": ["started"]
+              }
+            },
+            "required": ["cleanup", "server_process"]
+          },
+          "then": {
+            "properties": {
+              "server_process": {
+                "properties": { "exit_observed": { "const": true } }
+              },
+              "cleanup": {
+                "properties": { "process_exit_observed": { "const": true } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "server_process": { "type": "null" } },
+            "required": ["server_process"]
+          },
+          "then": {
+            "properties": {
+              "cleanup": {
+                "properties": {
+                  "status": { "const": "failed" },
+                  "process_exit_observed": { "const": false }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nullableProcess": {
+      "oneOf": [
+        { "$ref": "#/$defs/process" },
+        { "type": "null" }
+      ]
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["started", "exit_observed", "exit_code", "stdout", "stderr"],
+      "properties": {
+        "started": { "type": "boolean" },
+        "exit_observed": { "type": "boolean" },
+        "exit_code": { "type": ["integer", "null"], "minimum": -2147483648, "maximum": 2147483647 },
+        "stdout": { "$ref": "#/$defs/stream" },
+        "stderr": { "$ref": "#/$defs/stream" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "started": { "const": false } },
+            "required": ["started"]
+          },
+          "then": {
+            "properties": {
+              "exit_observed": { "const": false },
+              "exit_code": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "exit_observed": { "const": false } },
+            "required": ["exit_observed"]
+          },
+          "then": {
+            "properties": { "exit_code": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "exit_observed": { "const": true } },
+            "required": ["exit_observed"]
+          },
+          "then": {
+            "properties": {
+              "started": { "const": true },
+              "exit_code": { "type": "integer" }
+            }
+          }
+        }
+      ]
+    },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observed_bytes", "captured_bytes", "overflowed", "captured_sha256",
+        "strict_utf8", "classification"
+      ],
+      "properties": {
+        "observed_bytes": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+        "captured_bytes": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "overflowed": { "type": "boolean" },
+        "captured_sha256": { "$ref": "#/$defs/hash" },
+        "strict_utf8": { "type": "boolean" },
+        "classification": {
+          "type": "string",
+          "enum": ["empty", "unsupported_listen_host", "fatal", "other_text", "invalid_utf8"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "overflowed": { "const": false } },
+            "required": ["overflowed"]
+          },
+          "then": {
+            "properties": { "observed_bytes": { "maximum": 1048576 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "overflowed": { "const": true } },
+            "required": ["overflowed"]
+          },
+          "then": {
+            "properties": {
+              "observed_bytes": { "minimum": 4097 },
+              "captured_bytes": { "minimum": 4096 }
+            }
+          }
+        }
+      ]
+    },
+    "statusClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "terminal_substage", "process", "cleanup"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "terminal_substage": {
+          "type": "string",
+          "enum": [
+            "server-status_create-job", "server-status_start", "server-status_execute",
+            "server-status_output-overflow", "server-status_timeout",
+            "server-status_stream-drain", "server-status_process-exit",
+            "server-status_stderr", "server-status_stdout-utf8",
+            "server-status_job-membership", "server-status_cleanup", "server-status_unknown"
+          ]
+        },
+        "process": { "$ref": "#/$defs/nullableProcess" },
+        "cleanup": { "$ref": "#/$defs/clientCleanup" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "process": { "type": "null" } },
+            "required": ["process"]
+          },
+          "then": {
+            "properties": {
+              "cleanup": {
+                "properties": { "status": { "const": "failed" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "clientCleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "endpoint_contained"],
+      "properties": {
+        "status": { "type": "string", "enum": ["completed", "failed"] },
+        "endpoint_contained": { "type": "string", "enum": ["held", "reusable", "unverified"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "completed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": { "endpoint_contained": { "enum": ["held", "reusable"] } }
+          }
+        }
+      ]
+    },
+    "attemptCleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "process_exit_observed", "streams_drained", "port_rebind_verified"],
+      "properties": {
+        "status": { "type": "string", "enum": ["completed", "failed"] },
+        "process_exit_observed": { "type": "boolean" },
+        "streams_drained": { "type": "boolean" },
+        "port_rebind_verified": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "completed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "streams_drained": { "const": true },
+              "port_rebind_verified": { "const": true }
+            }
+          }
+        }
+      ]
+    },
+    "hostCleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_session", "private_adb_startup", "private_adb_guard", "artifact_guards",
+        "build_environment", "device_lease", "overall"
+      ],
+      "properties": {
+        "provider_session": { "const": "not_required" },
+        "private_adb_startup": { "$ref": "#/$defs/cleanupState" },
+        "private_adb_guard": { "const": "not_acquired" },
+        "artifact_guards": { "$ref": "#/$defs/cleanupState" },
+        "build_environment": { "$ref": "#/$defs/cleanupState" },
+        "device_lease": { "$ref": "#/$defs/cleanupState" },
+        "overall": { "type": "string", "enum": ["completed", "failed", "unverified"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "overall": { "const": "completed" } },
+            "required": ["overall"]
+          },
+          "then": {
+            "properties": {
+              "private_adb_startup": { "enum": ["not_acquired", "completed"] },
+              "artifact_guards": { "const": "completed" },
+              "build_environment": { "const": "completed" },
+              "device_lease": { "const": "completed" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "overall": { "const": "failed" } },
+            "required": ["overall"]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": { "private_adb_startup": { "const": "failed" } },
+                "required": ["private_adb_startup"]
+              },
+              {
+                "properties": { "artifact_guards": { "const": "failed" } },
+                "required": ["artifact_guards"]
+              },
+              {
+                "properties": { "build_environment": { "const": "failed" } },
+                "required": ["build_environment"]
+              },
+              {
+                "properties": { "device_lease": { "const": "failed" } },
+                "required": ["device_lease"]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -4,7 +4,12 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bPrivateAdbServerSchema = 'tablet-layout-c1b-private-adb-server/v1'
+$script:TL1C1bPrivateAdbStartupDiagnosticSchema = 'tablet-layout-c1b-private-adb-startup-diagnostic/v1'
+$script:TL1C1bPrivateAdbStartupDiagnosticDataKey = 'TL1C1bPrivateAdbStartupDiagnostic'
+$script:TL1C1bPrivateAdbClientDiagnosticDataKey = 'TL1C1bPrivateAdbClientDiagnostic'
+$script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey = 'TL1C1bPrivateAdbServerAttemptDiagnostic'
 $script:TL1C1bPrivateAdbHost = '127.0.0.1'
+$script:TL1C1bPrivateAdbListenHost = 'localhost'
 $script:TL1C1bPrivateAdbMinimumPort = 49152
 $script:TL1C1bPrivateAdbMaximumPortExclusive = 65536
 
@@ -1097,7 +1102,9 @@ function Assert-TL1C1bPrivateAdbServerStatus {
         throw 'C1b private adb server-status 不得含空记录。'
     }
     $stringFields = [Collections.Generic.HashSet[string]]::new(
-        [string[]]@('version','build','executable_absolute_path','log_absolute_path','os','trace_level'),
+        [string[]]@(
+            'version','build','executable_absolute_path','log_absolute_path','os','trace_level',
+            'keystore_path','known_hosts_path'),
         [StringComparer]::Ordinal)
     $booleanFields = [Collections.Generic.HashSet[string]]::new(
         [string[]]@('usb_backend_forced','mdns_backend_forced','burst_mode','mdns_enabled'),
@@ -1106,6 +1113,7 @@ function Assert-TL1C1bPrivateAdbServerStatus {
         [string[]]@('usb_backend','mdns_backend'), [StringComparer]::Ordinal)
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $reportedExecutable = $null
+    $reportedUsbBackend = $null
     foreach ($line in $lines) {
         $match = [regex]::Match($line, '^([a-z][a-z0-9_]{0,63}): (.+)$')
         if (-not $match.Success) { throw 'C1b private adb server-status field grammar 无效。' }
@@ -1124,10 +1132,13 @@ function Assert-TL1C1bPrivateAdbServerStatus {
                 throw 'C1b private adb server-status bool field grammar 无效。'
             }
         } elseif ($enumFields.Contains($name)) {
-            if ($name -ceq 'usb_backend' -and $value -cnotin @('UNKNOWN_USB','NATIVE','LIBUSB')) {
+            if ($name -ceq 'usb_backend' -and
+                $value -cnotin @('UNKNOWN_USB','NATIVE','LIBUSB','USB_DISABLED','LIBADBUSB')) {
                 throw 'C1b private adb server-status usb enum 无效。'
             }
-            if ($name -ceq 'mdns_backend' -and $value -cnotin @('UNKNOWN_MDNS','BONJOUR','OPENSCREEN')) {
+            if ($name -ceq 'usb_backend') { $reportedUsbBackend = $value }
+            if ($name -ceq 'mdns_backend' -and
+                $value -cnotin @('UNKNOWN_MDNS','BONJOUR','OPENSCREEN','LIBADBMDNS','MDNS_DISABLED')) {
                 throw 'C1b private adb server-status mdns enum 无效。'
             }
         } else { throw 'C1b private adb server-status 出现未知字段。' }
@@ -1135,6 +1146,9 @@ function Assert-TL1C1bPrivateAdbServerStatus {
     if ([string]::IsNullOrWhiteSpace($reportedExecutable) -or
         -not [IO.Path]::IsPathFullyQualified($reportedExecutable)) {
         throw 'C1b private adb server-status 缺少绝对 executable_absolute_path。'
+    }
+    if ($reportedUsbBackend -cnotin @('NATIVE','LIBUSB','LIBADBUSB')) {
+        throw 'C1b private adb server-status 未证明可用 USB backend。'
     }
     $reportedCanonical = Resolve-TL1C1bPrivateAdbExecutable $reportedExecutable
     $expectedCanonical = Resolve-TL1C1bPrivateAdbExecutable $ExpectedExecutablePath
@@ -1202,6 +1216,88 @@ function Wait-TL1C1bPrivateAdbEndpointContained {
     throw 'C1b private adb client cleanup 后 endpoint 未受控。'
 }
 
+function New-TL1C1bPrivateAdbOutputDiagnostic {
+    param([Parameter(Mandatory)][TL1C1bBoundedWriteStream]$Stream)
+
+    $bytes = $Stream.Snapshot()
+    try {
+        $sha256 = 'sha256:' + [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        $strictUtf8 = $false
+        $classification = 'invalid_utf8'
+        try {
+            $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+            $strictUtf8 = $true
+            if ($text.Length -eq 0) {
+                $classification = 'empty'
+            } elseif ($text.Contains('listening on specified hostname currently unsupported',
+                    [StringComparison]::Ordinal)) {
+                $classification = 'unsupported_listen_host'
+            } elseif ($text -cmatch '(?i)(?:^|[^a-z])(?:fatal|abort)(?:[^a-z]|$)') {
+                $classification = 'fatal'
+            } else {
+                $classification = 'other_text'
+            }
+        } catch { }
+        return [pscustomobject][ordered]@{
+            observed_bytes = [long]$Stream.ObservedBytes
+            captured_bytes = [int]$bytes.Length
+            overflowed = [bool]$Stream.Overflowed
+            captured_sha256 = $sha256
+            strict_utf8 = $strictUtf8
+            classification = $classification
+        }
+    } finally {
+        if ($bytes.Length -ne 0) { [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+}
+
+function New-TL1C1bPrivateAdbProcessDiagnostic {
+    param(
+        [AllowNull()]$Started,
+        [Parameter(Mandatory)][TL1C1bBoundedWriteStream]$Stdout,
+        [Parameter(Mandatory)][TL1C1bBoundedWriteStream]$Stderr
+    )
+
+    $exitObserved = $false
+    $exitCode = $null
+    if ($null -ne $Started) {
+        try {
+            if ($Started.Process.HasExited) {
+                $exitObserved = $true
+                $exitCode = [int]$Started.Process.ExitCode
+            }
+        } catch { }
+    }
+    return [pscustomobject][ordered]@{
+        started = $null -ne $Started
+        exit_observed = $exitObserved
+        exit_code = $exitCode
+        stdout = New-TL1C1bPrivateAdbOutputDiagnostic $Stdout
+        stderr = New-TL1C1bPrivateAdbOutputDiagnostic $Stderr
+    }
+}
+
+function New-TL1C1bPrivateAdbStartupException {
+    param(
+        [Parameter(Mandatory)][string]$FinalSubstage,
+        [Parameter(Mandatory)][AllowEmptyCollection()]
+        [Collections.Generic.List[object]]$Attempts
+    )
+
+    $diagnostic = [pscustomobject][ordered]@{
+        schema = $script:TL1C1bPrivateAdbStartupDiagnosticSchema
+        outcome = 'failed'
+        final_substage = $FinalSubstage
+        server_attempt_count = [int]$Attempts.Count
+        attempts = [object[]]$Attempts.ToArray()
+    }
+    $exception = [InvalidOperationException]::new(
+        "C1b private adb server startup 失败 ($FinalSubstage)。")
+    $exception.Data[$script:TL1C1bPrivateAdbStartupDiagnosticDataKey] = $diagnostic
+    return $exception
+}
+
 function Invoke-TL1C1bPrivateAdbClientCommand {
     param(
         [Parameter(Mandatory)][string]$AdbPath,
@@ -1224,6 +1320,10 @@ function Invoke-TL1C1bPrivateAdbClientCommand {
     $resultText = $null
     $failed = $false
     $failureCategory = 'unknown'
+    $endpointContained = 'unverified'
+    $processDiagnostic = $null
+    $cleanupComplete = $true
+    $streamReadersEstablished = $false
     try {
         $failureCategory = 'create-job'
         $job = [TL1C1bPrivateAdbNative]::CreateKillOnCloseJob(1)
@@ -1234,6 +1334,7 @@ function Invoke-TL1C1bPrivateAdbClientCommand {
             (ConvertTo-TL1C1bPrivateAdbEnvironmentEntries $Environment),
             $job)
         $started.StandardInput.Dispose()
+        $failureCategory = 'job-membership'
         if (-not [TL1C1bPrivateAdbNative]::IsProcessAssigned(
                 $job, $started.Process.Handle)) {
             throw 'client job membership failed'
@@ -1241,22 +1342,34 @@ function Invoke-TL1C1bPrivateAdbClientCommand {
         $failureCategory = 'execute'
         $stdoutTask = $started.StandardOutput.CopyToAsync($stdout)
         $stderrTask = $started.StandardError.CopyToAsync($stderr)
+        $streamReadersEstablished = $true
         $watch = [Diagnostics.Stopwatch]::StartNew()
         while (-not $started.Process.HasExited) {
-            if ($stdout.Overflowed -or $stderr.Overflowed) { throw 'client output overflow' }
-            if ($watch.Elapsed.TotalSeconds -ge $TimeoutSec) { throw 'client timeout' }
+            if ($stdout.Overflowed -or $stderr.Overflowed) {
+                $failureCategory = 'output-overflow'; throw 'client output overflow'
+            }
+            if ($watch.Elapsed.TotalSeconds -ge $TimeoutSec) {
+                $failureCategory = 'timeout'; throw 'client timeout'
+            }
             Start-Sleep -Milliseconds 10
         }
+        $failureCategory = 'stream-drain'
         if (-not $stdoutTask.Wait(1000) -or -not $stderrTask.Wait(1000)) {
             throw 'client stream drain timeout'
         }
-        if ($stdout.Overflowed -or $stderr.Overflowed -or $started.Process.ExitCode -ne 0) {
-            throw 'client failed'
+        if ($stdout.Overflowed -or $stderr.Overflowed) {
+            $failureCategory = 'output-overflow'; throw 'client output overflow'
+        }
+        if ($started.Process.ExitCode -ne 0) {
+            $failureCategory = 'process-exit'; throw 'client process failed'
         }
         $stdoutBytes = $stdout.Snapshot()
         $stderrBytes = $stderr.Snapshot()
         try {
-            if ($stderrBytes.Length -ne 0) { throw 'client stderr not empty' }
+            if ($stderrBytes.Length -ne 0) {
+                $failureCategory = 'stderr'; throw 'client stderr not empty'
+            }
+            $failureCategory = 'stdout-utf8'
             $resultText = ConvertFrom-TL1C1bPrivateAdbStrictUtf8 `
                 $stdoutBytes "$Command stdout"
         } finally {
@@ -1266,34 +1379,59 @@ function Invoke-TL1C1bPrivateAdbClientCommand {
         $failureCategory = 'none'
     } catch { $failed = $true }
     finally {
+        if ($null -ne $started -and -not $streamReadersEstablished) {
+            $failed = $true
+            $cleanupComplete = $false
+        }
         if ($null -ne $job) {
-            try { $job.Dispose() } catch { $failed = $true }
+            try { $job.Dispose() } catch { $failed = $true; $cleanupComplete = $false }
         }
         if ($null -ne $started) {
             try {
                 if (-not $started.Process.HasExited -and
                     -not $started.Process.WaitForExit(2000)) {
                     $started.Process.Kill($true)
-                    if (-not $started.Process.WaitForExit(2000)) { $failed = $true }
+                    if (-not $started.Process.WaitForExit(2000)) {
+                        $failed = $true; $cleanupComplete = $false
+                    }
                 }
-            } catch { $failed = $true }
+            } catch { $failed = $true; $cleanupComplete = $false }
         }
         foreach ($task in @($stdoutTask, $stderrTask)) {
             if ($null -ne $task) {
-                try { if (-not $task.Wait(1000)) { $failed = $true } }
-                catch { $failed = $true }
+                try {
+                    if (-not $task.Wait(1000)) { $failed = $true; $cleanupComplete = $false }
+                } catch { $failed = $true; $cleanupComplete = $false }
             }
         }
         try {
-            [void](Wait-TL1C1bPrivateAdbEndpointContained `
-                $Port $ExpectedServerProcessId -TimeoutMs 2000)
-        } catch { $failed = $true }
-        if ($null -ne $started) { try { $started.Dispose() } catch { $failed = $true } }
-        try { $stdout.Dispose() } catch { $failed = $true }
-        try { $stderr.Dispose() } catch { $failed = $true }
+            $endpointContained = Wait-TL1C1bPrivateAdbEndpointContained `
+                $Port $ExpectedServerProcessId -TimeoutMs 2000
+        } catch { $failed = $true; $cleanupComplete = $false }
+        try {
+            $processDiagnostic = New-TL1C1bPrivateAdbProcessDiagnostic `
+                $started $stdout $stderr
+        } catch { $failed = $true; $cleanupComplete = $false }
+        if ($null -ne $started) {
+            try { $started.Dispose() } catch { $failed = $true; $cleanupComplete = $false }
+        }
+        try { $stdout.Dispose() } catch { $failed = $true; $cleanupComplete = $false }
+        try { $stderr.Dispose() } catch { $failed = $true; $cleanupComplete = $false }
     }
     if ($failed) {
-        throw "C1b private adb $Command client 失败 ($failureCategory)。"
+        if ($failureCategory -ceq 'none') { $failureCategory = 'cleanup' }
+        $diagnostic = [pscustomobject][ordered]@{
+            terminal_substage = "${Command}_$failureCategory"
+            process = $processDiagnostic
+            cleanup = [pscustomobject][ordered]@{
+                status = if ($cleanupComplete) { 'completed' } else { 'failed' }
+                endpoint_contained = $endpointContained
+            }
+        }
+        $exception = [InvalidOperationException]::new(
+            "C1b private adb $Command client 失败 ($failureCategory)。")
+        $exception.Data[$script:TL1C1bPrivateAdbClientDiagnosticDataKey] = $diagnostic
+        throw $exception
     }
     return $resultText
 }
@@ -1302,12 +1440,14 @@ function Start-TL1C1bPrivateAdbServerAttempt {
     param(
         [Parameter(Mandatory)][string]$AdbPath,
         [Parameter(Mandatory)][Collections.IDictionary]$Environment,
+        [Parameter(Mandatory)][ValidateRange(1, 32)][int]$Ordinal,
         [Parameter(Mandatory)][ValidateRange(49152, 65535)][int]$Port,
         [Parameter(Mandatory)][ValidateRange(4096, 1048576)][int]$MaximumOutputBytes
     )
 
     $socket = "tcp:$($script:TL1C1bPrivateAdbHost):$Port"
-    $arguments = [string[]]@('-L', $socket, 'server', 'nodaemon')
+    $listenSocket = "tcp:$($script:TL1C1bPrivateAdbListenHost):$Port"
+    $arguments = [string[]]@('-L', $listenSocket, 'server', 'nodaemon')
     $stdout = [TL1C1bBoundedWriteStream]::new($MaximumOutputBytes)
     $stderr = [TL1C1bBoundedWriteStream]::new($MaximumOutputBytes)
     $job = $null
@@ -1315,75 +1455,107 @@ function Start-TL1C1bPrivateAdbServerAttempt {
     $stdoutTask = $null
     $stderrTask = $null
     $failureCategory = 'create-job'
+    $attempt = [pscustomobject][ordered]@{
+        Ordinal = $Ordinal
+        StartedProcess = $null
+        Process = $null
+        ProcessId = 0
+        Job = $null
+        Stdout = $stdout
+        Stderr = $stderr
+        StdoutTask = $null
+        StderrTask = $null
+        Port = $Port
+        Socket = $socket
+        ListenerObserved = $false
+        StatusClients = [Collections.Generic.List[object]]::new()
+    }
     try {
         $job = [TL1C1bPrivateAdbNative]::CreateKillOnCloseJob(1)
+        $attempt.Job = $job
         $failureCategory = 'start'
         $started = [TL1C1bPrivateAdbNative]::StartInJob(
             $AdbPath,
             $arguments,
             (ConvertTo-TL1C1bPrivateAdbEnvironmentEntries $Environment),
             $job)
+        $attempt.StartedProcess = $started
+        $attempt.Process = $started.Process
+        $attempt.ProcessId = [int]$started.Process.Id
         $started.StandardInput.Dispose()
-        if (-not [TL1C1bPrivateAdbNative]::IsProcessAssigned(
-                $job, $started.Process.Handle) -or $started.Process.HasExited) {
-            throw 'server atomic job membership failed'
-        }
         $failureCategory = 'stream-drain'
         $stdoutTask = $started.StandardOutput.CopyToAsync($stdout)
+        $attempt.StdoutTask = $stdoutTask
         $stderrTask = $started.StandardError.CopyToAsync($stderr)
-        return [pscustomobject][ordered]@{
-            StartedProcess = $started
-            Process = $started.Process
-            ProcessId = [int]$started.Process.Id
-            Job = $job
-            Stdout = $stdout
-            Stderr = $stderr
-            StdoutTask = $stdoutTask
-            StderrTask = $stderrTask
-            Port = $Port
-            Socket = $socket
+        $attempt.StderrTask = $stderrTask
+        $failureCategory = 'job-membership'
+        if (-not [TL1C1bPrivateAdbNative]::IsProcessAssigned(
+                $job, $started.Process.Handle)) {
+            throw 'server atomic job membership failed'
         }
+        $failureCategory = 'process-exit'
+        if ($started.Process.HasExited) {
+            throw 'server exited before ready proof'
+        }
+        $failureCategory = 'none'
+        return $attempt
     } catch {
-        if ($null -ne $job) { try { $job.Dispose() } catch { } }
-        if ($null -ne $started) {
-            try {
-                if (-not $started.Process.HasExited) {
-                    $started.Process.Kill($true)
-                    [void]$started.Process.WaitForExit(2000)
-                }
-            } catch { }
+        $substage = switch ($failureCategory) {
+            'create-job' { 'server_job_create' }
+            'start' { 'server_process_start' }
+            'stream-drain' { 'server_stream_drain' }
+            'job-membership' { 'server_job_membership' }
+            'process-exit' { 'server_process_exit_before_ready' }
+            default { 'server_process_start' }
         }
-        foreach ($task in @($stdoutTask, $stderrTask)) {
-            if ($null -ne $task) { try { [void]$task.Wait(1000) } catch { } }
+        $diagnostic = $null
+        try {
+            $diagnostic = Stop-TL1C1bPrivateAdbServerAttempt `
+                $attempt -TerminalSubstage $substage
+        } catch {
+            $diagnostic = $_.Exception.Data[
+                $script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey]
         }
-        if ($null -ne $started) { try { $started.Dispose() } catch { } }
-        try { $stdout.Dispose() } catch { }
-        try { $stderr.Dispose() } catch { }
-        throw "C1b private adb server process/job 启动失败 ($failureCategory)。"
+        $exception = [InvalidOperationException]::new(
+            "C1b private adb server process/job 启动失败 ($failureCategory)。")
+        if ($null -ne $diagnostic) {
+            $exception.Data[$script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey] =
+                $diagnostic
+        }
+        throw $exception
     }
 }
 
 function Stop-TL1C1bPrivateAdbServerAttempt {
-    param([AllowNull()]$Attempt)
+    param(
+        [AllowNull()]$Attempt,
+        [Parameter(Mandatory)][string]$TerminalSubstage
+    )
 
-    if ($null -eq $Attempt) { return }
+    if ($null -eq $Attempt) { return $null }
     $failed = $false
+    $streamsDrained = $null -eq $Attempt.StartedProcess -or
+        ($null -ne $Attempt.StdoutTask -and $null -ne $Attempt.StderrTask)
+    if (-not $streamsDrained) { $failed = $true }
     if ($null -ne $Attempt.Job) {
         try { $Attempt.Job.Dispose() } catch { $failed = $true }
         $Attempt.Job = $null
     }
-    try {
-        if (-not $Attempt.Process.HasExited) {
-            if (-not $Attempt.Process.WaitForExit(2000)) {
-                $Attempt.Process.Kill($true)
-                if (-not $Attempt.Process.WaitForExit(2000)) { $failed = $true }
+    if ($null -ne $Attempt.Process) {
+        try {
+            if (-not $Attempt.Process.HasExited) {
+                if (-not $Attempt.Process.WaitForExit(2000)) {
+                    $Attempt.Process.Kill($true)
+                    if (-not $Attempt.Process.WaitForExit(2000)) { $failed = $true }
+                }
             }
-        }
-    } catch { $failed = $true }
+        } catch { $failed = $true }
+    }
     foreach ($task in @($Attempt.StdoutTask, $Attempt.StderrTask)) {
         if ($null -ne $task) {
-            try { if (-not $task.Wait(1000)) { $failed = $true } }
-            catch { $failed = $true }
+            try {
+                if (-not $task.Wait(1000)) { $failed = $true; $streamsDrained = $false }
+            } catch { $failed = $true; $streamsDrained = $false }
         }
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(3)
@@ -1397,12 +1569,39 @@ function Stop-TL1C1bPrivateAdbServerAttempt {
         Start-Sleep -Milliseconds 25
     } while ([DateTime]::UtcNow -lt $deadline)
     if (-not $portReusable) { $failed = $true }
-    try { $Attempt.StartedProcess.Dispose() } catch { $failed = $true }
+    $processDiagnostic = $null
+    try {
+        $processDiagnostic = New-TL1C1bPrivateAdbProcessDiagnostic `
+            $Attempt.StartedProcess $Attempt.Stdout $Attempt.Stderr
+    } catch { $failed = $true }
+    if ($null -ne $Attempt.StartedProcess) {
+        try { $Attempt.StartedProcess.Dispose() } catch { $failed = $true }
+    }
     try { $Attempt.Stdout.Dispose() } catch { $failed = $true }
     try { $Attempt.Stderr.Dispose() } catch { $failed = $true }
-    if ($failed) {
-        throw 'C1b private adb failed server attempt 未完整回收。'
+    $diagnostic = [pscustomobject][ordered]@{
+        ordinal = [int]$Attempt.Ordinal
+        terminal_substage = $TerminalSubstage
+        listener_observed = [bool]$Attempt.ListenerObserved
+        server_process = $processDiagnostic
+        status_clients = [object[]]$Attempt.StatusClients.ToArray()
+        cleanup = [pscustomobject][ordered]@{
+            status = if ($failed) { 'failed' } else { 'completed' }
+            process_exit_observed = if ($null -eq $processDiagnostic) {
+                $false
+            } else { [bool]$processDiagnostic.exit_observed }
+            streams_drained = $streamsDrained
+            port_rebind_verified = $portReusable
+        }
     }
+    if ($failed) {
+        $exception = [InvalidOperationException]::new(
+            'C1b private adb failed server attempt 未完整回收。')
+        $exception.Data[$script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey] =
+            $diagnostic
+        throw $exception
+    }
+    return $diagnostic
 }
 
 function Open-TL1C1bPrivateAdbServerGuard {
@@ -1420,6 +1619,7 @@ function Open-TL1C1bPrivateAdbServerGuard {
     $executableGuard = [IO.File]::Open(
         $canonicalAdb, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $attempt = $null
+    $startupAttempts = [Collections.Generic.List[object]]::new()
     try {
         $executableSha256 = Get-TL1C1bPrivateAdbSha256Stream $executableGuard
         $executableIdentity =
@@ -1440,38 +1640,62 @@ function Open-TL1C1bPrivateAdbServerGuard {
             $environment = New-TL1C1bPrivateAdbEnvironment $ProcessEnvironment $socket
             try {
                 $attempt = Start-TL1C1bPrivateAdbServerAttempt `
-                    $canonicalAdb $environment $port $MaximumOutputBytes
-            } catch { continue }
+                    $canonicalAdb $environment ($startupAttempts.Count + 1) $port $MaximumOutputBytes
+            } catch {
+                $attemptDiagnostic = $_.Exception.Data[
+                    $script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey]
+                if ($null -ne $attemptDiagnostic) { $startupAttempts.Add($attemptDiagnostic) }
+                $attempt = $null
+                $finalSubstage = if ($null -eq $attemptDiagnostic) {
+                    'server_process_start'
+                } else { [string]$attemptDiagnostic.terminal_substage }
+                throw (New-TL1C1bPrivateAdbStartupException `
+                    $finalSubstage $startupAttempts)
+            }
 
-            $terminalFailure = $false
+            $terminalSubstage = 'startup_timeout'
             while ([DateTime]::UtcNow -lt $deadline) {
-                if ($attempt.Process.HasExited) { break }
+                if ($attempt.Process.HasExited) {
+                    $terminalSubstage = 'server_process_exit_before_ready'; break
+                }
                 if ($attempt.Stdout.Overflowed -or $attempt.Stderr.Overflowed) {
-                    $terminalFailure = $true; break
+                    $terminalSubstage = 'server_output_overflow'; break
                 }
                 $owners = @(Get-TL1C1bPrivateAdbListenerOwners $port)
                 if ($owners.Count -gt 0) {
                     if ($owners.Count -ne 1 -or
                         [string]$owners[0].Address -cne $script:TL1C1bPrivateAdbHost -or
                         [int]$owners[0].ProcessId -ne [int]$attempt.ProcessId) {
-                        $terminalFailure = $true; break
+                        $terminalSubstage = 'listener_ownership'; break
                     }
+                    $attempt.ListenerObserved = $true
                     try {
                         $status = Invoke-TL1C1bPrivateAdbClientCommand `
                             $canonicalAdb $environment $port $attempt.ProcessId 'server-status' `
                             $ClientTimeoutSec $MaximumOutputBytes
                     } catch {
-                        if ($attempt.Process.HasExited) { break }
-                        Start-Sleep -Milliseconds 50
-                        continue
+                        $clientDiagnostic = $_.Exception.Data[
+                            $script:TL1C1bPrivateAdbClientDiagnosticDataKey]
+                        if ($null -ne $clientDiagnostic) {
+                            $attempt.StatusClients.Add([pscustomobject][ordered]@{
+                                ordinal = [int]$attempt.StatusClients.Count + 1
+                                terminal_substage = [string]$clientDiagnostic.terminal_substage
+                                process = $clientDiagnostic.process
+                                cleanup = $clientDiagnostic.cleanup
+                            })
+                        }
+                        $terminalSubstage = if ($attempt.Process.HasExited) {
+                            'server_process_exit_during_status'
+                        } else { 'server_status_client' }
+                        break
                     }
                     try {
                         [void](Assert-TL1C1bPrivateAdbServerStatus `
                             $status $canonicalAdb $executableIdentity)
-                    } catch { $terminalFailure = $true; break }
+                    } catch { $terminalSubstage = 'server_status_contract'; break }
                     if ($attempt.Process.HasExited -or
                         -not (Test-TL1C1bPrivateAdbListenerOwned $port $attempt.ProcessId)) {
-                        $terminalFailure = $true; break
+                        $terminalSubstage = 'server_ready_recheck'; break
                     }
                     $handle = [TL1C1bPrivateAdbGuardHandle]::new(
                         [guid]::NewGuid().ToString('N'))
@@ -1512,17 +1736,42 @@ function Open-TL1C1bPrivateAdbServerGuard {
                 }
                 Start-Sleep -Milliseconds 25
             }
-            try { Stop-TL1C1bPrivateAdbServerAttempt $attempt }
-            finally { $attempt = $null }
-            if ($terminalFailure) { throw 'C1b private adb server ownership/status proof 失败。' }
+            try {
+                $attemptDiagnostic = Stop-TL1C1bPrivateAdbServerAttempt `
+                    $attempt -TerminalSubstage $terminalSubstage
+                $startupAttempts.Add($attemptDiagnostic)
+            } catch {
+                $attemptDiagnostic = $_.Exception.Data[
+                    $script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey]
+                if ($null -ne $attemptDiagnostic) { $startupAttempts.Add($attemptDiagnostic) }
+                $terminalSubstage = 'server_attempt_cleanup'
+            } finally { $attempt = $null }
+            throw (New-TL1C1bPrivateAdbStartupException `
+                $terminalSubstage $startupAttempts)
         }
-        throw 'C1b private adb server 在有界时间内未 ready。'
+        throw (New-TL1C1bPrivateAdbStartupException `
+            'port_selection_timeout' $startupAttempts)
     } catch {
+        $caught = $_.Exception
         if ($null -ne $attempt) {
-            try { Stop-TL1C1bPrivateAdbServerAttempt $attempt } catch { }
+            try {
+                $attemptDiagnostic = Stop-TL1C1bPrivateAdbServerAttempt `
+                    $attempt -TerminalSubstage 'unexpected_failure'
+                $startupAttempts.Add($attemptDiagnostic)
+            } catch {
+                $attemptDiagnostic = $_.Exception.Data[
+                    $script:TL1C1bPrivateAdbServerAttemptDiagnosticDataKey]
+                if ($null -ne $attemptDiagnostic) { $startupAttempts.Add($attemptDiagnostic) }
+            }
+            $attempt = $null
         }
         if ($null -ne $executableGuard) { try { $executableGuard.Dispose() } catch { } }
-        throw
+        if ($null -eq $caught.Data[$script:TL1C1bPrivateAdbStartupDiagnosticDataKey] -and
+            $startupAttempts.Count -ne 0) {
+            $caught = New-TL1C1bPrivateAdbStartupException `
+                'unexpected_failure' $startupAttempts
+        }
+        throw $caught
     }
 }
 

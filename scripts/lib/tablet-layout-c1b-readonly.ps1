@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:d3d869050c703883d447609f4efea0a4c41794846a75879260de144ea0dce793'
+    'sha256:c65d14e082ac7566dd8f7c3406d9e8cfa52fd2920c214a64f2092d6ff28c1749'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -504,14 +504,15 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Assert-TL1C1bPrivateAdbServerGuardUnchanged=2',
         'Assert-TL1C1bPublishedEvidenceBinding=2','Assert-TL1C1bReadOnlyArtifactProof=2',
         'Assert-TL1C1bRunnerReadOnlyAst=2','Assert-TL1C1bSidecarCrossBindings=2',
-        'Assert-TL1C1bT0ReadOnlySurface=2','Close-DispatchLockLease=1',
+        'Assert-TL1C1bT0ReadOnlySurface=2','Assert-TL1C1bAttemptFailureCrossBindings=1',
+        'Close-DispatchLockLease=1',
         'Close-TL1C1bBuildEnvironmentTrustGuard=1','Close-TL1C1bPrivateAdbServerGuard=2',
         'ConvertFrom-C1bSignerDigest=2','ConvertFrom-TL1C1aStrictUtf8=3',
         'ConvertFrom-TL1C1bClosedJson=1','ConvertFrom-TL1C1bControl=1',
-        'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=8',
+        'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=9',
         'ConvertTo-TL1C1bReadOnlyCounts=1','Copy-TL1C1bGuardedArtifactAtomic=5',
         'Find-C1bTrustedGitPath=1','Get-C1bImplementationHashes=1',
-        'Get-C1bTimestamp=5','Get-DispatchGlobalLockPath=1','Get-Item=3',
+        'Get-C1bTimestamp=6','Get-DispatchGlobalLockPath=1','Get-Item=3',
         'Get-Process=1','Get-TL1C1aFileSha256=6',
         'Get-TL1C1aInstalledApkHostSha256=2','Get-TL1C1aInstalledApkPath=2',
         'Get-TL1C1aPackageBinding=2','Get-TL1C1aSha256Bytes=1',
@@ -524,7 +525,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Get-TL1C1bPackagedAxmlDumpBinding=2','Get-TL1C1bPrivateAdbClientEnvironment=1',
         'Get-TL1C1bTranscriptSha256=1','Get-TL1C1bZipDexProof=1',
         'Invoke-TL1C1aAdb=9','Invoke-TL1C1aProcess=3','Invoke-TL1C1bAdb=3',
-        'Invoke-TL1C1bPrivateAdbGuardedProcess=1','Join-Path=61','New-Item=1',
+        'Invoke-TL1C1bPrivateAdbGuardedProcess=1','Join-Path=63','New-Item=1',
         'New-TL1C1aRunId=1','New-TL1C1bUri=6','Open-DispatchLock=1',
         'Open-TL1C1bAapt2TrustGuard=1','Open-TL1C1bArtifactGuard=5',
         'Open-TL1C1bBuildEnvironmentTrustGuard=1','Open-TL1C1bPrivateAdbServerGuard=1',
@@ -532,11 +533,11 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory=1',
         'Seal-TL1C1bBuildEnvironmentDebugKeystoreLock=1',
         'Set-C1bAbortExpectedSnapshot=5','Set-StrictMode=1','Sort-Object=1',
-        'Split-Path=1','Start-Sleep=1','Test-Json=2','Test-Path=6',
+        'Split-Path=1','Start-Sleep=1','Test-Json=3','Test-Path=7',
         'Test-TabletLayoutObservationC1BV1TrustedRuntimeFile=1',
         'Test-TL1C1aDeviceBinding=2','Wait-TL1C1aA11yReady=1',
         'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-Host=2',
-        'Write-TL1C1aBytesAtomic=4','Write-TL1C1aJsonAtomic=1'
+        'Write-TL1C1aBytesAtomic=4','Write-TL1C1aJsonAtomic=2'
     )){
         $separator=$spec.LastIndexOf('=')
         $expectedRunnerCommandCounts.Add(
@@ -566,11 +567,11 @@ function Assert-TL1C1bRunnerReadOnlyAst {
     $expectedRunnerMemberCounts=
         [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
     foreach($spec in [string[]]@(
-        'Add=7','AddSeconds=1','Clear=4','Clone=1','Contains=1','Dispose=1',
-        'Equals=2','Format=1','GetBytes=4','GetEnumerator=3','GetFolderPath=2',
+        'Add=8','AddSeconds=1','Clear=5','Clone=1','Contains=1','Dispose=1',
+        'Equals=2','Format=1','GetBytes=5','GetEnumerator=3','GetFolderPath=2',
         'GetFullPath=9','GetRelativePath=2','GetTempPath=1',
-        'IsNullOrWhiteSpace=7','IsPathFullyQualified=4','Matches=1','Min=1',
-        'new=8','ReadAllBytes=2','ReferenceEquals=1','Replace=2','StartNew=2',
+        'IsNullOrWhiteSpace=9','IsPathFullyQualified=4','Matches=1','Min=1',
+        'new=9','ReadAllBytes=2','ReferenceEquals=1','Replace=2','StartNew=2',
         'StartsWith=1','Stop=2','ToArray=2','ToHexString=2',
         'ToLowerInvariant=3','ToString=1','TrimEnd=2','WriteLine=1'
     )){
@@ -995,6 +996,41 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
        $successCloseIndex-le$sessionConsumedIndex-or$sidecarIndex-le$successCloseIndex-or
        $finalCloseIndex-le$sidecarIndex){
         throw 'C1b runner private adb open/use/cleanup/publish ordering 漂移。'
+    }
+    $hostProofIndex=$parsed.Source.IndexOf(
+        'Assert-C1bHostReadOnlyFrozenState',[StringComparison]::Ordinal)
+    $attemptIdentityText='$attemptId=(New-TL1C1aRunId)-replace''c1a'',''c1b'''
+    $attemptIdentityIndex=$parsed.Source.IndexOf(
+        $attemptIdentityText,[StringComparison]::Ordinal)
+    $attemptIdentityLastIndex=$parsed.Source.LastIndexOf(
+        $attemptIdentityText,[StringComparison]::Ordinal)
+    $deviceLeaseOpenIndex=$parsed.Source.IndexOf(
+        '$deviceLease=Open-DispatchLock',[StringComparison]::Ordinal)
+    $runPromotionText='$runId=$attemptId'
+    $runPromotionIndex=$parsed.Source.IndexOf(
+        $runPromotionText,[StringComparison]::Ordinal)
+    $runPromotionLastIndex=$parsed.Source.LastIndexOf(
+        $runPromotionText,[StringComparison]::Ordinal)
+    $t0LaunchIndex=$parsed.Source.IndexOf(
+        '[void](Invoke-TL1C1bPrivateAdbGuardedProcess',[StringComparison]::Ordinal)
+    $deviceLeaseCloseIndex=$parsed.Source.LastIndexOf(
+        'Close-DispatchLockLease -Lease $deviceLease',[StringComparison]::Ordinal)
+    $deviceLeaseCloseSuccessText=
+        'if((($deviceLeaseCloseResult=Close-DispatchLockLease -Lease $deviceLease)-isnot[bool])-or'
+    $deviceLeaseCloseSuccessIndex=$parsed.Source.IndexOf(
+        $deviceLeaseCloseSuccessText,[StringComparison]::Ordinal)
+    $failureEvidencePublishIndex=$parsed.Source.LastIndexOf(
+        "try{Write-C1bFailureEvidence 'c1b_runner_failed'}",[StringComparison]::Ordinal)
+    if($deviceLeaseCloseSuccessIndex-lt0){
+        throw 'C1b runner device lease cleanup result binding 漂移。'
+    }
+    if($hostProofIndex-lt0-or$attemptIdentityIndex-le$hostProofIndex-or
+       $attemptIdentityLastIndex-ne$attemptIdentityIndex-or
+       $deviceLeaseOpenIndex-le$attemptIdentityIndex-or$privateOpenIndex-le$deviceLeaseOpenIndex-or
+       $runPromotionIndex-le$privateOpenIndex-or$runPromotionLastIndex-ne$runPromotionIndex-or
+       $t0LaunchIndex-le$runPromotionIndex-or$deviceLeaseCloseIndex-le$t0LaunchIndex-or
+       $failureEvidencePublishIndex-le$deviceLeaseCloseIndex){
+        throw 'C1b runner attempt identity/promotion/evidence ordering 漂移。'
     }
     $implementationSnapshotCalls=@($parsed.Ast.FindAll({param($node)
         $node-is[Management.Automation.Language.CommandAst]-and

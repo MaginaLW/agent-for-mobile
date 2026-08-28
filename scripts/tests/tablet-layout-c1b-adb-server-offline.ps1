@@ -29,6 +29,66 @@ function Assert-Throws([scriptblock]$Action, [string]$Message) {
     return $failure
 }
 
+function Get-StartupDiagnostic($Failure) {
+    $diagnostic = $Failure.Exception.Data['TL1C1bPrivateAdbStartupDiagnostic']
+    Assert-True ($null -ne $diagnostic) `
+        ("private adb startup failure 缺少结构化 Exception.Data：" +
+            $Failure.Exception.GetType().FullName + ' / ' + $Failure.Exception.Message +
+            ' / inner=' + $(if($null-eq$Failure.Exception.InnerException){'<null>'}else{
+                $Failure.Exception.InnerException.GetType().FullName + ' / ' +
+                    $Failure.Exception.InnerException.Message}))
+    Assert-True ((@($diagnostic.PSObject.Properties.Name) -join ',') -ceq
+        'schema,outcome,final_substage,server_attempt_count,attempts') `
+        'private adb startup diagnostic 顶层字段不闭合。'
+    Assert-True ($diagnostic.schema -ceq
+        'tablet-layout-c1b-private-adb-startup-diagnostic/v1' -and
+        $diagnostic.outcome -ceq 'failed' -and
+        [int]$diagnostic.server_attempt_count -eq @($diagnostic.attempts).Count) `
+        'private adb startup diagnostic 顶层语义无效。'
+    return $diagnostic
+}
+
+function Assert-StartupAttemptDiagnostic($Attempt) {
+    Assert-True ((@($Attempt.PSObject.Properties.Name) -join ',') -ceq
+        'ordinal,terminal_substage,listener_observed,server_process,status_clients,cleanup') `
+        'private adb startup attempt 字段不闭合。'
+    Assert-True ((@($Attempt.cleanup.PSObject.Properties.Name) -join ',') -ceq
+        'status,process_exit_observed,streams_drained,port_rebind_verified') `
+        'private adb startup attempt cleanup 字段不闭合。'
+    Assert-True ($Attempt.cleanup.status -ceq 'completed' -and
+        [bool]$Attempt.cleanup.process_exit_observed -and
+        [bool]$Attempt.cleanup.streams_drained -and
+        [bool]$Attempt.cleanup.port_rebind_verified) `
+        'private adb startup attempt cleanup proof 不完整。'
+}
+
+function Assert-ProcessDiagnostic($ProcessDiagnostic) {
+    Assert-True ((@($ProcessDiagnostic.PSObject.Properties.Name) -join ',') -ceq
+        'started,exit_observed,exit_code,stdout,stderr') `
+        'private adb process diagnostic 字段不闭合。'
+    foreach ($stream in @($ProcessDiagnostic.stdout, $ProcessDiagnostic.stderr)) {
+        Assert-True ((@($stream.PSObject.Properties.Name) -join ',') -ceq
+            'observed_bytes,captured_bytes,overflowed,captured_sha256,strict_utf8,classification') `
+            'private adb stream diagnostic 字段不闭合。'
+        Assert-True ([long]$stream.observed_bytes -ge [long]$stream.captured_bytes -and
+            [int]$stream.captured_bytes -ge 0 -and
+            [string]$stream.captured_sha256 -cmatch '^sha256:[0-9a-f]{64}$') `
+            'private adb stream diagnostic byte/hash 语义无效。'
+    }
+}
+
+function Get-FailureCanaryObservation($State, [string]$Stage) {
+    $text = "$Stage|$($State.Root)|$($State.Secret)|诊断|$('Z' * 512)"
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($text)
+    try {
+        return [pscustomobject]@{
+            Bytes = $bytes.Length
+            Sha256 = 'sha256:' + [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        }
+    } finally { if ($bytes.Length -ne 0) { [Array]::Clear($bytes, 0, $bytes.Length) } }
+}
+
 function Test-Case([string]$Name, [scriptblock]$Body) {
     try {
         & $Body
@@ -73,7 +133,8 @@ function Get-FakeInvocationLines($State) {
 function Get-FakeInvocationPorts($State) {
     $ports = [Collections.Generic.HashSet[int]]::new()
     foreach ($line in Get-FakeInvocationLines $State) {
-        foreach ($match in [regex]::Matches($line, '(?:tcp:127\.0\.0\.1:|-P,)([0-9]{5})')) {
+        foreach ($match in [regex]::Matches(
+                $line, '(?:tcp:(?:127\.0\.0\.1|localhost):|-P,)([0-9]{5})')) {
             [void]$ports.Add([int]$match.Groups[1].Value)
         }
     }
@@ -146,8 +207,7 @@ public static class Program {
         }
     }
 
-    private static int ParsePort(string socket) {
-        const string prefix = "tcp:127.0.0.1:";
+    private static int ParsePort(string socket, string prefix) {
         if (!socket.StartsWith(prefix, StringComparison.Ordinal)) return -1;
         int port;
         return Int32.TryParse(socket.Substring(prefix.Length), out port) ? port : -1;
@@ -174,15 +234,26 @@ public static class Program {
     private static string ServerStatusText() {
         string executable = Mode == "wrong_status_path"
             ? Path.Combine(StateRoot, "other-adb.exe") : SelfPath;
-        return "usb_backend: NATIVE\n" +
-            "mdns_backend: OPENSCREEN\n" +
-            "version: \"fake-offline\"\n" +
-            "build: \"fake-build\"\n" +
+        return "usb_backend: LIBADBUSB\n" +
+            "usb_backend_forced: false\n" +
+            "mdns_backend: LIBADBMDNS\n" +
+            "mdns_backend_forced: false\n" +
+            "version: \"37.0.1\"\n" +
+            "build: \"fake-platform-tools-37.0.1\"\n" +
             "executable_absolute_path: " + ProtoQuote(executable) + "\n" +
             "log_absolute_path: " + ProtoQuote(Path.Combine(StateRoot, "adb.log")) + "\n" +
             "os: \"fake-windows\"\n" +
             "burst_mode: false\n" +
-            "mdns_enabled: false\n";
+            "mdns_enabled: false\n" +
+            "keystore_path: " + ProtoQuote(Path.Combine(StateRoot, "adbkey")) + "\n" +
+            "known_hosts_path: " + ProtoQuote(Path.Combine(StateRoot, "adb_known_hosts.pb")) + "\n";
+    }
+
+    private static void WriteFailureCanary(string stage) {
+        string secret = "SERIAL-SECRET-" + new DirectoryInfo(StateRoot).Name;
+        Console.Error.Write(stage + "|" + StateRoot + "|" + secret +
+            "|\u8BCA\u65AD|" + new String('Z', 512));
+        Console.Error.Flush();
     }
 
     private static bool HandleSmartSocketClient(TcpClient client) {
@@ -231,9 +302,15 @@ public static class Program {
     private static int RunServer(string[] args) {
         if (args.Length != 4 || args[0] != "-L" || args[2] != "server" ||
             args[3] != "nodaemon") return 81;
-        int port = ParsePort(args[1]);
+        int port = ParsePort(args[1], "tcp:localhost:");
         if (port < 49152 || port > 65535) return 82;
-        if (Environment.GetEnvironmentVariable("ADB_SERVER_SOCKET") != args[1]) return 83;
+        string clientSocket = "tcp:127.0.0.1:" +
+            port.ToString(CultureInfo.InvariantCulture);
+        if (Environment.GetEnvironmentVariable("ADB_SERVER_SOCKET") != clientSocket) return 83;
+        if (Mode == "server_exit_before_listener") {
+            WriteFailureCanary("server-fast-exit");
+            return 93;
+        }
         if (Mode == "output_overflow") {
             Console.Out.Write(new String('X', 131072));
             Console.Out.Flush();
@@ -291,6 +368,10 @@ public static class Program {
         string socket = "tcp:127.0.0.1:" + port;
         if (Environment.GetEnvironmentVariable("ADB_SERVER_SOCKET") != socket) return 86;
         if (args[4] == "server-status") {
+            if (Mode == "server_status_client_exit") {
+                WriteFailureCanary("status-client-exit");
+                return 94;
+            }
             if (Mode == "auto_start") {
                 try { SendService(port, "host:kill", false); } catch { }
                 for (int attempt = 0; attempt < 100; attempt++) {
@@ -446,15 +527,67 @@ try {
         }
     }
 
-    Test-Case 'server-status closed grammar 与 executable_absolute_path 严格绑定' {
+    Test-Case 'fake server 明确拒绝旧 numeric/literal-IP -L listen spec' {
+        $state = New-FakeState 'legacy-listen-spec'
+        $port = 0
+        for ($attempt = 0; $attempt -lt 64 -and $port -eq 0; $attempt++) {
+            $candidate = Get-TL1C1bPrivateAdbRandomHighPortCandidate
+            if (Test-TL1C1bPrivateAdbPortAvailable $candidate) { $port = $candidate }
+        }
+        Assert-True ($port -ge 49152 -and $port -le 65535) `
+            '无法为 legacy -L 拒绝测试选取空闲高位端口。'
+        $socket = "tcp:127.0.0.1:$port"
+        $environment = New-TL1C1bPrivateAdbEnvironment $state.Environment $socket
+        foreach ($legacySpec in @([string]$port, $socket)) {
+            $result = Invoke-TL1C1aProcess -FilePath $FakeAdb `
+                -Arguments @('-L', $legacySpec, 'server', 'nodaemon') `
+                -Operation 'fake legacy listen spec rejection' `
+                -Environment $environment -ClearEnvironment -TimeoutSec 2 -AllowFailure
+            Assert-True ($result.ExitCode -eq 82 -and $result.Bytes.Length -eq 0 -and
+                $result.Stderr.Length -eq 0) `
+                "fake adb 未明确拒绝 legacy -L listen spec：$legacySpec"
+        }
+        Assert-True (Test-TL1C1bPrivateAdbPortAvailable $port) `
+            'legacy -L 拒绝路径意外创建 listener。'
+        $legacyLines = Get-FakeInvocationLines $state
+        Assert-True ($legacyLines.Count -eq 2 -and
+            @($legacyLines | Where-Object {
+                $_ -match '\|-L,(?:[0-9]{5}|tcp:127\.0\.0\.1:[0-9]{5}),server,nodaemon$'
+            }).Count -eq 2) 'legacy -L 拒绝 fixture 未记录两个精确输入。'
+    }
+
+    Test-Case '37.0.1 server-status closed grammar/enums/path 严格绑定' {
         $quoted = $FakeAdb.Replace('\','\\').Replace('"','\"')
-        $valid = "usb_backend: NATIVE`nexecutable_absolute_path: `"$quoted`"`n"
+        $quotedKeystore = (Join-Path $TestRoot 'fake-adbkey').Replace('\','\\').Replace('"','\"')
+        $quotedKnownHosts = (Join-Path $TestRoot 'fake-known-hosts.pb').Replace('\','\\').Replace('"','\"')
+        $valid = "usb_backend: LIBADBUSB`n" +
+            "usb_backend_forced: false`n" +
+            "mdns_backend: LIBADBMDNS`n" +
+            "mdns_backend_forced: false`n" +
+            "version: `"37.0.1`"`n" +
+            "build: `"fake-platform-tools-37.0.1`"`n" +
+            "executable_absolute_path: `"$quoted`"`n" +
+            "keystore_path: `"$quotedKeystore`"`n" +
+            "known_hosts_path: `"$quotedKnownHosts`"`n"
         $held = [IO.File]::Open(
             $FakeAdb, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try { $identity = [TL1C1bPrivateAdbNative]::GetFileIdentity($held.SafeFileHandle) }
         finally { $held.Dispose() }
         Assert-True (Assert-TL1C1bPrivateAdbServerStatus $valid $FakeAdb $identity) `
-            '合法 executable_absolute_path 被拒绝。'
+            '37.0.1 LIBADBUSB/LIBADBMDNS 与 optional path fields 被拒绝。'
+        $mdnsDisabled = "usb_backend: LIBADBUSB`n" +
+            "mdns_backend: MDNS_DISABLED`n" +
+            "executable_absolute_path: `"$quoted`"`n"
+        Assert-True (Assert-TL1C1bPrivateAdbServerStatus $mdnsDisabled $FakeAdb $identity) `
+            '37.0.1 MDNS_DISABLED enum grammar 被拒绝。'
+        $usbDisabled = "usb_backend: USB_DISABLED`n" +
+            "mdns_backend: LIBADBMDNS`n" +
+            "executable_absolute_path: `"$quoted`"`n"
+        $disabledFailure = Assert-Throws {
+            Assert-TL1C1bPrivateAdbServerStatus $usbDisabled $FakeAdb $identity
+        } '37.0.1 USB_DISABLED 未在 ready proof fail closed。'
+        Assert-True ($disabledFailure.Exception.Message -match '可用 USB backend') `
+            'USB_DISABLED 被当成未知 enum，而非明确拒绝不可用 backend。'
         [void](Assert-Throws {
             Assert-TL1C1bPrivateAdbServerStatus `
                 ($valid + "unknown_field: `"x`"`n") $FakeAdb $identity
@@ -495,7 +628,13 @@ try {
             Assert-True (-not [object]::ReferenceEquals($binding, $bindingAgain)) `
                 'Assert 未每次重建独立只读 Binding。'
             $port = Get-PrivateGuardPort $guard
+            $guardState = Get-TL1C1bPrivateAdbGuardState $guard
+            $owners = @(Get-TL1C1bPrivateAdbListenerOwners $port)
             Assert-True ($port -ge 49152 -and $port -le 65535) 'guard 端口不在高位范围。'
+            Assert-True ($owners.Count -eq 1 -and
+                [string]$owners[0].Address -ceq '127.0.0.1' -and
+                [int]$owners[0].ProcessId -eq [int]$guardState.ProcessId) `
+                'listener owner 未精确绑定 127.0.0.1 与 held server PID。'
             Assert-True ($binding.server_mode -ceq 'private_nodaemon' -and
                 $binding.listener_pid_verified -and
                 $binding.server_status_executable_path_verified -and
@@ -525,6 +664,16 @@ try {
         $lines = Get-FakeInvocationLines $state
         Assert-True (@($lines | Where-Object { $_ -match '\|tcp:127\.0\.0\.1:5037\|' }).Count -eq 0) `
             'fake adb 观察到 default 5037。'
+        $serverLines = @($lines | Where-Object { $_ -match '\|-L,' })
+        Assert-True ($serverLines.Count -eq 1 -and
+            $serverLines[0] -match
+                '\|tcp:127\.0\.0\.1:([0-9]{5})\|-L,tcp:localhost:\1,server,nodaemon$') `
+            'server -L 未精确使用 tcp:localhost:<port>，或环境未保持 tcp:127.0.0.1:<port>。'
+        $clientLines = @($lines | Where-Object { $_ -match '\|-H,' })
+        Assert-True ($clientLines.Count -ge 2 -and @($clientLines | Where-Object {
+            $_ -cnotmatch
+                '\|tcp:127\.0\.0\.1:([0-9]{5})\|-H,127\.0\.0\.1,-P,\1,(?:server-status|kill-server)$'
+        }).Count -eq 0) 'client ADB_SERVER_SOCKET/-H/-P 未精确绑定 literal loopback。'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $state.Root 'serial-or-trace-leak.txt'))) `
             'fake adb 子进程环境泄露 serial/trace。'
         Assert-True (($lines -join "`n") -notmatch [regex]::Escape($state.Secret)) `
@@ -796,11 +945,110 @@ try {
             Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
                 -StartupTimeoutSec 4 -ClientTimeoutSec 1 -PortAttemptCount 1 | Out-Null
         } 'child-owned listener 未被拒绝。'
-        Assert-True ($failure.Exception.Message -match '未 ready|启动失败|ownership/status proof') `
-            'child listener 的 active-limit 拒绝原因不明确。'
+        $diagnostic = Get-StartupDiagnostic $failure
+        Assert-True ($diagnostic.final_substage -ceq 'server_process_exit_before_ready' -and
+            $diagnostic.server_attempt_count -eq 1) `
+            'child listener 的 active-limit failure substage 不明确。'
+        $attempt = @($diagnostic.attempts)[0]
+        Assert-StartupAttemptDiagnostic $attempt
+        Assert-True ($attempt.terminal_substage -ceq 'server_process_exit_before_ready' -and
+            -not [bool]$attempt.listener_observed) `
+            'child listener attempt 未证明在 listener ready 前退出。'
         Assert-True (@(Get-FakeInvocationLines $state | Where-Object {
                     $_ -match '--listener-child,[0-9]{5}'
                 }).Count -eq 0) 'child-owned listener 已越过 server Job active process limit。'
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case 'server 快速非零退出保留 bounded/hash 诊断并完成 cleanup' {
+        $state = New-FakeState 'server-fast-exit' 'server_exit_before_listener'
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $failure = Assert-Throws {
+            Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                -StartupTimeoutSec 3 -ClientTimeoutSec 1 -PortAttemptCount 1 `
+                -MaximumOutputBytes 4096 | Out-Null
+        } 'server 快速非零退出未 fail closed。'
+        $watch.Stop()
+        Assert-True ($watch.Elapsed.TotalSeconds -lt 8) 'server 快速退出诊断/cleanup 未保持有界。'
+        $diagnostic = Get-StartupDiagnostic $failure
+        Assert-True ($diagnostic.final_substage -ceq 'server_process_exit_before_ready' -and
+            $diagnostic.server_attempt_count -eq 1) `
+            'server 快速退出未保留精确 final_substage。'
+        $attempt = @($diagnostic.attempts)[0]
+        Assert-StartupAttemptDiagnostic $attempt
+        Assert-True ($attempt.terminal_substage -ceq 'server_process_exit_before_ready' -and
+            -not [bool]$attempt.listener_observed -and @($attempt.status_clients).Count -eq 0) `
+            'server 快速退出 attempt 阶段/owner 语义无效。'
+        Assert-ProcessDiagnostic $attempt.server_process
+        $expected = Get-FailureCanaryObservation $state 'server-fast-exit'
+        Assert-True ([bool]$attempt.server_process.started -and
+            [bool]$attempt.server_process.exit_observed -and
+            [int]$attempt.server_process.exit_code -eq 93 -and
+            [int]$attempt.server_process.stdout.captured_bytes -eq 0 -and
+            $attempt.server_process.stdout.classification -ceq 'empty' -and
+            [int]$attempt.server_process.stderr.captured_bytes -eq $expected.Bytes -and
+            [long]$attempt.server_process.stderr.observed_bytes -eq $expected.Bytes -and
+            $attempt.server_process.stderr.captured_sha256 -ceq $expected.Sha256 -and
+            [bool]$attempt.server_process.stderr.strict_utf8 -and
+            -not [bool]$attempt.server_process.stderr.overflowed -and
+            $attempt.server_process.stderr.classification -ceq 'other_text') `
+            'server 快速退出 exit/stderr bounded/hash 诊断不精确。'
+        $serialized = $diagnostic | ConvertTo-Json -Depth 12 -Compress
+        Assert-True ($serialized -notmatch [regex]::Escape($state.Root) -and
+            $serialized -notmatch [regex]::Escape($state.Secret) -and
+            $serialized -notmatch 'server-fast-exit') `
+            'server 快速退出结构化诊断泄露原始 stderr/path/serial。'
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case 'server-status client 非零退出与 server attempt 分层诊断' {
+        $state = New-FakeState 'status-client-exit' 'server_status_client_exit'
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $failure = Assert-Throws {
+            Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                -StartupTimeoutSec 3 -ClientTimeoutSec 1 -PortAttemptCount 1 `
+                -MaximumOutputBytes 4096 | Out-Null
+        } 'server-status client 非零退出未 fail closed。'
+        $watch.Stop()
+        Assert-True ($watch.Elapsed.TotalSeconds -lt 8) `
+            'server-status client 退出诊断/cleanup 未保持有界。'
+        $diagnostic = Get-StartupDiagnostic $failure
+        Assert-True ($diagnostic.final_substage -ceq 'server_status_client' -and
+            $diagnostic.server_attempt_count -eq 1) `
+            'status client failure 未与 server exit 分层。'
+        $attempt = @($diagnostic.attempts)[0]
+        Assert-StartupAttemptDiagnostic $attempt
+        Assert-True ($attempt.terminal_substage -ceq 'server_status_client' -and
+            [bool]$attempt.listener_observed -and @($attempt.status_clients).Count -eq 1) `
+            'status client attempt 阶段/listener 语义无效。'
+        Assert-ProcessDiagnostic $attempt.server_process
+        $client = @($attempt.status_clients)[0]
+        Assert-True ((@($client.PSObject.Properties.Name) -join ',') -ceq
+            'ordinal,terminal_substage,process,cleanup' -and
+            [int]$client.ordinal -eq 1 -and
+            $client.terminal_substage -ceq 'server-status_process-exit') `
+            "status client diagnostic 字段/阶段不闭合：keys=$(@($client.PSObject.Properties.Name) -join ','); ordinal=$($client.ordinal); substage=$($client.terminal_substage)"
+        Assert-ProcessDiagnostic $client.process
+        $expected = Get-FailureCanaryObservation $state 'status-client-exit'
+        Assert-True ([bool]$client.process.started -and [bool]$client.process.exit_observed -and
+            [int]$client.process.exit_code -eq 94 -and
+            [int]$client.process.stdout.captured_bytes -eq 0 -and
+            [int]$client.process.stderr.captured_bytes -eq $expected.Bytes -and
+            [long]$client.process.stderr.observed_bytes -eq $expected.Bytes -and
+            $client.process.stderr.captured_sha256 -ceq $expected.Sha256 -and
+            [bool]$client.process.stderr.strict_utf8 -and
+            -not [bool]$client.process.stderr.overflowed -and
+            $client.process.stderr.classification -ceq 'other_text') `
+            'status client exit/stderr bounded/hash 诊断不精确。'
+        Assert-True ((@($client.cleanup.PSObject.Properties.Name) -join ',') -ceq
+            'status,endpoint_contained' -and $client.cleanup.status -ceq 'completed' -and
+            $client.cleanup.endpoint_contained -ceq 'held') `
+            'status client cleanup/endpoint containment proof 不完整。'
+        $serialized = $diagnostic | ConvertTo-Json -Depth 12 -Compress
+        Assert-True ($serialized -notmatch [regex]::Escape($state.Root) -and
+            $serialized -notmatch [regex]::Escape($state.Secret) -and
+            $serialized -notmatch 'status-client-exit') `
+            'status client 结构化诊断泄露原始 stderr/path/serial。'
         Assert-StateHasNoLivePort $state
     }
 
@@ -827,6 +1075,141 @@ try {
         Assert-True ($watch.Elapsed.TotalSeconds -lt 8) 'stdout 超限失败未保持有界。'
         Assert-True ($failure.Exception.ToString() -notmatch [regex]::Escape($state.Secret)) `
             'stdout 超限异常泄露 serial。'
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case '已启动 server 缺任一 drain task 时 cleanup 必须失败' {
+        $state = New-FakeState 'partial-stream-drain'
+        $port = 0
+        for ($candidateAttempt = 0; $candidateAttempt -lt 64; $candidateAttempt++) {
+            $candidate = Get-TL1C1bPrivateAdbRandomHighPortCandidate
+            if (Test-TL1C1bPrivateAdbPortAvailable $candidate) { $port = $candidate; break }
+        }
+        Assert-True ($port -ge 49152) 'partial stream drain 测试未取得可用端口。'
+        $socket = "tcp:127.0.0.1:$port"
+        $environment = New-TL1C1bPrivateAdbEnvironment $state.Environment $socket
+        $job = $null
+        $started = $null
+        $stdout = [TL1C1bBoundedWriteStream]::new(4096)
+        $stderr = [TL1C1bBoundedWriteStream]::new(4096)
+        try {
+            $job = [TL1C1bPrivateAdbNative]::CreateKillOnCloseJob(1)
+            $started = [TL1C1bPrivateAdbNative]::StartInJob(
+                $FakeAdb,
+                [string[]]@('-H','127.0.0.1','-P',$port.ToString(),'unsupported'),
+                (ConvertTo-TL1C1bPrivateAdbEnvironmentEntries $environment),
+                $job)
+            $started.StandardInput.Dispose()
+            $stdoutTask = $started.StandardOutput.CopyToAsync($stdout)
+            $attempt = [pscustomobject][ordered]@{
+                Ordinal = 1; StartedProcess = $started; Process = $started.Process
+                ProcessId = [int]$started.Process.Id; Job = $job; Stdout = $stdout; Stderr = $stderr
+                StdoutTask = $stdoutTask; StderrTask = $null; Port = $port; Socket = $socket
+                ListenerObserved = $false; StatusClients = [Collections.Generic.List[object]]::new()
+            }
+            $failure = Assert-Throws {
+                Stop-TL1C1bPrivateAdbServerAttempt $attempt `
+                    -TerminalSubstage 'server_stream_drain' | Out-Null
+            } 'partial stream drain cleanup 被误报为成功。'
+            $diagnostic = $failure.Exception.Data['TL1C1bPrivateAdbServerAttemptDiagnostic']
+            Assert-True ($null -ne $diagnostic -and
+                $diagnostic.terminal_substage -ceq 'server_stream_drain' -and
+                $diagnostic.cleanup.status -ceq 'failed' -and
+                -not [bool]$diagnostic.cleanup.streams_drained -and
+                [bool]$diagnostic.cleanup.process_exit_observed -and
+                [bool]$diagnostic.cleanup.port_rebind_verified) `
+                'partial stream drain cleanup 诊断未向失败方向收敛。'
+        } finally {
+            if ($null -ne $job) { try { $job.Dispose() } catch { } }
+            if ($null -ne $started) { try { $started.Dispose() } catch { } }
+            try { $stdout.Dispose() } catch { }
+            try { $stderr.Dispose() } catch { }
+        }
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case '端口选择失败产生 zero-attempt closed diagnostic 且不启动 adb' {
+        $state = New-FakeState 'port-selection-timeout'
+        $originalCandidate =
+            (Get-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate).ScriptBlock
+        $originalPortAvailable =
+            (Get-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable).ScriptBlock
+        try {
+            Set-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate `
+                -Value { return 50001 }
+            Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable `
+                -Value { param([int]$Port) return $false }
+            $failure = Assert-Throws {
+                Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                    -StartupTimeoutSec 2 -ClientTimeoutSec 1 -PortAttemptCount 2 | Out-Null
+            } 'port selection timeout 未 fail closed。'
+        } finally {
+            Set-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate `
+                -Value $originalCandidate
+            Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable `
+                -Value $originalPortAvailable
+        }
+        $diagnostic = Get-StartupDiagnostic $failure
+        Assert-True ($diagnostic.final_substage -ceq 'port_selection_timeout' -and
+            [int]$diagnostic.server_attempt_count -eq 0 -and
+            @($diagnostic.attempts).Count -eq 0) `
+            'port selection timeout zero-attempt diagnostic 漂移。'
+        Assert-True (@(Get-FakeInvocationLines $state).Count -eq 0) `
+            'port selection timeout 前不应启动 fake adb。'
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case '跳过 unavailable port 后首个实际 server attempt ordinal 仍从一开始' {
+        $state = New-FakeState 'skipped-port-ordinal' 'server_exit_before_listener'
+        $candidates = [Collections.Generic.List[int]]::new()
+        for ($candidateAttempt = 0; $candidateAttempt -lt 128 -and $candidates.Count -lt 2;
+             $candidateAttempt++) {
+            $candidate = Get-TL1C1bPrivateAdbRandomHighPortCandidate
+            if (-not $candidates.Contains($candidate) -and
+                (Test-TL1C1bPrivateAdbPortAvailable $candidate)) {
+                $candidates.Add($candidate)
+            }
+        }
+        Assert-True ($candidates.Count -eq 2) 'skipped port ordinal 测试未取得两个可用端口。'
+        $originalCandidate =
+            (Get-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate).ScriptBlock
+        $originalPortAvailable =
+            (Get-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable).ScriptBlock
+        $script:TL1C1bSkippedPortCandidates = [int[]]$candidates.ToArray()
+        $script:TL1C1bSkippedPortCandidateIndex = 0
+        $script:TL1C1bOriginalPortAvailable = $originalPortAvailable
+        try {
+            Set-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate -Value {
+                $index = [Math]::Min($script:TL1C1bSkippedPortCandidateIndex,
+                    $script:TL1C1bSkippedPortCandidates.Count - 1)
+                $script:TL1C1bSkippedPortCandidateIndex++
+                return $script:TL1C1bSkippedPortCandidates[$index]
+            }
+            Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable -Value {
+                param([int]$Port)
+                if ($Port -eq $script:TL1C1bSkippedPortCandidates[0]) { return $false }
+                return & $script:TL1C1bOriginalPortAvailable $Port
+            }
+            $failure = Assert-Throws {
+                Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                    -StartupTimeoutSec 3 -ClientTimeoutSec 1 -PortAttemptCount 2 | Out-Null
+            } 'skipped port 后 server early failure 未 fail closed。'
+        } finally {
+            Set-Item -LiteralPath Function:\Get-TL1C1bPrivateAdbRandomHighPortCandidate `
+                -Value $originalCandidate
+            Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbPortAvailable `
+                -Value $originalPortAvailable
+            Remove-Variable -Scope Script -Name TL1C1bSkippedPortCandidates,
+                TL1C1bSkippedPortCandidateIndex,TL1C1bOriginalPortAvailable -ErrorAction SilentlyContinue
+        }
+        $diagnostic = Get-StartupDiagnostic $failure
+        Assert-True ($diagnostic.server_attempt_count -eq 1 -and
+            @($diagnostic.attempts).Count -eq 1 -and
+            [int]$diagnostic.attempts[0].ordinal -eq 1 -and
+            $diagnostic.final_substage -ceq 'server_process_exit_before_ready') `
+            'skipped unavailable port 污染了实际 server attempt ordinal。'
+        Assert-True (@(Get-FakeInvocationLines $state).Count -eq 1) `
+            'skipped unavailable port 不应产生 fake adb invocation。'
         Assert-StateHasNoLivePort $state
     }
 

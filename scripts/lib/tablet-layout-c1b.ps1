@@ -28,6 +28,7 @@ $script:TL1C1bImplementationPathMap = [ordered]@{
     native_path_validator_sha256='scripts/lib/tablet-layout-observation-v2-validator.ps1'
     observation_schema_sha256='docs/contracts/tablet-layout-observation-c1b-v1.schema.json'
     sidecar_schema_sha256='docs/contracts/tablet-layout-c1b-sidecar-v1.schema.json'
+    attempt_failure_schema_sha256='docs/contracts/tablet-layout-c1b-attempt-failure-v1.schema.json'
     artifact_proof_schema_sha256='docs/contracts/tablet-c1b-read-only-artifact-proof-v1.schema.json'
     android_layout_probe_sha256='app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt'
     android_layout_probe_model_sha256='app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbeModel.kt'
@@ -60,7 +61,9 @@ $script:TL1C1bRequiredOfflineCoverage = [string[]]@(
     'single_install_no_retry_uninstall','controlled_path_hash','sidecar_closed_schema','sidecar_cross_binding',
     'release_debug_boundary','validator_origin_scope','failure_atomic_cleanup','abort_terminal_control_closed',
     'summary_deception_rejection','sdk_adb_trust_root','runner_e2e_success','runner_e2e_result_control_abort',
-    'runner_e2e_malformed_abort_fail_closed','runner_e2e_tamper_abort'
+    'runner_e2e_malformed_abort_fail_closed','runner_e2e_tamper_abort',
+    'runner_e2e_early_private_adb_server_exit','runner_e2e_early_private_adb_status_client_exit',
+    'runner_e2e_early_device_lease_cleanup_failure'
 )
 
 if($null-eq('TL1C1bFileIdentity'-as[type])){
@@ -490,6 +493,136 @@ function Assert-TL1C1bPublishedEvidenceBinding {
     foreach ($entry in $Artifacts.GetEnumerator()) {
         $path = Assert-TL1C1aOrdinaryPath -RepoRoot $RepoRoot -Path ([string]$entry.Key)
         if ((Get-TL1C1aFileSha256 $path) -cne [string]$entry.Value) { throw "C1b published artifact 漂移：$path。" }
+    }
+}
+
+function Assert-TL1C1bAttemptFailureCrossBindings {
+    param([Parameter(Mandatory)]$Evidence)
+
+    $startup=$Evidence.private_adb_startup
+    $attempts=@($startup.attempts)
+    $declaredAttemptCount=[long]$startup.server_attempt_count
+    $portSelectionTimedOut=[string]$startup.final_substage-ceq'port_selection_timeout'
+    if($declaredAttemptCount-ne$attempts.Count){
+        throw 'C1b attempt failure server attempt count/list 不一致。'
+    }
+    if(($declaredAttemptCount-eq0)-ne$portSelectionTimedOut){
+        throw 'C1b attempt failure zero-attempt/final-substage 不一致。'
+    }
+    if($attempts.Count-gt0){
+        $lastAttempt=$attempts[$attempts.Count-1]
+        if([string]$startup.final_substage-ceq'server_attempt_cleanup'){
+            if([string]$lastAttempt.cleanup.status-cne'failed'-or
+               [string]$lastAttempt.terminal_substage-cin@(
+                   'port_selection_timeout','server_attempt_cleanup')){
+                throw 'C1b attempt failure server cleanup override 不成立。'
+            }
+        }elseif([string]$startup.final_substage-cne[string]$lastAttempt.terminal_substage){
+            throw 'C1b attempt failure final substage/last server attempt 不一致。'
+        }
+    }
+
+    $assertProcess={
+        param([AllowNull()]$Process,[Parameter(Mandatory)][string]$Name)
+        if($null-eq$Process){return}
+        $started=[bool]$Process.started
+        $exitObserved=[bool]$Process.exit_observed
+        $exitCode=$Process.exit_code
+        if((-not$started-and$exitObserved)-or
+           ($exitObserved-and$null-eq$exitCode)-or
+           (-not$exitObserved-and$null-ne$exitCode)){
+            throw "C1b attempt failure $Name process lifecycle 不一致。"
+        }
+        foreach($streamName in @('stdout','stderr')){
+            $stream=$Process.$streamName
+            $observed=[long]$stream.observed_bytes
+            $captured=[long]$stream.captured_bytes
+            $overflowed=[bool]$stream.overflowed
+            if($captured-gt$observed-or
+               ($overflowed-and$observed-le$captured)-or
+               (-not$overflowed-and$observed-ne$captured)){
+                throw "C1b attempt failure $Name/$streamName stream bounds 不一致。"
+            }
+        }
+    }
+
+    $startupCleanupFailed=$false
+    for($attemptIndex=0;$attemptIndex-lt$attempts.Count;$attemptIndex++){
+        $attempt=$attempts[$attemptIndex]
+        if([long]$attempt.ordinal-ne($attemptIndex+1)){
+            throw 'C1b attempt failure server attempt ordinal 不连续。'
+        }
+        & $assertProcess $attempt.server_process "attempt[$($attemptIndex+1)]/server"
+        $clients=@($attempt.status_clients)
+        $statusClientTerminal=[string]$attempt.terminal_substage-cin@(
+            'server_status_client','server_process_exit_during_status')
+        if(($clients.Count-gt0)-ne$statusClientTerminal-or
+           ($clients.Count-gt0-and
+               ($attemptIndex-ne$attempts.Count-1-or-not[bool]$attempt.listener_observed))){
+            throw 'C1b attempt failure status clients/server attempt stage/listener 不一致。'
+        }
+        for($clientIndex=0;$clientIndex-lt$clients.Count;$clientIndex++){
+            $client=$clients[$clientIndex]
+            if([long]$client.ordinal-ne($clientIndex+1)){
+                throw 'C1b attempt failure status client ordinal 不连续。'
+            }
+            & $assertProcess $client.process "attempt[$($attemptIndex+1)]/status-client[$($clientIndex+1)]"
+            $clientStarted=$null-ne$client.process-and[bool]$client.process.started
+            if([string]$client.cleanup.status-ceq'completed'){
+                if($null-eq$client.process-or
+                   [string]$client.cleanup.endpoint_contained-ceq'unverified'-or
+                   ($clientStarted-and-not[bool]$client.process.exit_observed)){
+                    throw 'C1b attempt failure completed status client cleanup 不成立。'
+                }
+            }else{$startupCleanupFailed=$true}
+        }
+        $serverExitObserved=$null-ne$attempt.server_process-and[bool]$attempt.server_process.exit_observed
+        if([bool]$attempt.cleanup.process_exit_observed-ne$serverExitObserved){
+            throw 'C1b attempt failure server process/cleanup exit observation 不一致。'
+        }
+        if([string]$attempt.cleanup.status-ceq'completed'){
+            $serverStarted=$null-ne$attempt.server_process-and[bool]$attempt.server_process.started
+            if($null-eq$attempt.server_process-or
+               -not[bool]$attempt.cleanup.streams_drained-or
+               -not[bool]$attempt.cleanup.port_rebind_verified-or
+               ($serverStarted-and-not$serverExitObserved)){
+                throw 'C1b attempt failure completed attempt cleanup 不成立。'
+            }
+        }else{$startupCleanupFailed=$true}
+    }
+
+    $cleanup=$Evidence.cleanup
+    $expectedStartupCleanup=if($attempts.Count-eq0){'not_acquired'}
+        elseif($startupCleanupFailed){'failed'}else{'completed'}
+    if([string]$cleanup.private_adb_startup-cne$expectedStartupCleanup){
+        throw 'C1b attempt failure private adb startup cleanup aggregation 不一致。'
+    }
+    $cleanupStates=@(
+        [string]$cleanup.private_adb_startup,
+        [string]$cleanup.artifact_guards,
+        [string]$cleanup.build_environment,
+        [string]$cleanup.device_lease
+    )
+    $expectedOverallCleanup=if($cleanupStates-ccontains'failed'){'failed'}
+        elseif([string]$cleanup.private_adb_startup-cin@('not_acquired','completed')-and
+               [string]$cleanup.artifact_guards-ceq'completed'-and
+               [string]$cleanup.build_environment-ceq'completed'-and
+               [string]$cleanup.device_lease-ceq'completed'){'completed'}else{'unverified'}
+    if([string]$cleanup.overall-cne$expectedOverallCleanup){
+        throw 'C1b attempt failure overall cleanup aggregation 不一致。'
+    }
+    if([string]$cleanup.overall-ceq'completed'){
+        if([string]$cleanup.provider_session-cne'not_required'-or
+           [string]$cleanup.private_adb_guard-cne'not_acquired'-or
+           [string]$cleanup.private_adb_startup-cnotin@('not_acquired','completed')-or
+           [string]$cleanup.artifact_guards-cne'completed'-or
+           [string]$cleanup.build_environment-cne'completed'-or
+           [string]$cleanup.device_lease-cne'completed'-or
+           @($cleanupStates|Where-Object{$_-cin@('failed','unverified')}).Count-ne0){
+            throw 'C1b attempt failure completed host cleanup 不成立。'
+        }
+    }elseif([string]$cleanup.overall-ceq'failed'-and$cleanupStates-cnotcontains'failed'){
+        throw 'C1b attempt failure failed host cleanup 缺少 failed component。'
     }
 }
 

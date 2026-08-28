@@ -458,7 +458,7 @@ try {
     $implementationHashes=[ordered]@{};foreach($name in @(
         'runner_sha256','c1b_library_sha256','c1b_read_only_library_sha256','c1b_artifact_proof_library_sha256','c1b_aapt2_library_sha256','c1b_build_environment_library_sha256','c1b_adb_server_library_sha256','dispatch_lock_library_sha256','c1a_low_level_library_sha256',
         't0_runner_sha256','t0_library_sha256','t0_adb_sidecar_cmd_sha256','t0_adb_sidecar_script_sha256','validator_sha256','native_path_validator_sha256',
-        'observation_schema_sha256','sidecar_schema_sha256','artifact_proof_schema_sha256','android_layout_probe_sha256','android_layout_probe_model_sha256','android_model_sha256','android_probe_sha256','android_source_sha256',
+        'observation_schema_sha256','sidecar_schema_sha256','attempt_failure_schema_sha256','artifact_proof_schema_sha256','android_layout_probe_sha256','android_layout_probe_model_sha256','android_model_sha256','android_probe_sha256','android_source_sha256',
         'android_provider_sha256','android_protocol_sha256','android_coordinator_sha256','android_controller_sha256','android_context_sha256','android_pending_registry_sha256',
         'app_build_gradle_sha256','app_settings_gradle_sha256','app_gradle_properties_sha256','app_gradlew_bat_sha256','app_gradle_wrapper_jar_sha256','app_gradle_wrapper_properties_sha256','app_gradle_verification_metadata_sha256','probe_build_gradle_sha256','probe_manifest_sha256','probe_service_sha256','probe_a11y_config_sha256','probe_strings_sha256'
     )){$implementationHashes[$name]=$hash}

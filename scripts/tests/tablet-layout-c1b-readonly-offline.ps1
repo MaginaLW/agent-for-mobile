@@ -67,6 +67,12 @@ function MutateOnce([string]$Source,[string]$Old,[string]$New,[string]$Name){
     $mutated=$raw.Substring(0,$index)+$New+$raw.Substring($index+$Old.Length)
     $path=Join-Path $temp $Name;[IO.File]::WriteAllText($path,$mutated,[Text.UTF8Encoding]::new($false));$script:lastRunnerMutationPath=$path;return $path
 }
+function MutateTwo([string]$Source,[string]$Old1,[string]$New1,[string]$Old2,[string]$New2,[string]$Name){
+    $raw=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
+    if(-not$raw.Contains($Old1)-or-not$raw.Contains($Old2)){throw 'two-part mutation anchor missing'}
+    $mutated=$raw.Replace($Old1,$New1).Replace($Old2,$New2)
+    $path=Join-Path $temp $Name;[IO.File]::WriteAllText($path,$mutated,[Text.UTF8Encoding]::new($false));$script:lastRunnerMutationPath=$path;return $path
+}
 function MutateLast([string]$Source,[string]$Old,[string]$New,[string]$Name){
     $raw=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
     $index=$raw.LastIndexOf($Old,[StringComparison]::Ordinal);if($index-lt0){throw "mutation anchor missing: $Old"}
@@ -290,6 +296,20 @@ try{
     Pass private_adb_cleanup_removed {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'Close-TL1C1bPrivateAdbServerGuard $adbServerGuard' "Write-Output 'skip-private-adb-close'" 'private-adb-close-removed.ps1')} 'private adb close removal accepted' -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Close-TL1C1bPrivateAdbServerGuard。')}
     Pass private_adb_frozen_recheck_removed {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '[void](Assert-C1bPrivateAdbServerFrozenState)' "[void](Write-Output 'skip-private-adb-recheck')" 'private-adb-recheck-removed.ps1')} 'private adb frozen recheck removal accepted' -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Assert-C1bPrivateAdbServerFrozenState。')}
     Pass private_adb_cleanup_after_sidecar {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '$sessionConsumed=$true' '$sessionConsumed=$true;$sidecar=[ordered]@{}' 'private-adb-cleanup-after-sidecar.ps1')} 'sidecar construction before private adb cleanup accepted' -SemanticReason (ExactReason 'C1b runner private adb open/use/cleanup/publish ordering 漂移。')}
+    Pass attempt_identity_rebound {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '$attemptId=(New-TL1C1aRunId)-replace''c1a'',''c1b''' '$runId=(New-TL1C1aRunId)-replace''c1a'',''c1b''' 'attempt-identity-rebound.ps1')} 'attempt identity rebinding accepted' -SemanticReason (ExactReason 'C1b runner attempt identity/promotion/evidence ordering 漂移。')}
+    Pass run_promotion_rebound {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '$runId=$attemptId' '$attemptId=$runId' 'run-promotion-rebound.ps1')} 'run promotion rebinding accepted' -SemanticReason (ExactReason 'C1b runner attempt identity/promotion/evidence ordering 漂移。')}
+    Pass early_failure_writer_before_cleanup {
+        $writer="try{Write-C1bFailureEvidence 'c1b_runner_failed'}catch{if(`$failure){`$failure+='；且 failure evidence 写入失败。'}else{`$failure='C1b failure evidence 写入失败。'}}"
+        $close='if((($deviceLeaseCloseResult=Close-DispatchLockLease -Lease $deviceLease)-isnot[bool])-or'
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (MutateTwo $runner $writer '$null=$failure' $close ($writer+';'+$close) 'early-writer-before-cleanup.ps1')} 'early failure writer before cleanup accepted' -SemanticReason (ExactReason 'C1b runner attempt identity/promotion/evidence ordering 漂移。')
+    }
+    Pass device_lease_cleanup_false_result_ignored {
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner `
+            'if((($deviceLeaseCloseResult=Close-DispatchLockLease -Lease $deviceLease)-isnot[bool])-or' `
+            'if((($deviceLeaseCloseResult=$true)-isnot[bool])-or' `
+            'device-lease-cleanup-result.ps1')} `
+            'device lease false return was ignored'
+    }
     Pass process_start_bypass {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    [Diagnostics.Process]::Start(`$AdbPath)" 'process-start.ps1')} 'Process.Start accepted' -SemanticReason (ExactReason 'C1b runner 禁止 ProcessStartInfo/.Start executable bypass。')}
     Pass scriptblock_dynamic_invoke {
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    `$dynamic={ adb.exe version }; `$dynamic.Invoke()" 'scriptblock-invoke.ps1')} 'scriptblock Invoke accepted' -SemanticReason (ExactReason 'C1b runner 禁止直接 adb executable。')
