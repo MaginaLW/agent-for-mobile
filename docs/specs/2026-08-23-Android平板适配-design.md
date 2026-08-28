@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer、受控 runner、synthetic gates、real isolated host build smoke 与独立复审已完成；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权因 private ADB 启动失败冻结，未进入安装或真机采集，转 A 道诊断与补可观测性
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权因 private ADB 启动失败冻结，未进入安装或真机采集；2026-08-29 的 42-input 修复已完成 `localhost` listen、bounded structured early-attempt evidence、汇总 gate 与当前独审，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host build smoke 尚未执行
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -78,8 +78,8 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
 ### T-L1 · 微信原生横屏双 window/pane 只读探针
 
 在可信 fresh T0 evidence 获得 `probe_only` 资格后，用隔离的 R 级工具做纯感知探针，不点击、
-不输入、不切 IME、不启动 App，也不修改手机/P0 共用的单窗口选择器。本轮 C1a 固定恰好两帧
-（一次 `c1`、宿主等待至少 900 ms、一次 `c2`，不补拍）；未来 C1b 若要增加帧数或提升结论，必须另开合同：
+不输入、不切 IME、不启动 App，也不修改手机/P0 共用的单窗口选择器。C1a 与当前 C1b-v1 都固定恰好两帧
+（一次 `c1`、宿主等待至少 900 ms、一次 `c2`，不补拍）；以后若要增加帧数或提升结论，必须另开合同：
 
 1. 枚举全部 interactive application windows；T0/WMS 的 `wN` 与 a11y 的 run-local `awN` 分属不同身份
    命名空间，不得凭编号或 bounds 宣称相等。
@@ -95,7 +95,7 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
    window/pane 的 toolbar/title、不是另一窗同名会话行；随后才能在同一 target window + pane 内机械分出
    toolbar、message viewport 与 input region。若 pure-a11y 仍 opaque，下一步应评审 pane/window-bound
    视觉通道，而不是关闭 vivo“应用多窗”或回退整屏坐标猜测。
-5. C1a observation 固定 `runtime_evidence=false`。未来 C1b fresh fixed-SHA runner/sidecar 最多可把可信来源、
+5. C1a observation 固定 `runtime_evidence=false`。当前 C1b fresh fixed-SHA runner/sidecar 最多可把可信来源、
    微信 window ownership、root projection、双 application-window topology、hidden IME 等机械结论置真；
    navigation/conversation/target/region、`layout_accepted`、`wechat_layout_verified`、
    `editor_action_ready`、P0 与 execution 仍固定 false/unsupported。
@@ -160,25 +160,27 @@ A3/C1b 已按上述真实形态另开 `tablet-layout-observation/c1b-v1`，没�
 闭合保存 platform window type、root handle/binding、subtree completeness、run-local projection pane、direct focus
 与 IME inventory；任何 display/type/layer/touchable/active/focused 结构读取失败都不得以默认值冒充稳定窗口，
 opaque subtree、截断 window inventory 或未知 window type 也不能提升 focus/hidden IME。observation gate 49/49、coverage
-89/89、self 5/5、full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB provenance 6/6、private
-ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB
-219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是 device
-子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
+89/89、self 5/5。当前 42-input 修复候选的专项离线结果为 host coverage 29/29、build-env 27/27、artifact
+32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、
+attempt-failure schema/cross-binding 51/51。七场景 synthetic host E2E 已通过：fake ADB 222 = 214 valid + 8 rejected；valid
+为 private server start/status/kill 8/7/4 + device 195，T0 4 是 device 子集，另观测 server exit 7。runner
+process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic
 E2E 内 real ADB/JDK/Gradle 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
-attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。另行 real isolated host build smoke 已完整
-退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、repository inputs 41；独立复审
-P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner 或平板取证。
+attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。旧 41-input SHA 的 real isolated host
+build smoke 与 P0/P1/P2=0 独立复审仅属历史基线；不能用来声称当前 42-input 候选的 smoke，也不构成
+fixed-SHA C1b build/install/runner 或平板取证。当前汇总 gate 与独审已另行闭合。
 
-C1b 受控构建把固定 HEAD 的 implementation/build inputs 收敛为 41 个普通文件（新增 private ADB server
-module），并以动态重算的
+C1b 受控构建把固定 HEAD 的 implementation/build inputs 收敛为 42 个普通文件（含 private ADB server
+module 与 attempt-failure schema），并以动态重算的
 `catalog_sha256` 绑定 exact bytes；专用 probe 同轮构建 Debug 与 Release，并以 artifact proof 绑定 APK、
 merged manifest、DEX、依赖闭包和受控 aapt2 解析。宿主 guard 冻结 Oracle JDK、Gradle、ProgramFiles/Git
 完整安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与三包 isolated
 Android SDK，使用 fresh user/project/Kotlin cache、strict dependency verification；构建允许联网，不能写成
 offline dependency build。Git 调用只接收 exact 15-key environment + `ClearEnvironment`；Gradle、签名器、ADB、
 aapt2 与 T0 子进程接收各自受控 child environment + `ClearEnvironment`。全局设备 lease 从 Windows KnownFolder
-导出，不信任 `LOCALAPPDATA`。全部设备命令
-使用 `49152..65535` 随机 loopback private `server nodaemon`、显式 `-H/-P` 与 `ADB_SERVER_SOCKET`，绑定 listener
+导出，不信任 `LOCALAPPDATA`。private server 在 `49152..65535` 随机 loopback port 上只以
+`-L tcp:localhost:<port> server nodaemon` 启动；全部 client/environment/listener proof 保持 numeric
+`127.0.0.1`，显式使用 `-H/-P` 与 `ADB_SERVER_SOCKET`，绑定 listener
 owner PID、server-status executable、job membership、cleanup 与 port rebind，永不使用 default 5037。success
 sidecar 只在 private server、build/artifact guards 与 device lease 全部 cleanup 成功后原子发布。这里的环境
 主张只覆盖 guard 建立后的文件系统与环境
@@ -193,8 +195,14 @@ canonical token topology 与 guard/anchor/pre-seal 三重绑定固定 build→se
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 已取得并消费一次独立 C1b 授权。runner 在 private
 ADB server ready guard 内 exit 1；Windows Application/WER 在同一 15 秒窗口记录 isolated ADB 六次同签名
 崩溃。控制流尚未进入设备发现、安装或采集，run/evidence/sidecar 均无，cleanup 无残留且没有重试，故仍
-没有访问平板的成立证据。本 SHA 与 C1a 授权均不能复用。下一步先在 A 道补持久失败诊断与 early failure
-record，完成 gate/独审并固定完整新 HEAD；之后才可针对新 SHA 单独取得一次 C1b build/install/只读授权。
+没有访问平板的成立证据。后续离线源码/实现核对把失败定位到旧 server argv 的 numeric
+`-L tcp:127.0.0.1:<port>` listen 形态。2026-08-29 修复将 listen host 改为 `localhost`，并在 run promotion 前
+private-ADB 启动失败时，于全部 cleanup 后原子发布 root-level closed attempt record。stream 内容不持久化 raw
+stdout/stderr，只保存 bounded byte counts、captured hash 与闭合分类；另以结构字段记录 substage、exit、
+strict-UTF-8/overflow 与 cleanup，不保存 PID、port、socket、argv、path 或 serial，也不自动重试。代码与专项
+离线验证、汇总 gate 与当前独审已完成，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host
+build smoke 尚未执行。之后若再真机，必须先完成该 smoke，再针对新 SHA 单独取得一次 C1b build/install/只读
+授权，旧 C1a 与已消费的本次 C1b 授权均不能复用。
 
 ### T-L2 · 横屏 P0
 
@@ -230,13 +238,15 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    window 形态，同时如实保留七项 diagnostic blocker。A2/C1a 的来源与只读取证完成，但结果固定不 accepted，
    T-L1/P0/execution 未通过。
 4. **A3/C1b 只读契约**：保持 v2 contract/schema/validator/fixture 原样冻结，另建 C1b pure-a11y
-   diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。41-file closure、专用 probe 的
-   Debug/Release artifact proof、host synthetic gates、real isolated host build smoke 与独立复审已闭合；
+   diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。旧 41-file 候选的 real isolated
+   host build smoke 与独审只作历史基线；当前 42-file closure、专用 probe artifact proof、`localhost` listen、
+   bounded structured early-attempt evidence、汇总 gate 与当前独审已完成，本提交固定新 clean SHA（见 HEAD）；当前
+   42-input real isolated host build smoke 尚未执行。
    `87ac7b45...` 的唯一 fixed-SHA run 因 isolated ADB 六次崩溃而在 private-server ready guard 冻结，未安装、
    未采集、未重试。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。先完成 A 道失败诊断/可观测性修复；固定新 HEAD 后必须
-   另取一次 C1b build/install/只读授权。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。固定新 HEAD 后必须另取一次 C1b build/install/只读授权，
+   旧 C1a 与已消费的旧 C1b 授权都不可复用。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -294,13 +304,13 @@ coverage 45/45、self 3/3，Debug 373/373、Release 261/261，标准全门通过
 标准全门为 C1a 15/15、coverage 46/46、self 3/3，Debug 377/377、Release 261/261、dispatch 28/28、
 runner 82/82、T-L1 24/24，assembleDebug/release absence/凭据扫描全绿，独立终审 P0/P1=0。fixed SHA
 `4b96f89...` 已完成唯一 origin/read-only C1a；diagnostic 仍 blocked，runtime/layout/P0/execution 不放行。
-C1b observation 49/49、coverage 89/89、self 5/5，full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB
-provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E
-稳定复跑通过，fake ADB 219（211 valid + 8 rejected；server start/status/kill/exit 6/6/4/6、device 195/T0
-4）、runner process 7、fake Gradle 6、fake signer 10、repository inputs 41、E2E 内 real ADB/JDK/Gradle 0；Job
-limits 1/4、auto-start attempts 2、escaped effects 0、cleanup 无残留。41-file
-implementation/build-input catalog 与专用 Debug/Release artifact proof 已纳入候选。另行 real isolated host build
-smoke 已通过（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审 P0/P1/P2=0；它不构成
-fixed-SHA C1b build/install/runner 或平板取证。`87ac7b45...` 的随后唯一授权 run 在 private ADB ready guard
-exit 1，同轮 isolated ADB 六次同签名崩溃，未进入设备发现/install/T0/c1/c2/result，未重试且 cleanup 无残留。
-下一步先完成 A 道诊断与失败可观测性，再固定新 SHA 并另取授权。
+C1b observation 49/49、coverage 89/89、self 5/5。当前 42-input 修复候选的专项离线结果为 host 29/29、
+build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、
+readonly 74/74、attempt schema/cross-binding 51/51；七场景 E2E 的 fake ADB 222（214 valid + 8 rejected；server
+start/status/kill/exit 8/7/4/7、device 195/T0 4）、runner process 9、fake Gradle 8、fake signer 12、repository
+inputs 42、real ADB/JDK/Gradle 0，Job limits 1/4、auto-start attempts 2、escaped effects 0、cleanup 无残留。
+旧 41-input real isolated host build smoke 与 P0/P1/P2=0 独审只作历史基线，不证明当前候选。`87ac7b45...`
+的唯一授权 run 在 private ADB ready guard exit 1，未进入设备发现/install/T0/c1/c2/result，未重试且 cleanup
+无残留。2026-08-29 已完成 `localhost` listen 与无 raw stdout/stderr 的 bounded structured early-attempt evidence
+代码/专项验证、汇总 gate 与当前独审，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host build
+smoke 尚未执行。后续真机须先完成该 smoke，再对新 SHA 新授权；旧授权不可复用。

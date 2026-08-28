@@ -368,8 +368,10 @@ TrustGuard/creation-time nested guard 引用身份、workspace `user.home` 与 p
 清空继承环境不是删除几个危险变量：Git 调用由 guard 重建 exact 15-key environment；Gradle、签名器、ADB、
 aapt2、T0 则使用各自显式受控 environment，所有启动均启用 `ClearEnvironment`。source SDK 只作被冻结输入，
 实际 ADB/aapt2 从 fresh isolated SDK 运行。全部设备命令使用本 run 在 `49152..65535` 随机取得的 loopback
-private `server nodaemon`，
-显式传 `-H/-P` 与 `ADB_SERVER_SOCKET`；listener owner PID、server-status executable、job membership、cleanup
+private `server nodaemon`。2026-08-29 的离线归因补充了一条必须分开的 host 规则：server listen 只能使用
+`-L tcp:localhost:<port>`；`ADB_SERVER_SOCKET`、所有 client `-H/-P` 与 listener endpoint proof 仍固定为
+numeric `127.0.0.1`。不能把 server listen 也写成 `tcp:127.0.0.1:<port>`，也不能为这个发生在 USB 初始化
+之前的错误加入 `ADB_USB_LEGACY=1`。listener owner PID、server-status executable、job membership、cleanup
 与 port rebind 都是证明字段，default 5037 永不使用。
 全局设备 lease 的位置由 Windows KnownFolder 导出，不读取可伪造的 `LOCALAPPDATA`；T0 sidecar 也必须加入同一
 lease，而不是在 runner 锁外另开设备窗口。
@@ -379,7 +381,7 @@ success sidecar 应当最后发布：先暂存并完成全部验证，再关闭 
 sidecar。这条顺序让“成功”
 同时证明没有活跃 guard/lease 残留，而不只是业务校验曾经到过绿色分支。
 
-full offline gate 已通过（host coverage 26/26）；当前专项机械证据为 build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
+2026-08-28 候选的 full offline gate 已通过（host coverage 26/26）；当时专项机械证据为 build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB total 219 = valid 211 +
 rejected 8；valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device
 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
@@ -393,6 +395,15 @@ build/install/runner 或真机取证。它支持
 ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。上述 smoke 没有访问平板；
 后续 fixed-SHA 唯一授权结果如下，C1a 授权仍不可复用。
 
+2026-08-29 修复工作树的专项离线结果为：host coverage 29/29；七场景 synthetic E2E；fake ADB
+222 = 214 valid + 8 rejected，其中 valid calls 为 server start/status/kill/device 8/7/4/195，另观测
+server exit 7；runner process 9、fake Gradle 8、fake signer 12、repository inputs 42。private ADB 22/22、
+readonly 74/74、新 attempt-failure schema/cross-binding 51/51，observation 49/49（coverage 89/89）；build-env 27/27、
+artifact 32/32、ADB provenance 6/6、T0 sidecar 7/7、aapt2 15/15 保持通过。这些都是 synthetic/offline
+证据，没有运行真实 ADB、JDK、Gradle 或访问设备。2026-08-28 的 real isolated host build smoke 只覆盖当时
+41-input 候选，不能改写为当前 42-input smoke；当前修复的汇总 gate 与独立复审已通过，本提交固定新的 clean SHA
+（见 HEAD）。当前 42-input real isolated host build smoke 尚未执行，连接设备前必须先完成。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
@@ -402,7 +413,18 @@ exit 1，尚未进入设备发现、install、T0 或两帧采集。runner 只留
 exception `0xc0000409`、data `7`。这能解释未 ready，却因没有 argv/dump，仍分不清 `server nodaemon`
 本体和 `server-status` client 谁先崩。
 
-安全失败和可诊断性是两件事：失败必须冻结且不得自动重试，但每次 private-server 尝试仍应在有界、脱敏的
-failure record 中保存 attempt ordinal、substage、port 是否曾监听、process exit code、stderr 摘要与 cleanup
-结果。failure record 的身份不能依赖稍后才有的 run_id；应在授权 runner 启动时先建立 attempt identity，
-再由后续证据绑定。否则真实 C 道只剩 generic timeout，修复者会被迫在“盲猜”与“违规重跑”之间二选一。
+上段是 2026-08-28 运行结束时、仅凭该 run 已持久材料能成立的认知边界。2026-08-29 继续做了不接设备的
+源码、binary 与 synthetic 复核，形成高置信根因解释：AOSP `tcp_host_is_local()` 对 server listen 只把空 host
+或 literal `localhost` 当作 local；原命令 `adb -L tcp:127.0.0.1:<port> server nodaemon` 因而落入
+“specified hostname unsupported”，server 重试后 `LOG(FATAL)`。这与旧 WER 的 `0xc0000409`/FAST_FAIL 7
+以及六进程约 0.64–0.72 秒寿命一致。它不是旧 run 自身持久化的 argv/FATAL 直接证据，不能追溯改写成当时
+已经证明。修复只把 server listen 改为 `tcp:localhost:<port>`；env/client/listener proof 仍为 numeric
+`127.0.0.1`，且不引入无关的 `ADB_USB_LEGACY`。
+
+安全失败和可诊断性是两件事：失败必须冻结且不得自动重试。当前实现会在 host readonly preflight 后、
+device lease/private ADB open 前建立 attempt identity；若仍在 `run_id` 分配前失败，则保存 closed、独立的
+`tablet-layout-c1b-attempt-failure/v1`，其中 `run_id=null`，并在全部 cleanup 完成后才把单个 root-level
+attempt record 原子发布。structured diagnostic 只保存 attempt ordinal、terminal substage、listener observed、
+process/status-client 状态、有界捕获 byte count/overflow/SHA-256/strict-UTF-8/classification 与 cleanup 结果；
+不持久化 raw stdout/stderr、PID、port、socket、argv、path 或 serial。这样既不泄露原始输出，也不会把一次
+授权失败转换成自动重试；后续成功路径才把同一 attempt identity 提升为 `run_id`。

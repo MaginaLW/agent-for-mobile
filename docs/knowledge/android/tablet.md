@@ -7,16 +7,21 @@
 > fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
 > `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
 > 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
-> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成
-> 无机候选：observation 49/49、coverage 89/89，full offline gate 已通过（host coverage 26/26）；build-env 27/27、artifact 32/32、ADB
-> provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E
-> 最终稳定复跑通过，fake ADB 219（211 valid + 8 rejected）、runner process 7、fake Gradle 6、fake signer
-> 10、synthetic E2E 内 real ADB/JDK/Gradle executions 0，escaped child/listener/side-effect 0、cleanup 无残留。另行 real isolated
+> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成。
+> 2026-08-29 private-ADB 修复工作树的专项离线结果为 observation 49/49、coverage 89/89、host coverage
+> 29/29；build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、
+> aapt2 15/15、readonly 74/74、新 attempt-failure schema/cross-binding 51/51。七场景 synthetic host E2E 通过，fake
+> ADB 222（214 valid + 8 rejected；start/status/kill/device 8/7/4/195，另观测 exit 7）、runner process 9、
+> fake Gradle 8、fake signer 12、repository inputs 42；synthetic E2E 内 real ADB/JDK/Gradle executions 0。
+> 另行 real isolated
 > host build smoke 已完整退出 0（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审
-> P0/P1/P2=0；它不构成 fixed-SHA C1b build/install/runner 或平板取证。随后 fixed SHA
+> P0/P1/P2=0；它只属于此前 41-input 候选，不得写成当前 42-input smoke，也不构成 fixed-SHA C1b
+> build/install/runner 或平板取证。随后 fixed SHA
 > `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB ready guard exit 1；同轮
-> isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。下一步回 A 道补失败
-> 可观测性并固定新 SHA；本次 C1b 与旧 C1a 授权均不可复用。
+> isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。后续离线复核已
+> 高置信归因为 numeric listen host 触发 ADB FATAL，并实现 bounded/hash diagnostic 与 run_id 前 root-level
+> attempt failure record；该归因不是旧 run 持久化的直接证据。当前汇总 gate 与独立复审已通过，本提交固定
+> 新 clean SHA（见 HEAD）；当前 42-input real isolated host build smoke 尚未执行。本次 C1b 与旧 C1a 授权均不可复用。
 
 ## 当前能力边界
 
@@ -187,15 +192,18 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   SDK；ADB 与 aapt2 的实际路径、hash、版本/输出都绑定这棵 isolated SDK，而不是继续执行 source SDK。
   Git 调用固定使用 exact 15-key environment + `ClearEnvironment`；ADB、aapt2、Gradle、签名器与 T0 子进程
   使用各自受控 child environment + `ClearEnvironment`。
-  全部设备命令另由本 run 的随机 `49152..65535` loopback private `server nodaemon` 承载，显式绑定 `-H/-P`
-  与 `ADB_SERVER_SOCKET`；listener owner PID、server-status executable、job membership、cleanup 和 port rebind
+  全部设备命令另由本 run 的随机 `49152..65535` loopback private `server nodaemon` 承载。server listen 使用
+  `-L tcp:localhost:<port>`；client `-H/-P`、`ADB_SERVER_SOCKET` 与 listener endpoint proof 仍绑定 numeric
+  `127.0.0.1`。listener owner PID、server-status executable、job membership、cleanup 和 port rebind
   必须闭合，default 5037 永不使用。该规则明确了宿主信任边界；它不声称能抵抗已完全控制本机 SDK 或
   同用户进程的攻击者。
 - **构建输入必须闭合到 exact bytes（C1b 无机复核，2026-08-28）**：固定 HEAD 的 implementation/build
-  inputs 恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序后动态重算
+  inputs 必须按相对路径 ordinal 排序后动态重算
   `catalog_sha256`；fixture 中的 catalog 不能代替目标 HEAD 的实算值。专用 probe 同轮构建 Debug 与 Release，
   artifact proof 还要独立验证 APK、
-  merged manifest、DEX、依赖闭包与受控 aapt2 解析，Debug 可安装不等于 Release 也含 probe。
+  merged manifest、DEX、依赖闭包与受控 aapt2 解析，Debug 可安装不等于 Release 也含 probe。2026-08-28
+  候选为 41 个输入；新增 attempt-failure schema 后，2026-08-29 工作树为 42 个。此前 41-input real smoke
+  不能替代当前 42-input smoke。
 - **受控构建不是离线依赖构建（C1b 无机复核，2026-08-28）**：冻结 Oracle JDK、Gradle、完整
   ProgramFiles/Git 安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与
   source/isolated SDK，fresh user/project/Kotlin cache 仍配合 strict dependency verification；构建允许联网，
@@ -212,7 +220,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `post_gradle_lock_sealed_achieved=false -> true` 外不得变化；canonical token topology 先于语义 AST 校验，
   因而移动调用、shadow/rebind 与 nested guard 等值替换都不能绕过。cleanup 按引用去重并关闭 anchor/current；
   证据 catalog 仍拒绝 `=` 分隔符，只给清理 Gradle zip-cache 的 inventory 开放合法 `=` 文件名。
-- **当前 A 道证明（2026-08-28）**：build-env 27/27、artifact 32/32、ADB provenance 6/6、private
+- **A 道证明基线（2026-08-28）**：build-env 27/27、artifact 32/32、ADB provenance 6/6、private
   ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake
   ADB 219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是
   device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，
@@ -226,8 +234,26 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   但无 argv/dump，runner 又未持久化每次尝试的 substage/stderr/exit，因此不能离线区分 server 本体与
   `server-status` client 崩溃，也不能恢复 ADB FATAL。控制流未进入设备发现、install、T0 或 c1/c2，
   没有 runtime evidence；所有语义/layout/P0/execution 结论不变。失败后 build/temp/journal/lease/process/
-  listener 均无残留。失败终态不授权重跑：先补 early failure record 与有界诊断，重新过门、固定新 SHA，
-  再单独取得用户授权；旧 C1a 与本次 C1b 授权都不能复用。
+  listener 均无残留。失败终态不授权重跑：当时冻结的下一步是先补 early failure record 与有界诊断，
+  重新过门、固定新 SHA，再单独取得用户授权；旧 C1a 与本次 C1b 授权都不能复用。
+- **private ADB 启动失败的离线后续归因与修复（2026-08-29）**：上条“无法区分”是旧 run 当时持久
+  证据的正确边界；后续 AOSP 源码、binary 与 synthetic 复核形成高置信解释，但不是旧 run 新长出来的直接
+  证据。`tcp_host_is_local()` 对 listen 只把空 host 或 literal `localhost` 当 local；旧命令
+  `adb -L tcp:127.0.0.1:<port> server nodaemon` 落入 specified-hostname unsupported，重试后
+  `LOG(FATAL)`，与旧 WER `0xc0000409`/FAST_FAIL 7 和 0.64–0.72 秒进程寿命一致。修复只将 server
+  listen 改为 `tcp:localhost:<port>`，env/client/listener proof 继续使用 numeric `127.0.0.1`；故障发生在
+  USB 之前，不加入 `ADB_USB_LEGACY`。
+- **run_id 前失败证据已闭合到独立 attempt（2026-08-29）**：host readonly preflight 后、device lease/
+  private ADB open 前先建立 attempt identity；成功后才提升成 run_id。启动失败时以 `run_id=null` 写 closed
+  attempt-failure schema，且须等全部 cleanup 完成后才原子发布 root-level attempt record。structured
+  diagnostic 只保留 ordinal/substage/listener/process/status-client、bounded byte counts、overflow、SHA-256、
+  UTF-8/classification 与 cleanup；不保留 raw stdout/stderr、PID、port、socket、argv、path 或 serial，且
+  自动重试仍为 0。当前专项离线结果：host 29/29；七场景；fake ADB 222 = 214 valid + 8 rejected，valid
+  start/status/kill/device 8/7/4/195，另观测 exit 7；runner 9、Gradle 8、signer 12、inputs 42；private
+  22/22、readonly 74/74、新 schema/cross-binding 51/51、observation 49/49（coverage 89/89），其余 build-env 27/27、
+  artifact 32/32、provenance 6/6、T0 7/7、aapt2 15/15。全是离线 synthetic 证据，未运行真实
+  ADB/JDK/Gradle 或访问设备；汇总 gate 与独立复审已通过，本提交固定 clean SHA（见 HEAD）。当前 42-input
+  real isolated host build smoke 尚未执行，连接设备前必须先完成。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧

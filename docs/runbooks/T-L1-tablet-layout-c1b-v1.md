@@ -15,19 +15,23 @@ false/unsupported。
 通知用户连接平板前，必须同时满足：
 
 1. 工作树 clean，并把完整 40 位 commit SHA 固定到本次候选；
-2. C1b observation gate、full offline gate（host coverage 26/26）、五场景 host E2E、real isolated host build smoke 与旧 v2/C1a 回归全部通过；
+2. C1b observation gate、full offline gate（host coverage 29/29）、七场景 host E2E、针对当前 42-input fixed SHA 的
+   real isolated host build smoke 与旧 v2/C1a 回归全部通过；
 3. build-env、artifact proof、ADB、aapt2、readonly 专项 gate 与凭据扫描全部通过；
 4. 独立审查无 P0/P1；
 5. 用户针对该 C1b SHA 明确授权一次真机 build/install/只读采集。C1a 授权不能复用。
 
-当前 A 道实现与验证已完成：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
-16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 已稳定复跑通过：fake ADB
-total 219 = valid 211 + rejected 8；valid 为 private server start/status/kill 6/6/4 + device calls 195，T0
-calls 4 是 device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository
-inputs 41，synthetic E2E 内 real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
+当前 42-input 离线修复候选已经完成的验证为：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
+22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、attempt-failure schema/cross-binding 51/51；observation 公共门仍为
+49/49、coverage 89/89。七场景 synthetic host E2E 已通过：fake ADB total 222 = valid 214 + rejected 8；valid
+为 private server start/status/kill 8/7/4 + device calls 195，T0 calls 4 是 device 子集，另观测 server exit 7。
+runner process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic E2E 内 real ADB/JDK/Gradle
+executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
 official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated
-host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、inputs 41；
-独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner、真实 APK 安装或平板采集。
+host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、
+real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
+真实 APK 安装或平板采集。当前候选的 observation/full gate 与当前独审已闭合；连接设备前仍须完成当前
+42-input fixed SHA 的 real isolated host build smoke，不能以旧 smoke 或旧独审结论替代。
 
 ## 2026-08-28 唯一授权结果
 
@@ -35,8 +39,12 @@ fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的一次授权已消费。
 private ADB server 未在有界时间内 ready。控制流停在设备发现之前：没有执行 `install -r -t`、T0、
 `c1`、`c2` 或 result，也没有 run_id、evidence 目录或 success/failure sidecar。build/seal/artifact
 checks 位于失败 guard 之前，只能推断已返回；cleanup 未保留 APK，不能将该推断升级成持久 artifact 证据。
-Windows Application/WER 同期记录同轮 isolated ADB 在 15 秒内以六个不同 PID 同签名崩溃；现有材料没有
-argv/dump/逐 attempt stderr，尚不能区分 `server nodaemon` 与 `server-status` client 崩溃。
+Windows Application/WER 同期记录同轮 isolated ADB 在 15 秒内以六个不同 PID 同签名崩溃；该轮原始材料没有
+argv/dump/逐 attempt stderr，因此单凭历史证据不能区分 `server nodaemon` 与 `server-status` client 崩溃。后续只读
+源码与实现核对定位到旧 runner 用 numeric `-L tcp:127.0.0.1:<port>` 启动 server，而该 listen 形态不被此 ADB 的
+local-listen 判定接受，server 的 retry/fatal 路径与同签名快速退出一致。当前候选改为只对 server argv 使用
+`-L tcp:localhost:<port>`，并新增有界、无原始输出的逐 attempt 诊断；这是后续离线归因与修复，不是对旧 run
+补造的新 evidence。
 退出后的进程、listener、build/temp、ACL journal 与 device lease 残留均为 0。不得自动重试该 SHA，
 也不得复用旧 C1a 授权；详细冻结记录见
 [`2026-08-28-T-L1-C1b私有ADB启动失败.md`](../runs/2026-08-28-T-L1-C1b私有ADB启动失败.md)。
@@ -45,8 +53,8 @@ argv/dump/逐 attempt stderr，尚不能区分 `server nodaemon` 与 `server-sta
 
 执行前必须显式提供 Oracle JDK 21.0.5、Gradle 8.9 与 source Android SDK，并确保 Windows Program Files
 KnownFolder 下已安装 canonical Git。runner 将 fixed
-HEAD 的 41 个 implementation/build-input 文件（含 private ADB server module）按 ordinal
-`relative/path=sha256:<lowerhex>` 编目，并把 `file_count=41` 与本 HEAD 重算的 `catalog_sha256` 写入 sidecar；
+HEAD 的 42 个 implementation/build-input 文件（含 private ADB server module 与 attempt-failure schema）按 ordinal
+`relative/path=sha256:<lowerhex>` 编目，并把 `file_count=42` 与本 HEAD 重算的 `catalog_sha256` 写入 sidecar；
 不得复用 fixture 中的 catalog hash。
 
 build-environment guard 冻结 JDK/Gradle 完整树、Windows Program Files KnownFolder 下的完整 `Git` 安装树，
@@ -69,10 +77,14 @@ Git 调用必须使用 exact 15-key environment 并传 `ClearEnvironment`，同�
 全局设备 lease 的路径只从 Windows KnownFolder API 取得，不读取或信任 `LOCALAPPDATA`；T0 sidecar 以
 runner 发出的 lease token 加入同一把锁，不能另开第二把设备锁。
 
-runner 必须在 `49152..65535` 中随机选择 loopback port，以受控 isolated SDK ADB 启动 private
-`server nodaemon`；全部设备命令均显式携带 `-H 127.0.0.1 -P <private-port>`，child environment 同时固定
-`ADB_SERVER_SOCKET=tcp:127.0.0.1:<private-port>`。启动后必须证明 listener owner PID、`server-status` 所报
-executable、Windows job membership 和预期 server process exact 相等；禁止连接、启动或回退到 default 5037。
+runner 必须在 `49152..65535` 中随机选择 loopback port，以受控 isolated SDK ADB 的唯一 argv
+`-L tcp:localhost:<private-port> server nodaemon` 启动 private server；server listen host 不得换成 numeric
+`127.0.0.1`。全部设备命令均显式携带 `-H 127.0.0.1 -P <private-port>`，child environment 同时固定
+`ADB_SERVER_SOCKET=tcp:127.0.0.1:<private-port>`，listener proof 也只接受 numeric `127.0.0.1`。
+`server-status` 37.0.1 只接受 USB enum `UNKNOWN_USB|NATIVE|LIBUSB|USB_DISABLED|LIBADBUSB`、mDNS enum
+`UNKNOWN_MDNS|BONJOUR|OPENSCREEN|LIBADBMDNS|MDNS_DISABLED` 与可选 string `keystore_path`、
+`known_hosts_path`；`UNKNOWN_USB` 或 `USB_DISABLED` 不得进入 ready。启动后必须证明 listener owner PID、
+`server-status` 所报 executable、Windows job membership 和预期 server process exact 相等；禁止连接、启动或回退到 default 5037。
 cleanup 必须关闭 job/server、证明 listener 消失，并成功重新 bind 同一 port 后才算完成。
 
 该 guard 证明的是建立 guard 后的 filesystem-and-environment integrity；它不证明同用户进程内存注入、
@@ -109,7 +121,7 @@ runner 只允许一次 fresh build、一次 `adb install -r -t`、一次 T0 v5�
 - `tablet-c1b-probe-release-merged-AndroidManifest.xml`
 - `tablet-layout-c1b-sidecar-v1.json`
 
-run 根目录还保留 fresh T0 原件 `tablet-profile.json`。sidecar 必须独立绑定 fixed SHA、41-file catalog、
+run 根目录还保留 fresh T0 原件 `tablet-profile.json`。sidecar 必须独立绑定 fixed SHA、42-file catalog、
 build environment、provider build challenge、Debug APK 与 signer、Release unsigned APK、artifact proof、merged/packaged
 manifest、DEX entries/catalog、aapt2 binding、private ADB port/socket/server executable、listener owner/job/
 cleanup/rebind proof、唯一设备/fingerprint/boot、T0 原始 bytes、c1/c2
@@ -129,6 +141,16 @@ C1a 或 v2 evidence 补造成功。尚未消费 result 的 session 只允许一�
 abort 返回还必须与发起前最后一个已验证 generation/counters/committed prefix 及闭合 terminal tuple 一致；畸形返回只能
 记 `cleanup=failed`，不能因出现 terminal 状态字符串就记为完成。尤其 `ABSENT/t0_pending`、`ABSENT/session_busy`
 或 `ABSENT/generation_exhausted` 不属于 abort cleanup 成功终态。
+
+private ADB 若在 run promotion 前失败，不创建普通 run 目录；全部 cleanup 完成后，runner 只原子发布一个
+root-level `docs/runs/evidence/tablet-layout-c1b-attempt-<attempt_id>.json`，其 schema 为
+`tablet-layout-c1b-attempt-failure/v1`。该记录必须是 `run_id=null`，并令 `pre_device_operations` 中
+`build_completed/artifact_checks_completed=true`、`private_adb_guard_created=false`，device discovery、install、
+T0、c1、c2、result、capture、abort 计数全部为 0，`runner_invocation_count=1`、
+`automatic_runner_retry_count=0`。它不得包含 raw
+stdout/stderr、PID、port、socket、argv、path 或 serial，只保存有界 byte counts、captured bytes SHA-256、闭合分类与
+cleanup 状态；既有 attempt id 不得覆盖。该记录不是 success/failure sidecar，不授权自动重试；旧 C1a 授权和
+2026-08-28 已消费的 C1b 授权都不可复用。
 
 ## 结果解释
 

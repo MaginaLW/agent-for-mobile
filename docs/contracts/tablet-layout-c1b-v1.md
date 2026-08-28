@@ -15,25 +15,28 @@ A 道公共入口 `scripts/run-tablet-layout-observation-c1b-v1-offline-gate.ps1
 exact case/coverage、Kotlin direct-focus 跨层 requirement 与永久 false/unsupported 安全结论原子写入固定
 `.checks/tablet-tl1-c1b-v1-offline-gate.summary.json`；consumer 只接受本次 run id 且两分钟内完成的摘要。
 
-宿主 runner 的 full offline gate 入口是 `scripts/run-tablet-layout-c1b-offline-gate.ps1`，本轮已通过并固定输出
+宿主 runner 的 full offline gate 入口是 `scripts/run-tablet-layout-c1b-offline-gate.ps1`，必须固定输出
 `.checks/tablet-tl1-c1b-host-v1-offline-gate.summary.json`。其 summary 是 closed、单行 strict JSON，绑定 fresh
-gate run id、两分钟 freshness/span、26 个 exact coverage、`fake_adb=true`、`real_adb_call_count=0`，并固定所有
+gate run id、两分钟 freshness/span、29 个 exact coverage、`fake_adb=true`、`real_adb_call_count=0`，并固定所有
 runtime/layout/action 结论为 false/unsupported；不能把旧摘要、删减 coverage 或自报成功当作门通过。
-完整 synthetic runner E2E 的 5 个场景已稳定复跑通过：fake ADB total 219 = valid 211 + rejected 8；
-valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device 子集，另观测
-server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic E2E 内 real ADB/JDK/Gradle
+当前离线修复候选的完整 synthetic runner E2E 共 7 个场景：fake ADB total 222 = valid 214 + rejected 8；
+valid 由 private server start/status/kill 8/7/4 与 device calls 195 构成，T0 calls 4 是 device 子集，另观测
+server exit 7。runner process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic E2E 内 real ADB/JDK/Gradle
 executions 全为 0。direct client Job active limit 固定为 1，T0 四层 Job 链 limit 固定为 4；两次
 official-style auto-start attempts 均未逃逸，escaped child/listener/side-effect 为 0，正常 cleanup 无锁、
-listener、server、build-root 等残留。这些计数只证明 host orchestration。另行 real isolated host build smoke
-已完整退出 0，并按实际运行证据记录受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、
-repository inputs 41；它不构成 fixed-SHA C1b build/install/runner 或真机取证。专项门为 build-env 27/27、
-artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。
+listener、server、build-root 等残留。这些计数只证明 host orchestration。旧 41-input SHA 的 real isolated host
+build smoke 历史基线曾完整退出 0，并按当时实际运行证据记录受控 JDK/GradleMain 1 次、held-Java
+ApkSignerTool 1 次、real ADB 0、repository inputs 41；它既不构成 fixed-SHA C1b build/install/runner 或真机取证，
+也不能替代当前 42-input 候选的 real isolated host build smoke。当前候选专项门为 build-env 27/27、artifact
+32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、
+attempt-failure schema/cross-binding 51/51；observation 公共门仍为 49/49、coverage 89/89。
 
 ## 构建与宿主信任闭包
 
-runner 从 fixed HEAD 的实现表导出 exact 41 个 repository input（新增 private ADB server module），按 ordinal
+runner 从 fixed HEAD 的实现表导出 exact 42 个 repository input（含 private ADB server module 与 attempt-failure
+schema），按 ordinal
 `relative/path=sha256:<lowerhex>`、UTF-8 无 BOM、LF join 且无尾 LF 形成 catalog；sidecar 必须保存
-`repository_inputs.file_count=41` 与针对该 HEAD 重算的 `catalog_sha256`。catalog hash 是 HEAD 绑定值，
+`repository_inputs.file_count=42` 与针对该 HEAD 重算的 `catalog_sha256`。catalog hash 是 HEAD 绑定值，
 不得从 fixture 或旧 run 复制。
 
 build-environment guard 固定以下 filesystem-and-environment 输入：
@@ -91,10 +94,15 @@ filesystem-and-environment integrity after guard establishment; excludes same-us
 CLI 输入的 source `ANDROID_SDK_ROOT=ANDROID_HOME` 必须 ordinary、非 reparse，`-AdbPath` 必须 exact 指向其
 `platform-tools/adb.exe`；任意 SDK 外 executable 即使可模拟 ADB 也必须在 build/install 前拒绝。guard 建立后，
 runner 将 Android child roots 与实际 adb/aapt2 重绑到 isolated SDK，并在 `49152..65535` 随机选择 loopback
-port，以 `server nodaemon` 建立本 run 专用 ADB server。全部设备命令必须显式传 `-H 127.0.0.1` 与
+port。server 唯一允许的启动 argv 为 `-L tcp:localhost:<private-port> server nodaemon`；`-L` 的 listen host
+不得改为 numeric `127.0.0.1`。全部设备命令必须显式传 `-H 127.0.0.1` 与
 `-P <private-port>`，且 controlled environment exact 设置 `ADB_SERVER_SOCKET=tcp:127.0.0.1:<private-port>`；default
-5037 不得监听、连接或作为 fallback。runner 必须闭合 private listener owner PID、`server-status` executable、
-Windows job membership、server process identity，以及 cleanup 后 listener absent + 同 port rebind 成功。runner 在
+5037 不得监听、连接或作为 fallback。listener proof 同样只接受 numeric `127.0.0.1`。`server-status` 必须按
+37.0.1 闭合解析 USB enum `UNKNOWN_USB|NATIVE|LIBUSB|USB_DISABLED|LIBADBUSB`、mDNS enum
+`UNKNOWN_MDNS|BONJOUR|OPENSCREEN|LIBADBMDNS|MDNS_DISABLED` 及可选 string `keystore_path`、
+`known_hosts_path`；ready 必须拒绝 `UNKNOWN_USB` 与 `USB_DISABLED`。runner 必须闭合 private listener owner
+PID、`server-status` executable、Windows job membership、server process identity，以及 cleanup 后 listener absent
+以及同 port rebind 成功。runner 在
 采集前后及 sidecar 发布前校验 `adb version` identity、Installed-as isolated canonical path、executable hash 与
 exact version-output hash，并把这些闭合字段写入 sidecar。authority 固定为 `dev.magina.gateway.tablet.c1b`，端点仅允许 `t0/status/capture/c1/capture/c2/result/abort` 的
 canonical URI。`t0` 必须通过 `adb exec-in content write` 原样转发 fresh T0 v5 的 exact bytes；宿主同时绑定原始
@@ -121,7 +129,7 @@ generation_exhausted` 即使属于全协议 absent reason，也不能证明 clea
 成功 sidecar 必须符合 `tablet-layout-c1b-sidecar/v1`，绑定：
 
 - fixed SHA、producer/APK、observation、validation 与 upstream T0 hash；
-- 41-file repository-input catalog 与完整 build-environment binding；
+- 42-file repository-input catalog 与完整 build-environment binding；
 - isolated Android SDK platform-tools trust root、private ADB port/socket、listener owner/server-status/job/
   cleanup/rebind proof、ADB executable/version-output 前后 hash 与 parsed identity；
 - runner/C1b lib/C1a 低层 helper/T0 runner 与 sidecar、validator/observation/sidecar schema 的实现 hash；
@@ -158,3 +166,13 @@ private ADB server、安装、provider、capture、读取、schema、hash、fres
 闭合 reason code 与 false/unsupported 结论，不泄漏 serial/nonce/build challenge/raw UI。不得自动重试，不得在 abort
 后继续 status/result/采集，也不得用 fixture 或 C1a evidence 补造成功。旧 `tablet-layout-observation/v2` evidence
 永不按 C1b schema 重算。
+
+若 private ADB 在 run promotion 前启动失败，runner 不创建普通 run 目录，而是在全部 cleanup 完成后原子发布唯一
+root-level `docs/runs/evidence/tablet-layout-c1b-attempt-<attempt_id>.json`。该文件必须符合
+`tablet-layout-c1b-attempt-failure/v1`：`run_id=null`，`pre_device_operations.build_completed=true`、
+`artifact_checks_completed=true`、`private_adb_guard_created=false`，device discovery、install、T0、c1、c2、result、
+capture 与 abort 计数全部为 0，并记录 `runner_invocation_count=1`、
+`automatic_runner_retry_count=0`。诊断不得保存 raw stdout/stderr、PID、port、
+socket、argv、path 或 serial，只能保存有界 byte counts、captured bytes SHA-256、strict-UTF-8/overflow 状态、闭合分类与
+cleanup 结果；既有 attempt id 不得覆盖。该 attempt 记录不是 success/failure sidecar，不能升级 runtime/layout/action
+结论，也不能复用任何旧 C1a 或已经消费的旧 C1b 授权。

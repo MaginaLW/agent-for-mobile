@@ -29,7 +29,7 @@
 observation validator 不能仅靠 observation 与 caller 字符串相等自证来源；它的 `runtime_origin_verified`、
 `runtime_evidence` 及所有 `*_verified` 在本层恒为 false。trusted-runtime 入口最多输出
 `runtime_binding_inputs_match=true` 这一非证明性的 binding fact。最终 runtime origin 只能由后续独立
-sidecar/runner 对 fixed HEAD 的 41-file catalog（含 private ADB server module）、受控 build environment、
+sidecar/runner 对 fixed HEAD 的 42-file catalog（含 private ADB server module 与 attempt-failure schema）、受控 build environment、
 private ADB server、专用 Debug/Release artifact proof、APK、observation、validation、T0、fresh install 与只读
 计数完成强闭环后产生。
 
@@ -124,6 +124,8 @@ navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 
 
 公共 observation offline gate 固定为 49/49 cases、89/89 required coverage；machine summary 的 closed
 schema 必须拒绝旧 48/86 计数、删减 case/coverage 或错绑 IME token 的摘要。
+当前宿主离线修复候选新增 run promotion 前的 private-ADB attempt-failure 诊断，但不改变本 observation schema、
+49/49 cases、89/89 coverage 或任何 false/unsupported 结论；该 attempt 记录也不能充当 observation/runtime evidence。
 
 ## 7. 隐私与采集纪律
 
