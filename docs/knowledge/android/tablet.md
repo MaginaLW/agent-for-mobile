@@ -7,9 +7,13 @@
 > fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
 > `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
 > 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
-> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已无机
-> 完成：observation 49/49、coverage 89/89、host fake-ADB 26/26、Android Debug 71/71、Release 33/33；
-> 本轮 real ADB=0。下一步是固定新 SHA并针对该 SHA取得一次新授权，C1a 授权不可复用。
+> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成
+> 无机候选：observation 49/49、coverage 89/89、host-only 26/26；build-env 23/23、artifact 32/32、ADB
+> provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E
+> 最终稳定复跑通过，fake ADB 219（211 valid + 8 rejected）、runner process 7、fake Gradle 6、fake signer
+> 10、real ADB/JDK/Gradle 0，escaped child/listener/side-effect 0、cleanup 无残留。
+> real isolated host build smoke、最终独审和平板取证均未执行；下一步
+> 提交并固定新 HEAD，再针对该 HEAD 单独取得一次 C1b build/install/只读授权，C1a 授权不可复用。
 
 ## 当前能力边界
 
@@ -174,10 +178,38 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   保留 raw code，但必须阻断完整 topology/focus/hidden-IME。producer 的 focus fail-closed 条件还必须能由
   consumer 从持久化的 root/subtree/node/pane/bounds/count 重新算出；只在内存 diagnostic 里记失败而不让
   wire 结论变化，会造成 producer 诚实报 unknown、consumer 却期待 absent/window_only 的跨层错位。
-- **传输程序也是来源链的信任根（C1b 无机复核，2026-08-27）**：仅要求 `-AdbPath` 是绝对普通文件，
-  不能支撑“独立来源绑定”。C1b runner 因而只接受 `ANDROID_SDK_ROOT == ANDROID_HOME` 下 canonical
-  `platform-tools/adb.exe`，在采集前后及 sidecar 发布读回时绑定 executable hash、exact `adb version` hash、
-  Installed-as path 与解析版本。该规则明确了宿主信任边界；它不声称能抵抗已完全控制本机 SDK 的攻击者。
+- **传输程序也是来源链的信任根（C1b 无机复核，2026-08-27/28）**：仅要求 `-AdbPath` 是绝对普通文件，
+  不能支撑“独立来源绑定”。caller 提供的 source SDK 必须满足 `ANDROID_SDK_ROOT == ANDROID_HOME`，guard
+  再从其中冻结并复制 exact `platform-tools`、`build-tools/35.0.0` 与 `platforms/android-35` 到 fresh isolated
+  SDK；ADB 与 aapt2 的实际路径、hash、版本/输出都绑定这棵 isolated SDK，而不是继续执行 source SDK。
+  Git 调用固定使用 exact 15-key environment + `ClearEnvironment`；ADB、aapt2、Gradle、签名器与 T0 子进程
+  使用各自受控 child environment + `ClearEnvironment`。
+  全部设备命令另由本 run 的随机 `49152..65535` loopback private `server nodaemon` 承载，显式绑定 `-H/-P`
+  与 `ADB_SERVER_SOCKET`；listener owner PID、server-status executable、job membership、cleanup 和 port rebind
+  必须闭合，default 5037 永不使用。该规则明确了宿主信任边界；它不声称能抵抗已完全控制本机 SDK 或
+  同用户进程的攻击者。
+- **构建输入必须闭合到 exact bytes（C1b 无机复核，2026-08-28）**：固定 HEAD 的 implementation/build
+  inputs 恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序后动态重算
+  `catalog_sha256`；fixture 中的 catalog 不能代替目标 HEAD 的实算值。专用 probe 同轮构建 Debug 与 Release，
+  artifact proof 还要独立验证 APK、
+  merged manifest、DEX、依赖闭包与受控 aapt2 解析，Debug 可安装不等于 Release 也含 probe。
+- **受控构建不是离线依赖构建（C1b 无机复核，2026-08-28）**：冻结 Oracle JDK、Gradle、完整
+  ProgramFiles/Git 安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与
+  source/isolated SDK，fresh user/project/Kotlin cache 仍配合 strict dependency verification；构建允许联网，
+  不得恢复 `--offline` 或把它表述成 offline dependency build。wrapper 不执行，runner 用 held Java 直接调用
+  `GradleMain` 与 `ApkSignerTool`。
+- **全局 lease 和发布顺序也是证据（C1b 无机复核，2026-08-28）**：全局设备锁路径只从 Windows
+  KnownFolder 导出，不信任 `LOCALAPPDATA`；success sidecar 先暂存，只有 private ADB server、build/artifact
+  guards 与 device lease cleanup 都成功后才原子发布并读回。环境主张只覆盖 guard 建立后的 filesystem-and-environment
+  integrity，不覆盖同用户内存注入、预先存在的可写 handle/mapping、ACL/ownership takeover，或对刻意可写
+  fresh build state 的同用户并发篡改。
+- **当前只有无机证明（2026-08-28）**：build-env 23/23、artifact 32/32、ADB provenance 6/6、private
+  ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 最终稳定复跑通过：fake
+  ADB 219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是
+  device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，
+  real ADB/JDK/Gradle 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
+  attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。本轮没有访问平板，也没有执行 real
+  isolated host build smoke、真实受控 C 道构建或最终独审，不能复用 C1a 授权。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧

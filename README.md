@@ -14,7 +14,7 @@
 |---|---|---|
 | M0 | mobile-mcp 真机跑通 5 个验收任务，拿到成功率/token 数据 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)·[runbook](docs/runbooks/M0-runbook.md)） |
 | M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 进行中——网关已在真机跑通（a11y + IME + OCR 融合 + 内嵌 MCP server），P0 安全硬门见下 |
-| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中——[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)；T0-L v5 已完成，C1a 已在日常双窗形态建立可信来源/只读取证但未通过 T-L1；C1b pure-a11y 的 observation 49/49（coverage 89/89）、host fake-ADB 26/26、Android Debug 71/71 + Release 33/33 已无机完成，尚未访问平板。下一步只允许在新 fixed SHA 获得新授权后执行一次安装/只读采集；导航/会话/目标区、布局、P0 与执行仍未放行 |
+| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中——[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)；T0-L v5 已完成，C1a 已在日常双窗形态建立可信来源/只读取证但未通过 T-L1。C1b pure-a11y 已形成 exact 41-file implementation/build-input catalog binding、专用 Debug/Release probe 与 artifact/manifest/DEX/aapt2 证明；全部设备命令绑定随机 loopback private ADB server，default 5037 永不使用。host-only gate 26/26，private ADB 16/16、T0 sidecar 7/7、readonly 67/67；五场景 host E2E 最终稳定复跑通过，fake ADB 219（211 valid + 8 rejected）、fake Gradle 6、fake signer 10，real ADB/JDK/Gradle 0，逃逸 child/listener/side-effect 0。real isolated host build smoke、最终审查与平板访问尚未执行；下一步只能先完成 A 道余项、提交并固定新 HEAD，再取得一次不可复用的 C1b build/install/只读采集授权。导航/会话/目标区、布局、P0 与执行仍未放行 |
 | M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ |
 

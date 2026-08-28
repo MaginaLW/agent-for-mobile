@@ -15,10 +15,50 @@ false/unsupported。
 通知用户连接平板前，必须同时满足：
 
 1. 工作树 clean，并把完整 40 位 commit SHA 固定到本次候选；
-2. C1b observation gate、host fake-ADB gate、旧 v2 回归全部通过；
-3. C1b Debug/Release JVM、`assembleDebug`、C1b release-absence 与凭据扫描通过；
+2. C1b observation gate、host-only fake-ADB gate、五场景 host E2E 与旧 v2/C1a 回归全部通过；
+3. build-env、artifact proof、ADB、aapt2、readonly 专项 gate 与凭据扫描全部通过；
 4. 独立审查无 P0/P1；
 5. 用户针对该 C1b SHA 明确授权一次真机 build/install/只读采集。C1a 授权不能复用。
+
+当前只完成无机实现与 synthetic 验证：build-env 23/23、artifact 32/32、ADB provenance 6/6、private ADB
+16/16、T0 sidecar 7/7、aapt2 15/15、readonly 67/67。五场景 host E2E 已最终稳定复跑通过：fake ADB
+total 219 = valid 211 + rejected 8；valid 为 private server start/status/kill 6/6/4 + device calls 195，T0
+calls 4 是 device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository
+inputs 41，real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
+official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。它不证明真实
+JDK/Gradle build、真实 APK 或平板采集已经发生；ignored real isolated host build smoke 仍待执行。
+
+## 受控构建与宿主边界
+
+执行前必须显式提供 Oracle JDK 21.0.5、Gradle 8.9 与 source Android SDK，并确保 Windows Program Files
+KnownFolder 下已安装 canonical Git。runner 将 fixed
+HEAD 的 41 个 implementation/build-input 文件（含 private ADB server module）按 ordinal
+`relative/path=sha256:<lowerhex>` 编目，并把 `file_count=41` 与本 HEAD 重算的 `catalog_sha256` 写入 sidecar；
+不得复用 fixture 中的 catalog hash。
+
+build-environment guard 冻结 JDK/Gradle 完整树、Windows Program Files KnownFolder 下的完整 `Git` 安装树，
+以及 source SDK 的 `build-tools/35.0.0`、`platforms/android-35`、`platform-tools` 三棵 package tree；随后在 fresh workspace
+只复制这三棵树形成 isolated SDK，child 的 `ANDROID_SDK_ROOT/ANDROID_HOME` 只能指向 isolated root。
+Git tree binding 固定 9,576 paths、9,489 file identities、85 个内部 hardlink groups 与 6 个关键文件 hash；
+不能只冻结入口 executable。
+Gradle user home、`user.home`、project/Kotlin cache、process temp 与专用 module build output 都必须 fresh；
+wrapper 不执行，由 held Java 直接启动 `GradleMain` 与 `ApkSignerTool`。构建允许联网，命令不得带
+`--offline`，但必须保留 `--dependency-verification=strict`、fresh caches、no build/configuration cache、
+rerun 与 no-daemon 约束。
+
+Git 调用必须使用 exact 15-key environment 并传 `ClearEnvironment`，同时禁用 system/global config、限制
+`PATH`；Gradle/apksigner、ADB、aapt2 与 T0 使用各自显式受控 child environment 并传 `ClearEnvironment`。
+全局设备 lease 的路径只从 Windows KnownFolder API 取得，不读取或信任 `LOCALAPPDATA`；T0 sidecar 以
+runner 发出的 lease token 加入同一把锁，不能另开第二把设备锁。
+
+runner 必须在 `49152..65535` 中随机选择 loopback port，以受控 isolated SDK ADB 启动 private
+`server nodaemon`；全部设备命令均显式携带 `-H 127.0.0.1 -P <private-port>`，child environment 同时固定
+`ADB_SERVER_SOCKET=tcp:127.0.0.1:<private-port>`。启动后必须证明 listener owner PID、`server-status` 所报
+executable、Windows job membership 和预期 server process exact 相等；禁止连接、启动或回退到 default 5037。
+cleanup 必须关闭 job/server、证明 listener 消失，并成功重新 bind 同一 port 后才算完成。
+
+该 guard 证明的是建立 guard 后的 filesystem-and-environment integrity；它不证明同用户进程内存注入、
+预存可写 handle/mapping、ACL/ownership takeover，或同用户并发篡改 intentionally writable fresh build state。
 
 ## 唯一入口
 
@@ -44,16 +84,28 @@ runner 只允许一次 fresh build、一次 `adb install -r -t`、一次 T0 v5�
 - `upstream-t0-v5.json`
 - `tablet-layout-observation-c1b-v1.json`
 - `tablet-layout-observation-validation-c1b-v1.json`
+- `tablet-c1b-read-only-artifact-proof-v1.json`
+- `tablet-c1b-probe-debug.apk`
+- `tablet-c1b-probe-release-unsigned.apk`
+- `tablet-c1b-probe-debug-merged-AndroidManifest.xml`
+- `tablet-c1b-probe-release-merged-AndroidManifest.xml`
 - `tablet-layout-c1b-sidecar-v1.json`
 
-sidecar 必须独立绑定 fixed SHA、实现文件、provider build challenge、APK 与 signer、唯一设备/fingerprint/
-boot、T0 原始 bytes、c1/c2 generation/counters/timing、control transcript、三份 evidence 路径与重算 hash。
+run 根目录还保留 fresh T0 原件 `tablet-profile.json`。sidecar 必须独立绑定 fixed SHA、41-file catalog、
+build environment、provider build challenge、Debug APK 与 signer、Release unsigned APK、artifact proof、merged/packaged
+manifest、DEX entries/catalog、aapt2 binding、private ADB port/socket/server executable、listener owner/job/
+cleanup/rebind proof、唯一设备/fingerprint/boot、T0 原始 bytes、c1/c2
+generation/counters/timing、control transcript，以及全部 evidence 的受控相对路径与重算 hash。
 observation validator 本身永远不能自证 runtime origin；只有 sidecar 全部闭环后，consumer 才能把
 `runtime_origin_verified/runtime_evidence` 置真。
 
+success sidecar bytes 只能先暂存；private ADB server、所有 artifact/aapt2/build-environment guard 与全局
+device lease 全部成功 cleanup 后，runner 才可原子发布 sidecar，再从 final ordinary path 做 strict JSON/schema/
+cross-binding、secret absence 与 artifact hash 读回。任一 cleanup 或读回失败都不得留下 success sidecar。
+
 ## 失败与冻结
 
-安装、T0、provider、capture、时序、schema、hash、设备/APK 漂移或 cleanup 任一失败，都只原子保留
+受控 build、private ADB server、安装、T0、provider、capture、时序、schema、hash、设备/APK 漂移或 cleanup 任一失败，都只原子保留
 `tablet-layout-c1b-failure.json` 与已经产生的只读证据；不发布 success sidecar，不自动重试，不借 fixture、
 C1a 或 v2 evidence 补造成功。尚未消费 result 的 session 只允许一次 abort cleanup；abort 不是重拍。
 abort 返回还必须与发起前最后一个已验证 generation/counters/committed prefix 及闭合 terminal tuple 一致；畸形返回只能

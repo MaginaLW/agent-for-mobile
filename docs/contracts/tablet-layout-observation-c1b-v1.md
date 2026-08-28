@@ -29,7 +29,9 @@
 observation validator 不能仅靠 observation 与 caller 字符串相等自证来源；它的 `runtime_origin_verified`、
 `runtime_evidence` 及所有 `*_verified` 在本层恒为 false。trusted-runtime 入口最多输出
 `runtime_binding_inputs_match=true` 这一非证明性的 binding fact。最终 runtime origin 只能由后续独立
-sidecar/runner 对 APK、observation、validation、T0、fresh install 与只读计数完成强闭环后产生。
+sidecar/runner 对 fixed HEAD 的 41-file catalog（含 private ADB server module）、受控 build environment、
+private ADB server、专用 Debug/Release artifact proof、APK、observation、validation、T0、fresh install 与只读
+计数完成强闭环后产生。
 
 `upstream_t0` 保留 T0 v5 的 `readiness_reasons` 与 `p0_unsupported_reasons`，后者至少包含
 `wechat_layout_unverified` 和 `tablet_landscape_p0_unimplemented`。这些字段只传递 probe-only 阻断归因，
