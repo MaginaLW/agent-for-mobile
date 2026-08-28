@@ -687,7 +687,7 @@ try {
         $journalPath = $fixture.Guard.RecoveryJournal.Path
         try {
             $bootstrap = Get-TL1C1bBuildEnvironmentBootstrapEnvironment $fixture.Guard
-            Assert-True ($bootstrap.Count -eq 22 -and
+            Assert-True ($bootstrap.Count -eq 21 -and
                 $bootstrap.JAVA_HOME -ceq $fixture.Jdk -and
                 $bootstrap.ANDROID_SDK_ROOT -ceq $fixture.Guard.AndroidSdkRoot -and
                 $bootstrap.ANDROID_HOME -ceq $fixture.Guard.AndroidSdkRoot -and
@@ -705,6 +705,7 @@ try {
                 $bootstrap.HOME -ceq $fixture.Guard.Workspace.UserHomeDirectory -and
                 $bootstrap.ANDROID_USER_HOME -ceq `
                     (Join-Path $fixture.Guard.Workspace.UserHomeDirectory '.android') -and
+                -not $bootstrap.ContainsKey('ANDROID_PREFS_ROOT') -and
                 $bootstrap.TL1_C1B_BUILD_OUTPUT_ROOT -ceq `
                     (Join-Path $fixture.Repo.Root 'app\tablet-c1b-probe\build') -and
                 $bootstrap.KOTLIN_DAEMON_RUN_FILES_PATH -ceq `
@@ -746,9 +747,10 @@ try {
             $build = Get-TL1C1bBuildEnvironmentBuildEnvironment $fixture.Guard
             $gitEnvironment = Get-TL1C1bBuildEnvironmentGitEnvironment $fixture.Guard
             $frozen = Assert-TL1C1bBuildEnvironmentFrozen $fixture.Guard
-            Assert-True ($build.Count -eq 22 -and
+            Assert-True ($build.Count -eq 21 -and
                 $build.JAVA_HOME -ceq $fixture.Jdk -and
-                $build.GRADLE_USER_HOME -ceq $workspacePath) `
+                $build.GRADLE_USER_HOME -ceq $workspacePath -and
+                -not $build.ContainsKey('ANDROID_PREFS_ROOT')) `
                 'build Environment hashtable 漂移。'
             Assert-True ($post.schema -ceq 'tablet-layout-c1b-build-environment-trust/v1' -and
                 $post.platform -ceq 'windows' -and $post.java_home_explicit -and

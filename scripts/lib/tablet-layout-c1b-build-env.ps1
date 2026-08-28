@@ -2870,7 +2870,6 @@ function New-TL1C1bBuildEnvironmentChildEnvironment {
         ANDROID_SDK_ROOT = [string]$TrustGuard.IsolatedAndroidSdk.Root
         ANDROID_HOME = [string]$TrustGuard.IsolatedAndroidSdk.Root
         ANDROID_USER_HOME = Join-Path $TrustGuard.Workspace.UserHomeDirectory '.android'
-        ANDROID_PREFS_ROOT = Join-Path $TrustGuard.Workspace.UserHomeDirectory '.android'
         GRADLE_USER_HOME = [string]$TrustGuard.Workspace.Root
         KOTLIN_DAEMON_RUN_FILES_PATH = [string]$TrustGuard.Workspace.KotlinRuntimeDirectory
         GIT_CONFIG_NOSYSTEM = '1'
