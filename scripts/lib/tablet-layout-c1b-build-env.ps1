@@ -350,7 +350,10 @@ function Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory {
 }
 
 function Get-TL1C1bBuildEnvironmentTreeInventory {
-    param([Parameter(Mandatory)][string]$Root)
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$AllowEqualsInRelativePath
+    )
 
     $canonicalRoot = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory $Root 'tree root'
     $directories = [Collections.Generic.List[string]]::new()
@@ -370,7 +373,8 @@ function Get-TL1C1bBuildEnvironmentTreeInventory {
             $relative = [IO.Path]::GetRelativePath($canonicalRoot, $item.FullName).Replace('\', '/')
             if ([string]::IsNullOrWhiteSpace($relative) -or
                 $relative.Contains("`r") -or $relative.Contains("`n") -or
-                $relative.Contains('=') -or [IO.Path]::IsPathFullyQualified($relative) -or
+                (-not $AllowEqualsInRelativePath -and $relative.Contains('=')) -or
+                [IO.Path]::IsPathFullyQualified($relative) -or
                 $relative -cmatch '(^|/)\.\.(/|$)') {
                 throw 'C1b build-environment tree relative path 不可安全编目。'
             }
@@ -2047,7 +2051,8 @@ function Remove-TL1C1bBuildEnvironmentModuleBuildOutputGuard {
             ([IO.Path]::GetDirectoryName($directory)) $Guard.Parent)) {
         throw 'C1b module build output cleanup target 越界。'
     }
-    $inventory = Get-TL1C1bBuildEnvironmentTreeInventory $Guard.Directory
+    $inventory = Get-TL1C1bBuildEnvironmentTreeInventory `
+        $Guard.Directory -AllowEqualsInRelativePath
     foreach ($relative in $inventory.Files) {
         $path = Join-Path $Guard.Directory `
             ($relative.Replace('/', [IO.Path]::DirectorySeparatorChar))

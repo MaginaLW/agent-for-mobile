@@ -584,6 +584,19 @@ try {
             Open-TL1C1bBuildEnvironmentTreeGuard `
                 $tree2 $proof2.FileCount $proof2.CatalogSha256 'renamed tree' | Out-Null
         } 'catalog SHA-256' 'tree path 漂移未 fail closed。'
+
+        $tree3 = New-SyntheticJdk 'catalog-delimiter'
+        $equalsPath = Join-Path $tree3 'legal\gradle-cache-key='
+        [IO.File]::WriteAllText($equalsPath, 'Gradle-compatible cache key')
+        Assert-ThrowsLike {
+            Get-TL1C1bBuildEnvironmentTreeInventory $tree3 | Out-Null
+        } 'relative path 不可安全编目' `
+            'catalog inventory 接受了未转义的 equals delimiter。'
+        $cleanupInventory = Get-TL1C1bBuildEnvironmentTreeInventory `
+            $tree3 -AllowEqualsInRelativePath
+        Assert-True ($cleanupInventory.Files -ccontains `
+            'legal/gradle-cache-key=') `
+            'cleanup-only inventory 未接受 Gradle 合法 equals filename。'
     }
 
     Test-Case 'tree root/descendant junction 在文件冻结前 fail closed' {
@@ -1089,6 +1102,13 @@ try {
             [IO.File]::WriteAllText($moduleOutputProbe, 'allowed module output')
             Assert-True (Test-Path -LiteralPath $moduleOutputProbe -PathType Leaf) `
                 'fresh module output 未保持可写。'
+            $gradleEqualsOutput = Join-Path `
+                $fixture.Guard.ModuleBuildOutputDirectory `
+                'intermediates\incremental\zip-cache\gradle-cache-key='
+            [IO.Directory]::CreateDirectory(
+                [IO.Path]::GetDirectoryName($gradleEqualsOutput)) | Out-Null
+            [IO.File]::WriteAllText(
+                $gradleEqualsOutput, 'Gradle mergeJavaRes cache entry')
             Close-SyntheticFixture $fixture -KeepGradleUserHome
             $closed = $true
             $postRestoreJdk = Join-Path $fixture.Jdk 'bin\post-restore.dll'
