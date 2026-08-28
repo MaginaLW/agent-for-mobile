@@ -6,6 +6,19 @@ $C1a=Join-Path $SourceRoot 'scripts\lib\tablet-layout-c1a.ps1';$Validator=Join-P
 . $C1a;. $Validator;. $C1b
 function Check([bool]$Value,[string]$Message){if(-not$Value){throw $Message}}
 function Run-Git([string]$At,[string[]]$Arguments){$all=@('-C',$At)+$Arguments;$text=& git @all 2>&1;if($LASTEXITCODE-ne0){throw "git $($Arguments-join' ') failed: $text"};return $text}
+function Assert-SyntheticGitHeadClean([string]$At){
+    $lastRefresh='';$lastStatus=''
+    for($attempt=0;$attempt-lt10;$attempt++){
+        $refresh=& git -C $At update-index --really-refresh 2>&1
+        $refreshExit=$LASTEXITCODE
+        $status=& git -C $At status --porcelain=v1 --untracked-files=all 2>&1
+        $statusExit=$LASTEXITCODE
+        $lastRefresh=[string]($refresh-join"`n");$lastStatus=[string]($status-join"`n")
+        if($refreshExit-eq0-and$statusExit-eq0-and[string]::IsNullOrWhiteSpace($lastStatus)){return}
+        Start-Sleep -Milliseconds 50
+    }
+    throw "synthetic C1b committed checkout did not stabilize clean: refresh=$lastRefresh status=$lastStatus"
+}
 function Get-IndependentSha256([byte[]]$Bytes){$hasher=[Security.Cryptography.SHA256]::Create();try{return 'sha256:'+([Convert]::ToHexString($hasher.ComputeHash($Bytes))).ToLowerInvariant()}finally{$hasher.Dispose()}}
 function Get-IndependentFileSha256([string]$Path){$bytes=[IO.File]::ReadAllBytes($Path);try{return Get-IndependentSha256 $bytes}finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}}
 function Get-IndependentTextSha256([string]$Value){$bytes=[Text.UTF8Encoding]::new($false).GetBytes($Value);try{return Get-IndependentSha256 $bytes}finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}}
@@ -508,7 +521,7 @@ public static class C1bFakeAdb {
 '@
     $fakeCs=Join-Path $root 'fake-adb.cs';$fakeExe=Join-Path $sdk 'platform-tools\adb.exe';[IO.File]::WriteAllText($fakeCs,$fakeSource,[Text.UTF8Encoding]::new($false));$csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe';if(-not(Test-Path $csc)){$csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'};&$csc /nologo /target:exe "/out:$fakeExe" $fakeCs;if($LASTEXITCODE-ne0){throw 'E2E fake adb compile failed'}
     $fakeAapt2=Join-Path $sdk 'build-tools\35.0.0\aapt2.exe';Copy-Item -LiteralPath $fakeExe -Destination $fakeAapt2
-    [void](Run-Git $repo @('config','user.email','c1b-e2e@invalid.local'));[void](Run-Git $repo @('config','user.name','C1b E2E'));[void](Run-Git $repo @('add','-f','--','.'));[void](Run-Git $repo @('commit','-q','-m','c1b e2e synthetic clean head'));$head=(Run-Git $repo @('rev-parse','HEAD')).Trim()
+    [void](Run-Git $repo @('config','user.email','c1b-e2e@invalid.local'));[void](Run-Git $repo @('config','user.name','C1b E2E'));[void](Run-Git $repo @('add','-f','--','.'));[void](Run-Git $repo @('commit','-q','-m','c1b e2e synthetic clean head'));Assert-SyntheticGitHeadClean $repo;$head=(Run-Git $repo @('rev-parse','HEAD')).Trim()
     $environment=@{TL1_C1B_E2E_STATE=$state;ANDROID_HOME=$sdk;ANDROID_SDK_ROOT=$sdk;JAVA_HOME=$javaHome;TL1_C1B_GRADLE_HOME=$gradleHome;LOCALAPPDATA=$localAppData;SYSTEMDRIVE=$env:SystemDrive;SYSTEMROOT=$env:SystemRoot;WINDIR=$env:WINDIR;TEMP=$env:TEMP;TMP=$env:TMP;PATH=[Environment]::SystemDirectory;TL1_C1B_E2E_SCENARIO='success'}
     $endpointProbes=@(
         [pscustomobject]@{Label='missing prefix';Socket='tcp:127.0.0.1:55000';Arguments=@('devices')},
