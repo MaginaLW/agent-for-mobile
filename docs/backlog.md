@@ -143,10 +143,13 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   E2E 内 real ADB/JDK/Gradle 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
   attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated host build smoke 已完整
   退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、repository inputs 41；独立复审
-  P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证。
-  第一批最多验证 origin、微信 window ownership、root projection、application topology 与 hidden IME；所有
-  语义/布局/动作结论仍固定 false/unsupported。fixed-SHA C1b build/install/runner 与平板访问尚未执行；C1a
-  授权不复用，只有固定最终 clean HEAD 后才能向用户请求一次 C1b build/install/只读采集授权。
+  P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证。随后 fixed SHA
+  `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权已执行并冻结：runner exit 1，private ADB
+  server 未在有界时间内 ready；Windows Application/WER 同期记录同轮 isolated ADB 六次同签名崩溃。
+  控制流尚未进入设备发现、`install -r -t`、T0、c1/c2 或 result，run_id/evidence/sidecar 均无；cleanup
+  无残留且没有重试。第一批的语义/布局/动作结论仍固定 false/unsupported。本 SHA 与旧 C1a 授权均不可
+  复用；下一步回 A 道补 private ADB 每次尝试的持久 stderr/exit/substage 与 early failure record，完成
+  gate、独立复审并固定新 clean SHA 后，才能请求一次新授权。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -157,6 +160,8 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - `ToolRegistry.callInternal` 拆解（179 行，全仓最长函数）
 - 套件提速
 - `dispatch.ps1 -Confirm` 收口
+- C1b private ADB early-failure 可观测性：在不泄漏路径/设备信息的前提下持久化每次启动尝试的 substage、
+  exit code 与有界 stderr，并在 run_id 分配前也生成闭合 failure record；补 Windows fail-fast fixture/gate。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
   所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，
@@ -177,7 +182,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 待本分支收尾后固定的新 HEAD | `codex/security-hardening` | **A 道实现、full offline gate、real isolated host build smoke 与独立复审完成；fixed-SHA build/install/runner 与真机取证未执行，待新授权** | host coverage 26/26、build-env 27/27、private ADB 16/16、T0 sidecar 7/7、readonly 70/70；五场景 synthetic E2E 稳定复跑通过，fake ADB 219（211 valid + 8 rejected；server 6/6/4/6、device 195/T0 4）、runner process 7、fake Gradle 6、fake signer 10、E2E 内 real ADB/JDK/Gradle 0；另行 smoke 为 JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41；独立复审 P0/P1/P2=0。不放行语义/layout/P0/execution |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 失败 fixed SHA **`87ac7b45e79bf658ca6e56b697a24f52fdf7381b`** | `codex/security-hardening` | **唯一授权已消费；private ADB 启动失败并冻结，未安装/采集** | runner exit 1；同轮 isolated ADB 在 startup window 内六次同签名崩溃，停止于设备发现之前，run/evidence/sidecar 均无，cleanup 无残留、retry 0。转 A 道补失败可观测性并固定新 SHA；本次与 C1a 授权均不可复用。不放行语义/layout/P0/execution |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

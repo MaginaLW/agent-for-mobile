@@ -390,5 +390,19 @@ auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup �
 build/install/runner 或真机取证。它支持
 的主张严格限于 guard 建立后的 filesystem-and-environment integrity；不覆盖同用户进程内存注入、预先持有
 的可写 handle/mapping、
-ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。本轮没有访问平板；新 fixed HEAD
-仍需单独的 C1b build/install/只读授权，C1a 授权不可复用。
+ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。上述 smoke 没有访问平板；
+后续 fixed-SHA 唯一授权结果如下，C1a 授权仍不可复用。
+
+## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
+
+fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
+exit 1，尚未进入设备发现、install、T0 或两帧采集。runner 只留下 generic timeout；run_id 在更晚阶段才分配，
+所以 early failure 没有 failure sidecar。Windows Application/WER 离线记录证明，同轮 isolated SDK 的
+`adb.exe` 在 15 秒 startup window 内以六个不同 PID 同签名崩溃：`ucrtbase.dll` offset `0x2da71`、
+exception `0xc0000409`、data `7`。这能解释未 ready，却因没有 argv/dump，仍分不清 `server nodaemon`
+本体和 `server-status` client 谁先崩。
+
+安全失败和可诊断性是两件事：失败必须冻结且不得自动重试，但每次 private-server 尝试仍应在有界、脱敏的
+failure record 中保存 attempt ordinal、substage、port 是否曾监听、process exit code、stderr 摘要与 cleanup
+结果。failure record 的身份不能依赖稍后才有的 run_id；应在授权 runner 启动时先建立 attempt identity，
+再由后续证据绑定。否则真实 C 道只剩 generic timeout，修复者会被迫在“盲猜”与“违规重跑”之间二选一。

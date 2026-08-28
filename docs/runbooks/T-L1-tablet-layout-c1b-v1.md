@@ -29,6 +29,18 @@ official-style auto-start attempts 2，escaped child/listener/side-effect 0，�
 host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、real ADB 0、inputs 41；
 独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b build/install/runner、真实 APK 安装或平板采集。
 
+## 2026-08-28 唯一授权结果
+
+fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的一次授权已消费。runner exit 1，失败原因为
+private ADB server 未在有界时间内 ready。控制流停在设备发现之前：没有执行 `install -r -t`、T0、
+`c1`、`c2` 或 result，也没有 run_id、evidence 目录或 success/failure sidecar。build/seal/artifact
+checks 位于失败 guard 之前，只能推断已返回；cleanup 未保留 APK，不能将该推断升级成持久 artifact 证据。
+Windows Application/WER 同期记录同轮 isolated ADB 在 15 秒内以六个不同 PID 同签名崩溃；现有材料没有
+argv/dump/逐 attempt stderr，尚不能区分 `server nodaemon` 与 `server-status` client 崩溃。
+退出后的进程、listener、build/temp、ACL journal 与 device lease 残留均为 0。不得自动重试该 SHA，
+也不得复用旧 C1a 授权；详细冻结记录见
+[`2026-08-28-T-L1-C1b私有ADB启动失败.md`](../runs/2026-08-28-T-L1-C1b私有ADB启动失败.md)。
+
 ## 受控构建与宿主边界
 
 执行前必须显式提供 Oracle JDK 21.0.5、Gradle 8.9 与 source Android SDK，并确保 Windows Program Files

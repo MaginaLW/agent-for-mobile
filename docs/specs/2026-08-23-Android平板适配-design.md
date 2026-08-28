@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer、受控 runner、synthetic gates、real isolated host build smoke 与独立复审已完成，fixed-SHA build/install/runner 和真机取证尚未执行，待固定最终 clean HEAD 后取得单独授权
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；A3/C1b pure-a11y 合同、producer、受控 runner、synthetic gates、real isolated host build smoke 与独立复审已完成；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权因 private ADB 启动失败冻结，未进入安装或真机采集，转 A 道诊断与补可观测性
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -190,8 +190,11 @@ sidecar 只在 private server、build/artifact guards 与 device lease 全部 cl
 canonical token topology 与 guard/anchor/pre-seal 三重绑定固定 build→seal 邻接并拒绝 shadow/rebind/equal-swap。
 证据 catalog 继续拒绝未转义 `=`，仅 cleanup inventory 接受 Gradle zip-cache 的合法 `=` 文件名。
 
-本轮尚未访问平板，C1a 授权已消费且不能复用。下一步是提交并固定完整新 HEAD，再针对该 HEAD 单独取得
-一次 C1b build/install/只读采集授权。
+fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 已取得并消费一次独立 C1b 授权。runner 在 private
+ADB server ready guard 内 exit 1；Windows Application/WER 在同一 15 秒窗口记录 isolated ADB 六次同签名
+崩溃。控制流尚未进入设备发现、安装或采集，run/evidence/sidecar 均无，cleanup 无残留且没有重试，故仍
+没有访问平板的成立证据。本 SHA 与 C1a 授权均不能复用。下一步先在 A 道补持久失败诊断与 early failure
+record，完成 gate/独审并固定完整新 HEAD；之后才可针对新 SHA 单独取得一次 C1b build/install/只读授权。
 
 ### T-L2 · 横屏 P0
 
@@ -228,10 +231,12 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    T-L1/P0/execution 未通过。
 4. **A3/C1b 只读契约**：保持 v2 contract/schema/validator/fixture 原样冻结，另建 C1b pure-a11y
    diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。41-file closure、专用 probe 的
-   Debug/Release artifact proof、host synthetic gates、real isolated host build smoke 与独立复审已闭合；fixed-SHA
-   build/install/runner 与平板取证仍未执行。
+   Debug/Release artifact proof、host synthetic gates、real isolated host build smoke 与独立复审已闭合；
+   `87ac7b45...` 的唯一 fixed-SHA run 因 isolated ADB 六次崩溃而在 private-server ready guard 冻结，未安装、
+   未采集、未重试。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。固定新 HEAD 后必须另取一次 C1b build/install/只读授权。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。先完成 A 道失败诊断/可观测性修复；固定新 HEAD 后必须
+   另取一次 C1b build/install/只读授权。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -296,5 +301,6 @@ provenance 6/6、private ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/
 limits 1/4、auto-start attempts 2、escaped effects 0、cleanup 无残留。41-file
 implementation/build-input catalog 与专用 Debug/Release artifact proof 已纳入候选。另行 real isolated host build
 smoke 已通过（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审 P0/P1/P2=0；它不构成
-fixed-SHA C1b build/install/runner 或平板取证。下一步固定最终 clean HEAD，再单独取得该 HEAD 的
-build/install/只读授权。
+fixed-SHA C1b build/install/runner 或平板取证。`87ac7b45...` 的随后唯一授权 run 在 private ADB ready guard
+exit 1，同轮 isolated ADB 六次同签名崩溃，未进入设备发现/install/T0/c1/c2/result，未重试且 cleanup 无残留。
+下一步先完成 A 道诊断与失败可观测性，再固定新 SHA 并另取授权。

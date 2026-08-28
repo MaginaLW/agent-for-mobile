@@ -13,8 +13,10 @@
 > 最终稳定复跑通过，fake ADB 219（211 valid + 8 rejected）、runner process 7、fake Gradle 6、fake signer
 > 10、synthetic E2E 内 real ADB/JDK/Gradle executions 0，escaped child/listener/side-effect 0、cleanup 无残留。另行 real isolated
 > host build smoke 已完整退出 0（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审
-> P0/P1/P2=0；它不构成 fixed-SHA C1b build/install/runner 或平板取证。下一步固定最终 clean HEAD，再针对
-> 该 HEAD 单独取得一次 C1b build/install/只读授权，C1a 授权不可复用。
+> P0/P1/P2=0；它不构成 fixed-SHA C1b build/install/runner 或平板取证。随后 fixed SHA
+> `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB ready guard exit 1；同轮
+> isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。下一步回 A 道补失败
+> 可观测性并固定新 SHA；本次 C1b 与旧 C1a 授权均不可复用。
 
 ## 当前能力边界
 
@@ -217,7 +219,15 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   synthetic E2E 内 real ADB/JDK/Gradle executions 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
   auto-start attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。另行 real isolated host build
   smoke 已完整退出 0：JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41；独立复审 P0/P1/P2=0。
-  该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证；本轮没有访问平板，不能复用 C1a 授权。
+  该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证。
+- **第一次 C1b fixed-SHA 授权在设备边界前冻结（2026-08-28）**：`87ac7b45...` 只启动一次，runner
+  exit 1，终态是 private ADB server 未在 15 秒内 ready。Application/WER 同期记录来自本轮 isolated SDK 的
+  `adb.exe` 六次同签名崩溃（`ucrtbase.dll` offset `0x2da71`、`0xc0000409`、data `7`）；这解释未 ready，
+  但无 argv/dump，runner 又未持久化每次尝试的 substage/stderr/exit，因此不能离线区分 server 本体与
+  `server-status` client 崩溃，也不能恢复 ADB FATAL。控制流未进入设备发现、install、T0 或 c1/c2，
+  没有 runtime evidence；所有语义/layout/P0/execution 结论不变。失败后 build/temp/journal/lease/process/
+  listener 均无残留。失败终态不授权重跑：先补 early failure record 与有界诊断，重新过门、固定新 SHA，
+  再单独取得用户授权；旧 C1a 与本次 C1b 授权都不能复用。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧
