@@ -142,6 +142,7 @@ public static class FakeAdb { public static int Main(string[] a){
             'read_only_proof.release_dex_entry_count','artifacts.artifact_proof.sha256','artifacts.release_apk.sha256',
             'artifacts.debug_merged_manifest.sha256','attestations.host_read_only_ast_verified',
             'claims.wechat_window_ownership_verified','build_environment.host_process.wrapper_not_executed',
+            'build_environment.debug_keystore.post_gradle_lock_sealed_achieved',
             'build_environment.repository_inputs.file_count','build_environment.repository_inputs.catalog_sha256','build_environment.extra'
         )){
             $x=($s|ConvertTo-Json -Depth 30)|ConvertFrom-Json -DateKind String
@@ -172,6 +173,7 @@ public static class FakeAdb { public static int Main(string[] a){
                 'artifacts.debug_merged_manifest.sha256'{$x.artifacts.debug_merged_manifest.sha256='sha256:'+'e'*64}
                 'attestations.host_read_only_ast_verified'{$x.attestations.host_read_only_ast_verified=$false}
                 'build_environment.host_process.wrapper_not_executed'{$x.build_environment.host_process.wrapper_not_executed=$false}
+                'build_environment.debug_keystore.post_gradle_lock_sealed_achieved'{$x.build_environment.debug_keystore.post_gradle_lock_sealed_achieved=$false}
                 'build_environment.repository_inputs.file_count'{$x.build_environment.repository_inputs.file_count=39}
                 'build_environment.repository_inputs.catalog_sha256'{$x.build_environment.repository_inputs.catalog_sha256='sha256:'+'e'*64}
                 'build_environment.extra'{$x.build_environment|Add-Member extra $true}

@@ -440,6 +440,37 @@ try {
             'Android SDK/isolated SDK frozen constants 漂移。'
     }
 
+    Test-Case 'JUnit BOM Gradle module metadata 的 Maven Central SHA-256 必须 exact' {
+        [xml]$metadata = Get-Content -LiteralPath `
+            (Join-Path $RepoRoot 'app\gradle\verification-metadata.xml') `
+            -Raw -Encoding UTF8
+        $namespace = [System.Xml.XmlNamespaceManager]::new($metadata.NameTable)
+        $namespace.AddNamespace(
+            'dv', 'https://schema.gradle.org/dependency-verification')
+        $expected = [ordered]@{
+            '5.9.2' = 'ab137ba5a8e32c9b066bf9126a1c76dd5614b724ba5c0b02549772b5e9f4cf1f'
+            '5.9.3' = 'b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93'
+        }
+        foreach ($version in $expected.Keys) {
+            $components = @($metadata.SelectNodes(
+                "/dv:verification-metadata/dv:components/dv:component[@group='org.junit' and @name='junit-bom' and @version='$version']",
+                $namespace))
+            Assert-True ($components.Count -eq 1) `
+                "junit-bom $version component 必须唯一。"
+            $module = @($components[0].SelectNodes(
+                "dv:artifact[@name='junit-bom-$version.module']", $namespace))
+            $pom = @($components[0].SelectNodes(
+                "dv:artifact[@name='junit-bom-$version.pom']", $namespace))
+            Assert-True ($module.Count -eq 1 -and $pom.Count -eq 1) `
+                "junit-bom $version module/pom artifact 必须各唯一。"
+            $sha = @($module[0].SelectNodes('dv:sha256', $namespace))
+            Assert-True ($sha.Count -eq 1 -and
+                [string]$sha[0].value -ceq [string]$expected[$version] -and
+                [string]$sha[0].origin -ceq 'Maven Central .sha256') `
+                "junit-bom $version module SHA-256/origin 漂移。"
+        }
+    }
+
     Test-Case 'GRADLE/JVM/Kotlin/Maven/Ant 环境注入全集 fail closed' {
         foreach ($name in @(
             'GRADLE_OPTS', 'gradle_user_home', 'ORG_GRADLE_PROJECT_secret',
@@ -783,6 +814,13 @@ try {
                 $post.gradle.version -ceq '8.9' -and
                 $post.gradle.wrapper_not_executed -and
                 $post.debug_keystore.isolated_copy_equal -and
+                $post.debug_keystore.gradle_lock_precreated -and
+                $post.debug_keystore.gradle_lock_identity_guarded -and
+                $post.debug_keystore.gradle_lock_deny_delete -and
+                $post.debug_keystore.gradle_lock_write_allowed_during_gradle -and
+                $post.debug_keystore.post_gradle_lock_seal_required -and
+                $post.debug_keystore.post_gradle_lock_zero_length -and
+                -not $post.debug_keystore.post_gradle_lock_sealed_achieved -and
                 $post.gradle.tree_directories_acl_protected -and
                 $post.gradle.init_d_acl_protected) 'post-bootstrap attestation 漂移。'
             $expectedGitEnvironmentKeys = [string[]]@(
@@ -922,6 +960,95 @@ try {
                 Assert-Throws { [IO.File]::Delete($guardedFile) } `
                     'repo/Git held file 未 deny delete。' | Out-Null
             }
+            $realLockGuard = $fixture.Guard.DebugKeystoreGuard.LockGuard
+            $decoyLockPath = Join-Path $TestRoot `
+                ('debug-keystore-decoy-' + [guid]::NewGuid().ToString('N') + '.lock')
+            $decoyLockGuard = Open-TL1C1bBuildEnvironmentMutableEmptyFileGuard `
+                $decoyLockPath 'external decoy debug.keystore.lock'
+            try {
+                $fixture.Guard.DebugKeystoreGuard.LockGuard = $decoyLockGuard
+                Assert-ThrowsLike {
+                    Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged `
+                        $fixture.Guard.DebugKeystoreGuard | Out-Null
+                } 'canonical path binding 漂移' `
+                    '外部 decoy lock guard 绕过了 isolated user.home path binding。'
+            } finally {
+                $fixture.Guard.DebugKeystoreGuard.LockGuard = $realLockGuard
+                Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard $decoyLockGuard
+                if (Test-Path -LiteralPath $decoyLockPath -PathType Leaf) {
+                    [IO.File]::Delete($decoyLockPath)
+                }
+            }
+            $gradleLock = Join-Path $fixture.Guard.Workspace.UserHomeDirectory `
+                '.android\debug.keystore.lock'
+            Assert-Throws { [IO.File]::Delete($gradleLock) } `
+                'precreated debug.keystore.lock 未 deny delete。' | Out-Null
+            $lockWriter = [IO.File]::Open(
+                $gradleLock, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite,
+                ([IO.FileShare]::Read -bor [IO.FileShare]::Write))
+            try {
+                $lockWriter.WriteByte(1)
+                $lockWriter.Flush($true)
+            } finally { $lockWriter.Dispose() }
+            Assert-ThrowsLike {
+                Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged `
+                    $fixture.Guard.DebugKeystoreGuard | Out-Null
+            } 'empty-file binding 漂移' `
+                '非空 debug.keystore.lock 未被 frozen recheck 检出。'
+            $lockWriter = [IO.File]::Open(
+                $gradleLock, [IO.FileMode]::Open, [IO.FileAccess]::Write,
+                ([IO.FileShare]::Read -bor [IO.FileShare]::Write))
+            try {
+                $lockWriter.SetLength(0)
+                $lockWriter.Flush($true)
+            } finally { $lockWriter.Dispose() }
+            [void](Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged `
+                $fixture.Guard.DebugKeystoreGuard)
+            $preSealBinding = Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged `
+                $fixture.Guard -RequireGradle
+            $preSealBindingRaw = $preSealBinding | ConvertTo-Json -Depth 20 -Compress
+            $postSealBindingRaw = $preSealBindingRaw.Replace(
+                '"post_gradle_lock_sealed_achieved":false',
+                '"post_gradle_lock_sealed_achieved":true')
+            Assert-TL1C1bBuildEnvironmentSealBindingTransition `
+                $preSealBindingRaw $postSealBindingRaw
+            Assert-ThrowsLike {
+                Assert-TL1C1bBuildEnvironmentSealBindingTransition `
+                    $preSealBindingRaw `
+                    ($postSealBindingRaw.Replace('"minimal_path":true',
+                        '"minimal_path":false'))
+            } '除 achieved false→true 外发生漂移' `
+                'pre/post full binding 接受了 seal 同时漂移其他字段。'
+            Assert-ThrowsLike {
+                Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
+                    -TrustGuard $fixture.Guard `
+                    -ExpectedTrustGuard ([pscustomobject]@{}) `
+                    -ExpectedPreSealBindingRaw $preSealBindingRaw | Out-Null
+            } 'trust guard identity 漂移' `
+                'post-Gradle seal 接受了不同 trust guard identity。'
+            Assert-ThrowsLike {
+                Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
+                    -TrustGuard $fixture.Guard `
+                    -ExpectedTrustGuard $fixture.Guard `
+                    -ExpectedPreSealBindingRaw ($preSealBindingRaw + ' ') | Out-Null
+            } '初始 binding.*漂移' `
+                'post-Gradle seal 接受了漂移的 pre-seal full binding。'
+            $sealedBinding=Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
+                -TrustGuard $fixture.Guard `
+                -ExpectedTrustGuard $fixture.Guard `
+                -ExpectedPreSealBindingRaw $preSealBindingRaw
+            Assert-True ([bool]$fixture.Guard.DebugKeystoreGuard.LockGuard.Sealed) `
+                'post-Gradle debug.keystore.lock 未进入 sealed state。'
+            Assert-True ([bool]$sealedBinding.debug_keystore.post_gradle_lock_sealed_achieved) `
+                'post-Gradle build-environment binding 未记录 seal achieved。'
+            Assert-Throws {
+                $writer = [IO.File]::Open(
+                    $gradleLock, [IO.FileMode]::Open, [IO.FileAccess]::Write,
+                    [IO.FileShare]::ReadWrite)
+                try { $writer | Out-Null } finally { $writer.Dispose() }
+            } 'sealed debug.keystore.lock 未 deny residual writer。' | Out-Null
+            [void](Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged `
+                $fixture.Guard.DebugKeystoreGuard)
             foreach ($directoryBinding in @(
                 [pscustomobject]@{
                     Path = Join-Path $fixture.Repo.Root 'app\gradle\wrapper'
@@ -985,6 +1112,177 @@ try {
         } finally {
             if (-not $closed) {
                 Close-SyntheticFixture $fixture
+            }
+        }
+    }
+
+    Test-Case 'debug signing nested guard equal-swap fail closed 并清理两套 handles' {
+        $fixture = Open-SyntheticTrustGuard 'debug-keystore-nested-swap'
+        $closed = $false
+        $realGuard = $fixture.Guard.DebugKeystoreGuard
+        $decoyGuard = $null
+        try {
+            [void](Complete-TL1C1bBuildEnvironmentBootstrap `
+                $fixture.Guard $fixture.GradleSource)
+            $preSealBinding = Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged `
+                $fixture.Guard -RequireGradle
+            $preSealBindingRaw =
+                $preSealBinding | ConvertTo-Json -Depth 20 -Compress
+            $decoyUserHome = Join-Path `
+                $fixture.Guard.Workspace.ProcessTempDirectory 'decoy-user-home'
+            [IO.Directory]::CreateDirectory(
+                (Join-Path $decoyUserHome '.android')) | Out-Null
+            $decoyGuard = New-TL1C1bBuildEnvironmentDebugKeystoreGuard `
+                -SourcePath $fixture.Repo.DebugKeystorePath `
+                -Workspace ([pscustomobject]@{
+                    UserHomeDirectory = $decoyUserHome
+                })
+            $fixture.Guard.DebugKeystoreGuard = $decoyGuard
+            Assert-ThrowsLike {
+                Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged `
+                    $fixture.Guard -RequireGradle | Out-Null
+            } 'creation-time guard identity 漂移' `
+                'outer trust 接受了整套 nested debug signing guard equal-swap。'
+            Assert-ThrowsLike {
+                Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
+                    -TrustGuard $fixture.Guard `
+                    -ExpectedTrustGuard $fixture.Guard `
+                    -ExpectedPreSealBindingRaw $preSealBindingRaw | Out-Null
+            } 'creation-time guard identity 漂移' `
+                'post-Gradle seal 接受了整套 nested debug signing guard equal-swap。'
+            Assert-True (-not [bool]$realGuard.LockGuard.Sealed -and
+                -not [bool]$decoyGuard.LockGuard.Sealed) `
+                'nested equal-swap 拒绝后仍错误 seal 了 real/decoy lock。'
+            Assert-ThrowsLike {
+                Close-SyntheticFixture $fixture
+            } 'final frozen recheck:.*creation-time guard identity 漂移' `
+                'nested equal-swap cleanup 未保留原始 frozen recheck 异常。'
+            $closed = $true
+            Assert-True ([bool]$fixture.Guard.Disposed -and
+                -not (Test-Path -LiteralPath $fixture.Guard.Workspace.Root)) `
+                'nested equal-swap cleanup 未完成 trust guard dispose/workspace removal。'
+            foreach ($candidate in @($realGuard, $decoyGuard)) {
+                foreach ($stream in @(
+                    $candidate.SourceGuard.Stream,
+                    $candidate.CopyGuard.Stream,
+                    $candidate.LockGuard.MutableStream,
+                    $candidate.LockGuard.SealStream
+                )) {
+                    if ($stream -is [IO.FileStream]) {
+                        Assert-True ([bool]$stream.SafeFileHandle.IsClosed) `
+                            'nested equal-swap cleanup 泄漏了 debug signing file handle。'
+                    }
+                }
+                foreach ($entry in @($candidate.DirectoryAclGuards.Entries)) {
+                    Assert-True ([bool]$entry.DirectoryHandle.IsClosed) `
+                        'nested equal-swap cleanup 泄漏了 debug signing directory handle。'
+                }
+            }
+        } finally {
+            if (-not $closed) {
+                $fixture.Guard.DebugKeystoreGuard = $realGuard
+                if ($null -ne $decoyGuard) {
+                    Close-TL1C1bBuildEnvironmentDebugKeystoreGuard $decoyGuard
+                }
+                Close-SyntheticFixture $fixture
+            }
+        }
+    }
+
+    Test-Case 'debug.keystore.lock seal 拒绝 residual writer' {
+        $root = Join-Path $TestRoot 'debug-keystore-lock-residual-writer'
+        [IO.Directory]::CreateDirectory($root) | Out-Null
+        $path = Join-Path $root 'debug.keystore.lock'
+        $guard = $null
+        $writer = $null
+        try {
+            $guard = Open-TL1C1bBuildEnvironmentMutableEmptyFileGuard `
+                $path 'residual writer regression'
+            $writer = [IO.File]::Open(
+                $path, [IO.FileMode]::Open, [IO.FileAccess]::Write,
+                [IO.FileShare]::ReadWrite)
+            Assert-Throws {
+                Seal-TL1C1bBuildEnvironmentMutableEmptyFileGuard $guard
+            } 'post-Gradle seal 接受了 residual writer。' | Out-Null
+        } finally {
+            if ($writer -is [IO.FileStream]) { $writer.Dispose() }
+            Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard $guard
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                [IO.File]::Delete($path)
+            }
+            if (Test-Path -LiteralPath $root -PathType Container) {
+                [IO.Directory]::Delete($root)
+            }
+        }
+    }
+
+    Test-Case 'debug signing ACL restore 异常仍释放全部 file/directory handles' {
+        $root = Join-Path $TestRoot 'debug-keystore-close-failure'
+        $userHome = Join-Path $root 'user-home'
+        $android = Join-Path $userHome '.android'
+        $source = Join-Path $root 'source.keystore'
+        [IO.Directory]::CreateDirectory($android) | Out-Null
+        [IO.File]::WriteAllText($source, 'synthetic debug keystore')
+        $guard = $null
+        $originalAclBindings = @()
+        try {
+            $guard = New-TL1C1bBuildEnvironmentDebugKeystoreGuard `
+                -SourcePath $source `
+                -Workspace ([pscustomobject]@{ UserHomeDirectory = $userHome })
+            $originalAclBindings = @($guard.DirectoryAclGuards.Entries | ForEach-Object {
+                [pscustomobject]@{
+                    Directory = [string]$_.Directory
+                    OriginalSddl = [string]$_.OriginalSddl
+                }
+            })
+            $guard.DirectoryAclGuards.Entries[0].OriginalSddl = 'not-an-sddl'
+            Assert-ThrowsLike {
+                Close-TL1C1bBuildEnvironmentDebugKeystoreGuard $guard
+            } '未完整关闭' 'ACL restore 漂移未 fail closed。'
+            foreach ($entry in @($guard.DirectoryAclGuards.Entries)) {
+                Assert-True ([bool]$entry.DirectoryHandle.IsClosed) `
+                    'ACL restore 异常后仍有 directory handle 未释放。'
+            }
+            for ($index = $originalAclBindings.Count - 1; $index -ge 0; $index--) {
+                $binding = $originalAclBindings[$index]
+                $directoryInfo = [IO.DirectoryInfo]::new($binding.Directory)
+                $security = [IO.FileSystemAclExtensions]::GetAccessControl($directoryInfo)
+                $security.SetSecurityDescriptorSddlForm(
+                    $binding.OriginalSddl,
+                    [Security.AccessControl.AccessControlSections]::Access)
+                [IO.FileSystemAclExtensions]::SetAccessControl($directoryInfo, $security)
+                $guard.DirectoryAclGuards.Entries[$index].OriginalSddl = `
+                    $binding.OriginalSddl
+                $guard.DirectoryAclGuards.Entries[$index].Restored = $true
+            }
+            $originalAclBindings = @()
+            foreach ($path in @(
+                $guard.LockGuard.Path,
+                $guard.CopyGuard.Path,
+                $guard.SourceGuard.Path
+            )) {
+                [IO.File]::Delete([string]$path)
+                Assert-True (-not (Test-Path -LiteralPath $path)) `
+                    'ACL restore 失败后仍有 file handle 阻止删除。'
+            }
+        } finally {
+            for ($index = $originalAclBindings.Count - 1; $index -ge 0; $index--) {
+                $binding = $originalAclBindings[$index]
+                $directoryInfo = [IO.DirectoryInfo]::new($binding.Directory)
+                $security = [IO.FileSystemAclExtensions]::GetAccessControl($directoryInfo)
+                $security.SetSecurityDescriptorSddlForm(
+                    $binding.OriginalSddl,
+                    [Security.AccessControl.AccessControlSections]::Access)
+                [IO.FileSystemAclExtensions]::SetAccessControl($directoryInfo, $security)
+            }
+            if ($null -ne $guard) {
+                Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard `
+                    $guard.LockGuard
+                Close-TL1C1bBuildEnvironmentExternalFileGuard $guard.CopyGuard
+                Close-TL1C1bBuildEnvironmentExternalFileGuard $guard.SourceGuard
+            }
+            if (Test-Path -LiteralPath $root -PathType Container) {
+                [IO.Directory]::Delete($root, $true)
             }
         }
     }

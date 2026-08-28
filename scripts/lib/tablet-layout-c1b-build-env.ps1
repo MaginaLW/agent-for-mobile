@@ -635,6 +635,145 @@ function Close-TL1C1bBuildEnvironmentExternalFileGuard {
     }
 }
 
+function Open-TL1C1bBuildEnvironmentMutableEmptyFileGuard {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if (-not [IO.Path]::IsPathFullyQualified($Path)) {
+        throw "C1b $Name 必须是绝对路径。"
+    }
+    $full = [IO.Path]::GetFullPath($Path)
+    [void](Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
+        ([IO.Path]::GetDirectoryName($full)) "$Name parent")
+    $stream = [IO.File]::Open(
+        $full, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite,
+        ([IO.FileShare]::Read -bor [IO.FileShare]::Write))
+    try {
+        $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrWhiteSpace((Get-TL1C1bBuildEnvironmentLinkType $item))) {
+            throw "C1b $Name 必须是 ordinary non-link file。"
+        }
+        $identity = [TL1C1bBuildEnvironmentFileIdentity]::Read($stream.SafeFileHandle)
+        $emptySha256 = Get-TL1C1bBuildEnvironmentSha256Text ''
+        if ($identity.LinkCount -ne 1 -or $stream.Length -ne 0 -or
+            (Get-TL1C1bBuildEnvironmentStreamSha256 $stream) -cne $emptySha256) {
+            throw "C1b $Name 必须是 empty single-link file。"
+        }
+        return [pscustomobject][ordered]@{
+            Name = $Name
+            Path = $full
+            EmptySha256 = $emptySha256
+            StableId = $identity.StableId
+            MutableStream = $stream
+            SealStream = $null
+            Sealed = $false
+        }
+    } catch { $stream.Dispose(); throw }
+}
+
+function Assert-TL1C1bBuildEnvironmentMutableEmptyFileGuardUnchanged {
+    param([Parameter(Mandatory)]$Guard)
+
+    $heldStream = if ([bool]$Guard.Sealed) {
+        $Guard.SealStream
+    } else {
+        $Guard.MutableStream
+    }
+    if ($heldStream -isnot [IO.FileStream] -or
+        $heldStream.SafeFileHandle.IsClosed -or
+        $heldStream.SafeFileHandle.IsInvalid -or -not $heldStream.CanRead) {
+        throw "C1b $($Guard.Name) held guard 已关闭。"
+    }
+    $full = [IO.Path]::GetFullPath($Guard.Path)
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace((Get-TL1C1bBuildEnvironmentLinkType $item))) {
+        throw "C1b $($Guard.Name) current path 不是 ordinary file。"
+    }
+    $share = if ([bool]$Guard.Sealed) {
+        [IO.FileShare]::Read
+    } else {
+        [IO.FileShare]::Read -bor [IO.FileShare]::Write
+    }
+    $pathStream = [IO.File]::Open(
+        $full, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+    try {
+        $heldIdentity = [TL1C1bBuildEnvironmentFileIdentity]::Read(
+            $heldStream.SafeFileHandle)
+        $pathIdentity = [TL1C1bBuildEnvironmentFileIdentity]::Read(
+            $pathStream.SafeFileHandle)
+        if ($heldIdentity.LinkCount -ne 1 -or $pathIdentity.LinkCount -ne 1 -or
+            [string]$heldIdentity.StableId -cne [string]$Guard.StableId -or
+            [string]$pathIdentity.StableId -cne [string]$Guard.StableId -or
+            $heldStream.Length -ne 0 -or $pathStream.Length -ne 0 -or
+            (Get-TL1C1bBuildEnvironmentStreamSha256 $heldStream) -cne
+                [string]$Guard.EmptySha256 -or
+            (Get-TL1C1bBuildEnvironmentStreamSha256 $pathStream) -cne
+                [string]$Guard.EmptySha256) {
+            throw "C1b $($Guard.Name) held/current empty-file binding 漂移。"
+        }
+    } finally { $pathStream.Dispose() }
+}
+
+function Seal-TL1C1bBuildEnvironmentMutableEmptyFileGuard {
+    param([Parameter(Mandatory)]$Guard)
+
+    if ([bool]$Guard.Sealed) {
+        Assert-TL1C1bBuildEnvironmentMutableEmptyFileGuardUnchanged $Guard
+        return
+    }
+    Assert-TL1C1bBuildEnvironmentMutableEmptyFileGuardUnchanged $Guard
+    $transition = [IO.File]::Open(
+        [string]$Guard.Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        ([IO.FileShare]::Read -bor [IO.FileShare]::Write))
+    $seal = $null
+    try {
+        $transitionIdentity = [TL1C1bBuildEnvironmentFileIdentity]::Read(
+            $transition.SafeFileHandle)
+        if ($transitionIdentity.LinkCount -ne 1 -or
+            [string]$transitionIdentity.StableId -cne [string]$Guard.StableId -or
+            $transition.Length -ne 0 -or
+            (Get-TL1C1bBuildEnvironmentStreamSha256 $transition) -cne
+                [string]$Guard.EmptySha256) {
+            throw "C1b $($Guard.Name) transition binding 漂移。"
+        }
+        $Guard.MutableStream.Dispose()
+        $Guard.MutableStream = $null
+        $seal = [IO.File]::Open(
+            [string]$Guard.Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::Read)
+        $sealIdentity = [TL1C1bBuildEnvironmentFileIdentity]::Read(
+            $seal.SafeFileHandle)
+        if ($sealIdentity.LinkCount -ne 1 -or
+            [string]$sealIdentity.StableId -cne [string]$Guard.StableId -or
+            $seal.Length -ne 0 -or
+            (Get-TL1C1bBuildEnvironmentStreamSha256 $seal) -cne
+                [string]$Guard.EmptySha256) {
+            throw "C1b $($Guard.Name) post-Gradle seal binding 漂移。"
+        }
+        $Guard.SealStream = $seal
+        $Guard.Sealed = $true
+        $seal = $null
+    } finally {
+        if ($null -ne $seal) { $seal.Dispose() }
+        $transition.Dispose()
+    }
+    Assert-TL1C1bBuildEnvironmentMutableEmptyFileGuardUnchanged $Guard
+}
+
+function Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard {
+    param([AllowNull()]$Guard)
+    if ($null -eq $Guard) { return }
+    foreach ($stream in @($Guard.SealStream, $Guard.MutableStream)) {
+        if ($stream -is [IO.FileStream]) { $stream.Dispose() }
+    }
+}
+
 function Protect-TL1C1bBuildEnvironmentRepoDirectories {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1338,12 +1477,16 @@ function New-TL1C1bBuildEnvironmentDebugKeystoreGuard {
 
     $source = Open-TL1C1bBuildEnvironmentExternalFileGuard `
         $SourcePath 'canonical user-profile .android/debug.keystore'
-    $tree = $null
+    $copyGuard = $null
+    $lockGuard = $null
+    $aclEntries = [Collections.Generic.List[object]]::new()
     $aclGuards = $null
     try {
         $destination = Join-Path $Workspace.UserHomeDirectory '.android\debug.keystore'
-        if (Test-Path -LiteralPath $destination) {
-            throw 'C1b fresh user.home debug.keystore destination 必须 absent。'
+        $lockPath = $destination + '.lock'
+        if ((Test-Path -LiteralPath $destination) -or
+            (Test-Path -LiteralPath $lockPath)) {
+            throw 'C1b fresh user.home debug.keystore/lock destination 必须 absent。'
         }
         $writer = [IO.File]::Open(
             $destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
@@ -1357,62 +1500,230 @@ function New-TL1C1bBuildEnvironmentDebugKeystoreGuard {
             $source.Stream.Position = $position
             $writer.Dispose()
         }
-        $catalog = Get-TL1C1bBuildEnvironmentSha256Text (
-            '.android/debug.keystore=' + [string]$source.Sha256)
-        $tree = Open-TL1C1bBuildEnvironmentTreeGuard `
-            $Workspace.UserHomeDirectory 1 $catalog 'isolated user.home'
-        $aclGuards = Protect-TL1C1bBuildEnvironmentTreeDirectories $tree
-        $copy = Get-TL1C1bBuildEnvironmentEntry $tree '.android/debug.keystore'
-        if ([string]$copy.Sha256 -cne [string]$source.Sha256) {
+        $copyGuard = Open-TL1C1bBuildEnvironmentExternalFileGuard `
+            $destination 'isolated user.home .android/debug.keystore'
+        $lockGuard = Open-TL1C1bBuildEnvironmentMutableEmptyFileGuard `
+            $lockPath 'isolated user.home .android/debug.keystore.lock'
+        foreach ($directory in @(
+            $Workspace.UserHomeDirectory,
+            (Join-Path $Workspace.UserHomeDirectory '.android')
+        )) {
+            $aclEntries.Add((Protect-TL1C1bBuildEnvironmentDirectory $directory))
+        }
+        $aclGuards = [pscustomobject][ordered]@{
+            Name = 'isolated debug signing user.home'
+            Entries = $aclEntries.ToArray()
+            ProtectedDirectoryCount = $aclEntries.Count
+        }
+        Assert-TL1C1bBuildEnvironmentTreeDirectoriesProtected $aclGuards
+        Assert-TL1C1bBuildEnvironmentDebugKeystoreDirectoryShape `
+            $Workspace.UserHomeDirectory
+        if ([string]$copyGuard.Sha256 -cne [string]$source.Sha256) {
             throw 'C1b isolated debug.keystore copy hash 与 held source 不一致。'
         }
         return [pscustomobject][ordered]@{
             SourceGuard = $source
-            TreeGuard = $tree
+            CopyGuard = $copyGuard
+            LockGuard = $lockGuard
+            UserHomeDirectory = [string]$Workspace.UserHomeDirectory
             DirectoryAclGuards = $aclGuards
             Binding = [pscustomobject][ordered]@{
                 sha256 = [string]$source.Sha256
                 source_ordinary_single_link_guarded = $true
                 isolated_copy_equal = $true
                 isolated_user_home_other_config_absent = $true
-                files_deny_write_delete = $true
+                keystore_source_and_copy_deny_write_delete = $true
                 directories_acl_protected = $true
+                gradle_lock_precreated = $true
+                gradle_lock_identity_guarded = $true
+                gradle_lock_deny_delete = $true
+                gradle_lock_write_allowed_during_gradle = $true
+                post_gradle_lock_seal_required = $true
+                post_gradle_lock_zero_length = $true
+                post_gradle_lock_sealed_achieved = $false
             }
         }
     } catch {
         if ($null -ne $aclGuards) {
             try { Restore-TL1C1bBuildEnvironmentTreeDirectories $aclGuards } catch { }
+        } else {
+            for ($index = $aclEntries.Count - 1; $index -ge 0; $index--) {
+                try { Restore-TL1C1bBuildEnvironmentDirectory $aclEntries[$index] }
+                catch { }
+            }
         }
-        Close-TL1C1bBuildEnvironmentTreeGuard $tree
+        Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard $lockGuard
+        Close-TL1C1bBuildEnvironmentExternalFileGuard $copyGuard
         Close-TL1C1bBuildEnvironmentExternalFileGuard $source
         throw
+    }
+}
+
+function Assert-TL1C1bBuildEnvironmentDebugKeystoreDirectoryShape {
+    param([Parameter(Mandatory)][string]$UserHomeDirectory)
+
+    $inventory = Get-TL1C1bBuildEnvironmentTreeInventory $UserHomeDirectory
+    if (($inventory.Directories -join "`n") -cne '.android' -or
+        ($inventory.Files -join "`n") -cne (@(
+            '.android/debug.keystore',
+            '.android/debug.keystore.lock'
+        ) -join "`n")) {
+        throw 'C1b isolated user.home 只能含 debug.keystore 与预创建 lock。'
     }
 }
 
 function Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged {
     param([Parameter(Mandatory)]$Guard)
 
+    $userHome = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
+        $Guard.UserHomeDirectory 'isolated debug signing user.home'
+    $expectedCopyPath = [IO.Path]::GetFullPath(
+        (Join-Path $userHome '.android\debug.keystore'))
+    $expectedLockPath = $expectedCopyPath + '.lock'
+    $aclEntries = @($Guard.DirectoryAclGuards.Entries)
+    if (-not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $Guard.CopyGuard.Path $expectedCopyPath) -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $Guard.LockGuard.Path $expectedLockPath) -or
+        $aclEntries.Count -ne 2 -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $aclEntries[0].Directory $userHome) -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $aclEntries[1].Directory (Join-Path $userHome '.android'))) {
+        throw 'C1b debug.keystore copy/lock/directory canonical path binding 漂移。'
+    }
     $sourceSha = Assert-TL1C1bBuildEnvironmentExternalFileGuardUnchanged `
         $Guard.SourceGuard
-    $tree = Assert-TL1C1bBuildEnvironmentTreeGuardUnchanged $Guard.TreeGuard
+    $copySha = Assert-TL1C1bBuildEnvironmentExternalFileGuardUnchanged `
+        $Guard.CopyGuard
+    Assert-TL1C1bBuildEnvironmentMutableEmptyFileGuardUnchanged `
+        $Guard.LockGuard
     Assert-TL1C1bBuildEnvironmentTreeDirectoriesProtected `
         $Guard.DirectoryAclGuards
-    $copy = Get-TL1C1bBuildEnvironmentEntry $Guard.TreeGuard '.android/debug.keystore'
-    if ([int]$tree.file_count -ne 1 -or
-        [string]$copy.Sha256 -cne $sourceSha -or
-        [string]$Guard.Binding.sha256 -cne $sourceSha) {
+    Assert-TL1C1bBuildEnvironmentDebugKeystoreDirectoryShape `
+        $userHome
+    if ($copySha -cne $sourceSha -or
+        [string]$Guard.Binding.sha256 -cne $sourceSha -or
+        [bool]$Guard.Binding.post_gradle_lock_sealed_achieved -ne
+            [bool]$Guard.LockGuard.Sealed) {
         throw 'C1b debug.keystore source/copy binding 漂移。'
     }
     return $Guard.Binding
+}
+
+function Assert-TL1C1bBuildEnvironmentDebugKeystoreTrustBinding {
+    param([Parameter(Mandatory)]$TrustGuard)
+
+    $guard = $TrustGuard.DebugKeystoreGuard
+    if (-not [object]::ReferenceEquals(
+            $guard, $TrustGuard.DebugKeystoreGuardAnchor)) {
+        throw 'C1b debug.keystore creation-time guard identity 漂移。'
+    }
+    $workspaceUserHome = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
+        $TrustGuard.Workspace.UserHomeDirectory 'fresh user.home'
+    $expectedUserHome = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
+        $TrustGuard.DebugKeystoreUserHomeDirectory `
+        'creation-time debug signing user.home'
+    if (-not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $workspaceUserHome $TrustGuard.Workspace.UserHomeDirectory) -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $expectedUserHome $TrustGuard.DebugKeystoreUserHomeDirectory) -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $workspaceUserHome $expectedUserHome) -or
+        -not (Test-TL1C1bBuildEnvironmentPathEqual `
+            $guard.UserHomeDirectory $expectedUserHome)) {
+        throw 'C1b debug.keystore 与 workspace user.home creation-time binding 漂移。'
+    }
+    return $guard
+}
+
+function Assert-TL1C1bBuildEnvironmentSealBindingTransition {
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$PreSealBindingRaw,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$PostSealBindingRaw
+    )
+
+    $falseMarker = '"post_gradle_lock_sealed_achieved":false'
+    $trueMarker = '"post_gradle_lock_sealed_achieved":true'
+    if ([regex]::Matches($PreSealBindingRaw, [regex]::Escape($falseMarker)).Count -ne 1 -or
+        $PreSealBindingRaw.Contains($trueMarker) -or
+        [regex]::Matches($PostSealBindingRaw, [regex]::Escape($trueMarker)).Count -ne 1 -or
+        $PostSealBindingRaw.Contains($falseMarker) -or
+        $PostSealBindingRaw.Replace($trueMarker, $falseMarker) -cne
+            $PreSealBindingRaw) {
+        throw 'C1b pre/post seal binding 除 achieved false→true 外发生漂移。'
+    }
+}
+
+function Seal-TL1C1bBuildEnvironmentDebugKeystoreLock {
+    param(
+        [Parameter(Mandatory)]$TrustGuard,
+        [Parameter(Mandatory)]$ExpectedTrustGuard,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()]
+        [string]$ExpectedPreSealBindingRaw
+    )
+
+    if (-not [object]::ReferenceEquals($TrustGuard, $ExpectedTrustGuard)) {
+        throw 'C1b post-Gradle seal trust guard identity 漂移。'
+    }
+    $guard = Assert-TL1C1bBuildEnvironmentDebugKeystoreTrustBinding `
+        $TrustGuard
+    $preSealBinding = Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged `
+        $TrustGuard -RequireGradle
+    $preSealBindingRaw = $preSealBinding | ConvertTo-Json -Depth 20 -Compress
+    if ($preSealBindingRaw -cne $ExpectedPreSealBindingRaw -or
+        [regex]::Matches(
+            $preSealBindingRaw,
+            [regex]::Escape('"post_gradle_lock_sealed_achieved":false')).Count -ne 1 -or
+        $preSealBindingRaw.Contains('"post_gradle_lock_sealed_achieved":true')) {
+        throw 'C1b pre/post seal 初始 binding 不唯一或已漂移。'
+    }
+    Seal-TL1C1bBuildEnvironmentMutableEmptyFileGuard $guard.LockGuard
+    Assert-TL1C1bBuildEnvironmentTreeDirectoriesProtected `
+        $guard.DirectoryAclGuards
+    Assert-TL1C1bBuildEnvironmentDebugKeystoreDirectoryShape `
+        $guard.UserHomeDirectory
+    $guard.Binding.post_gradle_lock_sealed_achieved = $true
+    $postSealBinding = Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged `
+        $TrustGuard -RequireGradle
+    $postSealBindingRaw = $postSealBinding | ConvertTo-Json -Depth 20 -Compress
+    if (-not [bool]$postSealBinding.debug_keystore.post_gradle_lock_sealed_achieved -or
+        -not [bool]$guard.LockGuard.Sealed) {
+        throw 'C1b post-Gradle seal state 未达成。'
+    }
+    Assert-TL1C1bBuildEnvironmentSealBindingTransition `
+        $preSealBindingRaw $postSealBindingRaw
+    return $postSealBinding
 }
 
 function Close-TL1C1bBuildEnvironmentDebugKeystoreGuard {
     param([AllowNull()]$Guard)
 
     if ($null -eq $Guard) { return }
-    Restore-TL1C1bBuildEnvironmentTreeDirectories $Guard.DirectoryAclGuards
-    Close-TL1C1bBuildEnvironmentTreeGuard $Guard.TreeGuard
-    Close-TL1C1bBuildEnvironmentExternalFileGuard $Guard.SourceGuard
+    $failures = [Collections.Generic.List[string]]::new()
+    try {
+        try {
+            Restore-TL1C1bBuildEnvironmentTreeDirectories $Guard.DirectoryAclGuards
+        } catch { $failures.Add("restore debug signing directories: $($_.Exception.Message)") }
+    } finally {
+        foreach ($entry in @(
+            [pscustomobject]@{ Name = 'lock'; Action = {
+                Close-TL1C1bBuildEnvironmentMutableEmptyFileGuard $Guard.LockGuard
+            } },
+            [pscustomobject]@{ Name = 'copy'; Action = {
+                Close-TL1C1bBuildEnvironmentExternalFileGuard $Guard.CopyGuard
+            } },
+            [pscustomobject]@{ Name = 'source'; Action = {
+                Close-TL1C1bBuildEnvironmentExternalFileGuard $Guard.SourceGuard
+            } }
+        )) {
+            try { & $entry.Action }
+            catch { $failures.Add("close debug signing $($entry.Name): $($_.Exception.Message)") }
+        }
+    }
+    if ($failures.Count -ne 0) {
+        throw ('C1b debug signing guard 未完整关闭：' + ($failures -join ' | '))
+    }
 }
 
 function Get-TL1C1bBuildEnvironmentAndroidSdkBinding {
@@ -2623,25 +2934,42 @@ function Restore-TL1C1bBuildEnvironmentDirectory {
     param([AllowNull()]$AclGuard)
 
     if ($null -eq $AclGuard -or [bool]$AclGuard.Restored) { return }
-    $canonical = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
-        $AclGuard.Directory 'tree ACL restore target'
-    $current = [IO.FileSystemAclExtensions]::GetAccessControl(
-        [IO.DirectoryInfo]::new($canonical))
-    $currentSddl = $current.GetSecurityDescriptorSddlForm(
-        [Security.AccessControl.AccessControlSections]::Access)
-    $drifted = $currentSddl -cne [string]$AclGuard.AppliedSddl
-    if ([bool]$AclGuard.Modified) {
-        $current.SetSecurityDescriptorSddlForm(
-            [string]$AclGuard.OriginalSddl,
+    $restoreCompleted = $false
+    try {
+        $canonical = Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory `
+            $AclGuard.Directory 'tree ACL restore target'
+        $directoryInfo = [IO.DirectoryInfo]::new($canonical)
+        $current = [IO.FileSystemAclExtensions]::GetAccessControl($directoryInfo)
+        $currentSddl = $current.GetSecurityDescriptorSddlForm(
             [Security.AccessControl.AccessControlSections]::Access)
-        [IO.FileSystemAclExtensions]::SetAccessControl(
-            [IO.DirectoryInfo]::new($canonical), $current)
+        $drifted = $currentSddl -cne [string]$AclGuard.AppliedSddl
+        if ([bool]$AclGuard.Modified) {
+            $current.SetSecurityDescriptorSddlForm(
+                [string]$AclGuard.OriginalSddl,
+                [Security.AccessControl.AccessControlSections]::Access)
+            [IO.FileSystemAclExtensions]::SetAccessControl($directoryInfo, $current)
+        }
+        $restoredSddl = [IO.FileSystemAclExtensions]::GetAccessControl(
+            $directoryInfo).GetSecurityDescriptorSddlForm(
+                [Security.AccessControl.AccessControlSections]::Access)
+        if (-not (Test-TL1C1bBuildEnvironmentAccessSddlEquivalent `
+                $restoredSddl ([string]$AclGuard.OriginalSddl))) {
+            throw 'C1b build-environment tree directory ACL 未恢复 original SDDL。'
+        }
+        $restoreCompleted = $true
+        if ($drifted) {
+            throw 'C1b build-environment tree directory ACL 在恢复前已漂移。'
+        }
+    } finally {
+        try {
+            if ($AclGuard.DirectoryHandle -is `
+                    [Microsoft.Win32.SafeHandles.SafeFileHandle]) {
+                $AclGuard.DirectoryHandle.Dispose()
+            }
+        } finally {
+            $AclGuard.Restored = $restoreCompleted
+        }
     }
-    if ($AclGuard.DirectoryHandle -is [Microsoft.Win32.SafeHandles.SafeFileHandle]) {
-        $AclGuard.DirectoryHandle.Dispose()
-    }
-    $AclGuard.Restored = $true
-    if ($drifted) { throw 'C1b build-environment tree directory ACL 在恢复前已漂移。' }
 }
 
 function Protect-TL1C1bBuildEnvironmentTreeDirectories {
@@ -3337,6 +3665,9 @@ function Open-TL1C1bBuildEnvironmentTrustGuardCore {
             TestOnlySynthetic = [bool]$TestOnlySynthetic
             Workspace = $workspace
             DebugKeystoreGuard = $debugKeystoreGuard
+            DebugKeystoreGuardAnchor = $debugKeystoreGuard
+            DebugKeystoreUserHomeDirectory =
+                [IO.Path]::GetFullPath($workspace.UserHomeDirectory)
             GradleTreeGuard = $gradleTree
             GradleDirectoryAclGuards = $gradleAclGuards
             GradleBinding = $gradleBinding
@@ -3577,9 +3908,11 @@ function Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged {
     Assert-TL1C1bBuildEnvironmentTreeDirectoriesProtected `
         $TrustGuard.IsolatedAndroidSdk.DirectoryAclGuards
     Assert-TL1C1bBuildEnvironmentWorkspaceUnchanged $TrustGuard.Workspace
+    $debugKeystoreGuard =
+        Assert-TL1C1bBuildEnvironmentDebugKeystoreTrustBinding $TrustGuard
     $debugKeystore =
         Assert-TL1C1bBuildEnvironmentDebugKeystoreGuardUnchanged `
-            $TrustGuard.DebugKeystoreGuard
+            $debugKeystoreGuard
     if ($RequireGradle -and $null -eq $TrustGuard.GradleTreeGuard) {
         throw 'C1b Gradle 8.9 distribution 尚未完成冻结。'
     }
@@ -3718,8 +4051,28 @@ function Close-TL1C1bBuildEnvironmentTrustGuard {
     } catch { $failures.Add("restore isolated Android SDK ACL: $($_.Exception.Message)") }
     try { Close-TL1C1bBuildEnvironmentTreeGuard $TrustGuard.IsolatedAndroidSdk.TreeGuard }
     catch { $failures.Add("close isolated Android SDK tree: $($_.Exception.Message)") }
-    try { Close-TL1C1bBuildEnvironmentDebugKeystoreGuard $TrustGuard.DebugKeystoreGuard }
-    catch { $failures.Add("close isolated debug.keystore guard: $($_.Exception.Message)") }
+    $debugKeystoreGuards = [Collections.Generic.List[object]]::new()
+    foreach ($candidate in @(
+        $TrustGuard.DebugKeystoreGuardAnchor,
+        $TrustGuard.DebugKeystoreGuard
+    )) {
+        if ($null -eq $candidate) { continue }
+        $duplicate = $false
+        foreach ($existing in $debugKeystoreGuards) {
+            if ([object]::ReferenceEquals($existing, $candidate)) {
+                $duplicate = $true
+                break
+            }
+        }
+        if (-not $duplicate) { $debugKeystoreGuards.Add($candidate) }
+    }
+    foreach ($candidate in $debugKeystoreGuards) {
+        try { Close-TL1C1bBuildEnvironmentDebugKeystoreGuard $candidate }
+        catch {
+            $failures.Add(
+                "close isolated debug.keystore guard: $($_.Exception.Message)")
+        }
+    }
     foreach ($guard in @(
         $TrustGuard.Workspace.InitGradleGuard,
         $TrustGuard.Workspace.InitGradleKtsGuard,

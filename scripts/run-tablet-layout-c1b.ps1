@@ -71,7 +71,8 @@ $runId=$null;$runDirectory=$null;$c1bDirectory=$null;$serial=$null;$nonce=$null;
 $expectedArtifactSha=$null;$sessionStarted=$false;$sessionConsumed=$false;$abortAttempted=$false;$abortSucceeded=$false
 $failure=$null;$implementationHashes=$null;$adbTrustBefore=$null;$artifactProofBinding=$null
 $staticReadOnlyProof=$null;$t0ReadOnlyProof=$null;$readOnlyCounts=$null
-$deviceLease=$null;$buildEnvironmentGuard=$null;$buildEnvironmentBinding=$null;$buildEnvironmentBindingRaw=$null
+$deviceLease=$null;$buildEnvironmentGuard=$null;$buildEnvironmentGuardAnchor=$null
+$buildEnvironmentBinding=$null;$buildEnvironmentBindingRaw=$null;$buildEnvironmentPreSealBindingRaw=$null
 $buildEnvironment=$null;$gitEnvironment=$null;$adbTrustEnvironment=$null;$adbEnvironment=$null;$Java=$null;$signerArguments=$null;$archivedSignerSha=$null
 $adbServerGuard=$null;$adbServerBinding=$null;$adbServerBindingRaw=$null;$adbServerCleanupBinding=$null
 $aapt2TrustGuard=$null;$aapt2TrustBinding=$null
@@ -111,7 +112,11 @@ function ConvertFrom-C1bSignerDigest([string]$Text) {
     return 'sha256:'+$matches[0].Groups[1].Value.ToLowerInvariant()
 }
 function Assert-C1bFrozenState {
-    if($null-eq$buildEnvironmentGuard-or$null-eq$buildEnvironmentBindingRaw){throw 'C1b build-environment trust guard 尚未建立。'}
+    if($null-eq$buildEnvironmentGuard-or$null-eq$buildEnvironmentGuardAnchor-or
+       $null-eq$buildEnvironmentBindingRaw){throw 'C1b build-environment trust guard 尚未建立。'}
+    if(-not[object]::ReferenceEquals($buildEnvironmentGuard,$buildEnvironmentGuardAnchor)){
+        throw 'C1b build-environment trust guard identity 漂移。'
+    }
     $currentBuildEnvironment=Assert-TL1C1bBuildEnvironmentFrozen $buildEnvironmentGuard
     $currentBuildEnvironmentRaw=$currentBuildEnvironment|ConvertTo-Json -Depth 20 -Compress
     if($currentBuildEnvironmentRaw-cne$buildEnvironmentBindingRaw){throw 'C1b build-environment trust binding 前后漂移。'}
@@ -296,8 +301,10 @@ try {
         -GradleUserHomeParent ([IO.Path]::GetTempPath()) `
         -RepositoryInputPaths $repositoryInputs `
         -RepositoryInputDirectories $repositoryInputDirectories
+    $buildEnvironmentGuardAnchor=$buildEnvironmentGuard
     $buildEnvironmentBinding=Assert-TL1C1bBuildEnvironmentFrozen $buildEnvironmentGuard
     $buildEnvironmentBindingRaw=$buildEnvironmentBinding|ConvertTo-Json -Depth 20 -Compress
+    $buildEnvironmentPreSealBindingRaw=$buildEnvironmentBindingRaw
     $AndroidSdkRoot=[IO.Path]::GetFullPath([string]$buildEnvironmentGuard.AndroidSdkRoot)
     $AndroidHome=$AndroidSdkRoot
     $AdbPath=[IO.Path]::GetFullPath((Join-Path $AndroidSdkRoot 'platform-tools\adb.exe'))
@@ -351,6 +358,14 @@ try {
     [void](Invoke-TL1C1aProcess -FilePath $Java -Arguments $gradleArguments `
         -Operation 'fresh C1b dedicated read-only APK 构建与闭包证明' `
         -Environment $buildEnvironment -ClearEnvironment -TimeoutSec 300)
+    $buildEnvironmentBinding=Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
+        -TrustGuard $buildEnvironmentGuard `
+        -ExpectedTrustGuard $buildEnvironmentGuardAnchor `
+        -ExpectedPreSealBindingRaw $buildEnvironmentPreSealBindingRaw
+    if(-not[bool]$buildEnvironmentBinding.debug_keystore.post_gradle_lock_sealed_achieved){
+        throw 'C1b post-Gradle debug.keystore.lock seal 未完成。'
+    }
+    $buildEnvironmentBindingRaw=$buildEnvironmentBinding|ConvertTo-Json -Depth 20 -Compress
     Assert-C1bFrozenState
     foreach($freshPath in @($Apk,$ReleaseApk,$ArtifactProof)){
         if(-not(Test-Path -LiteralPath $freshPath -PathType Leaf)){throw "fresh C1b dedicated artifact 缺失：$freshPath。"}
@@ -456,7 +471,11 @@ try {
     $nonce='n-'+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16)).ToLowerInvariant()
     $uris=[ordered]@{t0=New-TL1C1bUri t0 $runId $nonce $ExpectedCommitSha $expectedArtifactSha;status=New-TL1C1bUri status $runId $nonce
         c1=New-TL1C1bUri c1 $runId $nonce;c2=New-TL1C1bUri c2 $runId $nonce;result=New-TL1C1bUri result $runId $nonce;abort=New-TL1C1bUri abort $runId $nonce}
-    $endpointSetSha=Get-TL1C1aSha256Text (@($uris.GetEnumerator()|%{"$($_.Key)=$($_.Value)"})-join"`n")
+    $endpointSetEntries=[Collections.Generic.List[string]]::new()
+    foreach($entry in $uris.GetEnumerator()){
+        $endpointSetEntries.Add("$($entry.Key)=$($entry.Value)")
+    }
+    $endpointSetSha=Get-TL1C1aSha256Text ($endpointSetEntries.ToArray()-join"`n")
     $sessionStarted=$true
     $write=Invoke-TL1C1bAdb -AdbPath $AdbPath -Serial $serial -Name content_t0 -Value $uris.t0 -InputBytes $t0Bytes -TimeoutSec 30 -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard
     if($write.Bytes.Length-or$write.Stderr.Length){throw 'C1b T0 write 不得返回伪 ACK。'}

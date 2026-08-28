@@ -28,8 +28,15 @@
     "source_ordinary_single_link_guarded": true,
     "isolated_copy_equal": true,
     "isolated_user_home_other_config_absent": true,
-    "files_deny_write_delete": true,
-    "directories_acl_protected": true
+    "keystore_source_and_copy_deny_write_delete": true,
+    "directories_acl_protected": true,
+    "gradle_lock_precreated": true,
+    "gradle_lock_identity_guarded": true,
+    "gradle_lock_deny_delete": true,
+    "gradle_lock_write_allowed_during_gradle": true,
+    "post_gradle_lock_seal_required": true,
+    "post_gradle_lock_zero_length": true,
+    "post_gradle_lock_sealed_achieved": true
   },
   "host_process": {
     "windows_system_directory_api_trust_root": true,

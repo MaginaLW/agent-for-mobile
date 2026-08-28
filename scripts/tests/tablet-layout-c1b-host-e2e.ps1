@@ -172,6 +172,8 @@ function Assert-TL1C1bSyntheticBuildEnvironmentGuard {
        (Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $TrustGuard.IsolatedAapt2Path)-cne$TrustGuard.IsolatedAapt2Sha256-or
        (Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $TrustGuard.GradleScript)-cne$TrustGuard.GradleScriptSha256-or
        (Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $TrustGuard.SignerScript)-cne$TrustGuard.SignerScriptSha256-or
+       [bool]$TrustGuard.Binding.debug_keystore.post_gradle_lock_sealed_achieved-ne
+           [bool]$TrustGuard.DebugKeystoreGuard.Sealed-or
        (($TrustGuard.Binding|ConvertTo-Json -Depth 20 -Compress)-cne$TrustGuard.BindingRaw)){
         throw 'synthetic C1b build-environment frozen binding drift'
     }
@@ -193,6 +195,7 @@ function Open-TL1C1bBuildEnvironmentTrustGuard {
     $fixturePath=Join-Path $repo 'scripts\tests\fixtures\tablet-layout-c1b-build-environment.json';$gradleScript=Join-Path $repo 'app\fake-gradle.ps1';$signerScript=Join-Path $repo 'app\fake-signer.ps1'
     foreach($file in @($fixturePath,$gradleScript,$signerScript,$GitPath)){if(-not(Test-Path -LiteralPath $file -PathType Leaf)){throw "synthetic C1b build fixture input missing: $file"}}
     $binding=Get-Content -LiteralPath $fixturePath -Raw|ConvertFrom-Json -Depth 30 -DateKind String
+    $binding.debug_keystore.post_gradle_lock_sealed_achieved=$false
     $relativePaths=[string[]]@($RepositoryInputPaths);[Array]::Sort($relativePaths,[StringComparer]::Ordinal)
     if($relativePaths.Count-ne41-or$RepositoryInputDirectories.Count-ne3-or(@($relativePaths|Select-Object -Unique)).Count-ne41){throw 'synthetic C1b repository input closure drift'}
     $catalog=[Collections.Generic.List[string]]::new()
@@ -214,6 +217,7 @@ function Open-TL1C1bBuildEnvironmentTrustGuard {
     $syntheticStatusResult=Invoke-TL1C1aGit -RepoRoot $repo -Arguments @('status','--porcelain=v1','--untracked-files=all') -GitPath $gitPath -ProcessEnvironment $gitChild -ClearEnvironment
     if(-not[string]::IsNullOrWhiteSpace($syntheticStatusResult.Text)){throw "synthetic C1b guard dirtied repo: $($syntheticStatusResult.Text)"}
     $guard=[pscustomobject][ordered]@{Disposed=$false;TestOnlySynthetic=$true;RepoRoot=$repo;GitPath=$gitPath;GitRoot=$gitRoot;GitGuard=[pscustomobject]@{Path=$gitPath};GitEnvironment=$gitChild;RecoveryJournal=[pscustomobject]@{Path=$journal};ModuleBuildOutputDirectory=$moduleBuildOutput;Workspace=$workspace;ProcessTempDirectory=$processTemp;ProjectCacheDirectory=$projectCache;HostPaths=$hostPaths;SourceAndroidSdkRoot=$sdk;AndroidSdkRoot=$isolatedSdk;IsolatedAdbPath=$isolatedAdb;IsolatedAapt2Path=$isolatedAapt2;IsolatedAdbSha256=Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $isolatedAdb;IsolatedAapt2Sha256=Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $isolatedAapt2;PwshPath=(Get-Process -Id $PID).Path;GradleScript=$gradleScript;SignerScript=$signerScript;GradleScriptSha256=Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $gradleScript;SignerScriptSha256=Get-TL1C1bSyntheticBuildEnvironmentFileSha256 $signerScript;ChildEnvironment=$child;Binding=$binding;BindingRaw=($binding|ConvertTo-Json -Depth 20 -Compress)}
+    $guard|Add-Member -NotePropertyName DebugKeystoreGuard -NotePropertyValue ([pscustomobject]@{Sealed=$false})
     return $guard
 }
 function Assert-TL1C1bBuildEnvironmentFrozen {param([Parameter(Mandatory)]$TrustGuard);return Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard}
@@ -229,6 +233,31 @@ function Get-TL1C1bBuildEnvironmentGitEnvironment {
 function Get-TL1C1bBuildEnvironmentGradleInvocation {param([Parameter(Mandatory)]$TrustGuard);[void](Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard);return [pscustomobject][ordered]@{FilePath=$TrustGuard.PwshPath;Arguments=[string[]]@('-NoProfile','-File',$TrustGuard.GradleScript)}}
 function Get-TL1C1bBuildEnvironmentApkSignerInvocation {param([Parameter(Mandatory)]$TrustGuard);[void](Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard);return [pscustomobject][ordered]@{FilePath=$TrustGuard.PwshPath;Arguments=[string[]]@('-NoProfile','-File',$TrustGuard.SignerScript)}}
 function Get-TL1C1bBuildEnvironmentGradleArguments {param([Parameter(Mandatory)]$TrustGuard);[void](Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard);return [string[]]@('--project-cache-dir',$TrustGuard.ProjectCacheDirectory,'-PtabletC1bIsolatedBuild=true','-Pkotlin.incremental=false','-Pkotlin.compiler.execution.strategy=in-process')}
+function Seal-TL1C1bBuildEnvironmentDebugKeystoreLock {
+    param(
+        [Parameter(Mandatory)]$TrustGuard,
+        [Parameter(Mandatory)]$ExpectedTrustGuard,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()]
+        [string]$ExpectedPreSealBindingRaw
+    )
+    if(-not[object]::ReferenceEquals($TrustGuard,$ExpectedTrustGuard)){
+        throw 'synthetic C1b post-Gradle seal trust guard identity drift'
+    }
+    $pre=Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard
+    $preRaw=$pre|ConvertTo-Json -Depth 20 -Compress
+    if($preRaw-cne$ExpectedPreSealBindingRaw-or
+       [regex]::Matches($preRaw,[regex]::Escape('"post_gradle_lock_sealed_achieved":false')).Count-ne1-or
+       $preRaw.Contains('"post_gradle_lock_sealed_achieved":true')){
+        throw 'synthetic C1b pre-seal full binding drift'
+    }
+    $TrustGuard.DebugKeystoreGuard.Sealed=$true
+    $TrustGuard.Binding.debug_keystore.post_gradle_lock_sealed_achieved=$true
+    $TrustGuard.BindingRaw=$TrustGuard.Binding|ConvertTo-Json -Depth 20 -Compress
+    $post=Assert-TL1C1bSyntheticBuildEnvironmentGuard $TrustGuard
+    $postRaw=$post|ConvertTo-Json -Depth 20 -Compress
+    Assert-TL1C1bBuildEnvironmentSealBindingTransition $preRaw $postRaw
+    return $post
+}
 function Close-TL1C1bBuildEnvironmentTrustGuard {
     param([Parameter(Mandatory)]$TrustGuard,[switch]$KeepGradleUserHome)
     if([bool]$TrustGuard.Disposed){return};$TrustGuard.Disposed=$true

@@ -3,6 +3,8 @@
 
 Set-StrictMode -Version 3.0
 
+$script:TL1C1bReadonlyRunnerTokenSha256 =
+    'sha256:d3d869050c703883d447609f4efea0a4c41794846a75879260de144ea0dce793'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -64,7 +66,27 @@ function Read-TL1C1bReadonlyAst {
             throw "$Label PowerShell parse error at $($first.Extent.StartLineNumber):$($first.Extent.StartColumnNumber)。"
         }
         $sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
-        return [pscustomobject][ordered]@{ Path=$full; Source=$source; Ast=$ast; Sha256=$sha }
+        $tokenCatalog = [Text.StringBuilder]::new()
+        foreach ($token in $tokens) {
+            $tokenText = ([string]$token.Text).Replace("`r`n", "`n").Replace("`r", "`n")
+            [void]$tokenCatalog.Append([string]$token.Kind).
+                Append(':').Append($tokenText.Length).Append(':').
+                Append($tokenText).Append("`n")
+        }
+        $tokenBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+            $tokenCatalog.ToString())
+        try {
+            $tokenSha = 'sha256:' + [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData($tokenBytes)).ToLowerInvariant()
+        } finally {
+            if ($tokenBytes.Length -ne 0) {
+                [Array]::Clear($tokenBytes, 0, $tokenBytes.Length)
+            }
+        }
+        return [pscustomobject][ordered]@{
+            Path=$full; Source=$source; Ast=$ast; Sha256=$sha
+            TokenSha256=$tokenSha
+        }
     }
     finally { if ($bytes.Length -ne 0) { [Array]::Clear($bytes, 0, $bytes.Length) } }
 }
@@ -264,13 +286,34 @@ function Assert-TL1C1bReadonlyAstHygiene {
         [Parameter(Mandatory)]$Ast,
         [Parameter(Mandatory)][string]$Label,
         [string[]]$AllowedDotSourceVariables = @(),
-        [switch]$AllowClosedProcessStart
+        [switch]$AllowClosedProcessStart,
+        [switch]$ForbidCommandResolutionMutators
     )
     $allowedDot = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($name in $AllowedDotSourceVariables) { [void]$allowedDot.Add($name) }
     $forbidden = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($name in @('Invoke-Expression','iex','Start-Process','saps','start','Invoke-Command','Set-Variable','New-Variable','Set-Alias','New-Alias')) {
+    foreach ($name in @(
+        'Invoke-Expression','iex','Start-Process','saps','start',
+        'Invoke-Command','icm','Set-Variable','sv','set','New-Variable','nv',
+        'Set-Alias','sal','New-Alias','nal','Import-Alias','ipal'
+    )) {
         [void]$forbidden.Add($name)
+    }
+    if($ForbidCommandResolutionMutators){
+        foreach($name in @(
+            'Set-Item','si','Set-Content','sc','Add-Content','ac',
+            'Clear-Item','cli','Copy-Item','cpi','cp','Move-Item','mi','move','mv',
+            'Remove-Item','ri','rm','del','erase','rd','Rename-Item','rni','ren',
+            'Import-Module','ipmo','Remove-Module','rmo','New-Module',
+            'Export-ModuleMember','ni','mkdir','md','New-Object','Add-Type',
+            'Add-Member','Update-TypeData','Update-FormatData',
+            'ForEach-Object','%','Where-Object','?'
+        )){[void]$forbidden.Add($name)}
+        if(@($Ast.FindAll({param($node)
+            $node-is[Management.Automation.Language.UsingStatementAst]
+        },$true)).Count-ne0){
+            throw "$Label 禁止 using module/namespace command-resolution surface。"
+        }
     }
     foreach ($command in @($Ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst]}, $true))) {
         if ($command.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Ampersand) {
@@ -284,7 +327,12 @@ function Assert-TL1C1bReadonlyAstHygiene {
         }
         $name = $command.GetCommandName()
         if ([string]::IsNullOrWhiteSpace($name)) { throw "$Label 禁止 dynamic command name。" }
-        if ($forbidden.Contains($name)) { throw "$Label 禁止 command $name。" }
+        $leafName=$name
+        $moduleSeparator=$leafName.LastIndexOf('\')
+        if($moduleSeparator-ge0){$leafName=$leafName.Substring($moduleSeparator+1)}
+        if ($forbidden.Contains($name)-or$forbidden.Contains($leafName)) {
+            throw "$Label 禁止 command $name。"
+        }
         if ($name -match '(?i)(?:^|[\\/])adb(?:\.exe)?$') { throw "$Label 禁止直接 adb executable。" }
         if ($name -ceq 'Invoke-TL1C1aProcess') {
             $filePath = Get-TL1C1bReadonlyNamedArgumentAst $command 'FilePath'
@@ -308,6 +356,13 @@ function Assert-TL1C1bReadonlyAstHygiene {
         }
         if ($null -ne $category) { throw "$Label prohibited category $category is nonzero。" }
     }
+    if($ForbidCommandResolutionMutators-and
+       @($Ast.FindAll({param($node)
+            $node-is[Management.Automation.Language.VariableExpressionAst]-and
+            $node.VariablePath.UserPath-ieq'ExecutionContext'
+       },$true)).Count-ne0){
+        throw "$Label 禁止 ExecutionContext/SessionState command-resolution surface。"
+    }
     $fileNameAssignments = @($Ast.FindAll({param($node)
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and
         $node.Left -is [Management.Automation.Language.MemberExpressionAst] -and
@@ -322,11 +377,23 @@ function Assert-TL1C1bReadonlyAstHygiene {
     if (-not $AllowClosedProcessStart -and ($fileNameAssignments.Count -ne 0 -or $startInvocations.Count -ne 0)) {
         throw "$Label 禁止 ProcessStartInfo/.Start executable bypass。"
     }
-    if (@($Ast.FindAll({param($node)
-        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
-        $node.Member -is [Management.Automation.Language.StringConstantExpressionAst] -and
-        $node.Member.Value -in @('Invoke','InvokeReturnAsIs','InvokeWithContext')
-    }, $true)).Count -ne 0) { throw "$Label 禁止 scriptblock/reflection dynamic member invocation。" }
+    foreach ($memberInvocation in @($Ast.FindAll({param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst]
+    }, $true))) {
+        if ($memberInvocation.Member -isnot
+                [Management.Automation.Language.StringConstantExpressionAst]) {
+            throw "$Label 禁止 dynamic member invocation。"
+        }
+        $memberName = [string]$memberInvocation.Member.Value
+        if ($memberName -match '(?i)invoke' -or
+            $memberName -in @(
+                'AddScript','AddCommand','AddStatement','CreatePipeline',
+                'CreateNestedPipeline','Create','CreateInstance',
+                'GetTypeFromProgID','GetTypeFromCLSID','Set','Run','Exec',
+                'ForEach','Where')) {
+            throw "$Label 禁止 scriptblock/reflection/runspace dynamic member invocation。"
+        }
+    }
 }
 
 function Assert-TL1C1bReadonlyDotSourceBindings {
@@ -381,9 +448,13 @@ function Assert-TL1C1bRunnerReadOnlyAst {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$RunnerPath)
     $parsed = Read-TL1C1bReadonlyAst $RunnerPath 'C1b runner'
+    if ($parsed.TokenSha256 -cne $script:TL1C1bReadonlyRunnerTokenSha256) {
+        throw 'C1b runner canonical token topology SHA-256 漂移。'
+    }
     Assert-TL1C1bReadonlyAstHygiene $parsed.Ast 'C1b runner' @(
         'NativePathValidator','C1aLibrary','Validator','Library','ReadOnlyLibrary',
-        'ArtifactProofLibrary','Aapt2Library','BuildEnvironmentLibrary','AdbServerLibrary','DispatchLockLibrary')
+        'ArtifactProofLibrary','Aapt2Library','BuildEnvironmentLibrary','AdbServerLibrary','DispatchLockLibrary') `
+        -ForbidCommandResolutionMutators
     Assert-TL1C1bReadonlyDotSourceBindings $parsed.Ast ([ordered]@{
         NativePathValidator='lib\tablet-layout-observation-v2-validator.ps1'
         C1aLibrary='lib\tablet-layout-c1a.ps1'
@@ -396,6 +467,167 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         AdbServerLibrary='lib\tablet-layout-c1b-adb-server.ps1'
         DispatchLockLibrary='lib\dispatch-lock.ps1'
     }) 'C1b runner'
+    $expectedRunnerFunctions=[Collections.Generic.HashSet[string]]::new(
+        [string[]]@(
+            'Get-C1bTimestamp','Get-C1bImplementationHashes',
+            'Assert-C1bImplementationSnapshot','Find-C1bTrustedGitPath',
+            'ConvertFrom-C1bSignerDigest','Assert-C1bFrozenState',
+            'Assert-C1bPrivateAdbServerFrozenState','Assert-C1bArtifactFrozenState',
+            'Assert-C1bArchivedArtifactEvidence','Assert-C1bHostReadOnlyFrozenState',
+            'Write-C1bFailureEvidence','Read-C1bControl',
+            'Set-C1bAbortExpectedSnapshot'
+        ),[StringComparer]::Ordinal)
+    $runnerFunctions=@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.FunctionDefinitionAst]
+    },$true))
+    if($runnerFunctions.Count-ne$expectedRunnerFunctions.Count){
+        throw 'C1b runner function definition count 漂移。'
+    }
+    foreach($function in $runnerFunctions){
+        if(-not$expectedRunnerFunctions.Remove([string]$function.Name)){
+            throw "C1b runner function definition closure 漂移：$($function.Name)。"
+        }
+    }
+    if($expectedRunnerFunctions.Count-ne0){
+        throw 'C1b runner function definition closure 不完整。'
+    }
+    $expectedRunnerCommandCounts=
+        [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
+    foreach($spec in [string[]]@(
+        'Assert-C1bArchivedArtifactEvidence=2','Assert-C1bArtifactFrozenState=3',
+        'Assert-C1bFrozenState=4','Assert-C1bHostReadOnlyFrozenState=3',
+        'Assert-C1bImplementationSnapshot=2','Assert-C1bPrivateAdbServerFrozenState=2',
+        'Assert-TL1C1aGitProvenance=2','Assert-TL1C1aNoRawSecret=4',
+        'Assert-TL1C1aOrdinaryPath=3','Assert-TL1C1aT0DeviceBinding=1',
+        'Assert-TL1C1bAapt2TrustGuardUnchanged=1','Assert-TL1C1bAbortTerminalControl=1',
+        'Assert-TL1C1bBuildEnvironmentFrozen=2','Assert-TL1C1bControlTuple=5',
+        'Assert-TL1C1bPrivateAdbServerGuardUnchanged=2',
+        'Assert-TL1C1bPublishedEvidenceBinding=2','Assert-TL1C1bReadOnlyArtifactProof=2',
+        'Assert-TL1C1bRunnerReadOnlyAst=2','Assert-TL1C1bSidecarCrossBindings=2',
+        'Assert-TL1C1bT0ReadOnlySurface=2','Close-DispatchLockLease=1',
+        'Close-TL1C1bBuildEnvironmentTrustGuard=1','Close-TL1C1bPrivateAdbServerGuard=2',
+        'ConvertFrom-C1bSignerDigest=2','ConvertFrom-TL1C1aStrictUtf8=3',
+        'ConvertFrom-TL1C1bClosedJson=1','ConvertFrom-TL1C1bControl=1',
+        'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=8',
+        'ConvertTo-TL1C1bReadOnlyCounts=1','Copy-TL1C1bGuardedArtifactAtomic=5',
+        'Find-C1bTrustedGitPath=1','Get-C1bImplementationHashes=1',
+        'Get-C1bTimestamp=5','Get-DispatchGlobalLockPath=1','Get-Item=3',
+        'Get-Process=1','Get-TL1C1aFileSha256=6',
+        'Get-TL1C1aInstalledApkHostSha256=2','Get-TL1C1aInstalledApkPath=2',
+        'Get-TL1C1aPackageBinding=2','Get-TL1C1aSha256Bytes=1',
+        'Get-TL1C1aSha256Text=7','Get-TL1C1aSingleDevice=2',
+        'Get-TL1C1bAdbTrustBinding=3','Get-TL1C1bBuildEnvironmentApkSignerInvocation=1',
+        'Get-TL1C1bBuildEnvironmentBuildEnvironment=1',
+        'Get-TL1C1bBuildEnvironmentGitEnvironment=1',
+        'Get-TL1C1bBuildEnvironmentGradleArguments=1',
+        'Get-TL1C1bBuildEnvironmentGradleInvocation=1',
+        'Get-TL1C1bPackagedAxmlDumpBinding=2','Get-TL1C1bPrivateAdbClientEnvironment=1',
+        'Get-TL1C1bTranscriptSha256=1','Get-TL1C1bZipDexProof=1',
+        'Invoke-TL1C1aAdb=9','Invoke-TL1C1aProcess=3','Invoke-TL1C1bAdb=3',
+        'Invoke-TL1C1bPrivateAdbGuardedProcess=1','Join-Path=61','New-Item=1',
+        'New-TL1C1aRunId=1','New-TL1C1bUri=6','Open-DispatchLock=1',
+        'Open-TL1C1bAapt2TrustGuard=1','Open-TL1C1bArtifactGuard=5',
+        'Open-TL1C1bBuildEnvironmentTrustGuard=1','Open-TL1C1bPrivateAdbServerGuard=1',
+        'Read-C1bControl=6','Resolve-TL1C1bBuildEnvironmentGitRoot=1',
+        'Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory=1',
+        'Seal-TL1C1bBuildEnvironmentDebugKeystoreLock=1',
+        'Set-C1bAbortExpectedSnapshot=5','Set-StrictMode=1','Sort-Object=1',
+        'Split-Path=1','Start-Sleep=1','Test-Json=2','Test-Path=6',
+        'Test-TabletLayoutObservationC1BV1TrustedRuntimeFile=1',
+        'Test-TL1C1aDeviceBinding=2','Wait-TL1C1aA11yReady=1',
+        'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-Host=2',
+        'Write-TL1C1aBytesAtomic=4','Write-TL1C1aJsonAtomic=1'
+    )){
+        $separator=$spec.LastIndexOf('=')
+        $expectedRunnerCommandCounts.Add(
+            $spec.Substring(0,$separator),[int]$spec.Substring($separator+1))
+    }
+    $actualRunnerCommandCounts=
+        [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
+    foreach($command in @($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.CommandAst]-and
+        $node.InvocationOperator-ne[Management.Automation.Language.TokenKind]::Dot
+    },$true))){
+        $name=[string]$command.GetCommandName()
+        if(-not$actualRunnerCommandCounts.ContainsKey($name)){
+            $actualRunnerCommandCounts.Add($name,0)
+        }
+        $actualRunnerCommandCounts[$name]++
+    }
+    if($actualRunnerCommandCounts.Count-ne$expectedRunnerCommandCounts.Count){
+        throw 'C1b runner command name/count closure 漂移。'
+    }
+    foreach($entry in $expectedRunnerCommandCounts.GetEnumerator()){
+        if(-not$actualRunnerCommandCounts.ContainsKey($entry.Key)-or
+           [int]$actualRunnerCommandCounts[$entry.Key]-ne[int]$entry.Value){
+            throw "C1b runner command name/count closure 漂移：$($entry.Key)。"
+        }
+    }
+    $expectedRunnerMemberCounts=
+        [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
+    foreach($spec in [string[]]@(
+        'Add=7','AddSeconds=1','Clear=4','Clone=1','Contains=1','Dispose=1',
+        'Equals=2','Format=1','GetBytes=4','GetEnumerator=3','GetFolderPath=2',
+        'GetFullPath=9','GetRelativePath=2','GetTempPath=1',
+        'IsNullOrWhiteSpace=7','IsPathFullyQualified=4','Matches=1','Min=1',
+        'new=8','ReadAllBytes=2','ReferenceEquals=1','Replace=2','StartNew=2',
+        'StartsWith=1','Stop=2','ToArray=2','ToHexString=2',
+        'ToLowerInvariant=3','ToString=1','TrimEnd=2','WriteLine=1'
+    )){
+        $separator=$spec.LastIndexOf('=')
+        $expectedRunnerMemberCounts.Add(
+            $spec.Substring(0,$separator),[int]$spec.Substring($separator+1))
+    }
+    $actualRunnerMemberCounts=
+        [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
+    foreach($member in @($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.InvokeMemberExpressionAst]
+    },$true))){
+        $name=[string]$member.Member.Value
+        if(-not$actualRunnerMemberCounts.ContainsKey($name)){
+            $actualRunnerMemberCounts.Add($name,0)
+        }
+        $actualRunnerMemberCounts[$name]++
+    }
+    if($actualRunnerMemberCounts.Count-ne$expectedRunnerMemberCounts.Count){
+        throw 'C1b runner member invocation name/count closure 漂移。'
+    }
+    foreach($entry in $expectedRunnerMemberCounts.GetEnumerator()){
+        if(-not$actualRunnerMemberCounts.ContainsKey($entry.Key)-or
+           [int]$actualRunnerMemberCounts[$entry.Key]-ne[int]$entry.Value){
+            throw "C1b runner member invocation name/count closure 漂移：$($entry.Key)。"
+        }
+    }
+    $newItemCalls=@($parsed.Ast.FindAll({param($node)
+        if($node-isnot[Management.Automation.Language.CommandAst]){return $false}
+        $name=[string]$node.GetCommandName()
+        return $name-match'(?i)(?:^|\\)New-Item$'
+    },$true))
+    if($newItemCalls.Count-ne1){throw 'C1b runner New-Item callsite closure 漂移。'}
+    $newItemCall=$newItemCalls[0]
+    Assert-TL1C1bReadonlyExactParameterNames $newItemCall `
+        ([string[]]@('ItemType','Path')) 'C1b runner evidence directory New-Item'
+    $newItemType=Get-TL1C1bReadonlyStaticString `
+        (Get-TL1C1bReadonlyNamedArgumentAst $newItemCall 'ItemType') `
+        'C1b runner evidence directory New-Item ItemType'
+    $newItemPath=Get-TL1C1bReadonlyNamedArgumentAst $newItemCall 'Path'
+    if($newItemCall.CommandElements.Count-ne5-or$newItemType-cne'Directory'-or
+       $newItemPath-isnot[Management.Automation.Language.VariableExpressionAst]-or
+       -not$newItemPath.VariablePath.IsUnqualified-or
+       $newItemPath.VariablePath.UserPath-cne'c1bDirectory'){
+        throw 'C1b runner evidence directory New-Item binding 漂移。'
+    }
+    foreach($node in @($parsed.Ast.FindAll({param($candidate)
+        $candidate-is[Management.Automation.Language.StringConstantExpressionAst]-or
+        $candidate-is[Management.Automation.Language.ExpandableStringExpressionAst]-or
+        $candidate-is[Management.Automation.Language.BinaryExpressionAst]
+    },$true))){
+        $constant=Get-TL1C1bReadonlyConstantString $node
+        if($constant.IsStatic-and
+           [string]$constant.Value-match'^(?i:(?:function|alias):)'){
+            throw 'C1b runner 禁止 Function:/Alias: provider path。'
+        }
+    }
     $launcherAssignments=@($parsed.Ast.FindAll({param($node)
         $node-is[Management.Automation.Language.AssignmentStatementAst]-and
         $node.Left.Extent.Text-cmatch'^\$(?:Java|gradleInvocation|signerInvocation|signerArguments|gradleArguments|pwsh)(?:$|\.|\[)'
@@ -451,6 +683,7 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
         }
     }
     $seenGenericProcesses=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $gradleProcessCall=$null
     foreach ($call in $genericProcesses) {
         Assert-TL1C1bReadonlyExactParameterNames $call `
             ([string[]]@('FilePath','Arguments','Operation','Environment','ClearEnvironment','TimeoutSec')) `
@@ -460,6 +693,9 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
             (Get-TL1C1bReadonlyNamedArgumentAst $call 'Operation') 'C1b runner held launcher operation'
         if(-not$expectedGenericProcesses.Contains($operation)-or-not$seenGenericProcesses.Add($operation)){
             throw 'C1b runner held launcher operation closure 漂移。'
+        }
+        if($operation-ceq'fresh C1b dedicated read-only APK 构建与闭包证明'){
+            $gradleProcessCall=$call
         }
         $expected=$expectedGenericProcesses[$operation]
         $filePath=Get-TL1C1bReadonlyNamedArgumentAst $call 'FilePath'
@@ -478,6 +714,146 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
     }
     if($genericProcesses.Count-ne3-or$seenGenericProcesses.Count-ne$expectedGenericProcesses.Count){
         throw 'C1b runner generic process invocation count 漂移。'
+    }
+
+    $expectedBuildEnvironmentStateAssignments=[ordered]@{
+        '$buildEnvironmentGuard=$null'=1
+        '$buildEnvironmentGuardAnchor=$null'=1
+        '$buildEnvironmentBinding=$null'=1
+        '$buildEnvironmentBindingRaw=$null'=1
+        '$buildEnvironmentPreSealBindingRaw=$null'=1
+        '$buildEnvironmentGuard=Open-TL1C1bBuildEnvironmentTrustGuard-RepoRoot$RepoRoot-JavaHome$JavaHome-GradleHome$GradleHome-AndroidSdkRoot$sourceAndroidSdkRoot-GitPath$gitPath-GradleUserHomeParent([IO.Path]::GetTempPath())-RepositoryInputPaths$repositoryInputs-RepositoryInputDirectories$repositoryInputDirectories'=1
+        '$buildEnvironmentGuardAnchor=$buildEnvironmentGuard'=1
+        '$buildEnvironmentBinding=Assert-TL1C1bBuildEnvironmentFrozen$buildEnvironmentGuard'=1
+        '$buildEnvironmentBindingRaw=$buildEnvironmentBinding|ConvertTo-Json-Depth20-Compress'=2
+        '$buildEnvironmentPreSealBindingRaw=$buildEnvironmentBindingRaw'=1
+        '$buildEnvironmentBinding=Seal-TL1C1bBuildEnvironmentDebugKeystoreLock-TrustGuard$buildEnvironmentGuard-ExpectedTrustGuard$buildEnvironmentGuardAnchor-ExpectedPreSealBindingRaw$buildEnvironmentPreSealBindingRaw'=1
+    }
+    $buildEnvironmentStateAssignments=@($parsed.Ast.FindAll({param($node)
+        if($node-isnot[Management.Automation.Language.AssignmentStatementAst]){
+            return $false
+        }
+        $left=$node.Left.Extent.Text-replace'[\s`]+',''
+        return $left-match'^\$(?:(?:script|local|global|private):)?(?:buildEnvironmentGuard|buildEnvironmentGuardAnchor|buildEnvironmentBinding|buildEnvironmentBindingRaw|buildEnvironmentPreSealBindingRaw)(?:$|[.\[])'
+    },$true))
+    foreach($assignment in $buildEnvironmentStateAssignments){
+        $compact=$assignment.Extent.Text-replace'[\s`]+',''
+        if(-not$expectedBuildEnvironmentStateAssignments.Contains($compact)-or
+           [int]$expectedBuildEnvironmentStateAssignments[$compact]-lt1){
+            throw 'C1b runner build-environment guard/binding assignment closure 漂移。'
+        }
+        $expectedBuildEnvironmentStateAssignments[$compact]=
+            [int]$expectedBuildEnvironmentStateAssignments[$compact]-1
+    }
+    if(@($expectedBuildEnvironmentStateAssignments.Values|Where-Object{[int]$_-ne0}).Count-ne0){
+        throw 'C1b runner build-environment guard/binding assignment closure 不完整。'
+    }
+
+    $sealCalls=@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.CommandAst]-and
+        $node.GetCommandName()-ceq'Seal-TL1C1bBuildEnvironmentDebugKeystoreLock'
+    },$true))
+    if($sealCalls.Count-ne1-or$null-eq$gradleProcessCall){
+        throw 'C1b runner post-Gradle debug.keystore.lock seal 必须 exact one。'
+    }
+    if(@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.FunctionDefinitionAst]-and
+        [string]$node.Name-match
+            '^(?i:(?:script:|local:|global:|private:)?Seal-TL1C1bBuildEnvironmentDebugKeystoreLock)$'
+    },$true)).Count-ne0){
+        throw 'C1b runner 禁止 shadow debug.keystore.lock seal function。'
+    }
+    $sealCall=$sealCalls[0]
+    Assert-TL1C1bReadonlyExactParameterNames $sealCall `
+        ([string[]]@('TrustGuard','ExpectedTrustGuard','ExpectedPreSealBindingRaw')) `
+        'C1b runner post-Gradle debug.keystore.lock seal'
+    $sealGuard=Get-TL1C1bReadonlyNamedArgumentAst $sealCall 'TrustGuard'
+    $sealExpectedGuard=Get-TL1C1bReadonlyNamedArgumentAst `
+        $sealCall 'ExpectedTrustGuard'
+    $sealPreBinding=Get-TL1C1bReadonlyNamedArgumentAst `
+        $sealCall 'ExpectedPreSealBindingRaw'
+    if($sealCall.CommandElements.Count-ne7-or
+       $sealGuard-isnot[Management.Automation.Language.VariableExpressionAst]-or
+       -not$sealGuard.VariablePath.IsUnqualified-or
+       $sealGuard.VariablePath.UserPath-cne'buildEnvironmentGuard'-or
+       $sealExpectedGuard-isnot[Management.Automation.Language.VariableExpressionAst]-or
+       -not$sealExpectedGuard.VariablePath.IsUnqualified-or
+       $sealExpectedGuard.VariablePath.UserPath-cne'buildEnvironmentGuardAnchor'-or
+       $sealPreBinding-isnot[Management.Automation.Language.VariableExpressionAst]-or
+       -not$sealPreBinding.VariablePath.IsUnqualified-or
+       $sealPreBinding.VariablePath.UserPath-cne'buildEnvironmentPreSealBindingRaw'){
+        throw 'C1b runner post-Gradle debug.keystore.lock seal binding 漂移。'
+    }
+    $mainTryCandidates=@($parsed.Ast.EndBlock.Statements|Where-Object{
+        $_-is[Management.Automation.Language.TryStatementAst]-and
+        $null-ne$_.Finally
+    })
+    if($mainTryCandidates.Count-ne1-or
+       $mainTryCandidates[0].CatchClauses.Count-ne1){
+        throw 'C1b runner top-level main try/catch/finally closure 漂移。'
+    }
+    $mainTry=$mainTryCandidates[0]
+    $sealStatement=$sealCall
+    while($null-ne$sealStatement-and$sealStatement.Parent-ne$mainTry.Body){
+        $sealStatement=$sealStatement.Parent
+    }
+    if($sealStatement-isnot[Management.Automation.Language.AssignmentStatementAst]){
+        throw 'C1b runner post-Gradle debug.keystore.lock seal topology 漂移。'
+    }
+    $gradleStatement=$gradleProcessCall
+    while($null-ne$gradleStatement-and$gradleStatement.Parent-ne$mainTry.Body){
+        $gradleStatement=$gradleStatement.Parent
+    }
+    $statements=[object[]]@($mainTry.Body.Statements)
+    $gradleStatementIndex=[Array]::IndexOf($statements,$gradleStatement)
+    $sealStatementIndex=[Array]::IndexOf($statements,$sealStatement)
+    $gradleStatementCompact=if($null-ne$gradleStatement){
+        $gradleStatement.Extent.Text-replace'[\s`]+',''
+    }else{''}
+    $sealStatementCompact=$sealStatement.Extent.Text-replace'[\s`]+',''
+    $expectedGradleStatementCompact=
+        "[void](Invoke-TL1C1aProcess-FilePath`$Java-Arguments`$gradleArguments"+
+        "-Operation'freshC1bdedicatedread-onlyAPK构建与闭包证明'"+
+        "-Environment`$buildEnvironment-ClearEnvironment-TimeoutSec300)"
+    $achievedStatement=if($sealStatementIndex+1-lt$statements.Count){
+        $statements[$sealStatementIndex+1]
+    }else{$null}
+    $rawBindingStatement=if($sealStatementIndex+2-lt$statements.Count){
+        $statements[$sealStatementIndex+2]
+    }else{$null}
+    $frozenStatement=if($sealStatementIndex+3-lt$statements.Count){
+        $statements[$sealStatementIndex+3]
+    }else{$null}
+    if($gradleStatementIndex-lt0-or$sealStatementIndex-ne($gradleStatementIndex+1)-or
+       $gradleStatement-isnot[Management.Automation.Language.PipelineAst]-or
+       $gradleStatementCompact-cne$expectedGradleStatementCompact-or
+       $sealStatementCompact-cne
+           '$buildEnvironmentBinding=Seal-TL1C1bBuildEnvironmentDebugKeystoreLock-TrustGuard$buildEnvironmentGuard-ExpectedTrustGuard$buildEnvironmentGuardAnchor-ExpectedPreSealBindingRaw$buildEnvironmentPreSealBindingRaw'-or
+       $achievedStatement-isnot[Management.Automation.Language.IfStatementAst]-or
+       (($achievedStatement.Extent.Text-replace'[\s`]+','')-cne
+           "if(-not[bool]`$buildEnvironmentBinding.debug_keystore.post_gradle_lock_sealed_achieved){throw'C1bpost-Gradledebug.keystore.lockseal未完成。'}")-or
+       $rawBindingStatement-isnot[Management.Automation.Language.AssignmentStatementAst]-or
+       (($rawBindingStatement.Extent.Text-replace'[\s`]+','')-cne
+           '$buildEnvironmentBindingRaw=$buildEnvironmentBinding|ConvertTo-Json-Depth20-Compress')-or
+       $frozenStatement-isnot[Management.Automation.Language.PipelineAst]-or
+       (($frozenStatement.Extent.Text-replace'[\s`]+','')-cne
+           'Assert-C1bFrozenState')-or
+       @($gradleStatement.FindAll({param($node)
+            $node-is[Management.Automation.Language.CommandAst]
+       },$true)).Count-ne1-or
+       @($sealStatement.FindAll({param($node)
+            $node-is[Management.Automation.Language.CommandAst]
+       },$true)).Count-ne1-or
+       @($achievedStatement.FindAll({param($node)
+            $node-is[Management.Automation.Language.CommandAst]
+       },$true)).Count-ne0-or
+       @($rawBindingStatement.FindAll({param($node)
+            $node-is[Management.Automation.Language.CommandAst]
+       },$true)).Count-ne1-or
+       @($frozenStatement.FindAll({param($node)
+            $node-is[Management.Automation.Language.CommandAst]
+       },$true)).Count-ne1){
+        throw 'C1b runner Gradle/seal/frozen lifecycle ordering 漂移。'
     }
 
     $guardedT0Calls=@($parsed.Ast.FindAll({param($node)

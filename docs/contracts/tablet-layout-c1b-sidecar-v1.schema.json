@@ -101,12 +101,16 @@
     },
     "buildEnvironmentDebugKeystore": {
       "type": "object", "additionalProperties": false,
-      "required": ["sha256","source_ordinary_single_link_guarded","isolated_copy_equal","isolated_user_home_other_config_absent","files_deny_write_delete","directories_acl_protected"],
+      "required": ["sha256","source_ordinary_single_link_guarded","isolated_copy_equal","isolated_user_home_other_config_absent","keystore_source_and_copy_deny_write_delete","directories_acl_protected","gradle_lock_precreated","gradle_lock_identity_guarded","gradle_lock_deny_delete","gradle_lock_write_allowed_during_gradle","post_gradle_lock_seal_required","post_gradle_lock_zero_length","post_gradle_lock_sealed_achieved"],
       "properties": {
         "sha256": { "$ref": "#/$defs/hash" },
         "source_ordinary_single_link_guarded": { "const": true }, "isolated_copy_equal": { "const": true },
         "isolated_user_home_other_config_absent": { "const": true },
-        "files_deny_write_delete": { "const": true }, "directories_acl_protected": { "const": true }
+        "keystore_source_and_copy_deny_write_delete": { "const": true }, "directories_acl_protected": { "const": true },
+        "gradle_lock_precreated": { "const": true }, "gradle_lock_identity_guarded": { "const": true },
+        "gradle_lock_deny_delete": { "const": true }, "gradle_lock_write_allowed_during_gradle": { "const": true },
+        "post_gradle_lock_seal_required": { "const": true }, "post_gradle_lock_zero_length": { "const": true },
+        "post_gradle_lock_sealed_achieved": { "const": true }
       }
     },
     "buildEnvironmentHostProcess": {
