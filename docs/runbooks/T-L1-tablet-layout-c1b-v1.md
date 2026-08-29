@@ -54,6 +54,36 @@ launcher/verifier 未接受时整体仍必须判失败。详细记录见
 回归必须由**实际 launcher verifier**消费正对照 summary，不能只测 helper 内部 canary。修复、全门与独审后
 固定新 clean SHA，再取得新的 build-only smoke 授权；本轮不得追溯改判，也不得用于设备授权。
 
+## 后续 build-only outer verifier 与 preflight
+
+外层 verifier 是 42 个 runner/helper implementation/build input 之外的独立 evidence consumer；它不改变
+`repository_inputs.file_count=42`，而由 exact SHA-specific launcher 另行 pin/hold。其完整闭合规则见
+[受控运行合同](../contracts/tablet-layout-c1b-v1.md)：summary 必须递归拒绝 duplicate property，保持 closed key set、
+canonical Int64 token、exact CLR type 与七位小数 `Z` 结尾的 UTC timestamp string；不得只修日期提升而继续接受
+宽松 JSON。
+
+summary 必须来自 launcher 固定 expected parent 下的 ordinary、非 reparse、single-link file。验证从同一个
+deny-write/delete held stream 完成 length/hash/strict-UTF-8/parse，并闭合 parent guard、opened identity 与最终路径
+identity。launcher 记录 `Process.Start` 紧前/确认 helper 退出紧后的 execution envelope；三个 timestamp 必须落在
+envelope 内，observer end 必须晚于 start、不得晚于 completed，且距 completed 不得超过 5 秒。
+
+申请下一次 build-only 授权前按以下顺序执行：
+
+1. 完成 outer-verifier 专项回归、全门与无 P0/P1 独审；这些离线结果本身不是 smoke；
+2. 形成最终 clean HEAD，再为该完整 SHA 生成 exact repo-external helper 与 launcher；
+3. launcher 固定并持有 self/helper/verifier/pwsh 的 ordinary identity 与 hash；verifier 只允许 exact load `1`、
+   captured `FunctionInfo` invoke `1`，不得有 inline verifier、fallback 或 caller-selected verifier path；
+4. helper hard deadline exact 为 45 分钟，不得无界等待；超时后 process-tree kill 与 output drain 各有 30 秒上限，
+   任一终止、drain、guard 或 cleanup 失败都 fail closed；helper 仍固定 start `1`、retry `0`；
+5. 对 exact staging 执行只读静态 preflight；只有 clean SHA、hash/identity、load/invoke、deadline、既有输出阻断与
+   result 接线全部闭合时，才发布 `prepared_not_authorized`；
+6. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。只有此后用户
+   针对该 SHA 明确授权，才可运行一次 launcher；不得自动重试。
+
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 的历史结论仍是
+**helper-pass / launcher-verifier-fail（整体未闭合）**；上述规则不追溯修绿该 one-shot，也不把其临时 APK/proof
+升级为可安装产物。
+
 ## 2026-08-29 `77473af` 42-input real build smoke 结果
 
 `77473af5223d76b00bf4dbbf33cf44090fde635c` 的 one-shot build-only smoke 已消费。受控 GradleMain 执行

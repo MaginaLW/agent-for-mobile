@@ -267,6 +267,19 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   但 launcher 又在 summary 日期类型上 fail-closed。**JSON lexical type 同样属于证据链**：默认日期提升会改变
   schema 类型，closed reader 必须用 `-DateKind String` 或等价保形解析；helper 接受产物仍不等于外层消费者已接受。
   修复时不得放宽 schema 接受 `DateTime`，须固定新 SHA 并另取一次 build-only smoke 授权。
+- **外层 consumer 也要闭合 bytes、identity 与本轮时间（C1b 无机复核，2026-08-30）**：只补
+  `-DateKind String` 仍不足够。summary reader 还必须递归拒绝 duplicate property，闭合 exact key/type 与
+  canonical Int64 lexical token，并要求三项时间保持七位小数 `Z` 结尾的 UTC string。summary 只能从固定
+  expected parent 下的 ordinary、非 reparse、single-link file 读取；length/hash/strict-UTF-8/parse 必须来自同一
+  deny-write/delete held stream，opened identity 与最终路径 identity exact 相等，不能以先查路径、后另开文件的
+  TOCTOU 形态建立证据。launcher 的 helper start/exit envelope 还必须包住 summary 时间，observer end 距 helper
+  completed 最多 5 秒，防止旧/future summary replay。
+- **repo 外 one-shot launcher 是独立信任根，不是第 43 个 build input**：tracked outer verifier 不由
+  runner/helper 加载，因此 42-file implementation/build catalog 保持不变；launcher 另行 pin/hold
+  self/helper/verifier/pwsh，并机械约束 verifier load `1`、captured-function invoke `1`、helper start `1`/retry `0`。
+  helper hard deadline 为 45 分钟，process-tree kill 与 output drain 各自最多 30 秒；无界等待或 cleanup 未闭合都
+  必须失败。最终 clean HEAD 的静态 preflight 只可给出 `prepared_not_authorized`，不能执行 launcher/helper/真实
+  toolchain/ADB，也不能被表述成新的 smoke、设备授权或对 `8882add...` 历史失败的追溯修绿。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧

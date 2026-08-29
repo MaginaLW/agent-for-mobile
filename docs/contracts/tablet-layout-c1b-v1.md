@@ -31,13 +31,62 @@ ApkSignerTool 1 次、real ADB 0、repository inputs 41；它既不构成 fixed-
 32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、
 attempt-failure schema/cross-binding 51/51；observation 公共门仍为 49/49、coverage 89/89。
 
+## Real build-only 外层证据消费者
+
+`scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1` 是 one-shot helper 之外的独立 evidence
+consumer。它不由 runner/helper 加载，也不属于下节 42 个 implementation/build input；仅新增或修改该 verifier
+不得把 `repository_inputs.file_count` 改成 43。它的 exact bytes、路径与执行次数由 SHA-specific 外层 launcher
+单独绑定，helper summary 只有经此外层 consumer 接受后，才可能构成 build-only smoke 的必要证据。
+
+helper summary 必须是 1..65,536 bytes、strict UTF-8 且无 BOM 的单个 JSON object。reader 必须先按 lexical
+JSON 递归拒绝 duplicate property；名称按 ordinal、case-sensitive 比较，顶层 key set 必须与 v1 required-properties
+表 exact 相等，缺失、额外、大小写变体或转义后同名一律拒绝。所有 JSON number 必须是 Int64 范围内的 canonical
+integer token `0|-?[1-9][0-9]*`；`-0`、前导零、小数、指数与越界数均不得进入 typed reader。integer、boolean、
+nonempty string 与 `failure_reasons` array 必须保持 schema 的 exact CLR type，不能依赖 PowerShell 的宽松转换。
+
+`started_at_utc`、`completed_at_utc` 与 `process_start_observation_ended_at_utc` 在 typed parse 后仍必须是
+`[string]`，lexical 格式 exact 为 ASCII 数字的 `yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'`，并通过 invariant UTC
+`ParseExact`。reader 必须使用 `ConvertFrom-Json -DateKind String` 或等价保形解析；不得接受默认日期提升产生的
+`DateTime`/`DateTimeOffset`。launcher 在成功 `Process.Start` 紧前记录 lower bound，在确认 helper 退出紧后记录
+upper bound；验证必须满足
+`lower <= started_at_utc < process_start_observation_ended_at_utc <= completed_at_utc <= upper`，且
+`completed_at_utc - process_start_observation_ended_at_utc <= 5s`。observer scope 必须 exact 为
+`host_wide_best_effort_wmi`，limitation 必须 exact 为
+`Win32_ProcessStartTrace is operational observation, not a persistent kernel or syscall audit.`；过期、未来或
+observer 提前结束的 summary 均不得 replay 成本轮结果。
+
+summary path 只能位于 launcher 固定的 expected parent；该 parent、完整祖先链与 summary 本身都必须 ordinary、
+非 reparse。launcher/verifier 必须持有 expected parent guard，并以禁止 write/delete sharing 的同一个
+`FileStream` 完成长度检查、读取、SHA-256、strict UTF-8 decode 与 JSON parse；长度必须在分配 buffer 前检查。
+opened handle 的 stable identity 必须与最终路径重新解析的 identity exact 相等，link count 必须为 1，guard 要保持到
+verifier 返回。禁止先 `Get-Item` 再以 `ReadAllBytes` 打开另一个对象，也禁止 caller 选择任意 summary parent。
+
+exact repo-external launcher 必须固定并持有自身、one-shot helper、tracked verifier 与固定 pwsh 的 ordinary path、
+stable identity 和 SHA-256，且这些 guard 要覆盖 verifier 返回并在 `finally` 中关闭。verifier path 不得由 caller
+传入；launcher 只能 dot-source exact verifier 一次，捕获其 `FunctionInfo`，确认 `ScriptBlock.File` exact 指向该
+held file，再恰好 invoke 一次。不得保留 inline verifier、fallback、同名函数重绑定或第二条调用路径。helper
+必须 start `1`、automatic retry `0`；既有 summary/result 会在 start 前阻断，新输出只能 CreateNew/原子发布。
+
+helper hard deadline 固定为 45 分钟，任何正常或异常路径都不得先执行无界 `WaitForExit()`。deadline 到期后
+launcher 必须终止完整 process tree，kill completion 与 stdout/stderr drain 各自最多 30 秒；超时、无法确认退出、
+drain overflow/失败或任一 guard/cleanup 失败都令整体失败。launcher result 必须闭合记录 self/helper/verifier/pwsh
+expected/actual hash、verifier load/invoke count、helper start/exit/termination/retry、summary byte length/hash 与 cleanup，
+不能只采信 helper 的 `status=passed`。
+
+请求 build-only 授权前，必须在最终 clean HEAD 上对 exact staging 执行只读 preflight：绑定完整 candidate SHA、
+launcher/helper/verifier/pwsh hash 与 ordinary identity，机械证明无 inline fallback、load `1`/invoke `1`、45 分钟
+deadline、两段 30 秒 kill/drain、预存输出阻断及结果字段接线。preflight 只能发布 closed
+`prepared_not_authorized`，不得执行 launcher、helper、Gradle/JDK/ADB 或访问设备；它不是 smoke、不会消费 one-shot，
+也不构成 build、设备或后续采集授权。
+
 ## 构建与宿主信任闭包
 
 runner 从 fixed HEAD 的实现表导出 exact 42 个 repository input（含 private ADB server module 与 attempt-failure
 schema），按 ordinal
 `relative/path=sha256:<lowerhex>`、UTF-8 无 BOM、LF join 且无尾 LF 形成 catalog；sidecar 必须保存
 `repository_inputs.file_count=42` 与针对该 HEAD 重算的 `catalog_sha256`。catalog hash 是 HEAD 绑定值，
-不得从 fixture 或旧 run 复制。
+不得从 fixture 或旧 run 复制。该计数只覆盖 runner/helper 的 implementation/build inputs；上一节 outer
+verifier 是 separately pinned consumer，不进入该 catalog。
 
 build-environment guard 固定以下 filesystem-and-environment 输入：
 
