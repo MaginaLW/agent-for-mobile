@@ -399,10 +399,18 @@ ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发
 222 = 214 valid + 8 rejected，其中 valid calls 为 server start/status/kill/device 8/7/4/195，另观测
 server exit 7；runner process 9、fake Gradle 8、fake signer 12、repository inputs 42。private ADB 22/22、
 readonly 74/74、新 attempt-failure schema/cross-binding 51/51，observation 49/49（coverage 89/89）；build-env 27/27、
-artifact 32/32、ADB provenance 6/6、T0 sidecar 7/7、aapt2 15/15 保持通过。这些都是 synthetic/offline
-证据，没有运行真实 ADB、JDK、Gradle 或访问设备。2026-08-28 的 real isolated host build smoke 只覆盖当时
-41-input 候选，不能改写为当前 42-input smoke；当前修复的汇总 gate 与独立复审已通过，本提交固定新的 clean SHA
-（见 HEAD）。当前 42-input real isolated host build smoke 尚未执行，连接设备前必须先完成。
+artifact 32/32、ADB provenance 6/6、T0 sidecar 7/7、aapt2 15/15 保持通过。这些 gates 都是
+synthetic/offline 证据，本身没有运行真实 ADB、JDK、Gradle 或访问设备。2026-08-28 的 real isolated host build
+smoke 只覆盖当时 41-input 候选，不能改写为当前 42-input smoke；当前修复的汇总 gate 与独立复审通过后，候选固定为
+`77473af5223d76b00bf4dbbf33cf44090fde635c`。
+
+该 SHA 的一次 42-input real isolated host build smoke 随后执行并冻结失败。受控 GradleMain 为 `1`；临时
+Debug/Release APK 与 proof 出现后，artifact proof strict JSON reader fail-closed，ApkSigner、held AAPT2、real ADB、
+设备发现/install/T0/采集均为 `0`，retry `0`，契约内 runtime/build residue 为 `0`。离线复现确认 one-shot helper 没有像正式 runner
+一样先加载 observation validator，因而两个 closed-JSON walker 不存在。**Gradle 产物存在不等于 proof 已被接受；
+reader 位于 signer/AAPT2/ADB 之前，失败后必须冻结，不能拿临时 APK 继续。**下一 helper 必须把 validator 纳入
+held/pinned exact load set，并在 Gradle 前验证 walker 存在；修正后仍需另一 clean SHA 和新的 smoke 授权。详见
+[`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
 
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 

@@ -30,8 +30,23 @@ executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit
 official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated
 host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、
 real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
-真实 APK 安装或平板采集。当前候选的 observation/full gate 与当前独审已闭合；连接设备前仍须完成当前
-42-input fixed SHA 的 real isolated host build smoke，不能以旧 smoke 或旧独审结论替代。
+真实 APK 安装或平板采集。当前候选的 observation/full gate 与当前独审已闭合，但 fixed SHA
+`77473af5223d76b00bf4dbbf33cf44090fde635c` 的一次 42-input real isolated host build smoke 已执行且未通过；
+所以 A 道固定条件第 2 项仍不满足，不能以旧 smoke、离线 gate 或已生成过临时 APK 替代。
+
+## 2026-08-29 42-input real build smoke 结果
+
+`77473af5223d76b00bf4dbbf33cf44090fde635c` 的 one-shot build-only smoke 已消费。受控 GradleMain 执行
+`1` 次并到达 artifact proof reader；一次性 helper 漏载 observation validator，closed-JSON walker 不存在，
+因此 proof reader fail-closed。ApkSignerTool、held AAPT2、real ADB、设备发现、安装、T0 与采集均为 `0`；
+helper start `1`、automatic retry `0`，退出后进程、listener、受控 build workspace 与 journal 无残留；用于审计的
+exact one-shot staging scripts 刻意保留，不属于 build residue。
+
+未来新 helper 必须把 `tablet-layout-observation-c1b-v1-validator.ps1` 作为 held/pinned input，按
+`C1a -> validator -> C1b` 加载，并在 Gradle 前断言两个 strict-JSON walker 均存在。修正、离线回归、全门与
+独审完成后须固定另一 clean SHA，再取得新的 build-only smoke 授权；本轮临时 APK/proof 不得用于安装。
+详细证据与边界见
+[`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
 
 ## 2026-08-28 唯一授权结果
 

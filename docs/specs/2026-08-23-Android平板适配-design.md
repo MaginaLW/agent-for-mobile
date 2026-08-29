@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权因 private ADB 启动失败冻结，未进入安装或真机采集；2026-08-29 的 42-input 修复已完成 `localhost` listen、bounded structured early-attempt evidence、汇总 gate 与当前独审，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host build smoke 尚未执行
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权因 private ADB 启动失败冻结，未进入安装或真机采集；2026-08-29 的 42-input 修复已完成 `localhost` listen、bounded structured early-attempt evidence、汇总 gate 与当前独审，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 因 one-shot helper 漏载 validator 在 artifact proof strict JSON reader 再次冻结，未触达 signer/AAPT2/ADB/设备，下一候选回 A 道
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -200,9 +200,12 @@ ADB server ready guard 内 exit 1；Windows Application/WER 在同一 15 秒窗�
 private-ADB 启动失败时，于全部 cleanup 后原子发布 root-level closed attempt record。stream 内容不持久化 raw
 stdout/stderr，只保存 bounded byte counts、captured hash 与闭合分类；另以结构字段记录 substage、exit、
 strict-UTF-8/overflow 与 cleanup，不保存 PID、port、socket、argv、path 或 serial，也不自动重试。代码与专项
-离线验证、汇总 gate 与当前独审已完成，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host
-build smoke 尚未执行。之后若再真机，必须先完成该 smoke，再针对新 SHA 单独取得一次 C1b build/install/只读
-授权，旧 C1a 与已消费的本次 C1b 授权均不能复用。
+离线验证、汇总 gate 与当前独审已完成，42-input 候选固定为
+`77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 real isolated host build smoke 随后在 artifact proof
+strict JSON reader fail-closed：GradleMain `1`，signer/AAPT2/ADB/设备/install/采集 `0`，retry `0` 且契约内
+runtime/build residue 为 `0`；离线根因是 one-shot helper 漏载 validator。该 SHA 不能进入设备授权。之后须先修正并审查 helper、
+固定另一 clean SHA，再单独取得一次 build-only smoke 授权；只有 smoke 完整通过，才能另取 C1b
+build/install/两帧授权。旧 C1a 与两次已消费的 C1b 授权均不能复用。
 
 ### T-L2 · 横屏 P0
 
@@ -240,13 +243,14 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
 4. **A3/C1b 只读契约**：保持 v2 contract/schema/validator/fixture 原样冻结，另建 C1b pure-a11y
    diagnostic contract、producer、对抗 fixture、validator 与单次受控 runner。旧 41-file 候选的 real isolated
    host build smoke 与独审只作历史基线；当前 42-file closure、专用 probe artifact proof、`localhost` listen、
-   bounded structured early-attempt evidence、汇总 gate 与当前独审已完成，本提交固定新 clean SHA（见 HEAD）；当前
-   42-input real isolated host build smoke 尚未执行。
+   bounded structured early-attempt evidence、汇总 gate 与当前独审已完成，候选固定为
+   `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 42-input smoke 已执行，但因 one-shot helper
+   漏载 validator 在 artifact proof strict JSON reader fail-closed，signer/AAPT2/ADB/设备均未触达；该轮已冻结。
    `87ac7b45...` 的唯一 fixed-SHA run 因 isolated ADB 六次崩溃而在 private-server ready guard 冻结，未安装、
    未采集、未重试。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。固定新 HEAD 后必须另取一次 C1b build/install/只读授权，
-   旧 C1a 与已消费的旧 C1b 授权都不可复用。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。须先修正/审查 build-only helper，固定另一 clean SHA 并另取
+   real smoke 授权；该 smoke 通过后才可申请 C1b build/install/只读授权。旧 C1a 与两次已消费的 C1b 授权都不可复用。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -312,5 +316,7 @@ inputs 42、real ADB/JDK/Gradle 0，Job limits 1/4、auto-start attempts 2、esc
 旧 41-input real isolated host build smoke 与 P0/P1/P2=0 独审只作历史基线，不证明当前候选。`87ac7b45...`
 的唯一授权 run 在 private ADB ready guard exit 1，未进入设备发现/install/T0/c1/c2/result，未重试且 cleanup
 无残留。2026-08-29 已完成 `localhost` listen 与无 raw stdout/stderr 的 bounded structured early-attempt evidence
-代码/专项验证、汇总 gate 与当前独审，本提交固定新 clean SHA（见 HEAD）；当前 42-input real isolated host build
-smoke 尚未执行。后续真机须先完成该 smoke，再对新 SHA 新授权；旧授权不可复用。
+代码/专项验证、汇总 gate 与当前独审，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的
+一次 42-input real isolated host build smoke 在 artifact proof strict JSON reader 冻结：GradleMain `1`，
+ApkSigner/AAPT2/ADB/设备/install/采集 `0`、retry `0`、契约内 runtime/build residue 为 `0`；根因是 one-shot helper 漏载 validator。
+后续须回 A 道修正 helper、固定另一 clean SHA，再另取 build-only smoke 授权；旧授权不可复用。

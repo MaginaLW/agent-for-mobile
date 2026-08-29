@@ -20,8 +20,11 @@
 > `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB ready guard exit 1；同轮
 > isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。后续离线复核已
 > 高置信归因为 numeric listen host 触发 ADB FATAL，并实现 bounded/hash diagnostic 与 run_id 前 root-level
-> attempt failure record；该归因不是旧 run 持久化的直接证据。当前汇总 gate 与独立复审已通过，本提交固定
-> 新 clean SHA（见 HEAD）；当前 42-input real isolated host build smoke 尚未执行。本次 C1b 与旧 C1a 授权均不可复用。
+> attempt failure record；该归因不是旧 run 持久化的直接证据。当前汇总 gate 与独立复审已通过，42-input 候选固定为
+> `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 又在 artifact proof
+> strict JSON reader [冻结失败](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
+> ApkSigner/AAPT2/ADB/设备/install/采集 `0`，retry `0`，契约内 runtime/build residue 为 `0`。根因是 one-shot helper 漏载 validator；
+> 该 SHA 不得进入设备授权，本次与旧 C1a/C1b 授权均不可复用。
 
 ## 当前能力边界
 
@@ -251,9 +254,12 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   自动重试仍为 0。当前专项离线结果：host 29/29；七场景；fake ADB 222 = 214 valid + 8 rejected，valid
   start/status/kill/device 8/7/4/195，另观测 exit 7；runner 9、Gradle 8、signer 12、inputs 42；private
   22/22、readonly 74/74、新 schema/cross-binding 51/51、observation 49/49（coverage 89/89），其余 build-env 27/27、
-  artifact 32/32、provenance 6/6、T0 7/7、aapt2 15/15。全是离线 synthetic 证据，未运行真实
-  ADB/JDK/Gradle 或访问设备；汇总 gate 与独立复审已通过，本提交固定 clean SHA（见 HEAD）。当前 42-input
-  real isolated host build smoke 尚未执行，连接设备前必须先完成。
+  artifact 32/32、provenance 6/6、T0 7/7、aapt2 15/15。上述 gates 全是离线 synthetic 证据，本身未运行真实
+  ADB/JDK/Gradle 或访问设备；汇总 gate 与独立复审已通过，候选固定为
+  `77473af5223d76b00bf4dbbf33cf44090fde635c`。随后一次 build-only smoke 的真实 GradleMain 已执行 `1` 次，
+  但 one-shot helper 未加载 validator，artifact proof strict JSON reader fail-closed；signer/AAPT2/ADB/设备均 `0`，
+  retry `0` 且契约内 runtime/build residue 为 `0`。**经验：Gradle 产物存在不等于 artifact proof 已被宿主接受；reader 失败后不得利用
+  临时 APK 跳到签名或安装。**下一候选须修正 exact load set、固定另一 SHA，并另取一次 build-only smoke 授权。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧
