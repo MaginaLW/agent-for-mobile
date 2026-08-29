@@ -156,8 +156,12 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   port、socket、argv、path 或 serial，也不自动重试。当前汇总 gate 与独审已通过，42-input 候选固定为
   `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 real isolated host build smoke 随后在
   artifact proof strict JSON reader [冻结失败](runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
-  ApkSigner/AAPT2/real ADB/设备发现/install/T0/采集 `0`，retry `0` 且契约内 runtime/build residue 为 `0`。第一批的语义/布局/动作
-  结论继续固定 false/unsupported；该 SHA 不得进入真机授权，旧 C1a 与两次已消费的 C1b 授权均不可复用。
+  ApkSigner/AAPT2/real ADB/设备发现/install/T0/采集 `0`，retry `0` 且契约内 runtime/build residue 为 `0`。随后 fixed SHA
+  `8882add6116ebd3cca547d865f9d142bbbcac1a4` 修正 helper exact load set；其唯一 build-only smoke 的 helper summary
+  passed（GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/T0/采集 `0`、cleanup 全绿、residue `0`），
+  但 launcher 因 `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime` 而 strict-verifier exit `1`，故
+  [整体 evidence closure 未闭合](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。helper start `1`、retry `0`；
+  本轮已冻结，第一批语义/布局/动作继续 false/unsupported，旧 C1a 与三次已消费的 C1b 授权均不可复用。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -165,7 +169,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 ### 不进批次的 A 道纵深（C 队列排满时做）
 
-- `ToolRegistry.callInternal` 拆解（179 行，全仓最长函数）
+- `ToolRegistry.callInternal` 拆解（180 行，当前第二长；最长为 `ConfirmOverlay.ask` 307 行）
 - 套件提速
 - `dispatch.ps1 -Confirm` 收口
 - ~~C1b private ADB early-failure 可观测性~~ **代码与专项离线验证已完成（2026-08-29）**：server listen 固定为
@@ -174,11 +178,14 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   attempt schema/cross-binding 51/51、host/full gate 29/29、observation 49/49（coverage 89/89）与七场景 E2E 已过；
   当前独审 P0/P1/P2=0，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`。后续 build smoke 的
   artifact-proof reader 阻断是独立的新问题，不回写为本项未完成。
-- **C1b build-only smoke helper load-set 收口（2026-08-29 新阻断）**：本次 one-shot helper 漏载
-  `tablet-layout-observation-c1b-v1-validator.ps1`，使任意正常 proof 在 closed-JSON walker 调用处 fail-closed。
-  下一候选须把 validator 作为 held/pinned input，并按 `C1a -> validator -> C1b` 加载；Gradle 前断言两个 walker
-  均存在，完成对应离线回归、全门与独审后固定另一 clean SHA。不得自动重跑 `77473af...`，也不得利用本轮临时 APK
-  继续安装；详见[冻结记录](runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
+- ~~**C1b build-only smoke helper load-set 收口**~~ **已在 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 完成**：
+  validator 已作为 held/pinned input，按 `C1a -> validator -> C1b` 加载，两个 strict-JSON walker 在 Gradle 前成立；
+  本轮 helper core 已完整通过，证明旧 `77473af...` 的 load-set 阻断已消除。
+- **C1b launcher strict-JSON date-kind 保形（2026-08-29 新阻断）**：固定 PowerShell `7.6.4` 的默认
+  `ConvertFrom-Json` 会把合法 quoted ISO string 提升为 `System.DateTime`，而 launcher 随后要求 nonempty string，
+  产生确定性后验假阴性。下一候选须用 `-DateKind String` 或等价保形解析，并让实际 launcher verifier 消费
+  quoted-ISO 正对照；不得放宽 schema/verifier 接受 `DateTime`。完成回归、全门与独审后固定新 clean SHA，
+  再另取一次 build-only 授权；不得自动重跑或利用本轮临时 artifact 安装。详见[冻结记录](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
   所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，
@@ -199,7 +206,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | private-ADB 失败 SHA **`87ac7b45e79bf658ca6e56b697a24f52fdf7381b`**；build-smoke 失败 SHA **`77473af5223d76b00bf4dbbf33cf44090fde635c`** | `codex/security-hardening` | **两次 one-shot 均已消费；42-input real smoke 失败，回 A 道** | `77473af...` 的 GradleMain `1` 后，one-shot helper 漏载 validator，artifact proof strict JSON reader fail-closed；ApkSigner/AAPT2/ADB/设备/install/采集均 `0`、retry `0`、契约内 runtime/build residue 为 `0`。离线 gates/当前独审保持通过，但完整 A 道前置未通过；修正 helper 并固定另一 SHA 后才可另取 build-only smoke 授权，成功后才能申请设备授权。旧 C1a 与两次 C1b 授权均不可复用；不放行语义/layout/P0/execution。见[新冻结记录](runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md) |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | private-ADB 失败 SHA **`87ac7b45e79bf658ca6e56b697a24f52fdf7381b`**；helper-load 失败 SHA **`77473af5223d76b00bf4dbbf33cf44090fde635c`**；launcher-verifier 失败 SHA **`8882add6116ebd3cca547d865f9d142bbbcac1a4`** | `codex/security-hardening` | **三次 one-shot 均已消费；最新为 helper-pass / launcher-verifier-fail，回 A 道** | `8882add...` 已完成 GradleMain `1`、ApkSigner `1`、aapt2 `4`，ADB/设备/install/采集 `0`、cleanup 全绿、residue `0`；但 ISO JSON string 被默认 `ConvertFrom-Json` 提升为 `DateTime`，launcher strict verifier exit `1`，整体 evidence closure 未通过，helper start `1`、retry `0`。须保形解析并补实际 verifier 回归，固定新 clean SHA 后另取 build-only 授权；成功后才能申请设备授权。旧 C1a 与三次 C1b 授权均不可复用；不放行语义/layout/P0/execution。见[冻结记录](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md) |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
@@ -441,13 +448,13 @@ ledger 行并补回 main。下次 C 在结束前必须先把 ledger 落 main，�
   决定三"当前无实际后果"进 spec §5.5 + `ConfirmNotifier` 注释，并写明**锁屏能力一旦重开，
   这个决定当场变成承重的，要在同一轮重新确认**。
 
-**语义意图审批 spec 草稿已交**（[spec](specs/2026-08-02-语义意图审批-design.md)，只起草未实现）。
+**语义意图审批 spec 已交**（[spec](specs/2026-08-02-语义意图审批-design.md)，只起草未实现；08-02 初始决定已被 08-03 的 5 分钟拍板部分覆盖）。
 两个离线结论：①**锁屏那道墙不用拆也能绕开**——危险动作是在手机亮着、微信在前台时**发起**的，
 锁屏发生在等人决定那段，故 `requireKnownForeground` 位置不动、判据不松；代价是锁屏上按了允许，
-动作要等前台恢复才发生。②**「把 60 秒调大」在今天这套证据下是空话**——`InputCommitEvidence`
-与 `PreparedTargetEvidence` 的 TTL 都是 **120s**，从建立意图到执行总共两分钟。
-**四题待用户拍板**（见 spec §6，各带推荐）：意图有效期走哪条路 · 硬门不变量 4 的措辞改写 ·
-§2.3 两处"更弱"接不接受 · I 级要不要也走"批准后延后执行"。
+动作要等前台恢复才发生。②`InputCommitEvidence` 与 `PreparedTargetEvidence` 的 TTL 仍是 **120s**，没有随意图
+有效期放宽；08-03 最终拍板为 I 级 wait `0`、II 级 `foregroundWaitBudget=300s`、`decisionTimeout=90s`、
+`intentTtl=360s`。决策时钟从请求建立起算；执行有效期只在真人允许胜出时以不可刷新的 `approvedAtMs`
+启动。等待越过证据 TTL 时必须装配重建通道，执行前重读并与确认卡摘要比对。
 
 **批次 3 通过（主会话独立核 manifest）**：`deny_out_of_band = {captured:true, ocr:"windows-media-ocr",
 input_box_marker:"present", message_area_marker:"absent", verdict:"not_sent_confirmed"}`，
@@ -671,8 +678,10 @@ Deny 带外截屏比对可行。
 
 **语义意图审批四题的决定（用户 08-02 经 AskUserQuestion）：**
 
-1. **意图有效期压在 120s 证据 TTL 内**（decision 60→90s、foregroundWait 30s）。**不动证据 TTL**
-   ——那是往 fail-closed 松的一侧动。"批准后重建证据"作为下一步单独立项，不并进本篇。
+1. **08-03 后续拍板覆盖 08-02 的 30s/120s 时限选择**：I 级 wait `0`；II 级
+   `foregroundWaitBudget=300s`；`decisionTimeout=90s`；`intentTtl=360s`。证据 TTL 仍为 `120s`，没有放宽；
+   `decisionTimeout` 从请求建立起算，`intentTtl` 只在真人允许胜出时以不可刷新的 `approvedAtMs` 启动；
+   长等待路径必须实际装配证据重建通道，并以 `intentTtl >= foregroundWaitBudget` 和通道在位作构造/装配断言。
 2. **同意改写硬门不变量 4 的措辞**：「当前这一次调用」→「当前这一个意图的唯一一次执行」，
    实质不变，并在同一处写明「意图不因执行失败而复活」。
 3. **接受两处判据变弱**：执行前不再跨时间比 `activityName` 与身份来源，改由

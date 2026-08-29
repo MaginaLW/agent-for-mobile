@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked；fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权因 private ADB 启动失败冻结，未进入安装或真机采集；2026-08-29 的 42-input 修复已完成 `localhost` listen、bounded structured early-attempt evidence、汇总 gate 与当前独审，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 因 one-shot helper 漏载 validator 在 artifact proof strict JSON reader 再次冻结，未触达 signer/AAPT2/ADB/设备，下一候选回 A 道
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked。C1b 的 `77473af5223d76b00bf4dbbf33cf44090fde635c` 是历史 helper-load 失败；`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build/sign/aapt2 core 通过且设备操作为零，但 outer launcher 因 JSON ISO string 被 `ConvertFrom-Json` 提升为 `DateTime` 而 strict-verifier fail，整体 evidence closure 未闭合。C1b 设备授权与 T-L2 均未放行，下一候选回 A 道修 strict JSON 保形解析
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -203,9 +203,12 @@ strict-UTF-8/overflow 与 cleanup，不保存 PID、port、socket、argv、path 
 离线验证、汇总 gate 与当前独审已完成，42-input 候选固定为
 `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 real isolated host build smoke 随后在 artifact proof
 strict JSON reader fail-closed：GradleMain `1`，signer/AAPT2/ADB/设备/install/采集 `0`，retry `0` 且契约内
-runtime/build residue 为 `0`；离线根因是 one-shot helper 漏载 validator。该 SHA 不能进入设备授权。之后须先修正并审查 helper、
-固定另一 clean SHA，再单独取得一次 build-only smoke 授权；只有 smoke 完整通过，才能另取 C1b
-build/install/两帧授权。旧 C1a 与两次已消费的 C1b 授权均不能复用。
+runtime/build residue 为 `0`；离线根因是 one-shot helper 漏载 validator。随后 fixed SHA
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 load set，唯一 one-shot 的 helper summary passed：
+GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/采集 `0`、cleanup 全绿、residue `0`；但 outer
+launcher 将 quoted ISO string 自动提升为 `DateTime` 后又要求 string，strict verifier exit `1`。整体 smoke 未闭合，
+仍不能进入设备授权。之后须修正保形解析、补实际 verifier 回归、固定新 clean SHA，再单独取得一次 build-only
+smoke 授权；只有整体通过，才能另取 C1b build/install/两帧授权。旧 C1a 与三次已消费的 C1b 授权均不能复用。
 
 ### T-L2 · 横屏 P0
 
@@ -246,11 +249,13 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    bounded structured early-attempt evidence、汇总 gate 与当前独审已完成，候选固定为
    `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 42-input smoke 已执行，但因 one-shot helper
    漏载 validator 在 artifact proof strict JSON reader fail-closed，signer/AAPT2/ADB/设备均未触达；该轮已冻结。
+   `8882add6116ebd3cca547d865f9d142bbbcac1a4` 随后完成 helper/build/sign/aapt2 core，ADB/设备/install/capture `0`，
+   但 launcher 的默认日期转换令 strict summary verifier 假阴性，故整体仍失败并冻结。
    `87ac7b45...` 的唯一 fixed-SHA run 因 isolated ADB 六次崩溃而在 private-server ready guard 冻结，未安装、
    未采集、未重试。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。须先修正/审查 build-only helper，固定另一 clean SHA 并另取
-   real smoke 授权；该 smoke 通过后才可申请 C1b build/install/只读授权。旧 C1a 与两次已消费的 C1b 授权都不可复用。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。须先修正/审查 launcher strict JSON 保形解析，固定新 clean SHA 并另取
+   real smoke 授权；该 smoke 整体通过后才可申请 C1b build/install/只读授权。旧 C1a 与三次已消费的 C1b 授权都不可复用。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -319,4 +324,6 @@ inputs 42、real ADB/JDK/Gradle 0，Job limits 1/4、auto-start attempts 2、esc
 代码/专项验证、汇总 gate 与当前独审，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的
 一次 42-input real isolated host build smoke 在 artifact proof strict JSON reader 冻结：GradleMain `1`，
 ApkSigner/AAPT2/ADB/设备/install/采集 `0`、retry `0`、契约内 runtime/build residue 为 `0`；根因是 one-shot helper 漏载 validator。
-后续须回 A 道修正 helper、固定另一 clean SHA，再另取 build-only smoke 授权；旧授权不可复用。
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 随后令 helper/build/sign/aapt2 core 通过，但 outer launcher 因
+`ConvertFrom-Json` 的日期类型提升而 strict-verifier exit `1`；ADB/设备/install/capture `0`、cleanup/residue 全绿。
+后续须回 A 道修正 lexical-type 保形解析、补实际 verifier 回归、固定新 clean SHA，再另取 build-only smoke 授权；旧授权不可复用。

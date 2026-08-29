@@ -30,11 +30,31 @@ executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit
 official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated
 host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、
 real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
-真实 APK 安装或平板采集。当前候选的 observation/full gate 与当前独审已闭合，但 fixed SHA
-`77473af5223d76b00bf4dbbf33cf44090fde635c` 的一次 42-input real isolated host build smoke 已执行且未通过；
-所以 A 道固定条件第 2 项仍不满足，不能以旧 smoke、离线 gate 或已生成过临时 APK 替代。
+真实 APK 安装或平板采集。`77473af5223d76b00bf4dbbf33cf44090fde635c` 因 helper 漏载 validator 失败；
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败。
+所以 A 道固定条件第 2 项仍不满足，不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代。
 
-## 2026-08-29 42-input real build smoke 结果
+## 2026-08-29 `8882add` real build-only smoke 结果
+
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 的唯一 one-shot 已消费，结果为
+**helper-pass / launcher-verifier-fail（整体未闭合）**。helper summary 为 `status=passed`、`failure_count=0`：
+GradleMain `1`、ApkSignerTool `1`、held aapt2 `4`、held Git `32`，repository inputs `42`；artifact、依赖、
+packaged AXML、post-lock seal 与 pre/post provenance 均通过。direct/observed/real ADB、设备枚举、安装、T0、
+采集均为 `0`；三项 cleanup 全部 `completed`，workspace/journal/module/local.properties/Java residue 全部为 `0/false`。
+
+外层 launcher 使用固定 PowerShell `7.6.4` 的默认 `ConvertFrom-Json` 读取合法 summary；三个 quoted ISO
+时间值被自动提升成 `System.DateTime`，而 verifier 随后要求它们仍为 nonempty `string`，首先在
+`started_at_utc` fail-closed。launcher exit `1`，helper start `1`、exit `0`、automatic retry `0`。该失败是
+evidence consumer 的确定性类型检查假阴性，不是 build/helper 失败；但 helper passed 只是必要条件，outer
+launcher/verifier 未接受时整体仍必须判失败。详细记录见
+[`2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md`](../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
+
+后续所有 strict JSON summary reader 必须显式使用 `ConvertFrom-Json -DateKind String` 或等价的 lexical-type
+保形解析；quoted ISO timestamp 解析后仍必须是 `[string]`，不得修改 schema/verifier 去接受 `DateTime`。
+回归必须由**实际 launcher verifier**消费正对照 summary，不能只测 helper 内部 canary。修复、全门与独审后
+固定新 clean SHA，再取得新的 build-only smoke 授权；本轮不得追溯改判，也不得用于设备授权。
+
+## 2026-08-29 `77473af` 42-input real build smoke 结果
 
 `77473af5223d76b00bf4dbbf33cf44090fde635c` 的 one-shot build-only smoke 已消费。受控 GradleMain 执行
 `1` 次并到达 artifact proof reader；一次性 helper 漏载 observation validator，closed-JSON walker 不存在，
@@ -42,9 +62,9 @@ real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 
 helper start `1`、automatic retry `0`，退出后进程、listener、受控 build workspace 与 journal 无残留；用于审计的
 exact one-shot staging scripts 刻意保留，不属于 build residue。
 
-未来新 helper 必须把 `tablet-layout-observation-c1b-v1-validator.ps1` 作为 held/pinned input，按
-`C1a -> validator -> C1b` 加载，并在 Gradle 前断言两个 strict-JSON walker 均存在。修正、离线回归、全门与
-独审完成后须固定另一 clean SHA，再取得新的 build-only smoke 授权；本轮临时 APK/proof 不得用于安装。
+后续 helper 必须把 `tablet-layout-observation-c1b-v1-validator.ps1` 作为 held/pinned input，按
+`C1a -> validator -> C1b` 加载，并在 Gradle 前断言两个 strict-JSON walker 均存在；该要求已在
+`8882add...` one-shot 满足并由 helper core 通过，不得因后续 launcher 问题而回写为未完成。本轮临时 APK/proof 不得用于安装。
 详细证据与边界见
 [`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
 

@@ -24,7 +24,11 @@
 > `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 又在 artifact proof
 > strict JSON reader [冻结失败](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
 > ApkSigner/AAPT2/ADB/设备/install/采集 `0`，retry `0`，契约内 runtime/build residue 为 `0`。根因是 one-shot helper 漏载 validator；
-> 该 SHA 不得进入设备授权，本次与旧 C1a/C1b 授权均不可复用。
+> 该 SHA 不得进入设备授权。新 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 load set；其唯一
+> build-only smoke 为 [helper-pass / launcher-verifier-fail](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)：
+> GradleMain `1`、ApkSigner `1`、aapt2 `4`，ADB/设备/install/capture `0`、cleanup 全绿、residue `0`；但默认
+> `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime`，外层 strict verifier exit `1`。整体未闭合，
+> 本次与旧 C1a/C1b 授权均不可复用，仍不得进入设备授权。
 
 ## 当前能力边界
 
@@ -259,7 +263,10 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `77473af5223d76b00bf4dbbf33cf44090fde635c`。随后一次 build-only smoke 的真实 GradleMain 已执行 `1` 次，
   但 one-shot helper 未加载 validator，artifact proof strict JSON reader fail-closed；signer/AAPT2/ADB/设备均 `0`，
   retry `0` 且契约内 runtime/build residue 为 `0`。**经验：Gradle 产物存在不等于 artifact proof 已被宿主接受；reader 失败后不得利用
-  临时 APK 跳到签名或安装。**下一候选须修正 exact load set、固定另一 SHA，并另取一次 build-only smoke 授权。
+  临时 APK 跳到签名或安装。**`8882add...` 随后证明 exact load set 与 helper/build/artifact 路径已经成立，
+  但 launcher 又在 summary 日期类型上 fail-closed。**JSON lexical type 同样属于证据链**：默认日期提升会改变
+  schema 类型，closed reader 必须用 `-DateKind String` 或等价保形解析；helper 接受产物仍不等于外层消费者已接受。
+  修复时不得放宽 schema 接受 `DateTime`，须固定新 SHA 并另取一次 build-only smoke 授权。
 - **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
   时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
   sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧

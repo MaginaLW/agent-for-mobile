@@ -412,6 +412,19 @@ reader 位于 signer/AAPT2/ADB 之前，失败后必须冻结，不能拿临时 
 held/pinned exact load set，并在 Gradle 前验证 walker 存在；修正后仍需另一 clean SHA 和新的 smoke 授权。详见
 [`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
 
+随后 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 exact load set，唯一 build-only
+one-shot 的 helper summary 完整通过：GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/capture `0`、
+cleanup 全绿、residue `0`。但外层 launcher 用固定 PowerShell `7.6.4` 的默认 `ConvertFrom-Json` 读取 summary
+时，把原始 JSON 中合法的 quoted ISO string 自动提升成 `System.DateTime`；后续 strict verifier 要求 string，
+因此 launcher exit `1`。本轮是 **helper-pass / launcher-verifier-fail**，整体 evidence closure 仍失败并冻结，
+helper start `1`、retry `0`。详见
+[`2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
+
+**JSON lexical type 是证据链的一部分。** schema 要求 string 时，consumer 不能让便利型 parser 的日期自动
+转换悄悄改变类型，也不能反过来放宽 schema 接受运行时 `DateTime`。PowerShell strict reader 应使用
+`ConvertFrom-Json -DateKind String` 或等价保形解析；回归必须同时含 quoted ISO → `[string]` 的正对照，以及
+默认解析会复现 `DateTime` 并被 gate 拒绝的防退化检查。helper 自己通过不代表外层证据消费者已经接受。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
