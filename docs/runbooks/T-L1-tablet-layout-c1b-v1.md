@@ -44,7 +44,7 @@ automatic retry `0`；helper/verifier/build/ADB/设备/install/采集均为 `0`�
 详细记录见
 [`2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md`](../runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。
 
-新的 guard-only leaf 只增加 `[AllowEmptyCollection()]` 后，repo/output 完整目录链、launcher/helper/verifier/pwsh held
+历史 guard-only r2 只增加 `[AllowEmptyCollection()]` 后，repo/output 完整目录链、launcher/helper/verifier/pwsh held
 file、runtime pwsh reopen、路径重绑与三输出缺席检查全部通过，并在 verifier load 前主动停止。该修复不得移除目录
 stable ID、no-reparse、最终路径或 held-handle 门禁；目录时间戳等值继续不作为门禁，文件 identity/hash/size/mtime
 门禁保持。诊断 receipt 必须与进程 exit、terminal 状态及 primary/cleanup/recording failure count 联合消费，不能单独
@@ -57,6 +57,42 @@ failure 也不得被 `$resultPublished` 抑制，sidecar publication 失败只�
 preflight 或后续消费者当作成功证据；异常链若有界必须显式记录 observed/stored/truncated，陈旧 sidecar 必须在
 output gate 与 `Process.Start` 紧前分别 no-follow 阻断。`83121df` 不得重跑；形成新 clean SHA、完成静态复核和一次只读
 `prepared_not_authorized` preflight 后，必须重新取得 build-only 授权。
+
+## 2026-08-30 `21d2986` read-only preflight 与 build-only smoke
+
+历史 r2/r6 原样保留。为适配恢复 exact clean worktree 后的新 raw index，r7 只重绑 receipt leaf 与 index pin；相对 r6
+仅两个 string literal 改变。冻结 r7 leaf SHA-256 为
+`2f9fba1598e5b912787f4e9f4b7699b7cf64243f3a273f2eacbf999aee7c6c31`，201,438 bytes、ReadOnly、
+Parser 0；template/renderer/leaf 静态复核 P0/P1/P2=`0/0/0`。目录 mtime equality 继续为 `0`，volume serial +
+128-bit file ID、no-reparse、final path、完整 held chain/leaf handle 及文件 identity/hash/size/mtime 均保留。
+
+r7 read-only preflight 恰运行一次：外部 exit `0`、stderr empty、terminal `closed`、receipt published，
+primary/cleanup/recording failure count=`0/0/0`；receipt SHA-256 为
+`1cea8a95f608a6ed5c4150d8b09755d3999712f568dceb368bea74c88c80800d`。公开 `overall_passed=false` 仅表示脚本本身
+不能预知外层 exit；与外部 exit `0` 联合后成立 `prepared_not_authorized`。该 preflight 没有运行 launcher/helper/
+Gradle/ADB 或访问设备。
+
+获授权的 `21d2986` build-only one-shot 随后只启动一次 launcher/helper，exit `1/1`、automatic retry `0`。
+helper 在 direct GradleMain 前发现 `app/tablet-c1b-probe/build` 已存在；fresh-output 合同拒绝清理未知既有内容，故
+fail-closed。该树最新写入早于本轮约 13.5 小时，来自较早 `c4e42667` 普通全量 Gradle 门，不是本轮产物；现已同卷
+可恢复隔离，原路径 absent。GradleMain、ApkSigner、aapt2、held Git、verifier invoke、ADB、设备发现、install、T0、
+采集均为 `0`。完整证据见
+[`2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md`](../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。
+
+launcher 还暴露两个 failure-truth 缺口：active-process count 的跨行 `[long]` cast 被 AST 拆成类型对象赋值与独立
+native call，validation-time 因而误报 closure；finally 重查后 result 又写成 job zero/child true。即使修正 cast，
+当前顺序仍先因 helper exit `1`/stderr nonempty 抛 generic error，后才准备 held-bind failed summary，所以 failure-only
+sidecar 遮蔽 helper primary。该轮没有 false-pass，但“失败信息不再被遮蔽”尚未闭合。
+
+下一候选按以下顺序准备：
+
+1. 把 active count 改为单一 cast 表达式并加 AST canary，分别保留 validation/cleanup snapshots；
+2. 对 exit `1` 的 helper 仍先 held-bind stdout summary、验证 closed failed schema，并把 helper primary/reasons 写入
+   result 与 sidecar；stderr 只作为并列诊断，不覆盖结构化 primary；
+3. read-only preflight 在授权前显式要求 module build output absent，并继续要求三个正式输出/failure sidecar absent；
+4. 形成新的 clean SHA 与 repo-external helper/launcher/preflight，完成静态复核和一次 read-only preflight；
+5. 再由用户针对该新 SHA 明确授权一次 build-only smoke。`21d2986` 与此前所有授权均不可复用；install、ADB、设备、
+   C1b 采集、T-L1/P0/execution 继续未放行。
 
 ## 2026-08-29 `8882add` real build-only smoke 结果
 

@@ -28,7 +28,14 @@
 > build-only smoke 为 [helper-pass / launcher-verifier-fail](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)：
 > GradleMain `1`、ApkSigner `1`、aapt2 `4`，ADB/设备/install/capture `0`、cleanup 全绿、residue `0`；但默认
 > `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime`，外层 strict verifier exit `1`。整体未闭合，
-> 本次与旧 C1a/C1b 授权均不可复用，仍不得进入设备授权。
+> 后续 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 launcher 又在 helper 前因 Mandatory 空集合参数
+> 绑定失败并[冻结](../../runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)：launcher start/exit `1/1`、
+> retry `0`，helper/verifier/build/ADB/设备 `0`。下一 clean HEAD `21d29866a428f49e6ea79fe7fedc56f6cf42e16e`
+> 的 r7 read-only preflight 已闭合；其授权 smoke 又因启动前既有 module build output 在 Gradle 前 fail-closed，
+> Gradle/ADB/设备/install 均 `0`。旧 build 树已可恢复隔离，但 launcher 还暴露 active-count cast 与 failed-summary
+> 消费顺序缺陷，详见 [冻结记录](../../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与
+> [C1b runbook](../../runbooks/T-L1-tablet-layout-c1b-v1.md)。
+> 旧 C1a/C1b 授权均不可复用，仍不得进入设备授权。
 
 ## 当前能力边界
 

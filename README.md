@@ -14,7 +14,7 @@
 |---|---|---|
 | M0 | mobile-mcp 真机跑通 5 个验收任务，拿到成功率/token 数据 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)·[runbook](docs/runbooks/M0-runbook.md)） |
 | M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 进行中——网关已在真机跑通（a11y + IME + OCR 融合 + 内嵌 MCP server），P0 安全硬门见下 |
-| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中——[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)；T0-L v5 已完成，C1a 已建立可信来源/只读取证但 diagnostic blocked。fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的唯一 C1b build-only smoke 中，helper/build/sign/aapt2 core 全部通过且设备操作为零，但外层 launcher 因 JSON ISO string 被 `ConvertFrom-Json` 提升为 `DateTime` 而拒绝 summary，故[整体 evidence closure 未闭合](docs/runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)，尚不可申请设备授权；回 A 修 strict JSON 保形解析后，须固定新 clean SHA 并另取一次 one-shot 授权。导航/会话/目标区、布局、P0 与执行仍未放行 |
+| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中——[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)；T0-L v5 已完成，C1a 已建立可信来源/只读取证但 diagnostic blocked。C1b 的第五次 one-shot `21d2986` 已[失败并冻结](docs/runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)：r7 read-only preflight 闭合，但 helper 因启动前既有 module build output 在 Gradle 前 fail-closed，Gradle/ADB/设备/install 均为 0；launcher 另有 active-process cast 与 failed-summary 消费顺序缺陷，遮蔽了 helper primary。旧 build 树已可恢复隔离；下一候选须修诊断并把 build-output absence 纳入 preflight，再固定新 SHA 和新授权。导航/会话/目标区、布局、P0、执行、install 与设备采集仍未放行 |
 | M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ |
 

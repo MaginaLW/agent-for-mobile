@@ -163,8 +163,10 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   [整体 evidence closure 未闭合](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。helper start `1`、retry `0`；
   后续候选 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 launcher 又在 helper 前因 Mandatory 空
   `List[object]` 参数绑定失败：launcher start `1`、exit `1`、helper/verifier/build/ADB/设备 `0`、retry `0`、三输出缺席；
-  [现场已冻结](runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。第一批语义/布局/动作继续
-  false/unsupported，旧 C1a 与四次已消费的 C1b 授权均不可复用。
+  [现场已冻结](runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。`21d2986` 的 r7 preflight 随后闭合，
+  第五次 smoke 又因既有 module build output 在 Gradle 前 fail-closed，并暴露 launcher failure-truth 缺口；
+  [同样冻结](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。第一批语义/布局/动作继续
+  false/unsupported，旧 C1a 与五次已消费的 C1b 授权均不可复用。
 - **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
   IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
   确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
@@ -189,11 +191,19 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   产生确定性后验假阴性。下一候选须用 `-DateKind String` 或等价保形解析，并让实际 launcher verifier 消费
   quoted-ISO 正对照；不得放宽 schema/verifier 接受 `DateTime`。该项已在 `83121df` 前完成，但其 one-shot 被下述
   更早 launcher guard 阻断，不能据此改判为 smoke pass。详见[冻结记录](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
-- **C1b launcher 空集合绑定与 early-failure 可观测性（2026-08-30 新阻断）**：目录-chain accumulator 首次为空时，
-  Mandatory collection 未声明 `[AllowEmptyCollection()]` 会在函数体前 fail。精确修复不得移除 stable ID、
-  no-reparse、最终路径或 held-handle；目录 mtime 等值继续移除，文件门禁不变。新 launcher 同时固定 repo root，
-  用 CreateNew failure-only sidecar 保存 primary ErrorRecord/exception chain，publication failure 只作 secondary；完成
-  静态复核和一次只读 preflight 后固定新 clean SHA，再另取一次 build-only 授权。不得重跑 `83121df`。
+- **C1b `21d2986` preflight 闭合、smoke 在 Gradle 前失败（2026-08-30）**：r7 leaf
+  `2f9fba1598e5b912787f4e9f4b7699b7cf64243f3a273f2eacbf999aee7c6c31` 静态复核 0/0/0；唯一 read-only
+  preflight 外部 exit `0`、terminal `closed`、primary/cleanup/recording=`0/0/0`，receipt SHA-256
+  `1cea8a95f608a6ed5c4150d8b09755d3999712f568dceb368bea74c88c80800d`。获授权 one-shot 随后 launcher/helper
+  start `1/1`、exit `1/1`、retry `0`：helper 因启动前既有 `app/tablet-c1b-probe/build` 被 build-environment guard
+  拒绝，GradleMain/ApkSigner/aapt2/held Git/verifier invoke/ADB/设备/install/T0/采集均 `0`。旧 build 树来自较早
+  `c4e42667` 普通全量 Gradle 门，已同卷可恢复隔离，不能据此重跑 `21d2986`。另有 launcher P1：跨行
+  `[long]` cast 被 AST 解析成类型对象赋值与独立 native call，validation-time 误报 closure；即使修 cast，generic exit/stderr
+  仍早于 failed-summary held binding，failure-only sidecar 会遮蔽 helper primary。**有序待办**：①修成单一 cast 表达式，
+  分离 validation/cleanup snapshots；②非零 helper 也先 bind/核对/验证 closed failed summary，公开 primary/reasons；
+  ③preflight 新增 module-output preexisting-absence；④固定新 clean SHA，重新静态复核并单跑 read-only preflight；
+  ⑤再取得 exact build-only one-shot 授权。install、ADB、设备与 C1b 采集继续不放行。见
+  [冻结记录](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
   所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，
@@ -214,7 +224,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | private-ADB 失败 SHA **`87ac7b45e79bf658ca6e56b697a24f52fdf7381b`**；helper-load 失败 SHA **`77473af5223d76b00bf4dbbf33cf44090fde635c`**；launcher-verifier 失败 SHA **`8882add6116ebd3cca547d865f9d142bbbcac1a4`**；pre-helper 失败 SHA **`83121df4c0b00a142fd71d7bc09bb4d9263b9b97`** | `codex/security-hardening` | **四次 one-shot 均已消费；最新为 pre-helper launcher failure，回 A 道** | `83121df...` 在首个目录 guard 前因 Mandatory 空 collection 绑定失败；launcher start `1`、exit `1`，helper/verifier/build/ADB/设备 `0`，retry `0`，输出缺席。只允许精确 `[AllowEmptyCollection()]` 修复并保留 stable ID/no-reparse/final-path/held-handle；新 leaf 还需固定 repo root、failure-only sidecar、静态复核与一次只读 preflight，再另取 build-only 授权。旧 C1a 与四次 C1b 授权均不可复用；不放行语义/layout/P0/execution。见[冻结记录](runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md) |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 五次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986`** | `codex/security-hardening` | **`21d2986` preflight pass；smoke pre-Gradle fail，回 A 道** | r7 preflight 外部 exit `0`、terminal closed、三类 failure `0`；授权 smoke 因启动前既有 module build output 在 Gradle 前 fail-closed，build/ADB/设备均 `0`。旧树已可恢复隔离，但同 SHA 不重跑。下一候选须修 launcher active-count cast 与 failed-summary failure truth，把 module-output absence 加入 preflight，固定新 SHA、静态复核、read-only preflight 后再取 exact build-only 授权；语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[21d2986 冻结记录](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task

@@ -444,6 +444,31 @@ secondary error，绝不能遮蔽 primary failure；即使正式 result 已发�
 `$resultPublished` 抑制 sidecar。sidecar 固定 failed-only，不能参与 pass closure。诊断或 preflight receipt
 也不得单独判绿，至少要联合进程 exit、terminal 状态及 primary/cleanup/recording failure counts。
 
+## PowerShell：跨行 cast 与失败消费顺序会遮蔽 primary（2026-08-30）
+
+`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 build-only launcher 把 active-process count 写成：
+
+```powershell
+$count = [long]
+    [Native]::GetActiveProcessCount($job)
+```
+
+这段文本 Parser 0，但 AST 是“把 `[long]` 类型对象赋给变量”与“独立 native call”两个语句，不是 cast。validation
+因此误报 child closure；finally 重查又把同一变量覆盖为真实 `0`，导致 failure sidecar 与最终 result 看似矛盾。
+native/cmdlet 调用需要 cast 时必须用单一表达式（例如 `[long]([Native]::Call(...))`），静态门还要断言 RHS AST 中
+确实含唯一预期调用，不能只看 Parser 0 或文本相邻。
+
+更深一层是失败消费顺序：helper 已原子发布 closed failed summary 后 exit `1`，launcher 若先检查 nonzero exit 或
+stderr-empty，再去 held-bind summary，就只能留下 generic error，具体 primary 仍被遮蔽。安全顺序应是先确认 process/job/
+drain 闭合，再对 stdout 指向的 summary 做 held identity/hash/closed-schema 验证；若 summary 是 failed，就把其 primary 与
+reasons 作为结构化首要失败，exit/stderr 作为并列证据。validation-time snapshot 与 cleanup-time snapshot 必须分开，
+cleanup 成功不能覆盖失败瞬间。`checked=false` 也不能伪装成“验证失败”；应显式区分 absent、not_checked、rejected。
+
+同轮另暴露授权前环境检查缺口：build guard 要求 module output fresh/absent，但 read-only preflight 未检查既有
+`app/tablet-c1b-probe/build`，一次授权因此在 Gradle 前被消费。凡执行期会以“preexisting 即拒绝”为前置的路径，
+preflight 都必须用同等或更强的 no-follow absence 门禁提前覆盖；普通离线 Gradle/check 会重新生成该目录，不能放在
+preflight 与 one-shot 之间。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard

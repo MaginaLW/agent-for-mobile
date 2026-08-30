@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked。C1b 的 `77473af5223d76b00bf4dbbf33cf44090fde635c` 是历史 helper-load 失败；`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build/sign/aapt2 core 通过且设备操作为零，但 outer launcher 因 JSON ISO string 被 `ConvertFrom-Json` 提升为 `DateTime` 而 strict-verifier fail，整体 evidence closure 未闭合。C1b 设备授权与 T-L2 均未放行，下一候选回 A 道修 strict JSON 保形解析
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked。C1b 五次历史 one-shot 均已冻结且不可复用：`87ac7b4` private-ADB fail、`77473af` helper-load fail、`8882add` helper-pass/outer-verifier fail、`83121df` pre-helper Mandatory 空集合 fail，以及 `21d2986` preflight-pass/pre-Gradle environment fail。最后一轮因既有 module build output 在 Gradle 前 fail-closed，build/ADB/设备/install 均为 `0`；旧树已可恢复隔离，下一候选还须修 launcher active-count cast 与 failed-summary failure truth，并把 build-output absence 纳入 preflight。详见 [冻结记录](../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与 [C1b runbook](../runbooks/T-L1-tablet-layout-c1b-v1.md)。C1b install/设备采集与 T-L2 均未放行
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -207,8 +207,12 @@ runtime/build residue 为 `0`；离线根因是 one-shot helper 漏载 validator
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 load set，唯一 one-shot 的 helper summary passed：
 GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/采集 `0`、cleanup 全绿、residue `0`；但 outer
 launcher 将 quoted ISO string 自动提升为 `DateTime` 后又要求 string，strict verifier exit `1`。整体 smoke 未闭合，
-仍不能进入设备授权。之后须修正保形解析、补实际 verifier 回归、固定新 clean SHA，再单独取得一次 build-only
-smoke 授权；只有整体通过，才能另取 C1b build/install/两帧授权。旧 C1a 与三次已消费的 C1b 授权均不能复用。
+仍不能进入设备授权。`14e33c7/c4e4266` 随后已闭合 lexical-type 保形解析与 actual outer verifier 离线回归；
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的第四次 one-shot 又在 helper 前因 Mandatory 空集合绑定失败并冻结。
+`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 r7 read-only preflight 随后闭合，但第五次授权 smoke 因启动前
+既有 module build output 在 Gradle 前 fail-closed，Gradle/ADB/设备均为 `0`；旧树已可恢复隔离。下一候选须先修
+launcher failure truth、补 module-output absence preflight，再固定新 SHA 与授权；只有整体通过，才能另取 C1b
+build/install/两帧授权。旧 C1a 与五次已消费的 C1b 授权均不能复用。
 
 ### T-L2 · 横屏 P0
 
@@ -251,11 +255,16 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    漏载 validator 在 artifact proof strict JSON reader fail-closed，signer/AAPT2/ADB/设备均未触达；该轮已冻结。
    `8882add6116ebd3cca547d865f9d142bbbcac1a4` 随后完成 helper/build/sign/aapt2 core，ADB/设备/install/capture `0`，
    但 launcher 的默认日期转换令 strict summary verifier 假阴性，故整体仍失败并冻结。
+   `14e33c7/c4e4266` 已把 date-kind 与 outer-verifier 离线闭合；`83121df4c0b00a142fd71d7bc09bb4d9263b9b97`
+   的第四次 one-shot 又在 helper 前因 Mandatory 空集合绑定失败并冻结，helper/build/ADB/设备均未触达。
    `87ac7b45...` 的唯一 fixed-SHA run 因 isolated ADB 六次崩溃而在 private-server ready guard 冻结，未安装、
    未采集、未重试。
+   `21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 r7 read-only preflight 随后闭合，但第五次 smoke 因既有 module
+   build output 在 Gradle 前 fail-closed，build/ADB/设备均未触达；旧树已可恢复隔离，同 SHA 不重跑。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。须先修正/审查 launcher strict JSON 保形解析，固定新 clean SHA 并另取
-   real smoke 授权；该 smoke 整体通过后才可申请 C1b build/install/只读授权。旧 C1a 与三次已消费的 C1b 授权都不可复用。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。下一候选须修 launcher failure truth、补 module-output absence
+   preflight，固定新 SHA 并另取 real smoke 授权；整体通过后才可申请 C1b build/install/只读授权。旧 C1a 与五次
+   已消费的 C1b 授权都不可复用。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -326,4 +335,7 @@ inputs 42、real ADB/JDK/Gradle 0，Job limits 1/4、auto-start attempts 2、esc
 ApkSigner/AAPT2/ADB/设备/install/采集 `0`、retry `0`、契约内 runtime/build residue 为 `0`；根因是 one-shot helper 漏载 validator。
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 随后令 helper/build/sign/aapt2 core 通过，但 outer launcher 因
 `ConvertFrom-Json` 的日期类型提升而 strict-verifier exit `1`；ADB/设备/install/capture `0`、cleanup/residue 全绿。
-后续须回 A 道修正 lexical-type 保形解析、补实际 verifier 回归、固定新 clean SHA，再另取 build-only smoke 授权；旧授权不可复用。
+`14e33c7/c4e4266` 已闭合 lexical-type 保形解析与实际 verifier 回归；`83121df4c0b00a142fd71d7bc09bb4d9263b9b97`
+的第四次 one-shot 又在 helper 前因 Mandatory 空集合绑定失败并冻结。`21d2986` r7 preflight 已闭合，第五次 smoke
+则因启动前既有 module build output 在 Gradle 前 fail-closed，且 launcher sidecar 遮蔽 helper primary；旧 build 树已
+可恢复隔离。下一候选须修 failure truth、补 build-output absence preflight，再固定新 SHA 与授权；旧授权不可复用。
