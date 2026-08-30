@@ -67,6 +67,24 @@ stable identity 和 SHA-256，且这些 guard 要覆盖 verifier 返回并在 `f
 held file，再恰好 invoke 一次。不得保留 inline verifier、fallback、同名函数重绑定或第二条调用路径。helper
 必须 start `1`、automatic retry `0`；既有 summary/result 会在 start 前阻断，新输出只能 CreateNew/原子发布。
 
+完整目录链的首个调用会传入新建的空 accumulator；`$Order` 必须同时声明 `[Parameter(Mandatory)]` 与
+`[AllowEmptyCollection()]`。不得注入 dummy entry、移除 Mandatory 或移除目录 guard 来规避参数绑定：目录 stable identity、no-reparse、
+最终路径与 held-handle 必须保留，目录时间戳不作为 identity 等值条件；文件 identity/hash/size/mtime 门禁不变。
+launcher 必须把 repo root 渲染为固定 absolute path，并同时验证 PowerShell provider cwd 与 OS process cwd exact 指向该
+root；不得从 ambient cwd 推导 repo/output/verifier 路径。
+
+launcher 的顶层 trap、主 catch 与最终失败出口必须共享一个 failure-only publisher；任何最终 `$failure`，包括正式
+result 已发布后才发现的 held-guard cleanup failure，都不得因 `$resultPublished` 而跳过该 publisher。
+该 publisher 只能对固定 sidecar path 使用 CreateNew，并以 write-through、flush-to-disk 完成；内容必须是 closed failed
+record，至少绑定 candidate/launcher identity、phase、原始 ErrorRecord（message、fully-qualified id、category、
+script stack/position）与去重 exception chain；任何有界截断必须显式记录 stored/observed count、limit 与 truncated，
+不得静默丢弃尾部异常。record 固定 `status=failed`、`success_eligible=false`、`pass_closure=false`、
+`evidence_role=diagnostic_failure_only`。publication/serialization/cleanup 错误只能追加为 secondary failure，绝不能
+替换 primary failure；若 sidecar 本身无法写入，launcher 仍必须 exit nonzero。sidecar 必须位于 exact launcher 同目录
+的固定 `.failure.json` sibling，helper start 前至少两次 no-follow 缺席检查中任一发现陈旧 leaf 都必须阻断，且它不进入
+`$passClosure`。该 sidecar 不是 success result，不能
+与退出码或任何 receipt 分离消费后升级为 pass authority。
+
 helper hard deadline 固定为 45 分钟，任何正常或异常路径都不得先执行无界 `WaitForExit()`。deadline 到期后
 launcher 必须终止完整 process tree，kill completion 与 stdout/stderr drain 各自最多 30 秒；超时、无法确认退出、
 drain overflow/失败或任一 guard/cleanup 失败都令整体失败。launcher result 必须闭合记录 self/helper/verifier/pwsh
@@ -75,9 +93,11 @@ expected/actual hash、verifier load/invoke count、helper start/exit/terminatio
 
 请求 build-only 授权前，必须在最终 clean HEAD 上对 exact staging 执行只读 preflight：绑定完整 candidate SHA、
 launcher/helper/verifier/pwsh hash 与 ordinary identity，机械证明无 inline fallback、load `1`/invoke `1`、45 分钟
-deadline、两段 30 秒 kill/drain、预存输出阻断及结果字段接线。preflight 只能发布 closed
+deadline、两段 30 秒 kill/drain、预存 success/failure 输出阻断、failure-only publisher 的 failed-only/primary-preserving
+语义及正式结果字段接线。preflight 只能发布 closed
 `prepared_not_authorized`，不得执行 launcher、helper、Gradle/JDK/ADB 或访问设备；它不是 smoke、不会消费 one-shot，
-也不构成 build、设备或后续采集授权。
+也不构成 build、设备或后续采集授权。preflight receipt 只能与其进程 exit `0`、terminal `passed` 和
+primary/cleanup/recording failure count 全为 `0` 联合判定，不能单独作为成功权威。
 
 ## 构建与宿主信任闭包
 

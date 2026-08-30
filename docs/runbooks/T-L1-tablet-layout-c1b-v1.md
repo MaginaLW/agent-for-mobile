@@ -31,8 +31,32 @@ official-style auto-start attempts 2，escaped child/listener/side-effect 0，�
 host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、
 real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
 真实 APK 安装或平板采集。`77473af5223d76b00bf4dbbf33cf44090fde635c` 因 helper 漏载 validator 失败；
-`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败。
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败；
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 又在 helper 前因 launcher 空集合参数绑定失败。
 所以 A 道固定条件第 2 项仍不满足，不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代。
+
+## 2026-08-30 `83121df` real build-only smoke 结果
+
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 one-shot 已消费。exact launcher start `1`、exit `1`、
+automatic retry `0`；helper/verifier/build/ADB/设备/install/采集均为 `0`，三个正式输出不存在。失败发生在第一次
+`Add-LauncherHeldDirectoryChain` 调用的 PowerShell 参数绑定：新建的 `$directoryOrder` 是空
+`List[object]`，而 Mandatory `$Order` 未声明 `[AllowEmptyCollection()]`，所以函数体及首个目录 handle 都未进入。
+详细记录见
+[`2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md`](../runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。
+
+新的 guard-only leaf 只增加 `[AllowEmptyCollection()]` 后，repo/output 完整目录链、launcher/helper/verifier/pwsh held
+file、runtime pwsh reopen、路径重绑与三输出缺席检查全部通过，并在 verifier load 前主动停止。该修复不得移除目录
+stable ID、no-reparse、最终路径或 held-handle 门禁；目录时间戳等值继续不作为门禁，文件 identity/hash/size/mtime
+门禁保持。诊断 receipt 必须与进程 exit、terminal 状态及 primary/cleanup/recording failure count 联合消费，不能单独
+升级为 pass authority。
+
+下一 exact launcher 还必须固定 repo root，并为任何最终失败提供 exact launcher 同目录的独立 failure-only
+CreateNew `.failure.json` sidecar：保存原始 ErrorRecord、phase 与 exception chain；正式 result 已发布后的 cleanup
+failure 也不得被 `$resultPublished` 抑制，sidecar publication 失败只能作为 secondary failure，不能
+遮蔽 primary failure。该 sidecar 必须固定 `status=failed`、`success_eligible=false`、`pass_closure=false`，不得被
+preflight 或后续消费者当作成功证据；异常链若有界必须显式记录 observed/stored/truncated，陈旧 sidecar 必须在
+output gate 与 `Process.Start` 紧前分别 no-follow 阻断。`83121df` 不得重跑；形成新 clean SHA、完成静态复核和一次只读
+`prepared_not_authorized` preflight 后，必须重新取得 build-only 授权。
 
 ## 2026-08-29 `8882add` real build-only smoke 结果
 
@@ -51,8 +75,8 @@ launcher/verifier 未接受时整体仍必须判失败。详细记录见
 
 后续所有 strict JSON summary reader 必须显式使用 `ConvertFrom-Json -DateKind String` 或等价的 lexical-type
 保形解析；quoted ISO timestamp 解析后仍必须是 `[string]`，不得修改 schema/verifier 去接受 `DateTime`。
-回归必须由**实际 launcher verifier**消费正对照 summary，不能只测 helper 内部 canary。修复、全门与独审后
-固定新 clean SHA，再取得新的 build-only smoke 授权；本轮不得追溯改判，也不得用于设备授权。
+`14e33c7/c4e4266` 已把该规则、同一 held stream 与唯一 outer verifier 接入离线闭环；这不追溯修绿 `8882add`，
+也不代表后续 launcher guard 已通过 smoke。
 
 ## 后续 build-only outer verifier 与 preflight
 
@@ -73,16 +97,21 @@ envelope 内，observer end 必须晚于 start、不得晚于 completed，且距
 2. 形成最终 clean HEAD，再为该完整 SHA 生成 exact repo-external helper 与 launcher；
 3. launcher 固定并持有 self/helper/verifier/pwsh 的 ordinary identity 与 hash；verifier 只允许 exact load `1`、
    captured `FunctionInfo` invoke `1`，不得有 inline verifier、fallback 或 caller-selected verifier path；
-4. helper hard deadline exact 为 45 分钟，不得无界等待；超时后 process-tree kill 与 output drain 各有 30 秒上限，
+4. 首次目录-chain 调用必须保留 Mandatory `$Order` 并显式声明 `[AllowEmptyCollection()]`；preflight 机械核验该精确
+   修复及 stable ID/no-reparse/final-path/held-handle 全部仍在；
+5. launcher 固定 repo root 并验证 PowerShell provider cwd 与 OS cwd；early failure sidecar 只能 CreateNew、固定 failed-only
+   语义，且记录失败本身时的 secondary error 不得覆盖原始 ErrorRecord；
+6. helper hard deadline exact 为 45 分钟，不得无界等待；超时后 process-tree kill 与 output drain 各有 30 秒上限，
    任一终止、drain、guard 或 cleanup 失败都 fail closed；helper 仍固定 start `1`、retry `0`；
-5. 对 exact staging 执行只读静态 preflight；只有 clean SHA、hash/identity、load/invoke、deadline、既有输出阻断与
-   result 接线全部闭合时，才发布 `prepared_not_authorized`；
-6. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。只有此后用户
+7. 对 exact staging 执行只读静态 preflight；只有 clean SHA、hash/identity、load/invoke、deadline、既有输出阻断、
+   failure-only sidecar 缺席与结果接线全部闭合时，才发布 `prepared_not_authorized`；
+8. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。只有此后用户
    针对该 SHA 明确授权，才可运行一次 launcher；不得自动重试。
 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的历史结论仍是
 **helper-pass / launcher-verifier-fail（整体未闭合）**；上述规则不追溯修绿该 one-shot，也不把其临时 APK/proof
-升级为可安装产物。
+升级为可安装产物。`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 同样保持 pre-helper launcher failure，不能因已定位
+空集合绑定根因而追溯改判或重跑。
 
 ## 2026-08-29 `77473af` 42-input real build smoke 结果
 

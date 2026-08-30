@@ -425,6 +425,25 @@ helper start `1`、retry `0`。详见
 `ConvertFrom-Json -DateKind String` 或等价保形解析；回归必须同时含 quoted ISO → `[string]` 的正对照，以及
 默认解析会复现 `DateTime` 并被 gate 拒绝的防退化检查。helper 自己通过不代表外层证据消费者已经接受。
 
+## PowerShell：Mandatory 空集合会在函数体前失败（2026-08-30）
+
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 build-only launcher 在 helper 前退出。根因不是 Add-Type、
+UAC、cwd 或 native handle API，而是第一次给目录 guard 传入刚创建的空 `List[object]`：参数标了
+`[Parameter(Mandatory)]` 却没有 `[AllowEmptyCollection()]`，PowerShell binder 在函数体执行前直接抛
+`ParameterArgumentValidationErrorEmptyCollectionNotAllowed`。因此“循环会马上向 list 加元素”并不能让首次调用成立；
+所有 accumulator-style Mandatory collection 都要有空输入正对照，或显式允许初始空集合。
+
+修复必须精确：只给 accumulator 增加 `[AllowEmptyCollection()]`，不能删目录链或用时间戳替代身份。guard-only
+正对照应覆盖首个空 list 调用，并继续证明目录 stable ID、no-reparse、最终路径、held-handle 以及文件
+identity/hash/size/mtime。目录 mtime 不是可靠 identity 条件，不应重新加入等值门禁。
+
+另一个教训是“fail closed”不等于“failure observable”。advanced script 的 `exit 1` 可能让 PowerShell event log 只留下
+误导性的 `System error.`，而原始 ErrorRecord 停在未持久化的 stderr。one-shot launcher 应在任何 success publication
+之前建立固定 repo root 与 failure-only CreateNew sidecar：保留 phase、完整 ErrorRecord/exception chain，写失败只记
+secondary error，绝不能遮蔽 primary failure；即使正式 result 已发布后才发生 cleanup failure，也不能用
+`$resultPublished` 抑制 sidecar。sidecar 固定 failed-only，不能参与 pass closure。诊断或 preflight receipt
+也不得单独判绿，至少要联合进程 exit、terminal 状态及 primary/cleanup/recording failure counts。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
