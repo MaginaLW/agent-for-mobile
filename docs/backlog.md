@@ -186,10 +186,10 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - ~~**C1b build-only smoke helper load-set 收口**~~ **已在 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 完成**：
   validator 已作为 held/pinned input，按 `C1a -> validator -> C1b` 加载，两个 strict-JSON walker 在 Gradle 前成立；
   本轮 helper core 已完整通过，证明旧 `77473af...` 的 load-set 阻断已消除。
-- **C1b launcher strict-JSON date-kind 保形（2026-08-29 新阻断）**：固定 PowerShell `7.6.4` 的默认
+- ~~**C1b launcher strict-JSON date-kind 保形（2026-08-29 新阻断）**~~ **已在 `83121df` 前完成**：固定 PowerShell `7.6.4` 的默认
   `ConvertFrom-Json` 会把合法 quoted ISO string 提升为 `System.DateTime`，而 launcher 随后要求 nonempty string，
-  产生确定性后验假阴性。下一候选须用 `-DateKind String` 或等价保形解析，并让实际 launcher verifier 消费
-  quoted-ISO 正对照；不得放宽 schema/verifier 接受 `DateTime`。该项已在 `83121df` 前完成，但其 one-shot 被下述
+  产生确定性后验假阴性。修复使用 `-DateKind String` 保形解析并让实际 launcher verifier 消费 quoted-ISO
+  正对照；schema/verifier 未放宽为接受 `DateTime`。其 one-shot 被下述
   更早 launcher guard 阻断，不能据此改判为 smoke pass。详见[冻结记录](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
 - **C1b `21d2986` preflight 闭合、smoke 在 Gradle 前失败（2026-08-30）**：r7 leaf
   `2f9fba1598e5b912787f4e9f4b7699b7cf64243f3a273f2eacbf999aee7c6c31` 静态复核 0/0/0；唯一 read-only
@@ -202,8 +202,10 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   仍早于 failed-summary held binding，failure-only sidecar 会遮蔽 helper primary。**有序待办**：①修成单一 cast 表达式，
   分离 validation/cleanup snapshots；②非零 helper 也先 bind/核对/验证 closed failed summary，公开 primary/reasons；
   ③preflight 新增 module-output preexisting-absence；④固定新 clean SHA，重新静态复核并单跑 read-only preflight；
-  ⑤再取得 exact build-only one-shot 授权。install、ADB、设备与 C1b 采集继续不放行。见
-  [冻结记录](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。
+  ⑤冻结 preflight 后不得再运行会重建 module `build` 的 Gradle/check；⑥再取得该完整 SHA 的 exact build-only
+  one-shot 授权，且 retry 固定为 `0`。install、ADB、设备与 C1b 采集继续不放行。见
+  [冻结记录](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)与
+  [下一候选待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
   所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，

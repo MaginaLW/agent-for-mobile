@@ -21,7 +21,7 @@ false/unsupported。
 4. 独立审查无 P0/P1；
 5. 用户针对该 C1b SHA 明确授权一次真机 build/install/只读采集。C1a 授权不能复用。
 
-当前 42-input 离线修复候选已经完成的验证为：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
+42-input 离线链的历史验证快照为：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、attempt-failure schema/cross-binding 51/51；observation 公共门仍为
 49/49、coverage 89/89。七场景 synthetic host E2E 已通过：fake ADB total 222 = valid 214 + rejected 8；valid
 为 private server start/status/kill 8/7/4 + device calls 195，T0 calls 4 是 device 子集，另观测 server exit 7。
@@ -32,7 +32,8 @@ host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/
 real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
 真实 APK 安装或平板采集。`77473af5223d76b00bf4dbbf33cf44090fde635c` 因 helper 漏载 validator 失败；
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败；
-`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 又在 helper 前因 launcher 空集合参数绑定失败。
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 又在 helper 前因 launcher 空集合参数绑定失败；
+`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 则在 Gradle 前因既有 module build output 被 fresh-output guard 拒绝。
 所以 A 道固定条件第 2 项仍不满足，不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代。
 
 ## 2026-08-30 `83121df` real build-only smoke 结果
@@ -94,6 +95,9 @@ sidecar 遮蔽 helper primary。该轮没有 false-pass，但“失败信息不�
 5. 再由用户针对该新 SHA 明确授权一次 build-only smoke。`21d2986` 与此前所有授权均不可复用；install、ADB、设备、
    C1b 采集、T-L1/P0/execution 继续未放行。
 
+逐项闭合判据见
+[`2026-08-30-T-L1-C1b-下一候选待完成项.md`](../runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
+
 ## 2026-08-29 `8882add` real build-only smoke 结果
 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的唯一 one-shot 已消费，结果为
@@ -124,25 +128,33 @@ canonical Int64 token、exact CLR type 与七位小数 `Z` 结尾的 UTC timesta
 
 summary 必须来自 launcher 固定 expected parent 下的 ordinary、非 reparse、single-link file。验证从同一个
 deny-write/delete held stream 完成 length/hash/strict-UTF-8/parse，并闭合 parent guard、opened identity 与最终路径
-identity。launcher 记录 `Process.Start` 紧前/确认 helper 退出紧后的 execution envelope；三个 timestamp 必须落在
-envelope 内，observer end 必须晚于 start、不得晚于 completed，且距 completed 不得超过 5 秒。
+identity。launcher 记录 `Process.Start` 紧前/确认 helper 退出紧后的 execution envelope。`status=passed` 仍由公共
+verifier 要求三个 timestamp 全部存在、落在 envelope 内，observer end 晚于 start、不晚于 completed，且距
+completed 不超过 5 秒；`status=failed` 由独立 closed validator 消费，observer timestamp 可为 `null`，但必须有
+非 canary observer reason，存在时仍须满足 envelope 与顺序，5 秒 tail 不作为失败证据的额外门禁。
 
-申请下一次 build-only 授权前按以下顺序执行：
+申请下一次 build-only 授权前，先执行上文“下一候选按以下顺序准备”针对当前失败链的有序增量清单，再按以下通用清单复核；
+两处发生冲突时，以较窄的有序增量清单为准：
 
 1. 完成 outer-verifier 专项回归、全门与无 P0/P1 独审；这些离线结果本身不是 smoke；
 2. 形成最终 clean HEAD，再为该完整 SHA 生成 exact repo-external helper 与 launcher；
-3. launcher 固定并持有 self/helper/verifier/pwsh 的 ordinary identity 与 hash；verifier 只允许 exact load `1`、
-   captured `FunctionInfo` invoke `1`，不得有 inline verifier、fallback 或 caller-selected verifier path；
+3. launcher 固定并持有 self/helper/verifier/pwsh 的 ordinary identity 与 hash；verifier exact dot-source load=`1`，
+   captured private strict-parser 与 exact-property `FunctionInfo` 各 invoke=`1`；`status=passed` 时公共 verifier
+   `FunctionInfo` invoke=`1`，`status=failed` 时公共 pass verifier invoke=`0`；不得有 inline verifier、fallback 或
+   caller-selected verifier path；
 4. 首次目录-chain 调用必须保留 Mandatory `$Order` 并显式声明 `[AllowEmptyCollection()]`；preflight 机械核验该精确
    修复及 stable ID/no-reparse/final-path/held-handle 全部仍在；
 5. launcher 固定 repo root 并验证 PowerShell provider cwd 与 OS cwd；early failure sidecar 只能 CreateNew、固定 failed-only
    语义，且记录失败本身时的 secondary error 不得覆盖原始 ErrorRecord；
 6. helper hard deadline exact 为 45 分钟，不得无界等待；超时后 process-tree kill 与 output drain 各有 30 秒上限，
    任一终止、drain、guard 或 cleanup 失败都 fail closed；helper 仍固定 start `1`、retry `0`；
-7. 对 exact staging 执行只读静态 preflight；只有 clean SHA、hash/identity、load/invoke、deadline、既有输出阻断、
-   failure-only sidecar 缺席与结果接线全部闭合时，才发布 `prepared_not_authorized`；
-8. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。只有此后用户
-   针对该 SHA 明确授权，才可运行一次 launcher；不得自动重试。
+7. 静态门必须证明 active-process count 是含唯一 native call 的单一 cast RHS；validation 与 cleanup 各自保留不可互相
+   覆盖的 Job/child snapshot；合法 failed summary 的 held binding、严格解析和原因提取先于 generic exit/stderr；
+8. 对 exact staging 执行只读 preflight；除 clean SHA、hash/identity、load/invoke、deadline、既有输出与 failure-only
+   sidecar 缺席外，还必须以 no-follow 门禁确认 module build output absent，才可发布 `prepared_not_authorized`；
+9. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。冻结后到 one-shot
+   之间不得运行会重建 module `build` 的 Gradle/check；只有用户针对该完整 SHA 明确授权，才可运行一次 launcher，
+   automatic retry 固定为 `0`。
 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的历史结论仍是
 **helper-pass / launcher-verifier-fail（整体未闭合）**；上述规则不追溯修绿该 one-shot，也不把其临时 APK/proof
