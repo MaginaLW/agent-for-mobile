@@ -497,6 +497,32 @@ repo-external renderer 也属于 authority 链，不只是便利脚本。输入�
 handle-derived final path 与 stable ID；temp 在公开前完成 durable write、同柄回读与冻结，发布后以同一 stable ID
 桥接到 deny-write/delete final guard，并持有到整套结果闭合。目录身份复核只比较 stable ID，不恢复目录时间戳等值门。
 
+## PowerShell：函数会枚举数组；执行期完整环境 pin 也要进 preflight（2026-09-01）
+
+`a661f365322bbb8ef3aa83f7a84b9bcb23a51f6e` 的 helper 已把合法 closed failed summary 原子发布，stdout 的
+长度与 SHA 也证明它精确等于 summary bytes + CRLF；launcher 却在 strict parser 之前的 `Buffer.BlockCopy` 抛
+`Object must be an array of primitives`。根因不是文件读取或 stdout 漂移，而是 reader 内部虽建立 `System.Byte[]`，
+却写成 `return $bytes`。PowerShell 函数输出管道会枚举数组；调用方普通赋值后得到多元素 `Object[]`（1-byte 时甚至是
+标量 Byte），不能作为 `Buffer.BlockCopy` 的 primitive-array source。
+
+需要保留数组对象身份时，成功返回应使用 unary comma：`return ,$bytes`。Parser 把这里的逗号表示为只有 `$bytes`
+一个 element 的 `ArrayLiteralAst`，不是 `UnaryExpressionAst`；静态门若查错 AST 类型会制造确定性假拒。不要用 cast 或 `@()` 代替静态合同：它们可能
+碰巧在某一调用形态重新聚合，却没有锁住函数输出对象。静态门要检查唯一 return AST 的 unary-comma 形态，并用普通
+return、cast、`@()` mutation 作负例；隔离 runtime canary 要覆盖 1 byte、多 byte、真实 passed/closed-failed bytes，
+断言 direct result exact type 是 `System.Byte[]`、hash 不变、`BlockCopy` 与唯一 CRLF framing 成功。summary consumer
+还必须证明 failed reason 在 generic exit/stderr 之前公开，passed 才进入 public verifier。
+
+同轮 helper 的真实首因是 `${PROGRAMFILES}/Git` file count 从冻结 `9576` 漂移为 `9577`；退出后独立只读重算又证明
+当前全树 catalog 是 `deeaa…34ee`，而非冻结的 `4c5e…7458`。在当前内存 catalog 中排除 38-byte
+`etc/mtab` 后，count 算术上恢复 `9576`，但 digest 仍为
+`556e…f838`。因此不能靠删文件、忽略 `mtab` 或只增加 count 让门变绿。更一般地，执行期会在 Gradle 前验证的完整宿主
+tree pin（file count、catalog、identity/hardlink topology），read-only preflight 也必须在授权前以同等冻结规则检查；
+否则 preflight 虽绿，one-shot 仍会耗在环境 guard。恢复路径只能是可信来源的 exact 安装，或带逐路径 manifest、来源、
+identity/hardlink 复核的新基线；两者都是主机/合同变更，不能由一次 build-only 授权隐含放行。
+
+完整 preflight、one-shot、失败证据与退出闭包见
+[a661f36 real build-only smoke 失败记录](../../runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
