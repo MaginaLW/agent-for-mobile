@@ -485,9 +485,17 @@ compare，不取消实际 hashing 或文件身份门。**正对照必须证明�
 同轮 helper 的真实 primary 是 smoke 前已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener。pre/post 都为 `1`，而本轮
 process-start 与 direct adb attempt 都为 `0`，因此这是手机套件留下的宿主 lease，不是 smoke 启动的 ADB。Gradle/
 签名/aapt2/held Git/设备调用全为 `0`，说明授权再次耗在 build 前。凡执行期要求“default ADB process/listener 为零”的
-合同，read-only preflight 也要做被动 WMI/CIM process snapshot 与 TCP listener snapshot；它不得运行 adb、不得枚举
-设备，也不得自动 kill 未知进程。snapshot unavailable 与 nonzero 都要 fail closed。用户关闭手机套件或另行授权精确
-宿主进程处置后，必须重新形成新 SHA 与新 preflight；旧 one-shot 不因环境后来归零而恢复。
+合同，read-only preflight 也要做被动 process count 与 TCP listener count；它不得运行 adb、不得枚举设备，也不得自动
+kill 未知进程。snapshot unavailable 与 nonzero 都要 fail closed。这里不能只把命令写成 `Module\Command` 就声明
+authority：可变 `PSModulePath` 仍可能先自动加载同名模块并执行代码，空结果甚至会制造 false-zero。优先使用固定
+BCL/native 只读 API，并用 AST 锁住精确方法、参数与无 mutation 面；若必须使用模块，须在任何自动加载前绑定绝对
+系统路径、内容 hash、命令类型与最终路径。用户关闭手机套件或另行授权精确宿主进程处置后，必须重新形成新 SHA 与
+新 preflight；旧 one-shot 不因环境后来归零而恢复。
+
+repo-external renderer 也属于 authority 链，不只是便利脚本。输入的 `Get-Item`/`Get-FileHash` 分离读取、关闭 temp handle
+后按路径 `Move`、公开 final 后才设 ReadOnly，都会留下对象替换或半套工件窗口。安全发布至少要绑定 ancestor no-reparse、
+handle-derived final path 与 stable ID；temp 在公开前完成 durable write、同柄回读与冻结，发布后以同一 stable ID
+桥接到 deny-write/delete final guard，并持有到整套结果闭合。目录身份复核只比较 stable ID，不恢复目录时间戳等值门。
 
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 

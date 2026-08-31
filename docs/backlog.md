@@ -218,9 +218,12 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   `$null` 绑定为空串，在 summary held-open 前误触 canonical-hash 门；valid failed summary 的 primary 被顶层错误遮蔽。
   四件输出已只读冻结，同 SHA 不重跑。**有序待办**：① canonical check 与 hash compare 使用明确的 nonempty
   expected-hash 判定，并保留无 pin 时的实际 held hashing；②静态门证明 valid failed summary 能进入独立 validator；
-  ③read-only preflight 被动检查 adb process 与 TCP/5037 listener 均为零，但不运行 adb、不枚举设备、不自动终止未知
-  进程；④环境归零后固定新 clean SHA、静态复核并只运行一次 read-only preflight；⑤再取得该完整 SHA 的 exact
-  build-only one-shot 授权。详见[冻结记录](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)与
+  ③exact-pair renderer 与 preflight renderer 都以 stable-ID/no-reparse/final-path/held-handle 链发布；④read-only preflight
+  用固定 BCL/native 只读 API 分三阶段检查 adb process 与 TCP/5037 listener 均为零，但不运行 adb、不枚举设备、
+  不自动终止未知进程；⑤环境归零后固定新 clean SHA、静态复核并只运行一次 read-only preflight；⑥再取得该完整
+  SHA 的 exact build-only one-shot 授权。首个 exact-pair renderer `76f63fbf…a8e49` 与首个 passive-host preflight
+  renderer `5f623d34…e48e1` 都已 rejected-static、从未执行；后者还把 no-reparse AST 取证绑错函数，并留下可变模块
+  自动加载权威缺口。详见[冻结记录](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)与
   [更新后的待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
@@ -242,7 +245,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 六次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a`** | `codex/security-hardening` | **`690693a` preflight pass；smoke pre-build fail，回 A 道** | r11 preflight 外部 exit `0`、terminal closed、三类 failure `0`；授权 smoke 因宿主预存 ADB/5037 在 Gradle 前 fail-closed，build/设备均 `0`，launcher optional SHA null→empty 又遮蔽 valid failed summary。四件证据已冻结，同 SHA不重跑。下一候选须修 nonempty expected-hash 判定，并让 preflight 被动确认 adb/listener 为零；固定新 SHA、静态复核、read-only preflight 后再取 exact build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[690693a 冻结记录](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md) |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 六次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a`** | `codex/security-hardening` | **`690693a` preflight pass；smoke pre-build fail，回 A 道** | r11 preflight 外部 exit `0`、terminal closed、三类 failure `0`；授权 smoke 因宿主预存 ADB/5037 在 Gradle 前 fail-closed，build/设备均 `0`，launcher optional SHA null→empty 又遮蔽 valid failed summary。四件证据已冻结，同 SHA不重跑。模板修复静态通过，但两版 renderer 已 rejected-static 且从未执行；新 exact pair/preflight leaf 尚不存在。下一版须补 held 发布链、正确 no-reparse AST 取证，并用固定 BCL/native 被动观察宿主零边界；环境归零、固定新 SHA、静态复核、read-only preflight 后再取 exact build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[690693a 冻结记录](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md) |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
