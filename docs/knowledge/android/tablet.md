@@ -34,8 +34,11 @@
 > 的 r7 read-only preflight 已闭合；其授权 smoke 又因启动前既有 module build output 在 Gradle 前 fail-closed，
 > Gradle/ADB/设备/install 均 `0`。旧 build 树已可恢复隔离，但 launcher 还暴露 active-count cast 与 failed-summary
 > 消费顺序缺陷，详见 [冻结记录](../../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与
-> [C1b runbook](../../runbooks/T-L1-tablet-layout-c1b-v1.md)。
-> 旧 C1a/C1b 授权均不可复用，仍不得进入设备授权。
+> [C1b runbook](../../runbooks/T-L1-tablet-layout-c1b-v1.md)。修复后的 `690693ae4113a91f7590457a888b56e93b6e200b`
+> r11 preflight 闭合，但唯一 smoke 又被宿主预存 `adb.exe` / TCP/5037 listener 在 Gradle 前拒绝；launcher 的
+> optional string null→empty 绑定随后误拒 summary SHA 并遮蔽 helper primary。build/设备/install/采集仍为 `0`，
+> 四件失败证据与新待办已[冻结](../../runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。
+> 旧 C1a/C1b 授权均不可复用，宿主 ADB 环境归零和新 preflight 闭合前仍不得再申请 build-only 或设备授权。
 
 ## 当前能力边界
 

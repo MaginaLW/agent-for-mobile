@@ -98,6 +98,29 @@ sidecar 遮蔽 helper primary。该轮没有 false-pass，但“失败信息不�
 逐项闭合判据见
 [`2026-08-30-T-L1-C1b-下一候选待完成项.md`](../runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
 
+## 2026-08-31 `690693a` read-only preflight 与 build-only smoke
+
+r11 read-only preflight 恰运行一次：leaf SHA-256
+`371b32bec50166c537e299607f927e483ba4d49d7f6a3e91636e6edd528aa1f6`，外部 exit `0`、terminal closed、
+primary/cleanup/recording failure=`0/0/0`；receipt SHA-256 为
+`be20bd9a3f15eb1708050e0ada53ff8f789dca943751717818ffb86388cea2d0`。它没有启动 launcher/helper/build/ADB
+或访问设备。
+
+获授权的 `690693ae4113a91f7590457a888b56e93b6e200b` one-shot 随后 launcher/helper start=`1/1`、exit=`1/1`、
+retry `0`。helper 在 build 前观察到宿主已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener，按 ADB-zero boundary
+fail-closed；本轮 process-start/direct-adb/device/install/T0/capture 均为 `0`，GradleMain/ApkSigner/aapt2/held Git
+也均为 `0`。这些宿主对象来自 smoke 前的手机套件，本轮未终止或修改。
+
+helper 已发布合法 closed failed summary，stdout 精确等于 summary bytes + CRLF；但 launcher 的
+`[AllowNull()][string]$ExpectedSha256` 把 `$null` 绑定为空串，并以 `$null -ne` 误判为“已有 pin”，在 held-open
+summary 时必然触发 canonical-hash 错误。verifier 已加载但 parse/invoke=`0`，helper primary 再次被遮蔽。
+下一 leaf 必须让 canonical check 与 final compare 共用 nonempty expected-hash 判定；无 pin 仍须实际 hash 并保留
+全部 identity/no-reparse/final-path/held-handle 门。完整证据见
+[`2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md`](../runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。
+
+下一 preflight 还必须以被动 process/listener snapshot 要求 default ADB 与 TCP/5037 均为零；不得运行 adb、枚举设备或
+自动终止未知进程。`690693a` 与此前授权均不可复用，逐项闭合要求继续见上方待完成项文档。
+
 ## 2026-08-29 `8882add` real build-only smoke 结果
 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的唯一 one-shot 已消费，结果为
@@ -151,15 +174,17 @@ completed 不超过 5 秒；`status=failed` 由独立 closed validator 消费，
 7. 静态门必须证明 active-process count 是含唯一 native call 的单一 cast RHS；validation 与 cleanup 各自保留不可互相
    覆盖的 Job/child snapshot；合法 failed summary 的 held binding、严格解析和原因提取先于 generic exit/stderr；
 8. 对 exact staging 执行只读 preflight；除 clean SHA、hash/identity、load/invoke、deadline、既有输出与 failure-only
-   sidecar 缺席外，还必须以 no-follow 门禁确认 module build output absent，才可发布 `prepared_not_authorized`；
-9. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备，也不是 smoke 或授权。冻结后到 one-shot
-   之间不得运行会重建 module `build` 的 Gradle/check；只有用户针对该完整 SHA 明确授权，才可运行一次 launcher，
-   automatic retry 固定为 `0`。
+   sidecar 缺席、module build output no-follow absent 外，还必须被动确认宿主 `adb.exe` 与 TCP/5037 listener 都为零，
+   才可发布 `prepared_not_authorized`；snapshot unavailable 也 fail closed；
+9. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备、不自动终止宿主进程，也不是 smoke 或
+   授权。冻结后到 one-shot 之间不得运行会重建 module `build` 或重启 default ADB 的工具；只有用户针对该完整 SHA
+   明确授权，才可运行一次 launcher，automatic retry 固定为 `0`。
 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 的历史结论仍是
 **helper-pass / launcher-verifier-fail（整体未闭合）**；上述规则不追溯修绿该 one-shot，也不把其临时 APK/proof
 升级为可安装产物。`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 同样保持 pre-helper launcher failure，不能因已定位
-空集合绑定根因而追溯改判或重跑。
+空集合绑定根因而追溯改判或重跑。`690693ae4113a91f7590457a888b56e93b6e200b` 也保持 pre-build environment
+failure 与 launcher summary-open 二次失败，不能因宿主 ADB 后来退出或修正 null/empty 判定而重跑。
 
 ## 2026-08-29 `77473af` 42-input real build smoke 结果
 

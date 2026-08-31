@@ -469,6 +469,26 @@ cleanup 成功不能覆盖失败瞬间。`checked=false` 也不能伪装成“�
 preflight 都必须用同等或更强的 no-follow absence 门禁提前覆盖；普通离线 Gradle/check 会重新生成该目录，不能放在
 preflight 与 one-shot 之间。
 
+## PowerShell：nullable string 会绑定成空串，宿主 lease 也要进 preflight（2026-08-31）
+
+`690693ae4113a91f7590457a888b56e93b6e200b` 的唯一 build-only helper 已经生成合法 closed failed summary，
+launcher 却在 held-open 的第一步误报 `Pinned summary SHA-256 is not canonical lowercase hex.`。根因是函数把可选
+expected hash 声明成 `[AllowNull()][string]`：调用点传 `$null` 后，PowerShell binder 把它转换成 `''`；
+`$null -ne $ExpectedSha256` 因而为真，canonical regex 与后续 hash compare 都把“无 pin”误当成“非法 pin”。
+
+可选 string 参数不能用 `$null -ne` 判断 caller 是否提供了值。此类门应使用明确的 nonempty predicate（例如
+`-not [string]::IsNullOrEmpty(...)`），并同时覆盖 canonical check 与 final compare。**无 expected hash 只取消预先
+compare，不取消实际 hashing 或文件身份门。**正对照必须证明刚生成文件仍经 no-follow held handle、stable ID、最终
+路径、长度/mtime 与实际 SHA 读取；负对照必须证明 nonempty malformed hash 仍被拒绝。只把参数改成 `[object]` 或
+放宽 regex 会把 binder 假阴性换成证据弱化，不是修复。
+
+同轮 helper 的真实 primary 是 smoke 前已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener。pre/post 都为 `1`，而本轮
+process-start 与 direct adb attempt 都为 `0`，因此这是手机套件留下的宿主 lease，不是 smoke 启动的 ADB。Gradle/
+签名/aapt2/held Git/设备调用全为 `0`，说明授权再次耗在 build 前。凡执行期要求“default ADB process/listener 为零”的
+合同，read-only preflight 也要做被动 WMI/CIM process snapshot 与 TCP listener snapshot；它不得运行 adb、不得枚举
+设备，也不得自动 kill 未知进程。snapshot unavailable 与 nonzero 都要 fail closed。用户关闭手机套件或另行授权精确
+宿主进程处置后，必须重新形成新 SHA 与新 preflight；旧 one-shot 不因环境后来归零而恢复。
+
 ## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
 
 fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
