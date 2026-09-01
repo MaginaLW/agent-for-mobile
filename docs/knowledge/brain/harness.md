@@ -517,7 +517,9 @@ return、cast、`@()` mutation 作负例；隔离 runtime canary 要覆盖 1 byt
 `etc/mtab` 后，count 算术上恢复 `9576`，但 digest 仍为
 `556e…f838`。因此不能靠删文件、忽略 `mtab` 或只增加 count 让门变绿。更一般地，执行期会在 Gradle 前验证的完整宿主
 tree pin（file count、catalog、identity/hardlink topology），read-only preflight 也必须在授权前以同等冻结规则检查；
-否则 preflight 虽绿，one-shot 仍会耗在环境 guard。恢复路径只能是可信来源的 exact 安装，或带逐路径 manifest、来源、
+若 preflight 随后还会运行被该 tree 供应的只读工具，则工具调用后必须在 `finally` 中再次按同一规则检查，保持 primary-first；
+离散 pre/post 只能证明调用结束后仍满足冻结 binding，只有等价的跨调用 held guard 才能声称全程未变。否则 preflight 虽绿，
+one-shot 仍会耗在环境 guard。恢复路径只能是可信来源的 exact 安装，或带逐路径 manifest、来源、
 identity/hardlink 复核的新基线；两者都是主机/合同变更，不能由一次 build-only 授权隐含放行。
 
 完整 preflight、one-shot、失败证据与退出闭包见
