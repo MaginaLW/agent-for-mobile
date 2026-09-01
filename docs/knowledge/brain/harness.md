@@ -549,3 +549,88 @@ attempt record 原子发布。structured diagnostic 只保存 attempt ordinal、
 process/status-client 状态、有界捕获 byte count/overflow/SHA-256/strict-UTF-8/classification 与 cleanup 结果；
 不持久化 raw stdout/stderr、PID、port、socket、argv、path 或 serial。这样既不泄露原始输出，也不会把一次
 授权失败转换成自动重试；后续成功路径才把同一 attempt identity 提升为 `run_id`。
+
+## PowerShell：Volume-GUID `-File` 先经过 AuthorizationManager（2026-09-01）
+
+Git 恢复 `A-Acquire` r1 的唯一授权运行中，parent 已按 SHA、stable ID、ReadOnly、single-link、no-reparse、
+最终 DOS/Volume-GUID 路径与 held handle 绑定 exact leaf，但固定 PowerShell child 仍在 leaf 正文前 exit `1`。
+child stderr 是 51-byte `SecurityError: AuthorizationManager check failed.`；同宿主、同 Volume-GUID `-File`
+形态的不联网 canary 在默认 policy 下得到完全相同的 bytes/SHA，增加显式 `-ExecutionPolicy Bypass` 后 exit `0`，
+且 `$PSCommandPath` 仍保持精确 Volume-GUID 路径。这说明脚本内容门禁与 PowerShell 的启动策略门是两个不同阶段。
+
+若必须保留 Volume-GUID `-File` authority 并使用 CLI Bypass，至少同时满足：
+
+- 将 `-ExecutionPolicy Bypass` 作为固定 `ArgumentList` 的逐项 Ordinal 合同，禁止字符串拼接或额外参数；
+- 继续在 parent 中持有并复核 exact leaf bytes、stable ID、ReadOnly、single-link、no-reparse 与最终路径；
+- 结果明确记录其 requested scope 是 child 的 `Process/current_session`、设置非持久化、可能被更高优先级
+  machine/user policy 覆盖、可能由 PowerShell 后代继承、effective policy 未由 leaf 独立取证；
+- 明确 Bypass 不改变 token/elevation，不是 content/identity authority，也不是网络或进程创建沙箱；
+- 明确 PowerShell 引擎会按命名路径重新打开脚本，而不是消费 parent held file handle；AuthorizationManager
+  又先于 leaf 自身门禁，因此 pre-execution script-read identity 仍是外部 trust boundary。
+
+失败流不能只保存 byte count/hash 而隐藏原始首因。可以发布有界 strict-UTF-8 preview，但它只能是诊断字段：
+先去除 CR/LF/NUL，再对 HTTPS query 做 best-effort 脱敏，限制字符数与总 JSON UTF-8 bytes，标明 prefix/truncation、
+可能仍含非 query 敏感信息且不是 byte-stream authority；完整流仍以 total bytes/SHA/EOF/overflow 为准。结果对象构造、
+序列化与写出必须在同一保护块内，失败 fallback 要 primary-first，并把 phase/type/message/hresult/external exit 分别
+保护；captured byte arrays 放在 `finally` 清零。Console.Error 损坏、OOM 或进程被强制终止仍是无法由 renderer
+闭合的外部边界。
+
+outer caller 的宿主版本也是独立边界。本次原始 bytes/hash/terminal/exit 已捕获后，宿主 PowerShell 7.4 又因不支持
+`ConvertFrom-Json -DateKind String` 产生解析次因；它没有改变目标结果，但没有必要地削弱了外层结构化记录。caller 应
+先固定原始 stdout/stderr bytes、SHA-256、EOF/terminal 与 external exit，再做可选解析；需要 `-DateKind String` 时使用
+已钉定且支持该参数的 PowerShell 7.6.4，或显式 feature-detect。解析/记录失败只能作为 secondary，不能重启目标、覆盖
+primary，或把已经消费的一次性授权变成 retry。
+
+完整授权、失败、canary 与冻结证据见
+[Git A-Acquire r1 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)。
+
+## PowerShell：`Get-AuthenticodeSignature -Content` 不是 PE 路径验签（2026-09-01）
+
+Git 恢复 `A-Acquire` r2 已通过固定 Bypass 进入 leaf，并下载到发布期望的 exact installer：长度
+65388144 B、SHA-256 `af12577d…f1dca`。运行内 receipt 只记录 generic Authenticode contract failure；退出后 exact 重演
+leaf 的 `Get-AuthenticodeSignature -Content ... -SourcePathOrExtension '.exe'` 才得到 `NotSigned/None`，另一次对同一
+ReadOnly、ordinary、non-reparse、single-link 文件的最终 native path `-LiteralPath` 调用得到 `Valid`、预期 signer 与
+timestamp。installer 未执行，失败 receipt 与 installer 原样冻结；不能把重演所得 status/signature type 追溯写成 receipt 字段。
+
+这是 API 输入 authority 的差异，不是签名状态在两次调用之间变化。固定 PowerShell 7.6.4 的 `-Content` 分支走
+`WTD_CHOICE_BLOB`，并使用 hardcoded PowerShell script SIP subject GUID；`-SourcePathOrExtension '.exe'` 只提供来源提示，
+不会把 blob validation 切到 PE embedded-signature SIP。`-LiteralPath` 走 `WTD_CHOICE_FILE`，由命名文件的实际类型派发，
+所以能消费 PE 内嵌 Authenticode。对于 PE installer，不得把 `-Content` 的 `NotSigned` 当作可靠的签名否定，也不得把
+expected status 改成 `NotSigned` 来让门变绿。
+
+Windows share mode 约束的是 FileObject 上请求过的 access，不会因关闭一个 managed writer wrapper 而把 duplicate handle
+降级成 read-origin handle。旧 leaf 的 native CreateNew FileObject 请求 `GENERIC_READ | GENERIC_WRITE`、share=`READ`；
+duplicate 出所谓 read guard 后，即使 writer wrapper 已关闭，该 duplicate 仍保留 writer-origin `WriteAccess` share
+bookkeeping。exact share canary 证明，duplicate 存续时 `-LiteralPath` 的只读命名重开确定性报 sharing violation。
+因此“关闭 write stream 后继续持有该 duplicate，既拒绝 write/delete 又允许 read reopen”是错误模型。
+
+同一 signed-PE canary 的两侧结果钉住了可用性：writer-origin duplicate 存续时稳定 `0x80070020`；完全关闭 writer
+FileObject 后，以 fresh `GENERIC_READ`、share=`READ` guard 重绑并重验 stable ID/SHA，`-LiteralPath`=`Valid`，post
+identity/SHA 不变。旧 leaf 对 pinned PowerShell executable 本就使用同类 read-origin final-native-path guard +
+`-LiteralPath` 并成功。临时 canary 已精确清理，无残留；不能用“可能 API 不支持 held guard”解释失败，也不能跳过重绑门。
+
+需要命名路径 Authenticode 时，安全流必须显式换代 handle：
+
+1. writer-origin handle 在同一 FileObject 上完成 flush、hash、identity 与 ReadOnly，随后关闭全部 writer-origin handles；
+2. 诚实记录关闭 writer 到 read-origin 重绑之间的短 gap：`continuous_custody=false`、
+   `preverification_rebind_gap=true`；
+3. 在任何验签或 consumer 使用前，经 exact native path 新开 `GENERIC_READ`、share=`READ` 的 read-origin guard，并立即
+   重新证明 initial stable ID、最终 DOS/native path、ordinary/no-reparse、single-link、ReadOnly、length 与 pinned held
+   SHA-256；全部闭合后才记 `authority_reestablished_before_use=true`；
+4. read-origin guard live 时调用 `-LiteralPath`，并在 `finally` 无条件执行 post-held identity/SHA-256。
+
+gap 内仍活跃的 writer 会让 read-origin 重绑失败；gap 内临时改动后恢复，仍必须先经过步骤 3 的 exact authority 重建才
+能被消费。这个流不具 continuous custody，receipt 必须披露 preverification gap、命名路径重开并非
+held-handle-backed validation，以及 native namespace 仍是外部 trust boundary；不能用 pre/post 检查夸大成无 gap。
+
+异步等待也可能污染协议 stdout：PowerShell 中未接收的 `$task.GetAwaiter().GetResult()` 会把
+`System.Threading.Tasks.VoidTaskResult` 写入 pipeline。若 stdout 必须 exact-empty，应使用 `$null = ...` 或等价显式接收，
+并用回归门同时验证 success/failure 两条路径的 stdout framing；这类诊断缺陷不能改变 primary、触发 retry 或覆盖已消费授权。
+
+外层 summary 的 framing 同样要机械验证。把字符串字面 `\n` 追加到 JSON 后得到的是两个非 whitespace bytes，不是真实 LF；
+文件即使长度/hash 已冻结，也不能宣称 strict-JSON。caller 应先固定 raw stdout/stderr、exit 与 terminal，再写无尾随字面或只含
+真实 whitespace 的 summary 并严格 round-trip parse。summary 写出/解析失败只能成为 secondary，不能重启已消费的目标。
+
+完整单跑、failure receipt、path-based 只读复核与下一候选边界见
+[Git A-Acquire r2 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md)。
+
