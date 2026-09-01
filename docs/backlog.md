@@ -274,7 +274,15 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   `2.55.0.windows.3`，三个 pinned key file SHA 前缀 `7b7971dd…`/`1a004355…`/`799f7eef…` 与冻结常量一致，
   移出未影响任何 Git 功能，印证"无隐式 applet 调用路径"的预判。**全程未消费任何 A/B/C/D/E 授权，
   未下载、未执行 installer、未重启。主机侧已定版。**
-  **剩余有序待办**：③repo 定版——固定最终 clean SHA，生成并静态复核 exact pair/r14；
+  **③repo 定版已闭合（2026-09-02）**：clean SHA = `015835c1ab5fd155f6fec7b21845ce63df9a486d`
+  （自 `a661f36` 起唯一非文档改动为 `3ef4714` launcher 字节返回回归），工作树干净，该 SHA 上
+  `scripts/check.ps1` **全量 11/11 PASS**（含 C1b pure-a11y 49/49 与 host fake-ADB 29 cases、
+  Android JVM/Lint/assembleDebug+Release、监督式 runner 86 passed、凭据扫描）。
+  **该门必须用钉定 7.6.4 跑**：本机默认 `pwsh` 为 7.4.19，会在 `#Requires -Version 7.5` 处
+  拒绝执行、一个检查都不跑，却同样给出 exit `1`，与真回归无法从退出码区分。
+  **钉在 `015835c` 之后只允许纯文档提交**（本条闭合记录本身即是其一）；一旦有任何非文档改动落地，
+  必须重新固定 SHA 并在新 SHA 上重跑全量门，不得沿用本次结论。
+  **剩余有序待办**：③′在该 SHA 上生成并静态复核 exact r11 pair 与 r14 preflight；
   该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root file-count/catalog/identity/hardlink topology，
   后置检查即使 Git 失败也须执行且不得遮蔽 primary，任一终态漂移即拒绝；④只单跑一次 preflight；
   ⑤闭合后另取新完整 SHA 的 build-only one-shot 授权。

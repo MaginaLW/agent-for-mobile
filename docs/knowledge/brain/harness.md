@@ -667,3 +667,25 @@ UTF-8 no-BOM 的 SHA-256）复算一次全树，再按候选集合做差。**复
 
 定位过程与完整取证见
 [Git 信任根漂移定位](../../runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)。
+
+## `check.ps1` 跑不起来会伪装成"门失败"（2026-09-02）
+
+本机默认 `pwsh` 是 **7.4.19**（`C:\Program Files\PowerShell\7`），而 `scripts/check.ps1` 声明
+`#Requires -Version 7.5`。用默认 shell 调它，PowerShell 在**执行第一行之前**就拒绝：
+
+    The script 'check.ps1' cannot be run because it contained a "#requires" statement for
+    PowerShell 7.5. The version ... does not match the currently running version of PowerShell 7.4.19.
+
+外部 exit=`1`，日志只有 3 行，**一个检查都没跑**。它和"跑了 11 道门、某道失败"的外部信号完全一样。
+
+**判据纪律：`exit 1` 至少要分两种——「跑了并失败」和「根本没跑」。** 门的汇总表是不是出现过，
+是区分二者最便宜的机械证据；只看退出码会把环境问题误记成回归。这与本册"漂移门要先分新增/修改/缺失"
+是同一类错误：**聚合信号被当成了具体结论。**
+
+钉定的 7.6.4 在 Codex 运行时缓存内，与 A-Acquire 记录中的 pinned runtime 是同一个：
+
+    ~/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe
+    301368 B / SHA-256 db6dd811…458f / 7.6.4
+
+用它跑同一条命令，全量门 11/11 PASS。需要 ≥7.5 的仓库脚本（`check.ps1` 及其调用链）一律用它，
+不要用默认 `pwsh`；同理，需要 `ConvertFrom-Json -DateKind String` 的解析路径也只能用它（见本册前文）。
