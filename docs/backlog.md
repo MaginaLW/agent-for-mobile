@@ -235,12 +235,13 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   summary，stdout 与 summary+CRLF 的长度/hash 都 exact；launcher 的 reader 却以 `return $bytes` 让 `Byte[]`
   被 pipeline 展开为 `Object[]`，随后 `Buffer.BlockCopy` 确定性抛错并遮蔽 helper primary；这是 P1 false-negative。GradleMain/签名/
   held Git/ADB/设备均 `0`；外层 exit `1`、start=`1/1`、exit=`1/1`、retry=`0`、cleanup failure=`0`，smoke
-  前后 ADB/5037=`0/0`。build/workspace/journal 无残留，四件证据已只读冻结，同 SHA 不重跑。**有序待办**：
-  ①新建 template r11，把唯一成功返回改成 `return ,$bytes`，并补该语法对应的单元素 `ArrayLiteralAst`/mutation 与隔离 runtime
-  canary；②新 r14 read-only preflight 在 smoke 授权前重算 Git trust-root file-count/catalog，环境漂移即拒绝；
-  ③经另行主机变更授权后，从可信来源恢复 exact Git `2.55.0.windows.3` 到冻结 catalog，或完成逐路径来源/
-  identity/hardlink 审计后安全重基线；④固定新 clean SHA，生成并静态复核 exact pair/preflight，只单跑一次
-  preflight；⑤闭合后另取新完整 SHA 的 build-only one-shot 授权。详见
+  前后 ADB/5037=`0/0`。build/workspace/journal 无残留，四件证据已只读冻结，同 SHA 不重跑。**数组返回修复已完成**：
+  repo-external template r11 只插入 unary comma，145140 B / `f31b944f…e817`，r10 未改；`3ef4714` 已补单元素
+  `ArrayLiteralAst`/mutation、0/1/N、passed/failed、SHA/BlockCopy/CRLF 与 failure-first 常驻回归，固定 7.6.4 专项及
+  29-case 聚合门通过。**剩余有序待办**：①经另行主机变更授权后，从可信来源恢复 exact Git
+  `2.55.0.windows.3` 到冻结 catalog，或完成逐路径来源/identity/hardlink 审计并同步合同后安全重基线；②主机与 repo
+  都定版后固定最终 clean SHA，生成并静态复核 exact pair/r14；r14 在 repo Git 前重算 Git trust-root
+  file-count/catalog，环境漂移即拒绝；③只单跑一次 preflight；④闭合后另取新完整 SHA 的 build-only one-shot 授权。详见
   [冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)与
   [更新后的待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
@@ -263,7 +264,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 七次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a` / `a661f36`** | `codex/security-hardening` | **`a661f36` preflight pass；smoke pre-build fail，回 A 道** | r13 preflight 外部 exit `0`、terminal closed、ADB/5037 三阶段 `0/0`；授权 smoke 因 Git file-count 漂移在 Gradle 前 fail-closed，退出后独立重算才确认 full-tree catalog 也漂移；launcher 又因 `Byte[]` return 被展开为 `Object[]` 在 `BlockCopy` 遮蔽 helper primary。四件证据已冻结，同 SHA 不重跑。下一版修 `return ,$bytes` 并补 AST/runtime canary；preflight 先验证 Git 全树 catalog。恢复/重装 Git 或安全重基线须另行授权；环境恢复、新 clean SHA、exact pair/preflight 静态复核与一次 preflight 后，才另取 build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[a661f36 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md) |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 七次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a` / `a661f36`** | `codex/security-hardening` | **`a661f36` preflight pass；smoke pre-build fail，回 A 道** | r13 preflight 外部 exit `0`、terminal closed、ADB/5037 三阶段 `0/0`；授权 smoke 因 Git file-count 漂移在 Gradle 前 fail-closed，退出后独立重算才确认 full-tree catalog 也漂移；launcher 又因 `Byte[]` return 被展开为 `Object[]` 在 `BlockCopy` 遮蔽 helper primary。四件证据已冻结，同 SHA 不重跑。template r11 的 unary-comma 修复及 `3ef4714` 常驻 AST/runtime/failure-first 回归已完成，专项与 29-case 聚合门通过。下一步须先另行授权恢复/重装 Git 或完成安全重基线；主机与 repo 定版后才固定 clean SHA、生成/静态复核 exact pair/r14，r14 先验证 Git 全树 catalog。一次 preflight 闭合后，才另取 build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[a661f36 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md) |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
