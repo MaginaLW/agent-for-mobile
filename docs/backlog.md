@@ -238,12 +238,56 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   前后 ADB/5037=`0/0`。build/workspace/journal 无残留，四件证据已只读冻结，同 SHA 不重跑。**数组返回修复已完成**：
   repo-external template r11 只插入 unary comma，145140 B / `f31b944f…e817`，r10 未改；`3ef4714` 已补单元素
   `ArrayLiteralAst`/mutation、0/1/N、passed/failed、SHA/BlockCopy/CRLF 与 failure-first 常驻回归，固定 7.6.4 专项及
-  29-case 聚合门通过。**剩余有序待办**：①经另行主机变更授权后，从可信来源恢复 exact Git
-  `2.55.0.windows.3` 到冻结 catalog，或完成逐路径来源/identity/hardlink 审计并同步合同后安全重基线；②主机与 repo
-  都定版后固定最终 clean SHA，生成并静态复核 exact pair/r14；该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root
-  file-count/catalog/identity/hardlink topology，后置检查即使 Git 失败也须执行且不得遮蔽 primary，任一终态漂移即拒绝；③只单跑一次 preflight；④闭合后另取新完整 SHA 的
-  build-only one-shot 授权。详见
-  [冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)与
+  29-case 聚合门通过。Git 恢复 r1 `A-Acquire` 的 exact parent
+  `e4f2638b5eec7ffbcb0716b12216addbbadfdcc9bf2a0e7c6b2451e3c96e6ed5` / leaf
+  `d7939294d6457848cdcddfe0f61e384caaf8855cf54eb1b3a099e8ae217f3003` 授权已经消费：caller/parent 各只启动一次，
+  child 在 leaf body 前因默认 ExecutionPolicy 拒绝 Volume-GUID `-File` 而 exit `1`；外部 exit `1`、terminal closed、
+  retry=`0`，应用层 asset HTTP=`0`，无 download/receipt/installer，专用输出仍 exact-empty。同 pair 冻结不重跑，
+  B 未放行。repo-external r2 parent 已只读冻结：132271 B / 2791 行 / Parser0 / SHA-256
+  `04875b31db6b1743a5c6079d62bfe0cc5e727a8f1e8ceaa6b2a10909b061cba9`，ordinary/non-reparse/single-link；frozen leaf
+  `d7939294…f3003` 不变。r2 固定 Bypass argv 并披露 whole-session/inheritance/named-path pre-execution 边界，终末静态
+  P0/P1=`0/0`。该 r2 parent 与原 leaf 的唯一授权也已消费：parent/child start/exit=`1/1`、retry=`0`、外部 exit=`1`、
+  terminal closed；唯一 transfer 得到 expected 65388144 B / SHA-256 `af12577d…f1dca`，installer 未执行。运行内 receipt 只含
+  generic Authenticode failure；退出后 exact 重演 `-Content` 得到 `NotSigned/None`，同一 ReadOnly exact PE 经最终 native
+  path `-LiteralPath` 独立复核为 `Valid` 与预期 signer，结合 IL/SIP 确认是输入形态造成的 P1 false-negative。failure receipt 1613 B /
+  `3b2c7459…9b8c` 与 installer exact-two 只读冻结，无 success receipt、cleanup 或 retry；parent 的 bounded preview 未遮蔽
+  `authenticode` primary。parent stdout 还因未接收 async `GetResult()` 多出 39-byte `VoidTaskResult`，caller summary 尾随
+  字面 `\n` 而非 LF；二者都不改变 raw stream/exit/terminal，也不授权重跑。递归排除 caller 祖先后的目标进程=`0`；固定
+  PowerShell runtime 退出后复算仍为 `983/54/296034085` 与双 catalog `038b2a68…b225` / `295b0a02…13df`。
+  share canary 又证明旧 leaf 从 RW FileObject duplicate 的所谓 read guard 仍带 writer-origin `WriteAccess`：其存续时
+  `-LiteralPath` 稳定 `0x80070020`；全部 writer-origin handles 关闭后，fresh `GENERIC_READ`/share=`READ` guard 经
+  stable-ID/SHA 重验可得到 `Valid`，post identity/SHA 不变，临时 canary 已精确清理。
+  **2026-09-02 只读定位推翻了整条重装路线。** 按 build-env 同一规则独立复算全树：现树 9577 文件 catalog
+  = `deeaa4c2…34ee`（**独立重现 smoke 记录的漂移值，构成本次复算规则自身的对照**）；仅排除
+  `usr/bin/busybox.exe` 后 = `4c5e585b…7458`，**与冻结常量逐位相等**。故漂移是「多了一个文件」而非
+  「改了一个文件」：其余 9576 个逐字节未变，无任何 Git 二进制被篡改。新增项取证为 864256 B /
+  `334843de…6e92` / busybox-w32 `1.38.0` / 原生 x64 / `NotSigned`（`-LiteralPath` 分支，非 r2 踩过的 `-Content`；
+  同树 `sed.exe`、`msys-2.0.dll` 亦 `NotSigned`，故未签名是常态不是信号）/ 创建于 `2026-08-29T16:55:36Z`，
+  而全树其余文件创建于安装日 `2026-08-18`，冻结常量由 `9208241`（08-28）写入，时间线自洽。
+  **它不在 Inno 卸载日志内**（对照先行：同一日志 UTF-16 检索 `git.exe`=14 / `bash.exe`=11 / `sed.exe`=1 /
+  `msys-2.0.dll`=2 / **`busybox`=0**，故 0 命中是有效否定），**因此卸载+重装不会移除它，文件数仍为 9577、门仍
+  fail-closed——已消费的两次 A 授权走在结构上无法闭合的路径上。**
+  **①②已闭合（2026-09-02）**：用户以一次提升权限的移出动作把
+  `C:\Program Files\Git\usr\bin\busybox.exe` 移出 Git 树（移出而非删除，保留物证）；随后独立只读复算
+  **四道门同时 PASS**——file count `9576`、catalog `sha256:4c5e585b…7458`、identity `9489`、
+  internal hardlink group `85`，且 hardlink 全部闭合在 root 内（未闭合数 `0`）。`git version` 仍为
+  `2.55.0.windows.3`，三个 pinned key file SHA 前缀 `7b7971dd…`/`1a004355…`/`799f7eef…` 与冻结常量一致，
+  移出未影响任何 Git 功能，印证"无隐式 applet 调用路径"的预判。**全程未消费任何 A/B/C/D/E 授权，
+  未下载、未执行 installer、未重启。主机侧已定版。**
+  **剩余有序待办**：③repo 定版——固定最终 clean SHA，生成并静态复核 exact pair/r14；
+  该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root file-count/catalog/identity/hardlink topology，
+  后置检查即使 Git 失败也须执行且不得遮蔽 primary，任一终态漂移即拒绝；④只单跑一次 preflight；
+  ⑤闭合后另取新完整 SHA 的 build-only one-shot 授权。
+  **冻结的 leaf r2 `a78c99e4…cd66` / parent r3 `fd7d9b6d…2a25` 未授权、未执行、原样保留**（ReadOnly/Parser0/
+  ordinary/non-reparse/single-link，多路审计 P0/P1/P2=`0/0/0`），仅在改走重装路线时才需要；但按上述卸载日志证据，
+  重装本身不足以闭合本次漂移。r1/r2 的 evidence/output 目录继续冻结不复用。
+  **未确认项如实标注**：新增文件字节是否来自正版 PortableGit 2.55.0.3 未取证（其 mtime 与 Git 打包时间戳
+  `2026-07-10T07:25:56Z` 一致只是推断，本机无 `7z`/`innoextract`，未解包已冻结 installer 也未联网比对）；
+  写入者与提权来源未知。详见
+  [漂移定位记录](runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)、
+  [smoke 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)、
+  [A r1 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)、
+  [A r2 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md)与
   [更新后的待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
 - ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
   按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
@@ -265,7 +309,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 | **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
 | **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
 | **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 七次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a` / `a661f36`** | `codex/security-hardening` | **`a661f36` preflight pass；smoke pre-build fail，回 A 道** | r13 preflight 外部 exit `0`、terminal closed、ADB/5037 三阶段 `0/0`；授权 smoke 因 Git file-count 漂移在 Gradle 前 fail-closed，退出后独立重算才确认 full-tree catalog 也漂移；launcher 又因 `Byte[]` return 被展开为 `Object[]` 在 `BlockCopy` 遮蔽 helper primary。四件证据已冻结，同 SHA 不重跑。template r11 的 unary-comma 修复及 `3ef4714` 常驻 AST/runtime/failure-first 回归已完成，专项与 29-case 聚合门通过。下一步须先另行授权恢复/重装 Git 或完成安全重基线；主机与 repo 定版后才固定 clean SHA、生成/静态复核 exact pair/r14，r14 在 repo Git 前后都验证同一全树冻结 binding，post 在 finally 中执行并保持 primary-first。一次 preflight 闭合后，才另取 build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[a661f36 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md) |
+| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 七次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a` / `a661f36`** | `codex/security-hardening` | **Git 信任根已恢复、四门闭合；A→E 重装阶梯作废且零授权消费；下一步转 repo 定版** | r13 preflight 外部 exit `0`、terminal closed、ADB/5037 三阶段 `0/0`；授权 smoke 因 Git file-count 漂移在 Gradle 前 fail-closed，launcher 又在 `BlockCopy` 遮蔽 helper primary；证据已冻结，同 SHA 不重跑。**09-02 只读全树复算定位到唯一新增文件 `usr/bin/busybox.exe`：排除它后 catalog 精确回到冻结 `4c5e585b…7458`，其余 9576 个逐字节未变、无 Git 二进制被篡改；复算规则的对照是它独立重现了漂移值 `deeaa4c2…34ee`。该文件不在 Inno 卸载日志内（对照 `git.exe`=14/`bash.exe`=11/`busybox`=0），故卸载+重装无法移除它——已消费的两次 A 授权走在结构上无法闭合的路径上。** **09-02 用户已以一次提升权限的移出动作恢复，四门复算全 PASS（`9576`/`4c5e585b…7458`/identity `9489`/hardlink group `85`，hardlink 全闭合），Git 功能与 pinned key file SHA 均未受影响，全程零授权消费。** 冻结的 leaf r2 `a78c99e4…cd66` / parent r3 `fd7d9b6d…2a25` 未授权未执行、原样保留，仅在改走重装路线时才需要。未确认：字节是否来自正版 PortableGit 2.55.0.3（mtime 一致只是推断，本机无 `7z`/`innoextract`）、写入者与提权来源。之后才固定 clean SHA、生成/复核 exact pair/r14；一次 preflight 闭合后才另取 build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[漂移定位记录](runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)、[a661f36 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)、[A r1 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)与[A r2 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md) |
 | **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
 
 **批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
