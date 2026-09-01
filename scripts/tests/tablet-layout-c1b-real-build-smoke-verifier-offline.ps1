@@ -327,10 +327,22 @@ foreach ($name in $expectedFunctionNames) {
     }
 }
 $script:CapturedConvert = $injectedFunctions['ConvertFrom-TL1C1bRealBuildSmokeSummaryJson']
+$script:CapturedPropertyAssertion =
+    $injectedFunctions['Assert-TL1C1bRealBuildSmokeSummaryExactProperties']
 $script:CapturedValueVerifier = $injectedFunctions['Assert-TL1C1bRealBuildSmokeSummaryValue']
 $script:CapturedFileVerifier = $injectedFunctions['Assert-TL1C1bRealBuildSmokeSummaryFile']
 
 $Raw = [IO.File]::ReadAllText($FixturePath, [Text.UTF8Encoding]::new($false, $true))
+if ([regex]::Matches($Raw, [regex]::Escape('"status":"passed"')).Count -ne 1 -or
+    [regex]::Matches(
+        $Raw, [regex]::Escape('"failure_count":0,"failure_reasons":[]')).Count -ne 1) {
+    throw 'Passed fixture cannot produce one exact in-memory closed-failed control.'
+}
+$ClosedFailedReason = 'primary: synthetic offline closed failure.'
+$ClosedFailedRaw = $Raw.Replace(
+    '"status":"passed"', '"status":"failed"').Replace(
+    '"failure_count":0,"failure_reasons":[]',
+    ('"failure_count":1,"failure_reasons":["' + $ClosedFailedReason + '"]'))
 $TempRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) (
     'tl1-c1b-real-build-verifier-' + [guid]::NewGuid().ToString('N'))))
 [void][IO.Directory]::CreateDirectory($TempRoot)
@@ -517,6 +529,385 @@ function Set-SinglePropertyMutation {
     return $Value
 }
 
+function Read-LauncherHeldFileBytesCanary {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes
+    )
+    return ,$Bytes
+}
+
+function Read-LauncherHeldFileBytesCanaryWithoutUnaryComma {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes
+    )
+    return $Bytes
+}
+
+function New-LauncherSummaryStdoutBytesCanary {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$SummaryBytes
+    )
+    $framed = [byte[]]::new($SummaryBytes.Length + 2)
+    [Buffer]::BlockCopy($SummaryBytes, 0, $framed, 0, $SummaryBytes.Length)
+    $framed[$framed.Length - 2] = 13
+    $framed[$framed.Length - 1] = 10
+    return ,$framed
+}
+
+function Assert-LauncherClosedFailedSummaryCanary {
+    param([Parameter(Mandatory)][object]$Value)
+    if ($Value.GetType() -ne [Management.Automation.PSCustomObject] -or
+        $Value.status -isnot [string] -or
+        [string]$Value.status -cne 'failed' -or
+        $Value.failure_count -isnot [long] -or
+        [long]$Value.failure_count -lt 1L -or
+        $Value.failure_reasons -isnot [Array]) {
+        throw 'Closed-failed canary summary shape is not exact.'
+    }
+    $reasons = @($Value.failure_reasons)
+    if ($reasons.Count -ne [long]$Value.failure_count) {
+        throw 'Closed-failed canary reason cardinality is not exact.'
+    }
+    foreach ($reason in $reasons) {
+        if ($reason -isnot [string] -or
+            [string]::IsNullOrWhiteSpace([string]$reason)) {
+            throw 'Closed-failed canary contains an invalid reason.'
+        }
+    }
+    return [pscustomobject][ordered]@{
+        FailureCount = [long]$Value.failure_count
+        Reasons = [string[]]$reasons
+    }
+}
+
+function Invoke-LauncherSummaryRouteCanary {
+    param(
+        [Parameter(Mandatory)][object]$Value,
+        [Parameter(Mandatory)][long]$HelperExitCode,
+        [Parameter(Mandatory)][long]$StderrByteLength
+    )
+    $passVerifierInvocationCount = 0L
+    $failureValidatorInvocationCount = 0L
+    $passOnlyGuardEvaluationCount = 0L
+
+    if ($Value.status -isnot [string]) {
+        throw 'Canary summary status is not a string.'
+    }
+    $status = [string]$Value.status
+    if ($status -ceq 'failed') {
+        $failureValidatorInvocationCount++
+        $failureOutput = @(Assert-LauncherClosedFailedSummaryCanary -Value $Value)
+        if ($failureOutput.Count -ne 1) {
+            throw 'Closed-failed canary validator did not return exactly one value.'
+        }
+        return [pscustomobject][ordered]@{
+            Status = $status
+            OverallPassed = $false
+            PassVerifierInvocationCount = $passVerifierInvocationCount
+            FailureValidatorInvocationCount = $failureValidatorInvocationCount
+            PassOnlyGuardEvaluationCount = $passOnlyGuardEvaluationCount
+            FailureCount = [long]$failureOutput[0].FailureCount
+            FailureReasons = [string[]]$failureOutput[0].Reasons
+            HelperExitCode = $HelperExitCode
+            StderrByteLength = $StderrByteLength
+        }
+    }
+    if ($status -cne 'passed') {
+        throw 'Canary summary status is neither exact passed nor exact failed.'
+    }
+    $passOnlyGuardEvaluationCount++
+    if ($HelperExitCode -ne 0L) {
+        throw 'Canary passed summary has a nonzero helper exit.'
+    }
+    $passOnlyGuardEvaluationCount++
+    if ($StderrByteLength -ne 0L) {
+        throw 'Canary passed summary has nonempty helper stderr.'
+    }
+    $passVerifierInvocationCount++
+    [void](Invoke-ValueVerifier -Value $Value -Overrides @{})
+    return [pscustomobject][ordered]@{
+        Status = $status
+        OverallPassed = $true
+        PassVerifierInvocationCount = $passVerifierInvocationCount
+        FailureValidatorInvocationCount = $failureValidatorInvocationCount
+        PassOnlyGuardEvaluationCount = $passOnlyGuardEvaluationCount
+        FailureCount = 0L
+        FailureReasons = [string[]]@()
+        HelperExitCode = $HelperExitCode
+        StderrByteLength = $StderrByteLength
+    }
+}
+
+Test-Case 'launcher held byte return AST and 0/1/N stdout framing are exact' {
+    $reader = Get-Command -Name 'Read-LauncherHeldFileBytesCanary' `
+        -CommandType Function -ErrorAction Stop
+    $returns = @($reader.ScriptBlock.Ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.ReturnStatementAst]
+    }, $true))
+    Assert-True ($returns.Count -eq 1) 'byte canary return statement is not unique'
+    $pipelineElements = @($returns[0].Pipeline.PipelineElements)
+    Assert-True ($pipelineElements.Count -eq 1 -and
+        $pipelineElements[0] -is
+            [Management.Automation.Language.CommandExpressionAst]) `
+        'byte canary return pipeline is not one command expression'
+    $returnExpression = $pipelineElements[0].Expression
+    Assert-True ($returnExpression -is
+            [Management.Automation.Language.ArrayLiteralAst] -and
+        $returnExpression.Elements.Count -eq 1 -and
+        $returnExpression.Elements[0] -is
+            [Management.Automation.Language.VariableExpressionAst] -and
+        [string]$returnExpression.Elements[0].VariablePath.UserPath -ceq 'Bytes') `
+        'byte canary return is not unary-comma ArrayLiteralAst over Bytes'
+    Assert-True (([regex]::Replace(
+            $returns[0].Extent.Text, '\s+', '')) -ceq 'return,$Bytes') `
+        'byte canary return text is not exact unary comma'
+
+    $framer = Get-Command -Name 'New-LauncherSummaryStdoutBytesCanary' `
+        -CommandType Function -ErrorAction Stop
+    $blockCopies = @($framer.ScriptBlock.Ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        [string]$node.Member.Value -ceq 'BlockCopy'
+    }, $true))
+    Assert-True ($blockCopies.Count -eq 1 -and
+        [bool]$blockCopies[0].Static -and
+        $blockCopies[0].Expression -is
+            [Management.Automation.Language.TypeExpressionAst] -and
+        [string]$blockCopies[0].Expression.TypeName.FullName -ceq 'Buffer' -and
+        $blockCopies[0].Arguments.Count -eq 5) `
+        'stdout canary does not contain one static Buffer.BlockCopy with five arguments'
+    $blockCopyArguments = [string[]]@(
+        $blockCopies[0].Arguments | ForEach-Object {
+            [regex]::Replace($_.Extent.Text, '\s+', '')
+        })
+    Assert-True (($blockCopyArguments -join ',') -ceq
+        '$SummaryBytes,0,$framed,0,$SummaryBytes.Length') `
+        'stdout canary BlockCopy arguments drifted'
+
+    $fixtureBytes = [Text.UTF8Encoding]::new($false).GetBytes($Raw)
+    $closedFailedBytes = [Text.UTF8Encoding]::new($false).GetBytes($ClosedFailedRaw)
+    $vectors = [Collections.Generic.List[byte[]]]::new()
+    $vectors.Add([byte[]]::new(0))
+    $vectors.Add([byte[]]@(0x41))
+    $vectors.Add($fixtureBytes)
+    $vectors.Add($closedFailedBytes)
+    try {
+        foreach ($source in $vectors) {
+            $sourceCrlfCount = 0L
+            for ($index = 0; $index -lt ($source.Length - 1); $index++) {
+                if ($source[$index] -eq 13 -and $source[$index + 1] -eq 10) {
+                    $sourceCrlfCount++
+                }
+            }
+            Assert-True ($sourceCrlfCount -eq 0L) `
+                "stdout canary source unexpectedly contains CRLF at length $($source.Length)"
+            $sourceSnapshot = [byte[]]::new($source.Length)
+            if ($source.Length -gt 0) {
+                [Buffer]::BlockCopy(
+                    $source, 0, $sourceSnapshot, 0, $source.Length)
+            }
+            $sourceHash = [Security.Cryptography.SHA256]::HashData($source)
+            $actual = Read-LauncherHeldFileBytesCanary -Bytes $source
+            Assert-True ($null -ne $actual -and
+                $actual.GetType() -eq [byte[]]) `
+                "byte canary output type drifted at length $($source.Length)"
+            Assert-True ($actual.Length -eq $source.Length -and
+                [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $actual, $source)) `
+                "byte canary output bytes drifted at length $($source.Length)"
+            $actualHash = [Security.Cryptography.SHA256]::HashData($actual)
+            Assert-True (
+                [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $actualHash, $sourceHash)) `
+                "byte canary output SHA-256 drifted at length $($source.Length)"
+
+            $framed = New-LauncherSummaryStdoutBytesCanary -SummaryBytes $actual
+            Assert-True ($framed.GetType() -eq [byte[]] -and
+                $framed.Length -eq ($source.Length + 2)) `
+                "stdout canary type or length drifted at length $($source.Length)"
+            $expected = [byte[]]::new($source.Length + 2)
+            for ($index = 0; $index -lt $sourceSnapshot.Length; $index++) {
+                $expected[$index] = $sourceSnapshot[$index]
+            }
+            $expected[$expected.Length - 2] = 13
+            $expected[$expected.Length - 1] = 10
+            Assert-True (
+                [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $framed, $expected)) `
+                "stdout canary did not preserve exact bytes plus CRLF at length $($source.Length)"
+            Assert-True ($source.Length -eq $sourceSnapshot.Length -and
+                [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $source, $sourceSnapshot)) `
+                "stdout canary mutated its source bytes at length $($source.Length)"
+            $postFramingSourceHash =
+                [Security.Cryptography.SHA256]::HashData($source)
+            Assert-True (
+                [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
+                    $postFramingSourceHash, $sourceHash)) `
+                "stdout canary mutated its source SHA-256 at length $($source.Length)"
+            $crlfCount = 0L
+            for ($index = 0; $index -lt ($framed.Length - 1); $index++) {
+                if ($framed[$index] -eq 13 -and $framed[$index + 1] -eq 10) {
+                    $crlfCount++
+                }
+            }
+            Assert-True ($crlfCount -eq 1L -and
+                $framed[-2] -eq 13 -and $framed[-1] -eq 10) `
+                "stdout canary did not append exactly one terminal CRLF at length $($source.Length)"
+            [Array]::Clear($expected, 0, $expected.Length)
+            [Array]::Clear($framed, 0, $framed.Length)
+            [Array]::Clear(
+                $postFramingSourceHash, 0, $postFramingSourceHash.Length)
+            [Array]::Clear($actualHash, 0, $actualHash.Length)
+            [Array]::Clear($sourceHash, 0, $sourceHash.Length)
+            [Array]::Clear($sourceSnapshot, 0, $sourceSnapshot.Length)
+        }
+    }
+    finally {
+        [Array]::Clear($fixtureBytes, 0, $fixtureBytes.Length)
+        [Array]::Clear($closedFailedBytes, 0, $closedFailedBytes.Length)
+    }
+}
+
+Test-Case 'deleting the launcher byte-return unary comma is killed before BlockCopy' {
+    $mutatedReader = Get-Command `
+        -Name 'Read-LauncherHeldFileBytesCanaryWithoutUnaryComma' `
+        -CommandType Function -ErrorAction Stop
+    $mutatedReturns = @($mutatedReader.ScriptBlock.Ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.ReturnStatementAst]
+    }, $true))
+    Assert-True ($mutatedReturns.Count -eq 1) `
+        'mutated byte canary return statement is not unique'
+    $mutatedExpression =
+        $mutatedReturns[0].Pipeline.PipelineElements[0].Expression
+    Assert-True ($mutatedExpression -is
+            [Management.Automation.Language.VariableExpressionAst] -and
+        ([regex]::Replace(
+            $mutatedReturns[0].Extent.Text, '\s+', '')) -ceq 'return$Bytes') `
+        'mutation is not the exact unary-comma deletion'
+
+    $negativeReturnCases = @(
+        [pscustomobject]@{
+            Source = 'return $Bytes'
+            ExpectedType = [Management.Automation.Language.VariableExpressionAst]
+        },
+        [pscustomobject]@{
+            Source = 'return [byte[]]$Bytes'
+            ExpectedType = [Management.Automation.Language.ConvertExpressionAst]
+        },
+        [pscustomobject]@{
+            Source = 'return @($Bytes)'
+            ExpectedType = [Management.Automation.Language.ArrayExpressionAst]
+        }
+    )
+    foreach ($negativeCase in $negativeReturnCases) {
+        $negativeTokens = $null
+        $negativeErrors = $null
+        $negativeAst = [Management.Automation.Language.Parser]::ParseInput(
+            ('function Test-NegativeReturn { ' + $negativeCase.Source + ' }'),
+            [ref]$negativeTokens,
+            [ref]$negativeErrors)
+        Assert-True ($negativeErrors.Count -eq 0) `
+            "negative return mutation did not parse: $($negativeCase.Source)"
+        $negativeReturns = @($negativeAst.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.ReturnStatementAst]
+        }, $true))
+        Assert-True ($negativeReturns.Count -eq 1) `
+            "negative return mutation cardinality drifted: $($negativeCase.Source)"
+        $negativePipelineElements = @(
+            $negativeReturns[0].Pipeline.PipelineElements)
+        Assert-True ($negativePipelineElements.Count -eq 1 -and
+            $negativePipelineElements[0] -is
+                [Management.Automation.Language.CommandExpressionAst]) `
+            "negative return mutation pipeline drifted: $($negativeCase.Source)"
+        $negativeExpression = $negativePipelineElements[0].Expression
+        Assert-True ($negativeCase.ExpectedType.IsInstanceOfType(
+                $negativeExpression) -and
+            $negativeExpression -isnot
+                [Management.Automation.Language.ArrayLiteralAst]) `
+            "negative return mutation unexpectedly satisfied unary-comma AST: $($negativeCase.Source)"
+    }
+
+    $zero = Read-LauncherHeldFileBytesCanaryWithoutUnaryComma `
+        -Bytes ([byte[]]::new(0))
+    $one = Read-LauncherHeldFileBytesCanaryWithoutUnaryComma `
+        -Bytes ([byte[]]@(0x41))
+    $many = Read-LauncherHeldFileBytesCanaryWithoutUnaryComma `
+        -Bytes ([byte[]]@(0x41, 0x42, 0x43))
+    Assert-True ($null -eq $zero) 'zero-byte mutation did not collapse to null'
+    Assert-True ($one.GetType() -eq [byte]) `
+        'one-byte mutation did not collapse to scalar Byte'
+    Assert-True ($many.GetType() -eq [object[]]) `
+        'N-byte mutation did not expand to Object[]'
+
+    $blockCopyFailure = $null
+    try {
+        $destination = [byte[]]::new($many.Length + 2)
+        [Buffer]::BlockCopy($many, 0, $destination, 0, $many.Length)
+    }
+    catch { $blockCopyFailure = $_ }
+    Assert-True ($null -ne $blockCopyFailure) `
+        'unary-comma deletion still reached a successful BlockCopy'
+    $argumentFailure = $null
+    $cursor = $blockCopyFailure.Exception
+    while ($null -ne $cursor) {
+        if ($cursor -is [ArgumentException] -and
+            [string]$cursor.ParamName -ceq 'src') {
+            $argumentFailure = $cursor
+            break
+        }
+        $cursor = $cursor.InnerException
+    }
+    Assert-True ($null -ne $argumentFailure) `
+        'unary-comma deletion did not fail BlockCopy on primitive source type'
+    $script:MutationAssertionCount++
+    $script:DirectValueRejectionCount++
+}
+
+Test-Case 'passed summary routes only to the pass verifier' {
+    $value = & $script:CapturedConvert -Raw $Raw
+    $propertyOutput = @(& $script:CapturedPropertyAssertion -Value $value)
+    Assert-True ($propertyOutput.Count -eq 0) `
+        'passed summary exact-property assertion was not silent'
+    $route = @(Invoke-LauncherSummaryRouteCanary -Value $value `
+        -HelperExitCode 0L -StderrByteLength 0L)
+    Assert-True ($route.Count -eq 1) 'passed route did not return one outcome'
+    Assert-True ($route[0].Status -ceq 'passed' -and
+        [bool]$route[0].OverallPassed -and
+        [long]$route[0].PassVerifierInvocationCount -eq 1L -and
+        [long]$route[0].FailureValidatorInvocationCount -eq 0L -and
+        [long]$route[0].PassOnlyGuardEvaluationCount -eq 2L -and
+        [long]$route[0].FailureCount -eq 0L -and
+        @($route[0].FailureReasons).Count -eq 0 -and
+        [long]$route[0].HelperExitCode -eq 0L -and
+        [long]$route[0].StderrByteLength -eq 0L) `
+        'passed summary route counters or terminal outcome drifted'
+}
+
+Test-Case 'closed failed summary routes before passed-only exit and stderr guards' {
+    $value = & $script:CapturedConvert -Raw $ClosedFailedRaw
+    $propertyOutput = @(& $script:CapturedPropertyAssertion -Value $value)
+    Assert-True ($propertyOutput.Count -eq 0) `
+        'closed-failed summary exact-property assertion was not silent'
+    $route = @(Invoke-LauncherSummaryRouteCanary -Value $value `
+        -HelperExitCode 1L -StderrByteLength 37L)
+    Assert-True ($route.Count -eq 1) 'closed-failed route did not return one outcome'
+    Assert-True ($route[0].Status -ceq 'failed' -and
+        -not [bool]$route[0].OverallPassed -and
+        [long]$route[0].PassVerifierInvocationCount -eq 0L -and
+        [long]$route[0].FailureValidatorInvocationCount -eq 1L -and
+        [long]$route[0].PassOnlyGuardEvaluationCount -eq 0L -and
+        [long]$route[0].FailureCount -eq 1L -and
+        @($route[0].FailureReasons).Count -eq 1 -and
+        [string]$route[0].FailureReasons[0] -ceq $ClosedFailedReason -and
+        [long]$route[0].HelperExitCode -eq 1L -and
+        [long]$route[0].StderrByteLength -eq 37L) `
+        'closed-failed route did not preserve failure-first truth and reasons'
+}
+
 Test-Case 'tracked library dot-source is silent and all functions have one authority' {
     Assert-True ($loadOutput.Count -eq 0) 'dot-source emitted success-stream output'
     Assert-True ($expectedFunctionNames.Count -eq 16) 'tracked function count drifted'
@@ -529,7 +920,11 @@ Test-Case 'tracked library dot-source is silent and all functions have one autho
         Assert-True ([StringComparer]::OrdinalIgnoreCase.Equals($actualFile, $LibraryPath)) `
             "function source drifted: $name"
     }
-    foreach ($captured in @($script:CapturedConvert,$script:CapturedValueVerifier,$script:CapturedFileVerifier)) {
+    foreach ($captured in @(
+            $script:CapturedConvert,
+            $script:CapturedPropertyAssertion,
+            $script:CapturedValueVerifier,
+            $script:CapturedFileVerifier)) {
         Assert-True ($captured -is [Management.Automation.FunctionInfo]) `
             'public verifier binding is not a captured FunctionInfo'
     }
