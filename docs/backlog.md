@@ -916,7 +916,25 @@ commit `e7b4610`，分支 `claude/amazing-bhaskara-3cb56b`）
 
 ### 6.N 语义意图开关打开后的能力收窄：非宏路径的危险动作拿不到目标会话证据
 
-**2026-08-03 由 A 道在装配时发现，本批（批次 4）有意不动，但接任务 4/2 端到端链路之前必须解决。**
+**已消化（B 道 2026-09-02，用户经 AskUserQuestion 拍板「按档位收窄」），落点为
+[语义意图审批 spec §2.5](specs/2026-08-02-语义意图审批-design.md)。**
+`preparedTargetEvidence` 是「送进会话」这一类动作的要求，不是所有危险动作的要求：
+`press_key(enter)`/`type_text` 与 **II 级** `ui_action`（命中 `send_words`）要它，且须为后者补一个
+与 P0 宏同源同规则的非宏证据产出点；**I 级** `ui_action` 不进延后执行路径，沿用今天的
+`ref`/`text`/`description`/`bounds`/`source` 逐字段相等 + 每次必确认。不放宽任何已有判据。
+
+**两处事实澄清（2026-09-02 离线读码核实，与本条原文不符，以此处为准）**：
+
+1. **这不是待修的 bug，整套语义意图机制一行代码都还没有。** `resolveViaIntent`、`intentTtl`、
+   `approvedAtMs`、`foregroundWaitBudget`、证据重建三态在全仓 Kotlin 里均无实现，
+   `resolveViaIntent` 只存在于本条原文里；只有 spec。今天危险 `ui_action` 走的正是原文选项②
+   那套逐字段相等，所以**当下不存在需要修的收窄**，要做的是别让实现继承这个洞。
+2. **原文「非宏路径危险 `ui_action` 一律」过宽。** 决定四规定只有 II 级走延后执行，而
+   `ui_action` 未命中风险词按 fail-closed 归 I 级（`SafetyPolicy.assess` 的 `RiskTier.IRREVERSIBLE`
+   分支）。真正会撞上的只有命中 `send_words` 的 II 级点击——而那类动作按定义就发生在会话里，
+   证据是真实可取的，这也正是「按档位收窄」成立的原因。
+
+以下为原始记录（2026-08-03 由 A 道在装配时发现，批次 4 有意不动）：
 
 `resolveViaIntent` 无条件要求 `preparedTargetEvidence`，而**全仓只有 P0 准备宏会记录它**。
 `press_key(enter)` 本来就要求它，所以送信路径没变；但**危险 `ui_action` 点击在开关打开后
@@ -928,6 +946,8 @@ commit `e7b4610`，分支 `claude/amazing-bhaskara-3cb56b`）
 
 两条出路，届时择一：①让非宏路径也能产出目标会话证据；②给"没有语义锚点的危险动作"
 定一条单独判据（例如退回到今天那套焦点身份逐字段相等）。
+
+**（择一结果见本节开头：按档位收窄，即对 II 级取①、对 I 级取②。）**
 
 ## 7. 流转协议
 
