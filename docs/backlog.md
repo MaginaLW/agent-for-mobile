@@ -282,8 +282,25 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   拒绝执行、一个检查都不跑，却同样给出 exit `1`，与真回归无法从退出码区分。
   **钉在 `015835c` 之后只允许纯文档提交**（本条闭合记录本身即是其一）；一旦有任何非文档改动落地，
   必须重新固定 SHA 并在新 SHA 上重跑全量门，不得沿用本次结论。
-  **剩余有序待办**：③′在该 SHA 上生成并静态复核 exact r11 pair 与 r14 preflight；
-  该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root file-count/catalog/identity/hardlink topology，
+  **③′a exact pair 已闭合（2026-09-02）**：`render-final-r12-015835c.ps1` 已生成、静态复核并只读冻结
+  （60704 B / 1475 行 / Parser0 / SHA-256 `3086b43031b4e7fa6dc50c5227da44729d9675bf1757bf896fa25ece8203958a`）。
+  **先做对照再造**：用模板加从 r11 渲染器读出的替换规则重算上一轮，`helper-a661f36-r10`（52804 B /
+  `5f13f444…e7d0`）与 `launcher-a661f36-r10`（145499 B / `a022c356…fefe`）两份都精确重现，才认为替换规则理解无误。
+  输入权威复核：`launcher-template-r11.ps1`=`f31b944f…e817`、verifier=`daf9703c…66fa`（`3ef4714` 动的是测试文件
+  而非 verifier）、`pwsh.exe`=`db6dd811…458f` 均未漂移。渲染器 exit `0`，产出
+  `helper-015835c-r11.ps1`（52804 B / `bf8624fb2a7eaf907864c206b59a17420e01ebf1e33efa790ac4fdb220c34296`）与
+  `launcher-015835c-r11.ps1`（**145500 B** / `36e980c464213bed0df7c1cd1f89d7348847422eb094fcf65323c38421103f80`），
+  二者 ReadOnly/non-reparse/single-link；**输出 SHA 与离线独立派生逐位一致，两条推导互证**。launcher 比上一轮
+  正好多 1 字节，恰等于模板 r11 相对 r10 的 unary comma，长度差可解释。
+  `launcher/helper/preflight/git/build/adb` executed 全 `false`，无 `.rendering.tmp` 残留、无 failure sidecar、
+  `.checks` 内无 `015835c` 产物。
+  **渲染器常量必须按变量名重写，不能全局字符串替换**：本轮 `$expectedHelperSha256`（`5f13f444…`）与
+  `$expectedLauncherSha256`（`a022c356…`）在下一轮要变成**历史**那两个常量的值，全局替换会把两者同时改掉并
+  产出一个看起来完全合理的错误渲染器。静态复核 diff 只含常量与标签、零逻辑改动。
+  **剩余有序待办**：③′b 在该 SHA 上生成并静态复核 r14 preflight——它不是换常量而是新逻辑：相对 r13 需新增
+  launcher unary-comma/runtime canary，以及在四次 repo 只读 Git 前后各一次 Git 信任树核验；
+  该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root file-count/catalog/identity/hardlink topology
+  （冻结值即 `9576`/`4c5e585b…7458`/`9489`/`85`，本机已于 09-02 复核可满足），
   后置检查即使 Git 失败也须执行且不得遮蔽 primary，任一终态漂移即拒绝；④只单跑一次 preflight；
   ⑤闭合后另取新完整 SHA 的 build-only one-shot 授权。
   **冻结的 leaf r2 `a78c99e4…cd66` / parent r3 `fd7d9b6d…2a25` 未授权、未执行、原样保留**（ReadOnly/Parser0/
