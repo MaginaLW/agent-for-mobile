@@ -111,13 +111,11 @@ object IntentTools {
                     ctx.startActivity(Intent(base).setComponent(ComponentName(pkg, direct)))
                 }.isSuccess
                 if (started) return finishShare(
-                    ShareChannel.DIRECT_COMPONENT, pkg, SystemTools.waitForeground(pkg, VERIFY_TIMEOUT_MS),
+                    ShareChannel.DIRECT_COMPONENT, pkg, awaitLanding(pkg),
                 )
             }
             val started = runCatching { ctx.startActivity(Intent(base).setPackage(pkg)) }.isSuccess
-            if (started) return finishShare(
-                ShareChannel.PACKAGE, pkg, SystemTools.waitForeground(pkg, VERIFY_TIMEOUT_MS),
-            )
+            if (started) return finishShare(ShareChannel.PACKAGE, pkg, awaitLanding(pkg))
         }
         val chooser = Intent.createChooser(base, "分享").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
@@ -128,6 +126,14 @@ object IntentTools {
         // 系统面板没有已知目标包，前台无从验起：如实报 null，不冒充验过。
         return finishShare(ShareChannel.CHOOSER, target ?: "", null)
     }
+
+    /**
+     * 等目标包落地；技能包给该包配了落地 activity 白名单就一并收紧到 activity 级。
+     * 白名单缺省 = 回落包级（历史行为），不是"没有可接受项"。
+     */
+    private fun awaitLanding(pkg: String): Boolean = SystemTools.waitForegroundLanding(
+        pkg, Gateway.skills.shareLandingActivities[pkg].orEmpty(), VERIFY_TIMEOUT_MS,
+    )
 
     private fun finishShare(
         channel: ShareChannel,

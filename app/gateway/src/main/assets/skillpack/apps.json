@@ -12,5 +12,7 @@
   },
   "share_components": {
     "com.tencent.mm": "com.tencent.mm.ui.tools.ShareImgUI"
-  }
+  },
+  "_share_landing_activities_comment": "包名 → 可接受的分享落地 activity 全类名白名单。配了就把 share 的前台判据从包级收紧到 activity 级；不配则回落包级（即历史行为）。存在的理由：M1 spike 实测微信冷启动 splash 闪回时，包级判据抓到 WeChatSplashActivity 就判 true，分享页根本没出现却报成功。注意启动组件与落地 activity 不是一回事——spike 观测到启动 ShareImgUI、落地 MsgRetransmitUI，所以白名单必须填落地那个，填成启动组件会把真实成功判失败。空数组一律拒绝（那等于永远失败），要么不配要么配全。入库规程同深链：先真机实测拿到全类名再进 assets，不得凭印象填。",
+  "share_landing_activities": {}
 }

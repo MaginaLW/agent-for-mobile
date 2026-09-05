@@ -152,6 +152,16 @@ class GatewayA11yService : AccessibilityService() {
 
     fun foregroundPackage(): String = currentForeground().packageName
 
+    /**
+     * 前台 activity 全类名；判不出来时为空串。
+     *
+     * **只可用作"落地信号"，不可用作跨时间相等判据**——自举来的身份天生没有 activity，
+     * 语义意图 spec §2.3 正是因此把 `activityName` 从跨时间比较里摘掉的。
+     * 这里的用法不同：等一个**正向**的可接受落地页出现（见 `IntentTools` 的分享落地白名单），
+     * 等不到就 fail-closed，不涉及"两个时刻的 activity 必须相等"。
+     */
+    fun foregroundActivity(): String = currentForeground().activityName.orEmpty()
+
     fun keyboardState(): JSONObject {
         val ime = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
         val b = Rect()

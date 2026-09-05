@@ -240,13 +240,53 @@ object SystemTools {
     }
 
     /** 轮询 a11y 前台包名（无 a11y 时直接返回 false，不抛——启动本身已发生）。 */
-    fun waitForeground(pkg: String, timeoutMs: Long): Boolean {
+    fun waitForeground(pkg: String, timeoutMs: Long): Boolean =
+        waitForegroundLanding(pkg, emptyList(), timeoutMs)
+
+    /**
+     * 轮询直到前台落在 [pkg]，且（当 [acceptableActivities] 非空时）落在其中某个 activity 上。
+     *
+     * **一直轮询到超时而不是"首次命中包名即返回"**，这一条就是本函数存在的理由：
+     * M1 spike 实测微信冷启动会先闪 splash 再进分享页，包级判据抓到 splash 就判 true，
+     * 分享页根本没出现却报成功。等**正向落地信号**天然把 splash→目标页这段过渡包含进去，
+     * 也就不需要再叠一层"重试"。
+     *
+     * 白名单为空 = 不限制 activity（回落包级，历史行为），不是"没有可接受项"。
+     */
+    fun waitForegroundLanding(
+        pkg: String,
+        acceptableActivities: List<String>,
+        timeoutMs: Long,
+    ): Boolean {
         val a11y = GatewayA11yService.instance ?: return false
         val start = SystemClock.elapsedRealtime()
         while (SystemClock.elapsedRealtime() - start < timeoutMs) {
-            if (a11y.foregroundPackage() == pkg) return true
+            if (isAcceptableLanding(
+                    a11y.foregroundPackage(), a11y.foregroundActivity(), pkg, acceptableActivities,
+                )
+            ) return true
             SystemClock.sleep(200)
         }
         return false
     }
+}
+
+/**
+ * 前台是否落在预期目标上。抽成不碰 Android 类型的顶层纯函数，是为了能在纯 JVM 单测里覆盖
+ * （本模块单测没有 Robolectric，同 `resolveShareOutcome` 的理由）。
+ *
+ * - 包名必须相等——这一条任何时候都不放宽；
+ * - [acceptableActivities] 为空 → 只验包名（历史行为）；
+ * - 非空 → activity 全类名必须**精确命中**其一。不做后缀/子串匹配：`ShareImgUI` 这类短名
+ *   在不同 app 里可能重名，子串匹配会让白名单悄悄放宽成"看着像就行"。
+ */
+internal fun isAcceptableLanding(
+    foregroundPackage: String,
+    foregroundActivity: String,
+    expectedPackage: String,
+    acceptableActivities: List<String>,
+): Boolean {
+    if (foregroundPackage != expectedPackage) return false
+    if (acceptableActivities.isEmpty()) return true
+    return foregroundActivity.isNotEmpty() && acceptableActivities.any { it == foregroundActivity }
 }
