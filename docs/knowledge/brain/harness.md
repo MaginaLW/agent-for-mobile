@@ -709,3 +709,22 @@ backlog §6.N 记着「语义意图开关打开后，非宏路径危险 `ui_acti
 **成本对比很值得记**：这次核实只花了几条 grep（`resolveViaIntent`、`intentTtl`、`approvedAtMs`
 是否出现在 `app/` 的 `.kt` 里），而如果按原文直接动手，会去改一个不存在的调用点。
 接手他人写的待办时，**第一步是让它落到具体文件与行号上**，落不下去就说明描述本身要先修。
+
+## 「最长函数」第四次量错：别再用 grep/awk 量 Kotlin（2026-09-05）
+
+本册此前记过一次「`callInternal` 179 全仓最长」是量错，STATUS 随后改成
+「`ConfirmOverlay.ask`（307）第一、`ToolRegistry.callInternal`（180）第二」。2026-09-05 重量，**两个数都不对**：
+
+| 函数 | 实测行数 | 旧说法 |
+|---|---:|---:|
+| `overlay/ConfirmOverlay.kt:45` `ask` | **365**（45–409） | 307 |
+| `tablet/TabletLayoutProbe.kt:145` `sanitizeFrame` | **354** | 未提及 |
+| `mcp/ToolRegistry.kt:526` `callInternal` | **78**（526–603） | 180 |
+
+`ConfirmOverlay` 那条可判定：全文 410 行、仅一个 indent-4 `fun`、其后仅一个 indent-4 闭合括号（409）。
+但**整体排名仍标注为未验证**——本轮用的是缩进匹配启发式，第一次尝试的括号计数 awk 甚至给出
+「`shouldExposeWindow` 1442 行」这种超过文件长度的结果。
+
+**结论不是「再量一次」，是换工具**：Kotlin 的花括号会出现在字符串、lambda、字符串模板 `${}` 里，
+行式脚本天然量不准。要动这条先上 detekt / ktlint 的函数长度指标（真语法树），
+否则第五次还会错。**这处已经烧掉四轮，值得记成「不许用 grep 量」而不是又一个数字。**
