@@ -88,33 +88,36 @@ object IntentTools {
         target,
     )
 
-    /** 分享三级：技能包直达组件 → package 定向 → 系统分享面板。任务 4 的核心捷径。 */
+    /**
+     * 分享三级：技能包直达组件 → package 定向 → 系统分享面板。任务 4 的核心捷径。
+     *
+     * **降级只由 `startActivity` 抛异常触发，前台验不上不降级而是抛 [ErrorCode.E_VERIFY_FAIL]**
+     * ——见本文件类注释那条铁则。两件事必须分开：
+     * - `startActivity` 抛异常 = 这一级根本没被系统接受（组件失效、无接收方），换下一级是对的；
+     * - 启动被接受但前台没起来 = **假成功**，换一级只会把同一个 app 再打一次。
+     *
+     * 所以验证一定要放在 `catch` **外面**：早先的写法把 `waitForeground` 和 `startActivity` 裹在
+     * 同一个 `catch (e: Exception)` 里，一旦验证改成抛错就会被自己的降级分支吞掉，
+     * 表现成"静默降级后报成功"，正是这条铁则要挡的形态。
+     */
     private fun share(base: Intent, target: String?): JSONObject {
         base.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        var channelUsed = "chooser"
         if (target != null) {
             val pkg = Gateway.skills.resolvePackage(target)
             val direct = Gateway.skills.shareComponents[pkg]
             if (direct != null) {
-                try {
+                // 组件失效（如微信改版）→ 静默降级 package 定向（网关内机械回退，spec §3）
+                val started = runCatching {
                     ctx.startActivity(Intent(base).setComponent(ComponentName(pkg, direct)))
-                    channelUsed = "direct_component"
-                    val verified = SystemTools.waitForeground(pkg, 3000)
-                    return JSONObject().put("shared", true).put("channel", channelUsed)
-                        .put("target", pkg).put("foreground_verified", verified)
-                } catch (e: Exception) {
-                    // 组件失效（如微信改版）→ 静默降级 package 定向（网关内机械回退，spec §3）
-                }
+                }.isSuccess
+                if (started) return finishShare(
+                    ShareChannel.DIRECT_COMPONENT, pkg, SystemTools.waitForeground(pkg, VERIFY_TIMEOUT_MS),
+                )
             }
-            try {
-                ctx.startActivity(Intent(base).setPackage(pkg))
-                channelUsed = "package"
-                val verified = SystemTools.waitForeground(pkg, 3000)
-                return JSONObject().put("shared", true).put("channel", channelUsed)
-                    .put("target", pkg).put("foreground_verified", verified)
-            } catch (e: Exception) {
-                // 再降级系统面板
-            }
+            val started = runCatching { ctx.startActivity(Intent(base).setPackage(pkg)) }.isSuccess
+            if (started) return finishShare(
+                ShareChannel.PACKAGE, pkg, SystemTools.waitForeground(pkg, VERIFY_TIMEOUT_MS),
+            )
         }
         val chooser = Intent.createChooser(base, "分享").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
@@ -122,7 +125,68 @@ object IntentTools {
         } catch (e: ActivityNotFoundException) {
             throw GatewayError(ErrorCode.E_NOT_FOUND, "无可分享的接收方", channel = "intent")
         }
-        return JSONObject().put("shared", true).put("channel", channelUsed)
-            .put("target", target ?: "").put("foreground_verified", JSONObject.NULL)
+        // 系统面板没有已知目标包，前台无从验起：如实报 null，不冒充验过。
+        return finishShare(ShareChannel.CHOOSER, target ?: "", null)
     }
+
+    private fun finishShare(
+        channel: ShareChannel,
+        target: String,
+        foregroundVerified: Boolean?,
+    ): JSONObject {
+        val outcome = resolveShareOutcome(channel, target, foregroundVerified)
+        if (outcome.verifyFailed) throw GatewayError(
+            ErrorCode.E_VERIFY_FAIL,
+            "分享已发出但 ${VERIFY_TIMEOUT_MS}ms 内前台不是 ${outcome.target}" +
+                "（${outcome.channel.wireName} 通道；OriginOS 深链假成功模式）",
+            channel = "intent", retryable = false,
+            fallback = "app_launch(${outcome.target}) 后按技能包页面地图走 UI 导航",
+        )
+        return JSONObject()
+            .put("shared", true)
+            .put("channel", outcome.channel.wireName)
+            .put("target", outcome.target)
+            .put("foreground_verified", outcome.foregroundVerified ?: JSONObject.NULL)
+    }
+
+    private const val VERIFY_TIMEOUT_MS = 3000L
 }
+
+/** 分享三级降级用到的通道。`wireName` 是进结果 JSON 的那个值，改它等于改对外契约。 */
+internal enum class ShareChannel(val wireName: String) {
+    DIRECT_COMPONENT("direct_component"),
+    PACKAGE("package"),
+    CHOOSER("chooser"),
+}
+
+/** [resolveShareOutcome] 的结论。`verifyFailed` 为真时调用方必须抛 `E_VERIFY_FAIL`，不许报成功。 */
+internal data class ShareOutcome(
+    val channel: ShareChannel,
+    val target: String,
+    val foregroundVerified: Boolean?,
+    val verifyFailed: Boolean,
+)
+
+/**
+ * 分享终态判定。
+ *
+ * 抽成**不碰 Android 类型**的顶层纯函数，是为了能在纯 JVM 单测里覆盖：本模块单测没有
+ * Robolectric，`Intent`/`Context` 一被调用就抛 "not mocked"，判据只能挂在纯逻辑上
+ * （同 `resolveForeground` / `Audit.dirProvider` 的既有范式）。
+ *
+ * 判据只有一条，来自 `IntentTools` 类注释的铁则：**有已知目标包时，执行后前台必须验上**。
+ * `foregroundVerified` 三态的语义要分清——
+ * - `true`：验上了；
+ * - `false`：验过且没验上 → **假成功，必须 fail-closed**；
+ * - `null`：**不可验**（系统面板没有已知目标包），不是"验失败"，不得据此判失败。
+ */
+internal fun resolveShareOutcome(
+    channel: ShareChannel,
+    target: String,
+    foregroundVerified: Boolean?,
+): ShareOutcome = ShareOutcome(
+    channel = channel,
+    target = target,
+    foregroundVerified = foregroundVerified,
+    verifyFailed = channel != ShareChannel.CHOOSER && foregroundVerified == false,
+)
