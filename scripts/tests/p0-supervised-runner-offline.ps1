@@ -458,7 +458,11 @@ if "%1"=="exec-out" (
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
   )
-  if "%2"=="wc" (
+  rem 审计已迁到内部 filesDir，只能经 run-as 相对路径读（Android 11+ 的 run-as 读不到
+  rem external files，见 knowledge/android/common.md 第 22 条）。这里刻意用 "%2 %4" 双位判据
+  rem 而不是只认 %4：它把"审计必须走 run-as"钉进离线门——改回裸 exec-out 路径就匹配不上，
+  rem 审计增量读成 0 行，门当场失败，而不是等上真机才发现证据采不到。
+  if "%2 %4"=="run-as wc" (
     if not exist "%P0_FAKE_STATE%\audit.jsonl" exit /b 1
     rem find 必须走绝对路径：继承到的 PATH 若把 Git Bash 的 Unix find 排在 System32 前面，
     rem `find /v /c ""` 会被当成"递归搜索 /v 和 /c 两个目录"——/c 在 Git Bash 里就是整个 C 盘，
@@ -466,7 +470,7 @@ if "%1"=="exec-out" (
     for /f %%C in ('%SystemRoot%\System32\find.exe /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C audit.jsonl
     exit /b 0
   )
-  if "%2"=="tail" (
+  if "%2 %4"=="run-as tail" (
     if not exist "%P0_FAKE_STATE%\audit-increment.jsonl" exit /b 1
     type "%P0_FAKE_STATE%\audit-increment.jsonl"
     exit /b 0

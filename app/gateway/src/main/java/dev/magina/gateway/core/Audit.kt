@@ -42,13 +42,21 @@ internal fun buildAuditLine(
 /**
  * 审计 jsonl（spec §10）：每次工具调用一行——工具、参数、通道、结果码、耗时、
  * screen_capture 的 reason 也在参数里，事后可查每张原图为什么进了模型。
- * 落盘 getExternalFilesDir/audit/YYYYMMDD.jsonl，adb pull 可取，M3 任务面板回放用同一数据。
+ * 落盘 **filesDir**`/audit/YYYYMMDD.jsonl`，M3 任务面板回放用同一数据。
+ *
+ * **为什么是 filesDir 而不是 getExternalFilesDir**：审计是安全硬门的证据链，而 runner 的
+ * 私有取证边界是 `run-as`。Android 11+ 的 `run-as` 跑在 shell 的挂载命名空间里，对
+ * `/sdcard/Android/data/<pkg>` 一律 `Permission denied`（本机 Android 16 实测），
+ * 于是"审计写在 external files 里"等于**证据链落在取证通道读不到的地方**——
+ * 下面 [writeFailures] 注释提到的那次"采集坏了好几天没人知道"就是这个。
+ * 迁到内部 filesDir 后，取证侧必须用 `run-as <pkg>` + 相对路径 `files/audit/...` 读，
+ * 不能再用 `adb pull /sdcard/...`；两者不能混用一种写法（knowledge/android/common.md 第 22 条）。
  */
 class Audit(
     /** 审计目录来源。抽成 lambda 是为了能在纯 JVM 单测里注入临时目录与故意失败的实现。 */
     private val dirProvider: () -> File,
 ) {
-    constructor(appContext: Context) : this({ File(appContext.getExternalFilesDir(null), "audit") })
+    constructor(appContext: Context) : this({ File(appContext.filesDir, "audit") })
 
     private val seq = AtomicLong(0)
     private val day = SimpleDateFormat("yyyyMMdd", Locale.US)

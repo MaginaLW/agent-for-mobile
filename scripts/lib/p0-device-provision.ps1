@@ -1042,12 +1042,14 @@ function Get-P0AuditCursor {
         -Arguments @('shell','date','+%Y%m%d') -Operation '读取设备审计日期' -AllowFailure
     $day = $dayProbe.Stdout.Trim()
     if ($dayProbe.ExitCode -ne 0 -or $day -notmatch '^\d{8}$') { throw '无法建立 gateway 审计游标。' }
-    $path = "/sdcard/Android/data/$script:P0PackageName/files/audit/$day.jsonl"
-    # 审计落在 external files dir。Android 11+ 的 `run-as` 跑在 shell 的挂载命名空间里，
-    # 对 /sdcard/Android/data/<pkg> 一律 Permission denied（本机 Android 16 实测）；
-    # 而普通 adb shell 反而读得到。内部 filesDir 的操作仍必须走 run-as，两者不能混用。
+    # 审计已迁到内部 filesDir，因此这里是 **run-as 相对路径**，不是 /sdcard 绝对路径。
+    # Android 11+ 的 `run-as` 跑在 shell 的挂载命名空间里，对 /sdcard/Android/data/<pkg>
+    # 一律 Permission denied（本机 Android 16 实测），而内部 filesDir 恰恰只能走 run-as +
+    # 相对路径 `files/...`——两者不能混用一种写法（knowledge/android/common.md 第 22 条）。
+    # 迁移动机正是这个：审计是安全硬门的证据链，落在取证通道读不到的地方等于采不到。
+    $path = "files/audit/$day.jsonl"
     $probe = Invoke-P0DeviceCommand -Session $Session `
-        -Arguments @('exec-out','wc','-l',$path) `
+        -Arguments @('exec-out','run-as',$script:P0PackageName,'wc','-l',$path) `
         -Operation '读取 gateway 审计游标' -AllowFailure
     $lineCount = 0
     if ($probe.ExitCode -eq 0 -and $probe.Stdout -match '^\s*(\d+)') { $lineCount = [int64]$Matches[1] }
@@ -1065,7 +1067,7 @@ function Save-P0AuditIncrement {
     # 一行 `tail: ... Permission denied` 冒充审计内容，直到下游报"无法解析的 JSON 行"
     # 才暴露（2026-07-26 实锤，且这个坑一直藏在 ToolSearch 误杀后面没被发现）。
     Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
-        -Arguments @('-s',$Session.Serial,'exec-out','tail','-n',"+$firstLine",[string]$Cursor.Path) `
+        -Arguments @('-s',$Session.Serial,'exec-out','run-as',$script:P0PackageName,'tail','-n',"+$firstLine",[string]$Cursor.Path) `
         -Destination $Destination -Operation '拉取本腿 gateway 审计增量'
 
     # **跨零点**：设备审计按日期分文件。2026-08-02 实锤——Stale 腿 23:59:44 起、00:00:28 止，
@@ -1079,11 +1081,11 @@ function Save-P0AuditIncrement {
     $today = $dayProbe.Stdout.Trim()
     if ($dayProbe.ExitCode -ne 0 -or $today -notmatch '^\d{8}$' -or $today -ceq [string]$Cursor.Day) { return }
 
-    $rolled = "/sdcard/Android/data/$script:P0PackageName/files/audit/$today.jsonl"
+    $rolled = "files/audit/$today.jsonl"
     $tail = Join-Path ([IO.Path]::GetTempPath()) ("p0-audit-rollover-" + [guid]::NewGuid().ToString('N') + '.jsonl')
     try {
         Invoke-P0ExternalToFile -FilePath $Session.AdbPath `
-            -Arguments @('-s',$Session.Serial,'exec-out','tail','-n','+1',$rolled) `
+            -Arguments @('-s',$Session.Serial,'exec-out','run-as',$script:P0PackageName,'tail','-n','+1',$rolled) `
             -Destination $tail -Operation '拉取跨零点后的 gateway 审计增量'
         $rolledText = Get-Content -LiteralPath $tail -Raw -Encoding utf8 -ErrorAction SilentlyContinue
         if (-not [string]::IsNullOrWhiteSpace($rolledText)) {

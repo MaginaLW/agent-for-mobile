@@ -786,8 +786,14 @@ package 级无 activity，退出码 0——上一轮"没触达被读成通过"�
 5. `send_verification.state` 在 Stale/Deny 腿是空串，不是三态里的任何一个值。
 
 **搭便车项有结论**：`run-as` 读 filesDir **没问题**（实证列出了 `files/` 下的
-`profileInstalled`、`test-control-consumed-nonces`）。但**审计目录尚未迁移**，仍在
-`/storage/emulated/0/…/files/audit`——"迁移后能否读"的前置答案是能，真迁完再复验一次。
+`profileInstalled`、`test-control-consumed-nonces`）。~~但审计目录尚未迁移~~
+**审计目录已于 2026-09-05 迁移**：`Audit.kt` 的 `Context` 构造改用 `filesDir`，取证侧
+`Get-P0AuditCursor`/`Save-P0AuditIncrement` 三处路径同步改为 `run-as <pkg>` + 相对路径
+`files/audit/<day>.jsonl`（含跨零点那一份），`M1-真机日清单` 的 `adb pull /sdcard/...` 也已改写。
+**迁移动机不是整洁而是证据可达**：Android 11+ 的 `run-as` 读不到 external files，
+而 `run-as` 正是 runner 的私有取证边界，审计落在那里等于证据链采不到。
+**仍需一次真机复验**（C 道搭便车，只读）：确认 `run-as <pkg> wc -l files/audit/<day>.jsonl`
+返回行数、增量 `tail` 不再混入 `Permission denied` 行。
 
 **意外收获（批次 3 的可行性证据）**：Deny 腿确认卡截图里，消息区能看到
 `P0ALLOW-1D97824FD778` 是一条已发出的绿色气泡（10:11）——**Allow 腿网关侧自证不了的那次发送，
