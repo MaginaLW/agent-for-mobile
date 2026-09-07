@@ -846,3 +846,12 @@ PowerShell here-string 的内部换行来自源码文件，`Set-Content` 不会�
 监督式 runner 的 fake ADB 曾在 LF 下 exit 0 却输出空设备列表；只规范生成内容为 CRLF 即恢复。
 生成 Windows CMD 时应集中规范换行，并验证字节及 fake 设备发现，不能放宽生产的唯一设备判据。
 同时增加专项用例时同步精确汇总消费者，保留零失败/零跳过门；完整候选必须用最终 checkout 实测。
+
+## 新候选不能继承旧模板的仓库源码 hash（2026-09-08）
+
+复现历史冻结 pair 是来源核对，不意味着其中的仓库 loader hash 可复用于新候选。
+诊断和 Kotlin 状态修复后，旧 helper 的七项源码 pin 与新 checkout 不符；LF clone 还改变了未改语义的文件字节。
+独审在任何新 renderer 执行前发现此缺口，因此没有消费失败的 one-shot 来试错。
+应先原样复现历史 hash，再把最终候选目录的七项 loader raw hash 精确写入新 helper 的唯一 literal map，
+并把 verifier raw hash 一致传入新 launcher、pair/r14 renderer 与 preflight。固定工具链与历史工件 pin 保持原值。
+内存生成和实际 renderer 共用同一转换，不能在 helper 运行时按当前文件内容重写它自己的信任根。

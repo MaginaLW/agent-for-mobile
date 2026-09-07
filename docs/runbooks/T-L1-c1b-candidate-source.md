@@ -30,6 +30,9 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
    bootstrap 最早抑制进度输出、stderr 有界原始前缀诊断，以及两处捕获数组按真实引用清零。
    新 helper 的唯一 Gradle 调用还显式启用 `FailureDiagnostics`，wrapper 只透传该开关；
    转换器与生成 renderer 复用相同两处精确改写，历史模板/hash 对照仍在改写前核验。
+   helper 的七项 `expectedLibraryHashes` 必须取最终 `RepoRoot` 的原始文件字节，并精确替换唯一顶层 literal map；
+   verifier 的本轮 raw hash 同时绑定 launcher、pair/r14 renderer 与 preflight，不能沿用历史模板内的仓库源码 hash。
+   七项 map 的键、顺序、数量和 `sha256:` 小写值必须完全符合 loader 合同；新 renderer 与内存派生共用同一转换。
    内存派生和实际 renderer 复用同一份转换清单，各转换核验精确出现次数；r14 逆向模板 hash 对应转换后的模板。
 5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
    renderer。二者复用原 r12 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
@@ -42,6 +45,8 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 需要隔离时可使用完整 local clone（`--no-hardlinks`，不使用 shallow/filter/shared/alternates），
 只在新 clone 中把该本地分支指向新候选。按新 clone 的实际字节完成完整门、清理本轮构建状态、
 固定 clean/index 后再生成新工件；不复用旧目录的 raw index 或把旧 host 工件改路径后重跑。
+独审同时核对这八项源码 hash 与最终目录的原始字节。普通 clone 的 LF/CRLF 可能与开发目录不同，
+即使 Git blob 相同也不能复制另一目录的 raw hash；此前 `0386ee7` 的七项 loader 中实际有五项与旧模板不同。
 
 ## r14 新增门与离线回归
 
@@ -65,8 +70,8 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 ```
 
 两个常驻回归使用最小 synthetic fixture；不依赖历史 staging、本机账户路径、Git 安装树或真实设备。
-源码回归为 10 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝，
-另校验 helper 的有界失败诊断开关与生成端一致；
+源码回归为 14 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝，
+另校验 helper 的有界失败诊断与生成端一致、七项 literal map 的拒绝门，以及最终文件的原始字节读取；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
 测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。真实冻结输入的派生适配测试另行执行，只能证明源码能够生成和通过 Parser，

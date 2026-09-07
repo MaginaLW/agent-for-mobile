@@ -142,8 +142,87 @@ function New-C1bLauncherRendererTransformSource {
     return [string]::Join("`r`n", $lines)
 }
 
+function Get-C1bHelperLibraryPaths {
+    return [ordered]@{
+        c1a='scripts/lib/tablet-layout-c1a.ps1'
+        validator='scripts/lib/tablet-layout-observation-c1b-v1-validator.ps1'
+        c1b='scripts/lib/tablet-layout-c1b.ps1'
+        artifact='scripts/lib/tablet-layout-c1b-artifact-proof.ps1'
+        aapt2='scripts/lib/tablet-layout-c1b-aapt2.ps1'
+        build='scripts/lib/tablet-layout-c1b-build-env.ps1'
+        runner='scripts/run-tablet-layout-c1b.ps1'
+    }
+}
+
+function Assert-C1bHelperLibraryHashes {
+    param([Parameter(Mandatory)][Collections.IDictionary]$LibraryHashes)
+    $requiredKeys=[string[]]@((Get-C1bHelperLibraryPaths).Keys)
+    if($LibraryHashes.Count-ne7-or
+        (([string[]]@($LibraryHashes.Keys))-join "`n")-cne($requiredKeys-join "`n")){
+        throw 'Helper library hash keys/order must be exactly the seven loader inputs.'
+    }
+    foreach($key in $requiredKeys){
+        if($LibraryHashes[$key]-isnot[string]-or
+            [string]$LibraryHashes[$key]-cnotmatch'\Asha256:[0-9a-f]{64}\z'){
+            throw "Helper library hash must be a lowercase SHA-256 literal: $key"
+        }
+    }
+}
+
+function Get-C1bHelperLibraryHashTransformation {
+    param([Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][Collections.IDictionary]$LibraryHashes)
+    Assert-C1bHelperLibraryHashes $LibraryHashes
+    $ast=Get-C1bCandidateSourceAst $Source
+    $assignments=@($ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.AssignmentStatementAst]-and
+        $node.Left-is[Management.Automation.Language.VariableExpressionAst]-and
+        $node.Left.VariablePath.UserPath-imatch'(^|:)expectedLibraryHashes$'
+    },$true))
+    if($assignments.Count-ne1-or$assignments[0].Parent-ne$ast.EndBlock-or
+        $assignments[0].Left.VariablePath.UserPath-cne'expectedLibraryHashes'-or
+        $assignments[0].Operator.ToString()-cne'Equals'){
+        throw 'Helper requires one top-level expectedLibraryHashes literal assignment.'
+    }
+    $assignment=$assignments[0]
+    $expression=if($assignment.Right-is[Management.Automation.Language.CommandExpressionAst]){
+        $assignment.Right.Expression
+    }else{$null}
+    if($expression-isnot[Management.Automation.Language.ConvertExpressionAst]-or
+        $expression.Type.TypeName.FullName-cne'ordered'-or
+        $expression.Child-isnot[Management.Automation.Language.HashtableAst]){
+        throw 'Helper expectedLibraryHashes must be an ordered literal map.'
+    }
+    $oldValues=[ordered]@{}
+    foreach($pair in $expression.Child.KeyValuePairs){
+        if($pair.Item1-isnot[Management.Automation.Language.StringConstantExpressionAst]){
+            throw 'Helper library key must be a literal.'
+        }
+        $key=[string]$pair.Item1.Value
+        if($oldValues.Contains($key)){throw 'Helper library map contains a duplicate key.'}
+        $value=$pair.Item2
+        if($value-isnot[Management.Automation.Language.PipelineAst]-or
+            $value.PipelineElements.Count-ne1-or
+            $value.PipelineElements[0]-isnot[Management.Automation.Language.CommandExpressionAst]-or
+            $value.PipelineElements[0].Expression-isnot[Management.Automation.Language.StringConstantExpressionAst]){
+            throw 'Helper library hash value must be a literal.'
+        }
+        $oldValues[$key]=$value.PipelineElements[0].Expression.Value
+    }
+    Assert-C1bHelperLibraryHashes $oldValues
+    $newline=if($Source.Contains("`r`n")){"`r`n"}else{"`n"}
+    $lines=[Collections.Generic.List[string]]::new()
+    $lines.Add('$expectedLibraryHashes = [ordered]@{')
+    foreach($key in (Get-C1bHelperLibraryPaths).Keys){
+        $lines.Add("    $key = '$($LibraryHashes[$key])'")
+    }
+    $lines.Add('}')
+    return [pscustomobject]@{Old=$assignment.Extent.Text;New=([string]::Join($newline,$lines));Count=1}
+}
+
 function Get-C1bHelperSourceTransformations {
-    param([Parameter(Mandatory)][string]$Source)
+    param([Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][Collections.IDictionary]$LibraryHashes)
     $newline = if ($Source.Contains("`r`n")) { "`r`n" } else { "`n" }
     $wrapperOld = @'
 function Invoke-TL1C1aProcess {
@@ -174,11 +253,13 @@ function Invoke-TL1C1aProcess {
             Count=1
         }
     }
+    Get-C1bHelperLibraryHashTransformation $Source $LibraryHashes
 }
 
 function Update-C1bHelperCandidateTemplate {
-    param([Parameter(Mandatory)][string]$Source)
-    foreach ($change in @(Get-C1bHelperSourceTransformations $Source)) {
+    param([Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][Collections.IDictionary]$LibraryHashes)
+    foreach ($change in @(Get-C1bHelperSourceTransformations $Source $LibraryHashes)) {
         $Source = Replace-C1bCandidateExactText $Source $change.Old $change.New $change.Count
     }
     [void](Get-C1bCandidateSourceAst $Source)
@@ -186,9 +267,10 @@ function Update-C1bHelperCandidateTemplate {
 }
 
 function New-C1bHelperRendererTransformSource {
-    param([Parameter(Mandatory)][string]$TemplateSource)
+    param([Parameter(Mandatory)][string]$TemplateSource,
+        [Parameter(Mandatory)][Collections.IDictionary]$LibraryHashes)
     $lines = [Collections.Generic.List[string]]::new()
-    foreach ($change in @(Get-C1bHelperSourceTransformations $TemplateSource)) {
+    foreach ($change in @(Get-C1bHelperSourceTransformations $TemplateSource $LibraryHashes)) {
         $old64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.Old))
         $new64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.New))
         $lines.Add('    $helperTransformOld = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String(''' + $old64 + '''))')
@@ -208,6 +290,8 @@ function New-C1bExactPairCandidateSource {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$StagingRoot,
         [Parameter(Mandatory)][string]$PwshPath,
+        [Parameter(Mandatory)][Collections.IDictionary]$RepositoryLibraryHashes,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$VerifierSha256,
         [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$UtilityAssemblySha256,
         [Parameter(Mandatory)][long]$UtilityAssemblyLength
     )
@@ -263,8 +347,8 @@ function New-C1bExactPairCandidateSource {
     $launcherPath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.ps1")
     $failurePath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.failure.json")
     $pwshHash = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
-    # 旧模板/冻结工件不变；新 helper 的 wrapper 与唯一 Gradle 调用同时启用有界脱敏诊断。
-    $helper = Update-C1bHelperCandidateTemplate $HelperTemplateSource
+    # 旧 pair 已复现；仅新 helper 绑定当前仓库原始 hash，并启用有界脱敏构建诊断。
+    $helper = Update-C1bHelperCandidateTemplate $HelperTemplateSource $RepositoryLibraryHashes
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHA__' $CommitSha
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHORT__' $short
     # 原冻结 template 保持原 hash；只转换新 candidate 的运行时/progress/诊断/缓冲引用。
@@ -273,7 +357,7 @@ function New-C1bExactPairCandidateSource {
         '__FINAL_COMMIT_SHA__'=$CommitSha; '__FINAL_COMMIT_SHORT__'=$short
         '__REPO_ROOT__'=$RepoRoot; '__FAILURE_SIDECAR_ABSOLUTE_PATH__'=$failurePath
         '__HELPER_ABSOLUTE_PATH__'=$helperPath; '__HELPER_SHA256__'=(Get-C1bCandidateSourceHash $helper)
-        '__VERIFIER_SHA256__'=(Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'expectedVerifierSha256')
+        '__VERIFIER_SHA256__'=$VerifierSha256
         '__PWSH_ABSOLUTE_PATH__'=$PwshPath; '__PWSH_SHA256__'=$pwshHash
     }
     $launcher = $template
@@ -291,6 +375,7 @@ function New-C1bExactPairCandidateSource {
         pwshPath=$PwshPath
         utilityAssemblyPath=[IO.Path]::Combine([IO.Path]::GetDirectoryName($PwshPath), 'Microsoft.PowerShell.Commands.Utility.dll')
         expectedPwshSha256=$pwshHash; expectedPwshVersion='7.6.5'
+        expectedVerifierSha256=$VerifierSha256
         expectedUtilityAssemblySha256=$UtilityAssemblySha256; expectedUtilityAssemblyLength=$UtilityAssemblyLength
         expectedHelperSha256=(Get-C1bCandidateSourceHash $helper)
         expectedLauncherSha256=(Get-C1bCandidateSourceHash $launcher)
@@ -300,7 +385,7 @@ function New-C1bExactPairCandidateSource {
     $renderer = Set-C1bCandidateLiteralAssignments $BaselineRendererSource $constants
     $helperAnchor = '$helperText = [string]$inputByLabel[''helper_template''].Text'
     $renderer = Replace-C1bCandidateExactText $renderer $helperAnchor (
-        $helperAnchor + "`r`n" + (New-C1bHelperRendererTransformSource $HelperTemplateSource))
+        $helperAnchor + "`r`n" + (New-C1bHelperRendererTransformSource $HelperTemplateSource $RepositoryLibraryHashes))
     $anchor = '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
     $renderer = Replace-C1bCandidateExactText $renderer $anchor (
         $anchor + "`r`n" + (New-C1bLauncherRendererTransformSource $LauncherTemplateSource))

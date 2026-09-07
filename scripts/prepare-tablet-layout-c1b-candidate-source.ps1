@@ -37,6 +37,16 @@ function Get-CandidateFileHash {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
         (Read-CandidateInput $Path -Bytes))).ToLowerInvariant()
 }
+function Get-CandidateRepositoryLibraryHashes {
+    param([Parameter(Mandatory)][string]$Root)
+    $hashes=[ordered]@{}
+    foreach($entry in (Get-C1bHelperLibraryPaths).GetEnumerator()){
+        # 绑定最终候选 checkout 的原始字节，不通过文本读取/换行归一计算。
+        $hashes[$entry.Key]='sha256:'+(Get-CandidateFileHash (Join-Path $Root $entry.Value))
+    }
+    Assert-C1bHelperLibraryHashes $hashes
+    return $hashes
+}
 
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 $FrozenSourceRoot = [IO.Path]::GetFullPath($FrozenSourceRoot)
@@ -49,11 +59,14 @@ if ((Get-CandidateFileHash $PwshPath) -cne
 }
 $utility = [IO.Path]::Combine([IO.Path]::GetDirectoryName($PwshPath),'Microsoft.PowerShell.Commands.Utility.dll')
 $utilityBytes = Read-CandidateInput $utility -Bytes
+$repositoryLibraryHashes=Get-CandidateRepositoryLibraryHashes $RepoRoot
+$verifierSha256=Get-CandidateFileHash (Join-Path $RepoRoot 'scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1')
 $pair = New-C1bExactPairCandidateSource `
     -BaselineRendererSource (Read-CandidateInput (Join-Path $FrozenSourceRoot 'render-final-r12-015835c.ps1')) `
     -HelperTemplateSource (Read-CandidateInput (Join-Path $FrozenSourceRoot 'helper-template.ps1')) `
     -LauncherTemplateSource (Read-CandidateInput (Join-Path $FrozenSourceRoot 'launcher-template-r11.ps1')) `
     -CommitSha $CommitSha -RepoRoot $RepoRoot -StagingRoot $FrozenSourceRoot -PwshPath $PwshPath `
+    -RepositoryLibraryHashes $repositoryLibraryHashes -VerifierSha256 $verifierSha256 `
     -UtilityAssemblySha256 (Get-CandidateFileHash $utility) -UtilityAssemblyLength $utilityBytes.Length
 $indexPath = Join-Path $RepoRoot '.git/index'
 $indexBytes = Read-CandidateInput $indexPath -Bytes
@@ -78,7 +91,7 @@ $constants = [ordered]@{
     expectedGitAttributesSha256=(Get-CandidateFileHash (Join-Path $RepoRoot '.gitattributes'))
     expectedGitIgnoreSha256=(Get-CandidateFileHash (Join-Path $RepoRoot '.gitignore'))
     expectedGitInfoExcludeSha256=(Get-CandidateFileHash (Join-Path $RepoRoot '.git/info/exclude'))
-    expectedVerifierSha256=(Get-CandidateFileHash (Join-Path $RepoRoot 'scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1'))
+    expectedVerifierSha256=$verifierSha256
     summaryLeaf="tablet-c1b-real-build-smoke-$short.summary.json"
     logLeaf="tablet-c1b-real-build-smoke-$short.log"
     launcherResultLeaf="tablet-c1b-real-build-smoke-$short.launcher.json"
