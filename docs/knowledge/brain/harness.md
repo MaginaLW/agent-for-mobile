@@ -120,6 +120,12 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 - **批次按触达的真机表面划分。** 离线自举也可能牵动确认路径，不能只按改动意图区分批次。
   验收后的合并对象是已验的固定 SHA，不是持续前进的分支 tip；离线通过不代替真机结论。
 
+**2026-09-08 验证补充：离线也会竞争宿主 lease。** 本次脚本整合门的 C1b build-environment 子套件
+在 guard 初始化处因全局 mutex 占用得到 21 pass / 6 fail；没有执行 JDK/Gradle，也未到六项业务断言。
+测试和依赖与修改前的 Git blob 相同，且不加载本次提示词/流程文档；另有真实 C1b 引导进程存活，
+但未直接归属 mutex owner，不能把“看见进程”冒充句柄所有权证据。保留环境失败、不干预其他任务，
+按 [离线验证规程](../../runbooks/离线开发与验证.md)协调后再验受影响门，不能宣称整合门全绿。
+
 ### Codex C 证据必须在临时 worktree 回收前持久化（2026-08-12）
 
 批次 4 的两条 Codex C 结束后，临时 worktree 被清理，manifest、trace、截图路径随之失效，
