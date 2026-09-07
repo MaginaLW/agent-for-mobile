@@ -35,6 +35,7 @@ $LogDir = Join-Path $RepoRoot '.checks'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PwshPath = (Get-Process -Id $PID).Path
 . (Join-Path $PSScriptRoot 'lib\dev-env.ps1')
+. (Join-Path $PSScriptRoot 'lib\check-summary.ps1')
 
 if ($Clean) {
     Write-Host '清场：' -ForegroundColor Cyan
@@ -123,6 +124,13 @@ Invoke-Check '空白字符与冲突标记（git diff --check）' {
     'clean'
 }
 
+Invoke-Check '离线检查结果契约' {
+    Invoke-Logged -LogName 'check-summary-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\check-summary-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'check-summary-offline.log')
+}
+
 Invoke-Check '平板只读 intake 无设备离线门' {
     Invoke-Logged -LogName 'tablet-intake-offline-gate.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-tablet-intake-offline.ps1')
@@ -176,6 +184,7 @@ if ($SkipGradle) {
     Write-Host '跳过 gradle（-SkipGradle）：Kotlin 侧未验证。' -ForegroundColor Yellow
     $results.Add([pscustomobject]@{ Name = 'Android JVM/Lint/构建'; Ok = $null; Seconds = 0; Detail = '已跳过' })
 }
+
 else {
     Invoke-Check 'Android JVM/Lint/构建' {
         $gradlew = Join-Path $RepoRoot 'app\gradlew.bat'
@@ -222,7 +231,9 @@ Invoke-Check '监督式 runner 离线测试' {
         Invoke-Logged -LogName 'runner-offline.log' -FilePath $PwshPath -Arguments @(
             '-NoProfile', '-File', $suite
         ) | Out-Null
-        return Get-LastMeaningfulLine (Join-Path $LogDir 'runner-offline.log')
+        $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'runner-offline.log')
+        $passed = Get-RunnerOfflinePassedCount -Summaries @($summary)
+        return "顺序，合计 $passed passed"
     }
     # 分片数必须打出来：并行度随可用内存变化，一次假失败若不知道当时跑的是几片，
     # 就分不清是代码问题还是并发压出来的。复现用 -Shards 1。
@@ -266,10 +277,7 @@ Invoke-Check '监督式 runner 离线测试' {
     if ($failures.Count -gt 0) { throw ($failures -join "`n    ") }
 
     # 逐片的 passed 数相加再报，避免"某片一条没跑却全绿"这种看起来通过的失败。
-    $passed = 0
-    foreach ($line in $summaries) {
-        if ($line -match 'runner：(\d+) passed') { $passed += [int]$Matches[1] }
-    }
+    $passed = Get-RunnerOfflinePassedCount -Summaries $summaries.ToArray()
     "$shards 片并行，合计 $passed passed"
 }
 

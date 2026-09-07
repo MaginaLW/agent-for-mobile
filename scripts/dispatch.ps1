@@ -76,8 +76,8 @@ function Add-LedgerRow([AllowNull()][object]$Turns, [AllowNull()][object]$InTok,
 $Leg = 1
 $TaskText = ''
 if ($Confirm) {
-    if (-not (Test-Path $Confirm)) { throw "暂停件不存在：$Confirm" }
-    $pauseRaw = Get-Content $Confirm -Raw -Encoding utf8
+    if (-not (Test-Path -LiteralPath $Confirm -PathType Leaf)) { throw "暂停件不存在：$Confirm" }
+    $pauseRaw = Get-Content -LiteralPath $Confirm -Raw -Encoding utf8
     $pauseDocument = Read-DispatchPauseDocument -Text $pauseRaw
     $meta = $pauseDocument.Meta
 
@@ -92,11 +92,10 @@ if ($Confirm) {
     $Slug = [string]$(if ($meta.Contains('slug')) { $meta['slug'] } else { '' })
     # leg 直接进 trace 文件名与台账，且**没有上界的话，pause→confirm 可以无限接龙**，
     # 每一跳还把上一跳的报告原样再灌进提示词。两段式按定义只有第二腿。
-    if ([string]$meta['leg'] -notmatch '^\d+$') { throw "暂停件 leg 非法：$($meta['leg'])" }
-    $Leg = [int]$meta['leg'] + 1
-    if ($Leg -gt 2) {
-        throw "暂停件 leg=$($meta['leg']) 会产生第 $Leg 腿；两段式只有第二腿，拒绝接龙。"
+    if ([string]$meta['leg'] -cne '1') {
+        throw "暂停件 leg 非法：$($meta['leg'])；只接受 leg=1，两段式只有第二腿，拒绝接龙。"
     }
+    $Leg = 2
     $pauseReport = $pauseDocument.Body
     $pauseExecutor = if ([string]::IsNullOrWhiteSpace($meta['executor'])) { 'mobile' } else { $meta['executor'] }
     if ($pauseExecutor -notin @('mobile', 'gateway')) {

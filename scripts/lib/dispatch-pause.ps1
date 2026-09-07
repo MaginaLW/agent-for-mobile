@@ -8,7 +8,8 @@
 本仓踩过同一形态的坑：Deny 腿四条判据全部来自被测组件自报，看起来铁证如山。
 抽成纯函数后两半都能离线钉住。
 
-暂停件格式：`key: value` 若干行 + `---` + 报告正文。
+暂停件格式：`key: value` 若干行 + `---` + 报告正文。保留未知合法字段以兼容后续扩展；
+字段名不区分大小写且不得重复，非空头部行必须合法，显式 consumed 不得为空。
 #>
 
 # 刻意不写 Set-StrictMode：本册被 dispatch.ps1 dot-source，而 dot-source 的 StrictMode
@@ -22,8 +23,21 @@ function Read-DispatchPauseDocument {
     $parts = $Text -split '(?m)^---\s*$', 2
     if ($parts.Count -lt 2) { throw '暂停件格式异常（缺 --- 分隔）' }
     $meta = [ordered]@{}
+    $lineNumber = 0
     foreach ($line in ($parts[0] -split "`r?`n")) {
-        if ($line -match '^(\w+):\s*(.*)$') { $meta[$Matches[1]] = $Matches[2].Trim() }
+        $lineNumber++
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -notmatch '^(\w+):[ \t]*(.*)$') {
+            throw "暂停件头部第 $lineNumber 行格式异常（应为 key: value）"
+        }
+        $key = $Matches[1]
+        $value = $Matches[2].Trim()
+        # ordered dictionary 的键不区分大小写；后写覆盖会让 consumed 或 executor 失去原义。
+        if ($meta.Contains($key)) { throw "暂停件头部存在重复字段：$key" }
+        if ($key -ieq 'consumed' -and [string]::IsNullOrWhiteSpace($value)) {
+            throw '暂停件 consumed 字段不得为空；未消费的暂停件应省略此字段。'
+        }
+        $meta[$key] = $value
     }
     return [pscustomobject]@{
         Meta = $meta

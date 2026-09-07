@@ -1394,6 +1394,92 @@ session_id: offline
         }
     }
 
+    Test-Case '暂停件头部拒绝重复字段、空消费标记和非法行' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
+        $invalidHeaders = [ordered]@{
+            duplicateConsumed = "consumed: 2026-08-01T12:00:00Z`nconsumed: "
+            duplicateConsumedCase = "consumed: 2026-08-01T12:00:00Z`nCONSUMED: "
+            duplicateExecutor = 'EXECUTOR: mobile'
+            emptyConsumed = 'consumed: '
+            malformedLine = 'not a metadata line'
+        }
+        foreach ($case in $invalidHeaders.Keys) {
+            $raw = "slug: offline-invalid-header`nleg: 1`nexecutor: gateway`n$($invalidHeaders[$case])`n---`n" +
+                "[AWAIT_CONFIRM]`nsecret-invalid-header-body-must-not-leak"
+            foreach ($operation in @('read', 'consume')) {
+                $threw = $false
+                try {
+                    if ($operation -eq 'read') { $null = Read-DispatchPauseDocument -Text $raw }
+                    else { $null = Set-DispatchPauseConsumed -Text $raw -At '2026-08-01T13:00:00Z' }
+                }
+                catch { $threw = $true }
+                Assert-True $threw "$case 的 $operation 必须拒绝畸形头部。"
+            }
+
+            $invalidPause = Join-Path $TestRoot "$case.pause.md"
+            Set-Content -LiteralPath $invalidPause -Encoding utf8 -Value $raw
+            $result = Invoke-Dispatch @('-Confirm', $invalidPause, '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) "$case 不得进入确认腿。"
+            Assert-Matches $result.Text '重复字段|consumed|头部'
+            Assert-NotMatches $result.Text 'secret-invalid-header-body-must-not-leak|键入\s*CONFIRM|Read-Host'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
+        }
+    }
+
+    Test-Case '暂停件合法扩展字段和空行保持兼容' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
+        $raw = "slug: offline-extended-pause`n`nleg: 1`nexecutor: gateway`nfuture_field: retained:value`n---`n[AWAIT_CONFIRM]`nbody"
+        $document = Read-DispatchPauseDocument -Text $raw
+        Assert-True ($document.Meta['future_field'] -ceq 'retained:value') '未知合法字段必须保留。'
+        $marked = Set-DispatchPauseConsumed -Text $raw -At '2026-08-01T12:00:00Z'
+        $after = Read-DispatchPauseDocument -Text $marked
+        Assert-True ($after.Meta['future_field'] -ceq 'retained:value') '消费后未知合法字段不得丢失。'
+        Assert-True ($after.Body -ceq $document.Body) '消费后正文不得变化。'
+
+        $extendedPause = Join-Path $TestRoot 'extended.pause.md'
+        Set-Content -LiteralPath $extendedPause -Encoding utf8 -Value $raw
+        $result = Invoke-Dispatch @('-Confirm', $extendedPause, '-DryRun')
+        Assert-ExitCode $result 0
+        Assert-Contains $result.Text 'executor=gateway'
+        Assert-Contains $result.Text 'leg=2'
+        Assert-NoExternalTools $result
+        Assert-NoRepoEffects $before
+    }
+
+    Test-Case '暂停件只接受规范第一腿编号' {
+        foreach ($leg in @('0', '00', '01', '+1', '-1', '1.0', '2147483648')) {
+            $invalidPause = Join-Path $TestRoot 'invalid-first-leg.pause.md'
+            $raw = "slug: offline-invalid-first-leg`nleg: $leg`nexecutor: gateway`n---`n" +
+                "[AWAIT_CONFIRM]`nsecret-invalid-leg-body-must-not-leak"
+            Set-Content -LiteralPath $invalidPause -Encoding utf8 -Value $raw
+            $result = Invoke-Dispatch @('-Confirm', $invalidPause, '-DryRun')
+            Assert-True ($result.ExitCode -ne 0) "暂停件 leg=$leg 不得进入确认腿。"
+            Assert-Contains $result.Text 'leg'
+            Assert-NotMatches $result.Text 'secret-invalid-leg-body-must-not-leak|键入\s*CONFIRM|Read-Host'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
+        }
+    }
+
+    Test-Case '暂停件路径中的方括号按字面读取' {
+        $literalPause = Join-Path $TestRoot 'literal[1].pause.md'
+        $wildcardDecoy = Join-Path $TestRoot 'literal1.pause.md'
+        $header = "slug: offline-literal-pause`nleg: 1`nexecutor: gateway`n---`n[AWAIT_CONFIRM]`n"
+        Set-Content -LiteralPath $literalPause -Encoding utf8 -Value ($header + 'literal-path-selected')
+        Set-Content -LiteralPath $wildcardDecoy -Encoding utf8 -Value ($header + 'wildcard-decoy-must-not-be-selected')
+        $literalBefore = [IO.File]::ReadAllText($literalPause)
+        $decoyBefore = [IO.File]::ReadAllText($wildcardDecoy)
+        $result = Invoke-Dispatch @('-Confirm', $literalPause, '-DryRun')
+        Assert-ExitCode $result 0
+        Assert-Contains $result.Text 'literal-path-selected'
+        Assert-NotMatches $result.Text 'wildcard-decoy-must-not-be-selected'
+        Assert-True ([IO.File]::ReadAllText($literalPause) -ceq $literalBefore) 'DryRun 不得消费目标暂停件。'
+        Assert-True ([IO.File]::ReadAllText($wildcardDecoy) -ceq $decoyBefore) 'DryRun 不得修改通配符对照文件。'
+        Assert-NoExternalTools $result
+        Assert-NoRepoEffects $before
+    }
+
     Test-Case '暂停件 leg 接龙被拒（两段式只有第二腿）' {
         $chained = Join-Path $TestRoot 'chained.pause.md'
         Set-Content -LiteralPath $chained -Encoding utf8 -Value @'
