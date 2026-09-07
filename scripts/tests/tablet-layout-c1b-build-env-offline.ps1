@@ -725,6 +725,48 @@ try {
         } '必须在 guard 前 absent' '未知既有 module build output 未 fail closed。'
     }
 
+    Test-Case 'Kotlin persistent sessions 只写 fresh runtime 且不向 repository 回写' {
+        $fixture = Open-SyntheticTrustGuard 'kotlin-persistent-sessions'
+        $runtime = $fixture.Guard.Workspace.KotlinRuntimeDirectory
+        $workspace = $fixture.Guard.Workspace.Root
+        $repositoryCaches = @(
+            (Join-Path $fixture.Repo.Root 'app\.kotlin'),
+            (Join-Path $fixture.Repo.Root 'app\.gradle')
+        )
+        try {
+            $arguments = @(Get-TL1C1bBuildEnvironmentGradleArguments $fixture.Guard)
+            $persistentArguments = @($arguments | Where-Object {
+                $_.StartsWith('-Pkotlin.project.persistent.dir=', [StringComparison]::Ordinal)
+            })
+            Assert-True ($persistentArguments.Count -eq 1 -and
+                $persistentArguments[0] -ceq ('-Pkotlin.project.persistent.dir=' + $runtime)) `
+                'Kotlin persistent directory 未唯一绑定受控 fresh runtime。'
+            Assert-True (@($arguments | Where-Object {
+                $_ -ceq '-Pkotlin.project.persistent.dir.gradle.disableWrite=true'
+            }).Count -eq 1) 'Kotlin .gradle compatibility write 未显式关闭。'
+            foreach ($path in $repositoryCaches) {
+                Assert-True (-not (Test-Path -LiteralPath $path)) 'repository cache 被预置。'
+                Assert-Throws { [IO.Directory]::CreateDirectory($path) | Out-Null } `
+                    'repository ACL 允许创建 Kotlin/Gradle cache。' | Out-Null
+            }
+            $sessionDirectory = Join-Path $runtime 'sessions'
+            [IO.Directory]::CreateDirectory($sessionDirectory) | Out-Null
+            $sessionFile = Join-Path $sessionDirectory 'kotlin-compiler-synthetic.salive'
+            [IO.File]::WriteAllText($sessionFile, 'synthetic compiler session')
+            Assert-True (Test-Path -LiteralPath $sessionFile -PathType Leaf) `
+                'fresh Kotlin runtime ACL 阻止创建编译会话。'
+            [void](Assert-TL1C1bBuildEnvironmentTrustGuardUnchanged $fixture.Guard)
+            foreach ($path in $repositoryCaches) {
+                Assert-True (-not (Test-Path -LiteralPath $path)) '编译会话回写 repository cache。'
+            }
+        } finally { Close-SyntheticFixture $fixture }
+        Assert-True (-not (Test-Path -LiteralPath $runtime) -and
+            -not (Test-Path -LiteralPath $workspace)) 'Kotlin runtime/session cleanup 残留。'
+        foreach ($path in $repositoryCaches) {
+            Assert-True (-not (Test-Path -LiteralPath $path)) 'cleanup 后 repository cache 残留。'
+        }
+    }
+
     Test-Case 'synthetic lifecycle 提供 exact bootstrap/build env 与 path-free attestation' {
         $fixture = Open-SyntheticTrustGuard 'lifecycle'
         $workspacePath = $fixture.Guard.Workspace.Root
@@ -781,6 +823,9 @@ try {
                 '-PtabletC1bIsolatedBuild=true'
                 '-Pkotlin.incremental=false'
                 '-Pkotlin.compiler.execution.strategy=in-process'
+                ('-Pkotlin.project.persistent.dir=' +
+                    $fixture.Guard.Workspace.KotlinRuntimeDirectory)
+                '-Pkotlin.project.persistent.dir.gradle.disableWrite=true'
             ) -join "`n")) 'Gradle controlled arguments 漂移。'
             Assert-True ((Get-TL1C1bBuildEnvironmentGitBaseArguments) -join "`n" -ceq `
                 (@('-c','core.fsmonitor=false','-c','core.untrackedCache=false','-c',

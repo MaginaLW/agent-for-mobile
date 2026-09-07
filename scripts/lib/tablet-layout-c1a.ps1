@@ -117,6 +117,36 @@ function ConvertFrom-TL1C1aStrictUtf8 {
     catch { throw "$Operation 输出不是 strict UTF-8。" }
 }
 
+function ConvertTo-TL1C1aFailureDiagnostic {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [AllowEmptyCollection()][string[]]$SensitiveValues = @()
+    )
+    # 先对完整捕获内容脱敏，再截尾；否则切断凭据标签/值后可能让残片逃过脱敏。
+    $safe = $Text -replace '\x1b\][^\x07]*(?:\x07|\x1b\\)', ''
+    $safe = $safe -replace '\x1b\[[0-?]*[ -/]*[@-~]', ''
+    $safe = $safe -replace '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\p{Cf}]', ''
+    foreach ($value in @($SensitiveValues | Where-Object { -not [string]::IsNullOrEmpty($_) } |
+        Sort-Object Length -Descending)) {
+        foreach ($variant in @($value, $value.Replace('\','/'), $value.Replace('\','\\'))) {
+            $safe = $safe.Replace($variant, '<redacted>', [StringComparison]::OrdinalIgnoreCase)
+        }
+    }
+    $safe = $safe -replace '(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|$)', '<redacted private key>'
+    $safe = $safe -replace '(?im)^.*(?:password|passwd|secret|token|authorization|cookie|credential|api[_ -]?key|private[_ -]?key|nonce|challenge|(?<![a-z])lease(?![a-z])).*$','<redacted sensitive diagnostic line>'
+    $safe = $safe -replace '(?i)\b[a-z][a-z0-9+.-]*://[^\s<>"'']+', '<redacted url>'
+    $safe = $safe -replace '(?i)\b(?:sk-|gh[pousr]_)[a-z0-9_-]+', '<redacted key>'
+    $safe = $safe -replace '(?<![a-zA-Z0-9_])[a-zA-Z0-9_+/=-]{32,}(?![a-zA-Z0-9_])', '<redacted opaque value>'
+    $safe = $safe -replace '(?i)([a-z]:[\\/]+Users[\\/]+)[^\\/\s]+', '${1}<user>'
+    $safe = $safe -replace '(?i)(/(?:home|Users)/)[^/\s]+', '${1}<user>'
+    $safe = $safe.Trim()
+    if ($safe.Length -eq 0) { return '<empty>' }
+    $limit = 4096
+    $marker = '<truncated; sanitized tail>' + "`n"
+    if ($safe.Length -gt $limit) { return $marker + $safe.Substring($safe.Length - ($limit - $marker.Length)) }
+    return $safe
+}
+
 function Invoke-TL1C1aProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -126,7 +156,8 @@ function Invoke-TL1C1aProcess {
         [hashtable]$Environment,
         [switch]$ClearEnvironment,
         [ValidateRange(1, 300)][int]$TimeoutSec = 30,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [switch]$FailureDiagnostics
     )
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $FilePath
@@ -198,7 +229,29 @@ function Invoke-TL1C1aProcess {
             Stderr = $stderrText
         }
         if (-not $AllowFailure -and $result.ExitCode -ne 0) {
-            throw "$Operation 失败（exit=$($result.ExitCode)）。"
+            $failureMessage = "$Operation 失败（exit=$($result.ExitCode)）。"
+            if ($FailureDiagnostics) {
+                try {
+                    $sensitiveValues = [Collections.Generic.List[string]]::new()
+                    foreach ($entry in $start.Environment.GetEnumerator()) {
+                        if ($entry.Key -match '(?i)password|passwd|secret|token|authorization|cookie|credential|api.?key|private.?key|nonce|challenge|lease|HOME|ROOT|^(?:USERNAME|COMPUTERNAME|TEMP|TMP)$') {
+                            $sensitiveValues.Add([string]$entry.Value)
+                        }
+                    }
+                    foreach ($argument in $Arguments) {
+                        $candidate = $argument -replace '^-[DP][^=]+=', ''
+                        if ([IO.Path]::IsPathFullyQualified($candidate)) { $sensitiveValues.Add($candidate) }
+                    }
+                    $failureMessage += "`nstdout (sanitized, max 4096 chars):`n" +
+                        (ConvertTo-TL1C1aFailureDiagnostic $text $sensitiveValues.ToArray()) +
+                        "`nstderr (sanitized, max 4096 chars):`n" +
+                        (ConvertTo-TL1C1aFailureDiagnostic $stderrText $sensitiveValues.ToArray())
+                } catch {
+                    # 脱敏器异常也不能放行或回退到输出原始内容。
+                    $failureMessage += "`n<sanitized process diagnostics unavailable>"
+                }
+            }
+            throw $failureMessage
         }
         return $result
     }

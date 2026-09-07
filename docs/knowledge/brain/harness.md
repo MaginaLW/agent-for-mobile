@@ -822,3 +822,19 @@ r3 的实际 Gradle exit `1` 被通用进程函数缩成一行错误，内部 st
 清理后便不可恢复。**外层捕获完整，不等于每层子进程的失败可诊断。** 成功的 host build-only 也不能说明
 生产 runner 为什么失败；须保留有界、脱敏的内部失败信息，再按单变量复验，不能猜编译/网络/路径原因。
 本轮设备尚未访问，清理仅做被动残留复核，没有逐 ACL 独审；详见[接入后失败记录](../../runs/2026-09-08-C1b-463304c-接入后主机构建失败.md)。
+
+## Kotlin 2.0 项目状态必须显式隔离（2026-09-08）
+
+已锁 KGP 2.0.20 的编译调用在选择执行策略前创建 `.kotlin/sessions` 的 session flag，关闭增量编译和
+`in-process` 都不能消除该写入。原目录已有 `.kotlin` 时可能成功；全新目录受 app 根 ACL 保护时无法
+首次创建。官方固定源码见 [persistentCaches.kt](https://raw.githubusercontent.com/JetBrains/kotlin/v2.0.20/libraries/tools/kotlin-gradle-plugin/src/common/kotlin/org/jetbrains/kotlin/gradle/utils/persistentCaches.kt)，
+迁移和旧 `.gradle` 兼容写见 [Kotlin 2.0 说明](https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects)。
+
+修复通过 `-Pkotlin.project.persistent.dir=<fresh KotlinRuntimeDirectory>` 将会话状态放到已有受控临时目录，
+并用 `-Pkotlin.project.persistent.dir.gradle.disableWrite=true` 关闭项目 `.gradle` 兼容写，不放宽 app ACL，
+不预置项目缓存。验证实建时应确保项目 `.kotlin/.gradle` 不会掩盖首次创建路径问题。
+这是已确认的隔离遗漏；r3 的内部错误输出已丢失，仍不能追认为该轮唯一根因。
+
+新的生产 Gradle 调用和新 helper 显式启用失败诊断：先对完整捕获文本移除控制序列并脱敏环境秘密、
+路径、凭据行、URL 和不透明长值，再各保留最多 4096 字符的 stdout/stderr 尾部。脱敏异常仅返回不可用标记，
+不回退原文；非零退出、1 MiB 总捕获门、超时与 finally 清理保持。新原文不能补回历史已丢失的诊断。

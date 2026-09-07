@@ -28,12 +28,20 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 4. 静态审查这五份源码及输入绑定。pair 的历史对照先逐字节重现上一对冻结 hash；常量只按唯一顶层变量名改写，
    相同值的历史常量保持不动。launcher 原模板仍按旧 hash 读取；转换包含三处精确 `7.6.4 → 7.6.5`、
    bootstrap 最早抑制进度输出、stderr 有界原始前缀诊断，以及两处捕获数组按真实引用清零。
+   新 helper 的唯一 Gradle 调用还显式启用 `FailureDiagnostics`，wrapper 只透传该开关；
+   转换器与生成 renderer 复用相同两处精确改写，历史模板/hash 对照仍在改写前核验。
    内存派生和实际 renderer 复用同一份转换清单，各转换核验精确出现次数；r14 逆向模板 hash 对应转换后的模板。
 5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
    renderer。二者复用原 r12 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
    发布原语，最终 helper/launcher/preflight 必须与 `.expected.ps1` 的 hash/length 一致。本入口不会自动执行这一步。
 6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
    不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
+
+固定候选须使用独占工作目录。现有 r14 host 模板要求普通 `.git` 目录及本地
+`codex/security-hardening` 的 HEAD/loose ref；普通 worktree 的 gitfile 不满足这一层合同。
+需要隔离时可使用完整 local clone（`--no-hardlinks`，不使用 shallow/filter/shared/alternates），
+只在新 clone 中把该本地分支指向新候选。按新 clone 的实际字节完成完整门、清理本轮构建状态、
+固定 clean/index 后再生成新工件；不复用旧目录的 raw index 或把旧 host 工件改路径后重跑。
 
 ## r14 新增门与离线回归
 
@@ -57,7 +65,8 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 ```
 
 两个常驻回归使用最小 synthetic fixture；不依赖历史 staging、本机账户路径、Git 安装树或真实设备。
-源码回归为 9 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝；
+源码回归为 10 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝，
+另校验 helper 的有界失败诊断开关与生成端一致；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
 测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。真实冻结输入的派生适配测试另行执行，只能证明源码能够生成和通过 Parser，

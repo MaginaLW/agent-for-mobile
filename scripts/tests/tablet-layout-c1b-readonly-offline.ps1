@@ -9,6 +9,7 @@ $runner=Join-Path $root 'scripts\run-tablet-layout-c1b.ps1'
 $t0Runner=Join-Path $root 'scripts\run-tablet-intake.ps1'
 $t0Library=Join-Path $root 'scripts\lib\tablet-intake.ps1'
 . $helper
+. (Join-Path $root 'scripts\lib\tablet-layout-c1a.ps1')
 $passed=0;$failed=0;$temp=Join-Path ([IO.Path]::GetTempPath()) ('tl1-c1b-readonly-'+[guid]::NewGuid().ToString('N'))
 $canonicalTokenTopologyReason='C1b runner canonical token topology SHA-256 漂移。'
 $script:lastRunnerMutationPath=$null
@@ -101,10 +102,23 @@ function WrapSegment(
     $script:lastRunnerMutationPath=$path
     return $path
 }
+function Invoke-SyntheticBuildProcess {
+    param([string]$Body,[hashtable]$Environment=@{},[switch]$Diagnostics,[switch]$AllowFailure)
+    $path=Join-Path $temp ('build-process-'+[guid]::NewGuid().ToString('N')+'.ps1')
+    [IO.File]::WriteAllText($path, $Body, [Text.UTF8Encoding]::new($false))
+    $childEnvironment=@{SystemRoot=$env:SystemRoot}
+    foreach($name in $Environment.Keys){$childEnvironment[$name]=$Environment[$name]}
+    return Invoke-TL1C1aProcess -FilePath (Get-Process -Id $PID).Path `
+        -Arguments @('-NoLogo','-NoProfile','-NonInteractive','-File',$path) `
+        -Operation 'synthetic build' -Environment $childEnvironment -ClearEnvironment `
+        -FailureDiagnostics:$Diagnostics -AllowFailure:$AllowFailure -TimeoutSec 15
+}
 try{
     $proof=$null;$t0Proof=$null
     Pass ast_positive {
         $script:proof=Assert-TL1C1bRunnerReadOnlyAst $runner;if($proof.schema-cne'tablet-layout-c1b-runner-readonly-ast/v1'){throw 'schema'}
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ' -FailureDiagnostics)' ')' 'build-diagnostic-missing.ps1')} 'build failure diagnostics missing accepted' -SemanticReason (ExactReason 'C1b runner fresh build 必须使用 bare -FailureDiagnostics；不得省略或显式绑定 false。')
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ' -FailureDiagnostics)' ' -FailureDiagnostics:$false)' 'build-diagnostic-false.ps1')} 'build failure diagnostics false accepted' -SemanticReason (ExactReason 'C1b runner fresh build 必须使用 bare -FailureDiagnostics；不得省略或显式绑定 false。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    `":tablet-c1b-probe:clean`"" 'double-clean.ps1')} 'double-quoted clean accepted' -SemanticReason (ExactReason 'C1b runner 禁止 Gradle clean/WrapperMain 执行面。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    'org.gradle.wrapper.' + 'GradleWrapperMain'" 'concat-wrapper.ps1')} 'concatenated WrapperMain accepted' -SemanticReason (ExactReason 'C1b runner 禁止 Gradle clean/WrapperMain 执行面。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ' -ProcessEnvironment $adbEnvironment -ClearEnvironment' ' -ProcessEnvironment $adbEnvironment' 'adb-env-inherit.ps1')} 'ADB inherited environment accepted' -SemanticReason (ExactReason 'C1b runner Invoke-TL1C1aAdb 必须使用 bare -ClearEnvironment；不得省略或显式绑定 false。')
@@ -181,7 +195,7 @@ try{
     }
     Pass gradle_seal_frozen_topology {
         $gradleStart='[void](Invoke-TL1C1aProcess -FilePath $Java -Arguments $gradleArguments `'
-        $gradleEnd='-Environment $buildEnvironment -ClearEnvironment -TimeoutSec 300)'
+        $gradleEnd='-Environment $buildEnvironment -ClearEnvironment -TimeoutSec 300 -FailureDiagnostics)'
         Throws {
             Assert-TL1C1bRunnerReadOnlyAst (WrapSegment $runner `
                 $gradleStart $gradleEnd '@(' '; Start-Sleep -Milliseconds 1)' `
@@ -351,6 +365,65 @@ try{
     Pass t0_library_second_process_start {Throws {Assert-TL1C1bT0ReadOnlySurface $t0Runner (Mutate $t0Library 'Set-StrictMode -Version 3.0' "Set-StrictMode -Version 3.0`n[Diagnostics.Process]::Start('adb.exe')" 't0-process-start.ps1')} 'T0 second Process.Start accepted'}
     Pass t0_arguments_reassignment {Throws {Assert-TL1C1bT0ReadOnlySurface $t0Runner (Mutate $t0Library '$start = [Diagnostics.ProcessStartInfo]::new()' "`$arguments=@('shell','settings','put','secure','x','1')`n    `$start = [Diagnostics.ProcessStartInfo]::new()" 't0-args-reassign.ps1')} 'T0 arguments reassignment accepted'}
     Pass t0_argument_list_injection {Throws {Assert-TL1C1bT0ReadOnlySurface $t0Runner (Mutate $t0Library 'foreach ($argument in $arguments) { $start.ArgumentList.Add($argument) }' "foreach (`$argument in `$arguments) { `$start.ArgumentList.Add(`$argument) }`n    `$start.ArgumentList.Add('shell')" 't0-args-add.ps1')} 'T0 ArgumentList injection accepted'}
+    Pass build_diagnostic_exit_zero_unchanged {
+        $result=Invoke-SyntheticBuildProcess '[Console]::Out.Write("success stdout");[Console]::Error.Write("success stderr");exit 0' -Diagnostics
+        if($result.ExitCode-ne0-or$result.Text-cne'success stdout'-or$result.Stderr-cne'success stderr'){throw 'successful process result changed'}
+    }
+    Pass build_diagnostic_nonzero_both_streams_and_cleanup {
+        $message=$null;$cleaned=$false
+        try{[void](Invoke-SyntheticBuildProcess '[Console]::Out.Write("Task :probe:compile FAILED");[Console]::Error.Write("Could not resolve module fixture.dependency");exit 7' -Diagnostics)}catch{$message=$_.Exception.Message}finally{$cleaned=$true}
+        if(-not$cleaned-or$null-eq$message-or$message-notmatch'exit=7'-or
+           -not$message.Contains('Task :probe:compile FAILED')-or-not$message.Contains('Could not resolve module fixture.dependency')){throw 'nonzero exit lost diagnostics or cleanup'}
+    }
+    Pass build_diagnostic_opt_in_and_allow_failure_preserved {
+        $body='[Console]::Out.Write("raw stdout");[Console]::Error.Write("raw stderr");exit 9'
+        $message=$null;try{[void](Invoke-SyntheticBuildProcess $body)}catch{$message=$_.Exception.Message}
+        if($message-cne'synthetic build 失败（exit=9）。'){throw 'ordinary process failure changed'}
+        $result=Invoke-SyntheticBuildProcess $body -AllowFailure -Diagnostics
+        if($result.ExitCode-ne9-or$result.Text-cne'raw stdout'-or$result.Stderr-cne'raw stderr'){throw 'AllowFailure contract changed'}
+    }
+    Pass build_diagnostic_redacts_secrets_before_bounding {
+        $secret='fixture_sensitive_value_7'
+        $body=@'
+[Console]::Out.WriteLine(('line of build progress ' * 1000))
+[Console]::Out.WriteLine($env:TEST_SECRET)
+[Console]::Out.WriteLine('Authorization: Bearer fixture-bearer-value')
+[Console]::Out.WriteLine('https://fixture-user:fixture-pass@example.invalid/path?api_key=fixture-query-value')
+[Console]::Out.WriteLine('-----BEGIN PRIVATE KEY-----')
+[Console]::Out.WriteLine('fixture-private-material')
+[Console]::Out.WriteLine('-----END PRIVATE KEY-----')
+[Console]::Out.WriteLine('Build failed: fixture diagnostic retained')
+[Console]::Error.WriteLine('Task :probe:compile FAILED')
+exit 1
+'@
+        $message=$null;try{[void](Invoke-SyntheticBuildProcess $body -Environment @{TEST_SECRET=$secret} -Diagnostics)}catch{$message=$_.Exception.Message}
+        if($null-eq$message-or$message.Length-gt8500-or-not$message.Contains('<truncated; sanitized tail>')-or
+           -not$message.Contains('fixture diagnostic retained')-or-not$message.Contains('Task :probe:compile FAILED')){throw 'bounded failure diagnostics missing'}
+        foreach($value in @($secret,'fixture-bearer-value','fixture-user','fixture-pass','fixture-query-value','fixture-private-material')){
+            if($message.Contains($value)){throw 'sensitive fixture leaked in failure diagnostics'}
+        }
+    }
+    Pass build_diagnostic_control_sequences_and_user_paths {
+        $raw="to$([char]27)[31mken=fixture-hidden-value`nC:\Users\fixture-user\project\build.gradle.kts`nCause retained"
+        $safe=ConvertTo-TL1C1aFailureDiagnostic $raw @()
+        if($safe.Contains('fixture-hidden-value')-or$safe.Contains('fixture-user')-or$safe.Contains([string][char]27)-or
+           -not$safe.Contains('Cause retained')){throw 'control sequence or user path redaction failed'}
+        foreach($text in @('',('plain build output ' * 1000))){
+            if((ConvertTo-TL1C1aFailureDiagnostic $text @()).Length-gt4096){throw 'stream diagnostic cap exceeded'}
+        }
+    }
+    Pass build_diagnostic_equal_length_secrets_and_path_variants {
+        $first='fixture-sensitive-alpha';$second='fixture-sensitive-bravo'
+        if($first.Length-ne$second.Length){throw 'fixture secrets must have equal length'}
+        $path='Q:\isolated-host\build-root'
+        $safe=ConvertTo-TL1C1aFailureDiagnostic `
+            ("$first`n$second`n$path`n"+$path.Replace('\','/').ToLowerInvariant()+"`n"+$path.Replace('\','\\')+"`nCause retained") `
+            @($first,$second,$path)
+        foreach($value in @($first,$second,'isolated-host')){
+            if($safe.Contains($value)){throw 'equal-length secret or path variant leaked'}
+        }
+        if(-not$safe.Contains('Cause retained')){throw 'useful diagnostic lost'}
+    }
     $capture=[pscustomobject][ordered]@{c1_requests_accepted=1L;c2_requests_accepted=1L;result_read_count=1L;recapture_count=0L}
     $control=[pscustomobject][ordered]@{c1_requests_accepted=1L;c2_requests_accepted=1L;committed_tokens=[string[]]@('c1','c2');recapture_count=0L}
     Pass counts_positive {$counts=ConvertTo-TL1C1bReadOnlyCounts $capture $control $proof;if($counts.a11y_frame_capture_count-ne2L-or$counts.recapture_count-ne0L){throw 'derived counts'}}

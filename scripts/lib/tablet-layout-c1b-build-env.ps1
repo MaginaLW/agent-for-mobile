@@ -3349,6 +3349,9 @@ function Get-TL1C1bBuildEnvironmentGradleArguments {
         '-PtabletC1bIsolatedBuild=true'
         '-Pkotlin.incremental=false'
         '-Pkotlin.compiler.execution.strategy=in-process'
+        ('-Pkotlin.project.persistent.dir=' +
+            [string]$TrustGuard.Workspace.KotlinRuntimeDirectory)
+        '-Pkotlin.project.persistent.dir.gradle.disableWrite=true'
     )
 }
 

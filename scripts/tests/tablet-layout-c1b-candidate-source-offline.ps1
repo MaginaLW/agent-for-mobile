@@ -230,6 +230,51 @@ Test-Case 'successful pre/post evidence disclaims transient continuity' {
     Assert-Test ($r.Failures.Count -eq 0 -and $r.Receipt.git_trust_root_continuity_verified) 'Stable tree was rejected.'
     Assert-Test (-not $r.Receipt.git_trust_root_transient_change_excluded) 'Discrete checks overclaimed continuity.'
 }
+Test-Case 'new helper diagnostics reach underlying process and renderer matches candidate bytes' {
+    # wrapper 签名与唯一 Gradle 调用取自冻结模板；仅底层进程使用内存 stub，不启动构建。
+    $template = @'
+function Invoke-TL1C1aProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Operation,
+        [byte[]]$InputBytes,
+        [hashtable]$Environment,
+        [switch]$ClearEnvironment,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 30,
+        [switch]$AllowFailure
+    )
+    return Invoke-TL1C1aProcessSmokeUnderlying @PSBoundParameters
+}
+    [void](Invoke-TL1C1aProcess -FilePath ([string]$gradleInvocation.FilePath) `
+        -Arguments $gradleArguments `
+        -Operation 'C1b 42-input real isolated direct GradleMain smoke' `
+        -Environment $environment -ClearEnvironment -TimeoutSec 300)
+'@
+    $updated = Update-C1bHelperCandidateTemplate $template
+    $helperText = $template
+    function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
+    . ([scriptblock]::Create((New-C1bHelperRendererTransformSource $template)))
+    Assert-Test ($helperText -ceq $updated) 'Helper renderer differs from candidate transformation.'
+    $crlf = $template.Replace("`r`n","`n").Replace("`n","`r`n")
+    Assert-Test ((Update-C1bHelperCandidateTemplate $crlf).Replace("`r`n","`n") -ceq $updated.Replace("`r`n","`n")) 'Helper CRLF transformation differs.'
+    $script:helperForwarded = $null
+    function Invoke-TL1C1aProcessSmokeUnderlying {
+        param($FilePath,$Arguments,$Operation,$InputBytes,$Environment,[switch]$ClearEnvironment,
+            [int]$TimeoutSec,[switch]$AllowFailure,[switch]$FailureDiagnostics)
+        $script:helperForwarded = @{} + $PSBoundParameters
+    }
+    $gradleInvocation = @{FilePath='fixture-java.exe'}
+    $gradleArguments = [string[]]@('fixture-gradle-main')
+    $environment = @{FIXTURE='value'}
+    . ([scriptblock]::Create($updated))
+    Assert-Test ($null -ne $script:helperForwarded -and $script:helperForwarded.FailureDiagnostics.IsPresent -and
+        $script:helperForwarded.ClearEnvironment.IsPresent -and $script:helperForwarded.TimeoutSec -eq 300 -and
+        $script:helperForwarded.FilePath -ceq 'fixture-java.exe') 'Helper wrapper did not forward diagnostics unchanged.'
+    Assert-Rejected { Update-C1bHelperCandidateTemplate $updated } 'cardinality'
+    Assert-Rejected { Update-C1bHelperCandidateTemplate ($template.Replace('-TimeoutSec 300)', '-TimeoutSec 299)')) } 'cardinality'
+    Assert-Rejected { Update-C1bHelperCandidateTemplate ($template + "`n" + $template) } 'cardinality'
+}
 Test-Case 'missing or duplicate injection anchors cannot silently produce a candidate' {
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource ($fixture.Replace('function Invoke-ReadOnlyGit {','function Other {')) $checks $constants } 'cardinality'
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture ($checks + '; Write-Output bad') $constants } 'functions only'

@@ -419,7 +419,7 @@ try {
     $buildStarted=[DateTime]::UtcNow
     [void](Invoke-TL1C1aProcess -FilePath $Java -Arguments $gradleArguments `
         -Operation 'fresh C1b dedicated read-only APK 构建与闭包证明' `
-        -Environment $buildEnvironment -ClearEnvironment -TimeoutSec 300)
+        -Environment $buildEnvironment -ClearEnvironment -TimeoutSec 300 -FailureDiagnostics)
     $buildEnvironmentBinding=Seal-TL1C1bBuildEnvironmentDebugKeystoreLock `
         -TrustGuard $buildEnvironmentGuard `
         -ExpectedTrustGuard $buildEnvironmentGuardAnchor `

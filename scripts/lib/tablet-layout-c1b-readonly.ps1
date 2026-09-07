@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:c65d14e082ac7566dd8f7c3406d9e8cfa52fd2920c214a64f2092d6ff28c1749'
+    'sha256:f47e30ce0a7c5e3773f9176afbe13c42b1bf953bdbbdb606043d30d3575df89d'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -686,12 +686,17 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
     $seenGenericProcesses=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $gradleProcessCall=$null
     foreach ($call in $genericProcesses) {
-        Assert-TL1C1bReadonlyExactParameterNames $call `
-            ([string[]]@('FilePath','Arguments','Operation','Environment','ClearEnvironment','TimeoutSec')) `
-            'C1b runner held launcher'
-        Assert-TL1C1bReadonlyBareSwitch $call 'ClearEnvironment' 'C1b runner held launcher'
         $operation=Get-TL1C1bReadonlyStaticString `
             (Get-TL1C1bReadonlyNamedArgumentAst $call 'Operation') 'C1b runner held launcher operation'
+        $parameterNames=[string[]]@('FilePath','Arguments','Operation','Environment','ClearEnvironment','TimeoutSec')
+        if($operation-ceq'fresh C1b dedicated read-only APK 构建与闭包证明'){
+            $parameterNames+=[string[]]@('FailureDiagnostics')
+            Assert-TL1C1bReadonlyBareSwitch $call 'FailureDiagnostics' 'C1b runner fresh build'
+        }
+        Assert-TL1C1bReadonlyExactParameterNames $call `
+            $parameterNames `
+            'C1b runner held launcher'
+        Assert-TL1C1bReadonlyBareSwitch $call 'ClearEnvironment' 'C1b runner held launcher'
         if(-not$expectedGenericProcesses.Contains($operation)-or-not$seenGenericProcesses.Add($operation)){
             throw 'C1b runner held launcher operation closure 漂移。'
         }
@@ -815,7 +820,7 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
     $expectedGradleStatementCompact=
         "[void](Invoke-TL1C1aProcess-FilePath`$Java-Arguments`$gradleArguments"+
         "-Operation'freshC1bdedicatedread-onlyAPK构建与闭包证明'"+
-        "-Environment`$buildEnvironment-ClearEnvironment-TimeoutSec300)"
+        "-Environment`$buildEnvironment-ClearEnvironment-TimeoutSec300-FailureDiagnostics)"
     $achievedStatement=if($sealStatementIndex+1-lt$statements.Count){
         $statements[$sealStatementIndex+1]
     }else{$null}

@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建失败诊断** | 463304c 全量 13/13、exact pair/r14、只读 preflight 与真实 build-only 已通过；接入后独立目录 r3 的生产 Gradle exit 1，具体输出丢失，尚未安装或访问设备 | 修复有界脱敏诊断并离线定位；新代码重新完成候选门与 [源码准备](runbooks/T-L1-c1b-candidate-source.md)，不重跑已冻结 r1/r2/r3 或 host 工件 |
+| **C1b 生产构建隔离与诊断** | 463304c 主机前置通过后 r3 生产 Gradle exit 1、未访问设备；现已修 Kotlin 项目状态重定向与有界脱敏诊断，readonly 80/80、source 10/10、build-env 28/28 和 Host E2E 通过 | 新代码在独立完整 clone 重新完成候选门与 [源码准备](runbooks/T-L1-c1b-candidate-source.md)，再实建；不重跑已冻结 r1/r2/r3 或 host 工件，不追认历史缺失错误 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；

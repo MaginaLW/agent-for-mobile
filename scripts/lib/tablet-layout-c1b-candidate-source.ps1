@@ -142,6 +142,63 @@ function New-C1bLauncherRendererTransformSource {
     return [string]::Join("`r`n", $lines)
 }
 
+function Get-C1bHelperSourceTransformations {
+    param([Parameter(Mandatory)][string]$Source)
+    $newline = if ($Source.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $wrapperOld = @'
+function Invoke-TL1C1aProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Operation,
+        [byte[]]$InputBytes,
+        [hashtable]$Environment,
+        [switch]$ClearEnvironment,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 30,
+        [switch]$AllowFailure
+    )
+'@
+    $gradleOld = @'
+    [void](Invoke-TL1C1aProcess -FilePath ([string]$gradleInvocation.FilePath) `
+        -Arguments $gradleArguments `
+        -Operation 'C1b 42-input real isolated direct GradleMain smoke' `
+        -Environment $environment -ClearEnvironment -TimeoutSec 300)
+'@
+    foreach ($change in @(
+        @{Old=$wrapperOld;New=$wrapperOld.Replace('[switch]$AllowFailure', '[switch]$AllowFailure,' + "`n" + '        [switch]$FailureDiagnostics')},
+        @{Old=$gradleOld;New=$gradleOld.Replace('-TimeoutSec 300)', '-TimeoutSec 300 -FailureDiagnostics)')}
+    )) {
+        [pscustomobject]@{
+            Old=$change.Old.Replace("`r`n","`n").Replace("`n",$newline)
+            New=$change.New.Replace("`r`n","`n").Replace("`n",$newline)
+            Count=1
+        }
+    }
+}
+
+function Update-C1bHelperCandidateTemplate {
+    param([Parameter(Mandatory)][string]$Source)
+    foreach ($change in @(Get-C1bHelperSourceTransformations $Source)) {
+        $Source = Replace-C1bCandidateExactText $Source $change.Old $change.New $change.Count
+    }
+    [void](Get-C1bCandidateSourceAst $Source)
+    return $Source
+}
+
+function New-C1bHelperRendererTransformSource {
+    param([Parameter(Mandatory)][string]$TemplateSource)
+    $lines = [Collections.Generic.List[string]]::new()
+    foreach ($change in @(Get-C1bHelperSourceTransformations $TemplateSource)) {
+        $old64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.Old))
+        $new64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.New))
+        $lines.Add('    $helperTransformOld = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String(''' + $old64 + '''))')
+        $lines.Add('    $helperTransformNew = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String(''' + $new64 + '''))')
+        $lines.Add('    Assert-Renderer (([regex]::Matches($helperText, [regex]::Escape($helperTransformOld))).Count -eq ' + $change.Count + ') ''Helper source transform cardinality drifted.''')
+        $lines.Add('    $helperText = $helperText.Replace($helperTransformOld, $helperTransformNew, [StringComparison]::Ordinal)')
+    }
+    return [string]::Join("`r`n", $lines)
+}
+
 function New-C1bExactPairCandidateSource {
     param(
         [Parameter(Mandatory)][string]$BaselineRendererSource,
@@ -206,7 +263,9 @@ function New-C1bExactPairCandidateSource {
     $launcherPath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.ps1")
     $failurePath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.failure.json")
     $pwshHash = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
-    $helper = Replace-C1bCandidateExactText $HelperTemplateSource '__FINAL_COMMIT_SHA__' $CommitSha
+    # 旧模板/冻结工件不变；新 helper 的 wrapper 与唯一 Gradle 调用同时启用有界脱敏诊断。
+    $helper = Update-C1bHelperCandidateTemplate $HelperTemplateSource
+    $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHA__' $CommitSha
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHORT__' $short
     # 原冻结 template 保持原 hash；只转换新 candidate 的运行时/progress/诊断/缓冲引用。
     $template = Update-C1bLauncherCandidateTemplate $LauncherTemplateSource
@@ -239,6 +298,9 @@ function New-C1bExactPairCandidateSource {
         expectedLauncherLength=[long][Text.UTF8Encoding]::new($false).GetByteCount($launcher)
     }
     $renderer = Set-C1bCandidateLiteralAssignments $BaselineRendererSource $constants
+    $helperAnchor = '$helperText = [string]$inputByLabel[''helper_template''].Text'
+    $renderer = Replace-C1bCandidateExactText $renderer $helperAnchor (
+        $helperAnchor + "`r`n" + (New-C1bHelperRendererTransformSource $HelperTemplateSource))
     $anchor = '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
     $renderer = Replace-C1bCandidateExactText $renderer $anchor (
         $anchor + "`r`n" + (New-C1bLauncherRendererTransformSource $LauncherTemplateSource))
