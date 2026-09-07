@@ -309,6 +309,10 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   再按最终目录的实际原始字节绑定七项 loader 及 verifier；不能先归一化换行后再宣称 raw hash 一致。
   Windows 离线 fake CMD 夹具须显式生成 CRLF；源码改为 LF 的 clone 曾让设备列表夹具返回空，
   该现象属于宿主测试夹具，不能推断真实平板未连接。证据见[候选失败与修复记录](../../runs/2026-09-08-C1b-0386ee7-候选整合门失败.md)。
+- **外层路径检查也必须实际执行（2026-09-08，主机入口失败）**：`Get-Item` 的 provider 扩展属性
+  不保证存在于 `.Parent`/`.Directory` 返回的原生对象；遍历父链应使用 `FileInfo`/`DirectoryInfo` 类型。
+  Parser 和静态签名检查不能代替路径守卫运行合同。本次 r1 在 wrapper 启动前失败；修复草稿未运行，
+  不能把静态审查结论当作实际通过。见[设备入口记录](../../runs/2026-09-08-C1b-4cafd99-设备入口.md)。
 
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
