@@ -189,8 +189,11 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 - **语义意图基础模块已补齐**（`48f8dd8`）：一次性 store、三时钟/依赖装配、a11y/OCR 重建与绑定内容基线，
   新增 57 条 JVM 用例；生产 SafetyGate 接线及 handler 次数证明仍待队列放开，见[spec §5](specs/2026-08-02-语义意图审批-design.md)。
 - **C1b r14 源码任务已完成**（`b0aaa28`）：可复现转换与 pre/finally-post/字节 canary，9 cases + 545 assertions/10 mutations；
-  [准备入口](runbooks/T-L1-c1b-candidate-source.md)已就位。正式 exact 工件、read-only preflight 和 build-only
-  尚未执行，前置是 Windows 符号链接能力与完整门闭合；下方旧候选记录不构成新运行授权。
+  [准备入口](runbooks/T-L1-c1b-candidate-source.md)已就位。`6fbb157` 已补齐符号链接能力、全量 13/13，正式 exact
+  工件与只读 preflight 均已通过；唯一 build-only 因 helper stderr 非空且溢出被外层拒绝，不能通知接平板。
+  本轮构建/签名/aapt2 完成、ADB 0、清理完成。启动进度、有界错误诊断及原数组清零已补齐源码，
+  短回归为 9 cases + 1300 assertions/28 mutations；完整门和新候选 one-shot 尚待验收。
+  旧轮不重跑，见[冻结记录](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。
 - ~~C1b private ADB early-failure 可观测性~~ **代码与专项离线验证已完成（2026-08-29）**：server listen 固定为
   `localhost`，run_id 前生成 post-cleanup closed attempt record；每次启动只保存 substage、exit、bounded
   byte counts/hash/分类与 cleanup，不持久化 raw stderr 或路径/设备信息。private ADB 22/22、readonly 74/74、

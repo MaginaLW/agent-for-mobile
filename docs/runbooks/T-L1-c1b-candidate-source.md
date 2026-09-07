@@ -26,8 +26,9 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 新 SHA 或任何影响输入的改动都必须重新定版，不能把占位 SHA 的适配测试当作最终候选。
 
 4. 静态审查这五份源码及输入绑定。pair 的历史对照先逐字节重现上一对冻结 hash；常量只按唯一顶层变量名改写，
-   相同值的历史常量保持不动。launcher 原模板仍按旧 hash 读取，只有三处精确 `7.6.4 → 7.6.5` 版本转换；
-   r14 的模板逆向重构期望值对应转换后的模板。
+   相同值的历史常量保持不动。launcher 原模板仍按旧 hash 读取；转换包含三处精确 `7.6.4 → 7.6.5`、
+   bootstrap 最早抑制进度输出、stderr 有界原始前缀诊断，以及两处捕获数组按真实引用清零。
+   内存派生和实际 renderer 复用同一份转换清单，各转换核验精确出现次数；r14 逆向模板 hash 对应转换后的模板。
 5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
    renderer。二者复用原 r12 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
    发布原语，最终 helper/launcher/preflight 必须与 `.expected.ps1` 的 hash/length 一致。本入口不会自动执行这一步。
@@ -45,12 +46,19 @@ primary-first，最后汇总拒绝失败终态。额外 identity catalog 对比�
 launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 canary 在隔离 runspace 执行已验证的固定 return，
 用 0/1/5 字节向量核验返回类型、内容和 CRLF framing，不加载或调用 launcher 本身。
 
+输出流合同还核验 bootstrap 的 `ProgressPreference=SilentlyContinue` 位于 `ErrorActionPreference=Stop` 之前，
+保留 stderr 非空、溢出及 drain 失败的拒绝门。原有 launcher 日志增加最多 1 MiB 原始 stderr 前缀的 Base64、
+前缀 hash/长度和未捕获长度；全流 hash/总长度继续独立记录，不能将前缀当作完整 stderr。
+捕获数组清零必须保留真实 `byte[]` 引用，避免 PowerShell 管道枚举后只清掉副本。
+
 ```powershell
 & $pwshPath -NoProfile -File scripts/tests/tablet-layout-c1b-candidate-source-offline.ps1
 & $pwshPath -NoProfile -File scripts/tests/tablet-layout-c1b-preflight-r14-checks-offline.ps1
 ```
 
 两个常驻回归使用最小 synthetic fixture；不依赖历史 staging、本机账户路径、Git 安装树或真实设备。
-测试分别覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
+源码回归为 9 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝；
+r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
+测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。真实冻结输入的派生适配测试另行执行，只能证明源码能够生成和通过 Parser，
 不能升级为真实 preflight 或 smoke 通过。

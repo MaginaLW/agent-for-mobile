@@ -146,9 +146,10 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         ConvertFrom-Json -DateKind String -ErrorAction Stop
     if ($snapshotSummary.status -cne 'passed' -or $snapshotSummary.synthetic_only -ne $true -or
         $snapshotSummary.frozen_script_invocation_count -ne 0 -or $snapshotSummary.external_process_invocation_count -ne 0 -or
-        $snapshotSummary.assertion_count -ne 545 -or $snapshotSummary.mutation_rejection_cases -ne 10 -or
+        $snapshotSummary.assertion_count -ne 1300 -or $snapshotSummary.mutation_rejection_cases -ne 28 -or
+        $snapshotSummary.stream_contract_mutation_rejection_cases -ne 18 -or
         $snapshotSummary.cleanup_failure_count -ne 0) { throw 'r14 预检反例汇总不符。' }
-    'candidate source 9/9；r14 synthetic 545 assertions / 10 mutations；无冻结候选或外部进程调用'
+    'candidate source 9/9（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；无冻结候选、构建或设备调用'
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {

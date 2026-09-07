@@ -341,3 +341,227 @@ function Assert-TL1C1bPreflightLauncherByteReturn {
         cleanup_completed = $true
     }
 }
+
+function Assert-TL1C1bPreflightLauncherStreamContract {
+    param([Parameter(Mandatory)][Management.Automation.Language.ScriptBlockAst]$LauncherAst)
+
+    # Token text preserves whitespace inside quoted literals. Only lexical
+    # whitespace/comments are ignored; no launcher expression is evaluated.
+    $compact = {
+        param([Management.Automation.Language.Ast]$Node)
+        $tokens = $null
+        $errors = $null
+        $null = [Management.Automation.Language.Parser]::ParseInput(
+            $Node.Extent.Text, [ref]$tokens, [ref]$errors)
+        Assert-Preflight ($errors.Count -eq 0) 'Launcher stream-contract fragment did not parse.'
+        return [string]::Join('', [string[]]@($tokens | Where-Object {
+            $_.Kind -notin @('EndOfInput', 'NewLine', 'LineContinuation', 'Comment')
+        } | ForEach-Object { $_.Text }))
+    }
+    $unwrap = {
+        param([Management.Automation.Language.Ast]$Node)
+        while ($true) {
+            if ($Node -is [Management.Automation.Language.CommandExpressionAst]) {
+                Assert-Preflight ($Node.Redirections.Count -eq 0) 'Launcher stream-contract expression redirects a stream.'
+                $Node = $Node.Expression
+            } elseif ($Node -is [Management.Automation.Language.ConvertExpressionAst]) {
+                Assert-Preflight ($Node.Type.TypeName.FullName -in @('pscustomobject', 'ordered')) (
+                    'Launcher stream-contract expression has an unexpected cast.')
+                $Node = $Node.Child
+            } elseif ($Node -is [Management.Automation.Language.PipelineAst]) {
+                Assert-Preflight ($Node.PipelineElements.Count -eq 1) 'Launcher stream-contract expression has a pipeline.'
+                $Node = $Node.PipelineElements[0]
+            } elseif ($Node -is [Management.Automation.Language.StatementBlockAst]) {
+                Assert-Preflight ($Node.Statements.Count -eq 1) 'Launcher stream-contract expression has multiple statements.'
+                $Node = $Node.Statements[0]
+            } else { return $Node }
+        }
+    }
+    $assignments = @($LauncherAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst]
+    }, $true))
+    $bootstrapAssignments = @($assignments | Where-Object {
+        $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        ($_.Left.VariablePath.UserPath -split ':')[-1] -ieq 'childBootstrapSource'
+    })
+    Assert-Preflight (
+        $bootstrapAssignments.Count -eq 1 -and
+        $bootstrapAssignments[0].Left.VariablePath.UserPath -ceq 'childBootstrapSource' -and
+        $bootstrapAssignments[0].Operator -eq [Management.Automation.Language.TokenKind]::Equals
+    ) 'Launcher stream contract requires one literal childBootstrapSource assignment.'
+    $bootstrapLiteral = & $unwrap $bootstrapAssignments[0].Right
+    Assert-Preflight ($bootstrapLiteral -is [Management.Automation.Language.StringConstantExpressionAst]) (
+        'Launcher stream contract requires a literal bootstrap, without interpolation.')
+    $tokens = $null
+    $errors = $null
+    $bootstrapAst = [Management.Automation.Language.Parser]::ParseInput(
+        $bootstrapLiteral.Value, [ref]$tokens, [ref]$errors)
+    Assert-Preflight (
+        $errors.Count -eq 0 -and $null -eq $bootstrapAst.ParamBlock -and
+        $null -eq $bootstrapAst.BeginBlock -and $null -eq $bootstrapAst.ProcessBlock -and
+        $null -eq $bootstrapAst.DynamicParamBlock -and $null -ne $bootstrapAst.EndBlock -and
+        $bootstrapAst.EndBlock.Statements.Count -ge 2
+    ) 'Launcher stream contract requires a plain bootstrap statement sequence.'
+    Assert-Preflight (
+        (& $compact $bootstrapAst.EndBlock.Statements[0]) -ceq '$ProgressPreference=''SilentlyContinue''' -and
+        (& $compact $bootstrapAst.EndBlock.Statements[1]) -ceq '$ErrorActionPreference=''Stop'''
+    ) 'Launcher stream contract must suppress progress first and retain ErrorActionPreference Stop second.'
+    $bootstrapWrites = @($bootstrapAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst]
+    }, $true))
+    Assert-Preflight (@($bootstrapWrites | Where-Object {
+        $_.Left -isnot [Management.Automation.Language.VariableExpressionAst]
+    }).Count -eq 0) 'Launcher stream contract rejects indirect bootstrap assignments.'
+    foreach ($name in @('ProgressPreference', 'ErrorActionPreference')) {
+        $writes = @($bootstrapWrites | Where-Object {
+            ($_.Left.VariablePath.UserPath -split ':')[-1] -ieq $name
+        })
+        Assert-Preflight ($writes.Count -eq 1 -and $writes[0].Left.VariablePath.UserPath -ceq $name) (
+            "Launcher stream contract requires exactly one unscoped $name write.")
+    }
+    $indirectWrites = @($bootstrapAst.FindAll({
+        param($node)
+        ($node -is [Management.Automation.Language.UnaryExpressionAst] -and
+            $node.TokenKind -in @('PlusPlus', 'MinusMinus', 'PostfixPlusPlus', 'PostfixMinusMinus')) -or
+        ($node -is [Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -imatch '(^|\\)(Set-Variable|New-Variable|Clear-Variable|Remove-Variable|sv|nv|clv|rv|set)$')
+    }, $true))
+    $redirections = @($bootstrapAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.RedirectionAst]
+    }, $true))
+    Assert-Preflight ($indirectWrites.Count -eq 0 -and $redirections.Count -eq 0) (
+        'Launcher stream contract rejects preference setters or bootstrap stream redirection.')
+
+    $capAssignments = @($assignments | Where-Object {
+        $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        ($_.Left.VariablePath.UserPath -split ':')[-1] -ieq 'captureCapBytes'
+    })
+    Assert-Preflight (
+        $capAssignments.Count -eq 1 -and
+        (& $compact $capAssignments[0]) -ceq '$captureCapBytes=1048576L'
+    ) 'Launcher stream contract must retain the unique one-MiB capture cap.'
+    $drains = @($LauncherAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Expression -is [Management.Automation.Language.TypeExpressionAst] -and
+        $node.Expression.TypeName.FullName -ceq 'TL1C1bNextLauncherNativeV1' -and
+        $node.Member.Value -ceq 'DrainAsync'
+    }, $true))
+    Assert-Preflight ($drains.Count -eq 2) 'Launcher stream contract requires exactly two bounded drains.'
+    foreach ($role in @('StandardOutput', 'StandardError')) {
+        $matchingDrains = @($drains | Where-Object {
+            $_.Arguments.Count -eq 2 -and
+            (& $compact $_.Arguments[0]) -ceq ('$process.' + $role + '.BaseStream') -and
+            (& $compact $_.Arguments[1]) -ceq '[int]$captureCapBytes'
+        })
+        Assert-Preflight ($matchingDrains.Count -eq 1) "Launcher stream contract lost the bounded $role drain."
+    }
+
+    $logAssignments = @($assignments | Where-Object {
+        $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        ($_.Left.VariablePath.UserPath -split ':')[-1] -ieq 'logValue'
+    })
+    Assert-Preflight ($logAssignments.Count -eq 1 -and $logAssignments[0].Left.VariablePath.UserPath -ceq 'logValue') (
+        'Launcher stream contract requires a unique logValue assignment.')
+    $logTable = & $unwrap $logAssignments[0].Right
+    Assert-Preflight ($logTable -is [Management.Automation.Language.HashtableAst]) (
+        'Launcher stream contract requires a literal log hashtable.')
+    $stderrPairs = @($logTable.KeyValuePairs | Where-Object {
+        $_.Item1 -is [Management.Automation.Language.StringConstantExpressionAst] -and
+        $_.Item1.Value -ceq 'stderr'
+    })
+    Assert-Preflight ($stderrPairs.Count -eq 1) 'Launcher stream contract requires exactly one log stderr field.'
+    $stderrBranch = & $unwrap $stderrPairs[0].Item2
+    Assert-Preflight (
+        $stderrBranch -is [Management.Automation.Language.IfStatementAst] -and
+        $stderrBranch.Clauses.Count -eq 1 -and $null -ne $stderrBranch.ElseClause -and
+        (& $compact $stderrBranch.Clauses[0].Item1) -ceq '$null-eq$stderrResult' -and
+        $stderrBranch.Clauses[0].Item2.Statements.Count -eq 1 -and
+        (& $compact $stderrBranch.Clauses[0].Item2.Statements[0]) -ceq '$null'
+    ) 'Launcher stream contract requires the exact nullable stderr log branch.'
+    $stderrTable = & $unwrap $stderrBranch.ElseClause
+    Assert-Preflight ($stderrTable -is [Management.Automation.Language.HashtableAst]) (
+        'Launcher stream contract requires a literal stderr diagnostic hashtable.')
+    $expectedFields = [ordered]@{
+        total_byte_length = '[long]$stderrResult.TotalByteLength'
+        captured_byte_length = '[long]$stderrResult.CapturedBytes.Length'
+        sha256 = '''sha256:''+[string]$stderrResult.Sha256'
+        overflowed = '[bool]$stderrResult.Overflowed'
+        forced_closed = '[bool]$stderrForcedClosed'
+        captured_prefix_base64 = '[Convert]::ToBase64String($stderrResult.CapturedBytes)'
+        captured_prefix_sha256 = '''sha256:''+[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stderrResult.CapturedBytes)).ToLowerInvariant()'
+        captured_prefix_byte_length = '[long]$stderrResult.CapturedBytes.Length'
+        capture_is_prefix = '$true'
+        uncaptured_byte_length = '[long]$stderrResult.TotalByteLength-[long]$stderrResult.CapturedBytes.Length'
+    }
+    Assert-Preflight ($stderrTable.KeyValuePairs.Count -eq $expectedFields.Count) (
+        'Launcher stream contract stderr diagnostic field count drifted.')
+    foreach ($name in $expectedFields.Keys) {
+        $pairs = @($stderrTable.KeyValuePairs | Where-Object {
+            $_.Item1 -is [Management.Automation.Language.StringConstantExpressionAst] -and
+            $_.Item1.Value -ceq $name
+        })
+        Assert-Preflight ($pairs.Count -eq 1 -and (& $compact $pairs[0].Item2) -ceq $expectedFields[$name]) (
+            "Launcher stream contract stderr diagnostic field drifted: $name")
+    }
+
+    $emptyGateCondition = '$stderrResult.Overflowed-or[long]$stderrResult.TotalByteLength-ne0L-or$stderrResult.CapturedBytes.Length-ne0'
+    $emptyGates = @($LauncherAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.IfStatementAst]
+    }, $true) | Where-Object {
+        $_.Clauses.Count -eq 1 -and
+        (& $compact $_.Clauses[0].Item1) -ceq $emptyGateCondition
+    })
+    Assert-Preflight (
+        $emptyGates.Count -eq 1 -and $null -eq $emptyGates[0].ElseClause -and
+        $emptyGates[0].Clauses[0].Item2.Statements.Count -eq 1 -and
+        (& $compact $emptyGates[0].Clauses[0].Item2.Statements[0]) -ceq
+            'throw''Helper stderr was not byte-empty for a passed summary.'''
+    ) 'Launcher stream contract must preserve the exact nonempty-stderr rejection gate.'
+
+    $bufferLoops = @($LauncherAst.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.ForEachStatementAst] -and
+        $node.Variable.VariablePath.UserPath -ceq 'buffer'
+    }, $true))
+    $expectedBufferCollection = '@($summaryBytes,$expectedStdoutBytes,$(if($null-eq$stdoutResult){$null}else{,$stdoutResult.CapturedBytes}),$(if($null-eq$stderrResult){$null}else{,$stderrResult.CapturedBytes}))'
+    Assert-Preflight (
+        $bufferLoops.Count -eq 1 -and
+        (& $compact $bufferLoops[0].Condition) -ceq $expectedBufferCollection -and
+        $bufferLoops[0].Body.Statements.Count -eq 1 -and
+        $bufferLoops[0].Body.Statements[0] -is [Management.Automation.Language.IfStatementAst]
+    ) 'Launcher stream contract cleanup must retain both captured byte arrays by unary-comma reference.'
+    $bufferGate = $bufferLoops[0].Body.Statements[0]
+    Assert-Preflight (
+        $bufferGate.Clauses.Count -eq 1 -and $null -eq $bufferGate.ElseClause -and
+        (& $compact $bufferGate.Clauses[0].Item1) -ceq '$null-ne$buffer-and$buffer.Length-ne0' -and
+        $bufferGate.Clauses[0].Item2.Statements.Count -eq 1 -and
+        $bufferGate.Clauses[0].Item2.Statements[0] -is [Management.Automation.Language.TryStatementAst]
+    ) 'Launcher stream contract cleanup must retain the guarded original-buffer clear.'
+    $bufferTry = $bufferGate.Clauses[0].Item2.Statements[0]
+    Assert-Preflight (
+        $bufferTry.Body.Statements.Count -eq 1 -and
+        (& $compact $bufferTry.Body.Statements[0]) -ceq '[Array]::Clear($buffer,0,$buffer.Length)'
+    ) 'Launcher stream contract cleanup must clear the original buffer without rebinding or cloning.'
+    return [pscustomobject][ordered]@{
+        progress_suppressed_before_bootstrap = $true
+        progress_preference_write_count = 1L
+        error_action_stop_preserved = $true
+        bootstrap_stderr_redirection_count = 0L
+        diagnostic_prefix_bound = $true
+        diagnostic_prefix_cap_bytes = 1048576L
+        diagnostic_prefix_field_count = 5L
+        captured_byte_length_field_preserved = $true
+        empty_stderr_gate_preserved = $true
+        empty_stderr_gate_count = 1L
+        captured_array_cleanup_reference_shape_verified = $true
+        captured_array_unary_comma_cleanup_count = 2L
+        original_buffer_clear_preserved = $true
+        launcher_invocation_count = 0L
+        bootstrap_invocation_count = 0L
+    }
+}

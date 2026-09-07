@@ -208,6 +208,116 @@ try {
             ('function Read-LauncherHeldFileBytes { ' + $badReturn + ' }'), [ref]$tokens, [ref]$errors)
         Assert-Rejected { Assert-TL1C1bPreflightLauncherByteReturn $badAst } 'Launcher held-byte'
     }
+
+    # Text-only launcher fixture: parsed by the stream contract, never invoked.
+    $bootstrapFixture = @'
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 3.0
+$gate = $null
+'@
+    $streamFixturePattern = @'
+$childBootstrapSource = '__BOOTSTRAP__'
+$captureCapBytes = 1048576L
+$stdoutDrainTask = [TL1C1bNextLauncherNativeV1]::DrainAsync(
+    $process.StandardOutput.BaseStream, [int]$captureCapBytes)
+$stderrDrainTask = [TL1C1bNextLauncherNativeV1]::DrainAsync(
+    $process.StandardError.BaseStream, [int]$captureCapBytes)
+if ($stderrResult.Overflowed -or
+    [long]$stderrResult.TotalByteLength -ne 0L -or
+    $stderrResult.CapturedBytes.Length -ne 0) {
+    throw 'Helper stderr was not byte-empty for a passed summary.'
+}
+$logValue = [pscustomobject][ordered]@{
+    stderr = if ($null -eq $stderrResult) { $null } else {
+        [pscustomobject][ordered]@{
+            total_byte_length = [long]$stderrResult.TotalByteLength
+            captured_byte_length = [long]$stderrResult.CapturedBytes.Length
+            sha256 = 'sha256:' + [string]$stderrResult.Sha256
+            overflowed = [bool]$stderrResult.Overflowed
+            forced_closed = [bool]$stderrForcedClosed
+            captured_prefix_base64 = [Convert]::ToBase64String($stderrResult.CapturedBytes)
+            captured_prefix_sha256 = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stderrResult.CapturedBytes)).ToLowerInvariant()
+            captured_prefix_byte_length = [long]$stderrResult.CapturedBytes.Length
+            capture_is_prefix = $true
+            uncaptured_byte_length = [long]$stderrResult.TotalByteLength - [long]$stderrResult.CapturedBytes.Length
+        }
+    }
+}
+foreach ($buffer in @(
+    $summaryBytes, $expectedStdoutBytes,
+    $(if ($null -eq $stdoutResult) { $null } else { ,$stdoutResult.CapturedBytes }),
+    $(if ($null -eq $stderrResult) { $null } else { ,$stderrResult.CapturedBytes }))) {
+    if ($null -ne $buffer -and $buffer.Length -ne 0) {
+        try { [Array]::Clear($buffer, 0, $buffer.Length) }
+        catch { throw }
+    }
+}
+'@
+    $makeStreamFixture = {
+        param([string]$Bootstrap)
+        return $streamFixturePattern.Replace('__BOOTSTRAP__', $Bootstrap.Replace("'", "''"))
+    }
+    $streamFixture = & $makeStreamFixture $bootstrapFixture
+    $streamAst = [Management.Automation.Language.Parser]::ParseInput(
+        $streamFixture, [ref]$tokens, [ref]$errors)
+    Assert-Preflight ($errors.Count -eq 0) 'Stream-contract fixture did not parse.'
+    $streamEvidence = Assert-TL1C1bPreflightLauncherStreamContract $streamAst
+    Assert-Preflight (
+        $streamEvidence.progress_suppressed_before_bootstrap -and
+        $streamEvidence.error_action_stop_preserved -and
+        $streamEvidence.diagnostic_prefix_bound -and
+        $streamEvidence.diagnostic_prefix_cap_bytes -eq 1048576L -and
+        $streamEvidence.empty_stderr_gate_preserved -and
+        $streamEvidence.captured_array_cleanup_reference_shape_verified -and
+        $streamEvidence.captured_array_unary_comma_cleanup_count -eq 2L -and
+        $streamEvidence.original_buffer_clear_preserved -and
+        $streamEvidence.launcher_invocation_count -eq 0L -and
+        $streamEvidence.bootstrap_invocation_count -eq 0L
+    ) 'Stream-contract positive evidence drifted.'
+    $streamMutations = [Collections.Generic.List[string]]::new()
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture.Replace(
+        '$ProgressPreference = ''SilentlyContinue''', '$unused = ''SilentlyContinue'''))))
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture.Replace(
+        '$ProgressPreference = ''SilentlyContinue''', '$ErrorActionPreference = ''Stop''').Replace(
+        '$ErrorActionPreference = ''Stop''' + "`n" + 'Set-StrictMode',
+        '$ProgressPreference = ''SilentlyContinue''' + "`n" + 'Set-StrictMode'))))
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture + "`n" + '$script:ProgressPreference = ''Continue''')))
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture.Replace("'Stop'", "'Continue'"))))
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture + "`n" + 'Write-Output 1 2>$null')))
+    $streamMutations.Add((& $makeStreamFixture ($bootstrapFixture + "`n" + 'Set-Variable ProgressPreference Continue')))
+    $streamMutations.Add($streamFixture.Replace(
+        '[Convert]::ToBase64String($stderrResult.CapturedBytes)',
+        '[Convert]::ToBase64String($stdoutResult.CapturedBytes)'))
+    $streamMutations.Add($streamFixture.Replace(
+        '[Security.Cryptography.SHA256]::HashData($stderrResult.CapturedBytes)',
+        '[Security.Cryptography.SHA256]::HashData($stdoutResult.CapturedBytes)'))
+    $streamMutations.Add($streamFixture.Replace(
+        'captured_prefix_byte_length = [long]$stderrResult.CapturedBytes.Length',
+        'captured_prefix_byte_length = [long]$stderrResult.TotalByteLength'))
+    $streamMutations.Add($streamFixture.Replace('capture_is_prefix = $true', 'capture_is_prefix = $false'))
+    $streamMutations.Add($streamFixture.Replace(
+        'uncaptured_byte_length = [long]$stderrResult.TotalByteLength - [long]$stderrResult.CapturedBytes.Length',
+        'uncaptured_byte_length = [long]$stderrResult.TotalByteLength + [long]$stderrResult.CapturedBytes.Length'))
+    $streamMutations.Add($streamFixture.Replace('$captureCapBytes = 1048576L', '$captureCapBytes = 2097152L'))
+    $streamMutations.Add($streamFixture.Replace(
+        '$process.StandardError.BaseStream, [int]$captureCapBytes',
+        '$process.StandardError.BaseStream, 1048576'))
+    $streamMutations.Add($streamFixture.Replace(
+        '$stderrResult.CapturedBytes.Length -ne 0)', '$stderrResult.CapturedBytes.Length -gt 0)'))
+    $streamMutations.Add($streamFixture.Replace('captured_byte_length =', 'renamed_captured_byte_length ='))
+    $streamMutations.Add($streamFixture.Replace(
+        "captured_prefix_sha256 = 'sha256:'", "captured_prefix_sha256 = 'sha 256:'"))
+    $streamMutations.Add($streamFixture.Replace(
+        'else { ,$stdoutResult.CapturedBytes }', 'else { $stdoutResult.CapturedBytes }'))
+    $streamMutations.Add($streamFixture.Replace(
+        'else { ,$stderrResult.CapturedBytes }', 'else { $stderrResult.CapturedBytes }'))
+    foreach ($mutatedSource in $streamMutations) {
+        $mutatedAst = [Management.Automation.Language.Parser]::ParseInput(
+            $mutatedSource, [ref]$tokens, [ref]$errors)
+        Assert-Preflight ($errors.Count -eq 0) 'Stream-contract mutation did not parse.'
+        Assert-Rejected { Assert-TL1C1bPreflightLauncherStreamContract $mutatedAst } 'Launcher stream contract'
+    }
     Assert-Preflight ($script:cleanupFailures -eq 0) 'Synthetic resource cleanup failed.'
     [pscustomobject][ordered]@{
         status = 'passed'
@@ -217,7 +327,9 @@ try {
         snapshot_files = 3
         snapshot_identities = 2
         snapshot_internal_hardlink_groups = 1
-        mutation_rejection_cases = 10
+        mutation_rejection_cases = 10 + $streamMutations.Count
+        stream_contract_mutation_rejection_cases = $streamMutations.Count
+        stream_contract_static_only = $true
         byte_canary_lengths = @(0, 1, 5)
         cleanup_failure_count = $script:cleanupFailures
         assertion_count = $script:checks

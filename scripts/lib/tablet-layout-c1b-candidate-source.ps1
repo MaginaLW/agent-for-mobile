@@ -79,6 +79,69 @@ function Replace-C1bCandidateExactText {
     return $Source.Replace($Old, $New, [StringComparison]::Ordinal)
 }
 
+function Get-C1bLauncherSourceTransformations {
+    # 同一组可审查字节替换同时供内存 candidate 与 held renderer 使用。
+    param([Parameter(Mandatory)][string]$Source)
+    $newline = if ($Source.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $bootstrapOld = @'
+    $childBootstrapSource = @'
+#Requires -Version 7.5
+$ErrorActionPreference = 'Stop'
+'@
+    $bootstrapNew = $bootstrapOld.Replace('$ErrorActionPreference',
+        '$ProgressPreference = ''SilentlyContinue''' + "`n" + '$ErrorActionPreference',
+        [StringComparison]::Ordinal)
+    $stderrOld = @'
+                stderr = if ($null -eq $stderrResult) { $null } else {
+                    [pscustomobject][ordered]@{
+                        total_byte_length = [long]$stderrResult.TotalByteLength
+                        captured_byte_length = [long]$stderrResult.CapturedBytes.Length
+'@
+    $stderrNew = $stderrOld + "`n" + @'
+                        captured_prefix_base64 = [Convert]::ToBase64String($stderrResult.CapturedBytes)
+                        captured_prefix_sha256 = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stderrResult.CapturedBytes)).ToLowerInvariant()
+                        captured_prefix_byte_length = [long]$stderrResult.CapturedBytes.Length
+                        capture_is_prefix = $true
+                        uncaptured_byte_length = [long]$stderrResult.TotalByteLength - [long]$stderrResult.CapturedBytes.Length
+'@
+    foreach ($change in @(
+        @{Old='7.6.4';New='7.6.5';Count=3},
+        @{Old=$bootstrapOld;New=$bootstrapNew;Count=1},
+        @{Old=$stderrOld;New=$stderrNew;Count=1},
+        @{Old='else { $stdoutResult.CapturedBytes })';New='else { ,$stdoutResult.CapturedBytes })';Count=1},
+        @{Old='else { $stderrResult.CapturedBytes })';New='else { ,$stderrResult.CapturedBytes })';Count=1}
+    )) {
+        [pscustomobject]@{
+            Old=$change.Old.Replace("`r`n", "`n").Replace("`n", $newline)
+            New=$change.New.Replace("`r`n", "`n").Replace("`n", $newline)
+            Count=[int]$change.Count
+        }
+    }
+}
+
+function Update-C1bLauncherCandidateTemplate {
+    param([Parameter(Mandatory)][string]$Source)
+    foreach ($change in @(Get-C1bLauncherSourceTransformations $Source)) {
+        $Source = Replace-C1bCandidateExactText $Source $change.Old $change.New $change.Count
+    }
+    [void](Get-C1bCandidateSourceAst $Source)
+    return $Source
+}
+
+function New-C1bLauncherRendererTransformSource {
+    param([Parameter(Mandatory)][string]$TemplateSource)
+    $lines = [Collections.Generic.List[string]]::new()
+    foreach ($change in @(Get-C1bLauncherSourceTransformations $TemplateSource)) {
+        $old64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.Old))
+        $new64 = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($change.New))
+        $lines.Add('    $launcherTransformOld = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String(''' + $old64 + '''))')
+        $lines.Add('    $launcherTransformNew = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String(''' + $new64 + '''))')
+        $lines.Add('    Assert-Renderer (([regex]::Matches($launcherText, [regex]::Escape($launcherTransformOld))).Count -eq ' + $change.Count + ') ''Launcher source transform cardinality drifted.''')
+        $lines.Add('    $launcherText = $launcherText.Replace($launcherTransformOld, $launcherTransformNew, [StringComparison]::Ordinal)')
+    }
+    return [string]::Join("`r`n", $lines)
+}
+
 function New-C1bExactPairCandidateSource {
     param(
         [Parameter(Mandatory)][string]$BaselineRendererSource,
@@ -145,8 +208,8 @@ function New-C1bExactPairCandidateSource {
     $pwshHash = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
     $helper = Replace-C1bCandidateExactText $HelperTemplateSource '__FINAL_COMMIT_SHA__' $CommitSha
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHORT__' $short
-    # 旧 template 仍按原 hash 持有；版本更新是审查过的精确三处源转换。
-    $template = Replace-C1bCandidateExactText $LauncherTemplateSource '7.6.4' '7.6.5' 3
+    # 原冻结 template 保持原 hash；只转换新 candidate 的运行时/progress/诊断/缓冲引用。
+    $template = Update-C1bLauncherCandidateTemplate $LauncherTemplateSource
     $slots = [ordered]@{
         '__FINAL_COMMIT_SHA__'=$CommitSha; '__FINAL_COMMIT_SHORT__'=$short
         '__REPO_ROOT__'=$RepoRoot; '__FAILURE_SIDECAR_ABSOLUTE_PATH__'=$failurePath
@@ -178,10 +241,7 @@ function New-C1bExactPairCandidateSource {
     $renderer = Set-C1bCandidateLiteralAssignments $BaselineRendererSource $constants
     $anchor = '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
     $renderer = Replace-C1bCandidateExactText $renderer $anchor (
-        $anchor + "`r`n" + @'
-    Assert-Renderer (([regex]::Matches($launcherText, '7\.6\.4')).Count -eq 3) 'Launcher runtime version slot count drifted.'
-    $launcherText = $launcherText.Replace('7.6.4', '7.6.5', [StringComparison]::Ordinal)
-'@)
+        $anchor + "`r`n" + (New-C1bLauncherRendererTransformSource $LauncherTemplateSource))
     [void](Get-C1bCandidateSourceAst $renderer)
     [void](Get-C1bCandidateSourceAst $launcher)
     [void](Get-C1bCandidateSourceAst $helper)
@@ -203,8 +263,43 @@ function New-C1bPreflightR14CandidateSource {
         'bf15d0097fa02c9c99f69f8b08b5415390728bfb3d054b84bbd7895abafcd57c') {
         throw 'Frozen r13 preflight source drifted.'
     }
+    $BaselineLeafSource = Update-C1bPreflightLauncherBootstrapAssertion $BaselineLeafSource
     return Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $BaselineLeafSource `
         -ChecksSource $ChecksSource -Constants $Constants
+}
+
+function Update-C1bPreflightLauncherBootstrapAssertion {
+    param([Parameter(Mandatory)][string]$Source)
+    $old = @'
+        $childEndStatements.Count -eq 5 -and
+        (Get-CompactAstText $childEndStatements[0]) -ceq
+            '$ErrorActionPreference=''Stop''' -and
+        [object]::ReferenceEquals(
+            $childEndStatements[1],
+            $childStrictModeCommands[0].Parent) -and
+        $childEndStatements[2] -is
+            [Management.Automation.Language.AssignmentStatementAst] -and
+        (Get-CompactAstText $childEndStatements[2]) -ceq
+            '$gate=[Threading.EventWaitHandle]::OpenExisting($env:TL1C1B_LAUNCH_GATE)'
+'@
+    $new = @'
+        $childEndStatements.Count -eq 6 -and
+        (Get-CompactAstText $childEndStatements[0]) -ceq
+            '$ProgressPreference=''SilentlyContinue''' -and
+        (Get-CompactAstText $childEndStatements[1]) -ceq
+            '$ErrorActionPreference=''Stop''' -and
+        [object]::ReferenceEquals(
+            $childEndStatements[2],
+            $childStrictModeCommands[0].Parent) -and
+        $childEndStatements[3] -is
+            [Management.Automation.Language.AssignmentStatementAst] -and
+        (Get-CompactAstText $childEndStatements[3]) -ceq
+            '$gate=[Threading.EventWaitHandle]::OpenExisting($env:TL1C1B_LAUNCH_GATE)'
+'@
+    $newline = if ($Source.Contains("`r`n")) { "`r`n" } else { "`n" }
+    return Replace-C1bCandidateExactText $Source `
+        ($old.Replace("`r`n", "`n").Replace("`n", $newline)) `
+        ($new.Replace("`r`n", "`n").Replace("`n", $newline))
 }
 
 function Add-C1bPreflightR14ChecksToSource {
@@ -250,6 +345,7 @@ $gitTrustTreePostCheckFailureCount = 0L
 $gitTrustTreePostCheckFailureReasons = [Collections.Generic.List[string]]::new()
 $gitTrustTreeContinuityVerified = $false
 $launcherByteReturnCanary = $null
+$launcherStreamContract = $null
 '@
     $source = Replace-C1bCandidateExactText $source '$gitInvocationCount = 0L' (
         $initial.Replace("`r`n", "`n").Replace("`n", $newline) + $newline + '$gitInvocationCount = 0L')
@@ -288,13 +384,15 @@ $launcherByteReturnCanary = $null
         $newline + '    $cleanupFailures = [Collections.Generic.List[string]]::new()')
     $source = Replace-C1bCandidateExactText $source '    $launcherParsed = Parse-HeldPowerShell $launcherBinding' (
         '    $launcherParsed = Parse-HeldPowerShell $launcherBinding' + $newline +
-        '    $launcherByteReturnCanary = Assert-TL1C1bPreflightLauncherByteReturn -LauncherAst $launcherParsed.Ast')
+        '    $launcherByteReturnCanary = Assert-TL1C1bPreflightLauncherByteReturn -LauncherAst $launcherParsed.Ast' + $newline +
+        '    $launcherStreamContract = Assert-TL1C1bPreflightLauncherStreamContract -LauncherAst $launcherParsed.Ast')
     $gates = @'
     $gitTrustTreePreCheckAttemptCount -eq 1L -and
     $gitTrustTreePostCheckAttemptCount -eq 1L -and
     $gitTrustTreePostCheckFailureCount -eq 0L -and
     $gitTrustTreeContinuityVerified -and
     $null -ne $launcherByteReturnCanary -and
+    $null -ne $launcherStreamContract -and
 '@
     $source = Replace-C1bCandidateExactText $source '    $gitInvocationCount -eq 4L -and' (
         $gates.Replace("`r`n", "`n").Replace("`n", $newline) + $newline + '    $gitInvocationCount -eq 4L -and')
@@ -308,6 +406,7 @@ $launcherByteReturnCanary = $null
     git_trust_root_continuity_verified = $gitTrustTreeContinuityVerified
     git_trust_root_transient_change_excluded = $false
     launcher_byte_return_canary = $launcherByteReturnCanary
+    launcher_stream_contract = $launcherStreamContract
 '@
     $source = Replace-C1bCandidateExactText $source '    read_only_git_invocation_count = [long]$gitInvocationCount' (
         $evidence.Replace("`r`n", "`n").Replace("`n", $newline) + $newline +

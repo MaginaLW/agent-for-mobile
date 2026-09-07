@@ -774,3 +774,15 @@ catalog `sha256:7b68ced0…076d`。详见
 PowerShell 的另一个边界：在 `if` 和 `else` 之间误插普通语句，Parser 可能仍返回零错误，
 因为 `else` 被解析成普通命令；本轮独审在执行前发现并修复。**Parser0 不等于控制结构正确**，
 门脚本必须实际跑到汇总；静态复核可额外排除名为 `else` 的 `CommandAst`。
+
+## EncodedCommand 的进度也是 stderr 字节（2026-09-07）
+
+`6fbb157` build-only 的 helper exit 0、自报 passed，仍被 launcher 的非空 stderr 门正确拒绝；
+stderr 共 2,439,272 bytes，超过 1 MiB 捕获上限。只存 hash/计数而不保存有界原文，会失去失败归因能力，
+不能事后把整个流猜成无害进度。证据见[本轮记录](../../runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。
+
+固定 PowerShell 7.6.5 的无害替身复现：`-EncodedCommand` 下 `Write-Progress` 会产生 CLIXML stderr；
+最早设置 `$ProgressPreference='SilentlyContinue'` 只抑制进度，Write-Error 和 Console.Error 仍可见。
+因此应在源头关闭进度，保留空 stderr 与 overflow 门；不能仅凭 CLIXML 头、exit 0 或 helper 摘要放行。
+generic launcher/preflight JSON 含合法 `5.0` 阈值，不适用 helper summary 专属的“全部数字必须 Int64”规则；
+generic reader 应拒绝重复键并按各字段合同验证，helper 的 strict reader 保持原样。
