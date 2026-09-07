@@ -1,0 +1,56 @@
+# C1b exact pair / r14 源码准备
+
+`scripts/prepare-tablet-layout-c1b-candidate-source.ps1` 将冻结的 r12 renderer、helper/launcher
+模板和 r13 leaf 转换为可审查的新候选源码。它不执行 renderer、preflight、helper、launcher、Git、构建或 ADB。
+入口输出是 `.checks/c1b-candidate-source/<short>/` 中的 **review drafts**，不是已冻结工件、clean SHA 证明或运行授权。
+
+## 输入与步骤
+
+1. 完成所有代码修改、常驻离线门和最终 clean SHA 固定，再提供完整 40 位 SHA。
+2. `C1B_FROZEN_SOURCE_ROOT` 指向已有 repo-external staging，须保留
+   `render-final-r12-015835c.ps1`、`helper-template.ps1`、`launcher-template-r11.ps1`、
+   `preflight-a661f36-r13.ps1`。实际发布 pair 时还需要 renderer 既有的历史 r10 pair、template 与 failure sidecar。
+   不复制冻结生成物入库，不修改它们；源缺失时先恢复精确冻结输入，不接受当前内容的新 hash。
+3. 使用钉定的 PowerShell 7.6.5 执行下面的源码准备命令。入口检查 exe hash；Utility DLL 的 hash 和长度也固定，
+   不能使用自更新缓存中的同名运行时。
+
+```powershell
+$pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
+& $pwshPath -NoProfile -File scripts/prepare-tablet-layout-c1b-candidate-source.ps1 `
+    -FrozenSourceRoot ${env:C1B_FROZEN_SOURCE_ROOT} `
+    -CommitSha ${env:C1B_FINAL_COMMIT_SHA} -PwshPath $pwshPath
+```
+
+输出包括 pair renderer、r14 renderer，以及 helper/launcher/preflight 三份 `.expected.ps1`，供独立 hash/AST 对照。
+同名目录已经存在时拒绝覆盖。输入 raw index 在派生前后复核；入口不启动 Git，故 **不声称工作树干净**。
+新 SHA 或任何影响输入的改动都必须重新定版，不能把占位 SHA 的适配测试当作最终候选。
+
+4. 静态审查这五份源码及输入绑定。pair 的历史对照先逐字节重现上一对冻结 hash；常量只按唯一顶层变量名改写，
+   相同值的历史常量保持不动。launcher 原模板仍按旧 hash 读取，只有三处精确 `7.6.4 → 7.6.5` 版本转换；
+   r14 的模板逆向重构期望值对应转换后的模板。
+5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
+   renderer。二者复用原 r12 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
+   发布原语，最终 helper/launcher/preflight 必须与 `.expected.ps1` 的 hash/length 一致。本入口不会自动执行这一步。
+6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
+   不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
+
+## r14 新增门与离线回归
+
+`scripts/lib/tablet-layout-c1b-preflight-r14-checks.ps1` 是可跟踪注入源，只定义函数。
+Git 树按现有 build guard 的 UTF-8/LF/Ordinal catalog 规则校验 `9576` 文件、`9489` identities、`85` 内部 hardlink groups
+及固定 catalog；拒绝树外 hardlink、reparse 和路径/identity/content/membership 漂移。单次 snapshot 持有整棵树的目录与文件
+no-follow handle，完成复核后释放。主流程在第一条只读 Git 前执行一次，主 `finally` 再执行一次；后置失败只记录，保留
+primary-first，最后汇总拒绝失败终态。额外 identity catalog 对比保留前后树拓扑。离散 pre/post 不声称排除期间的瞬时变化。
+
+launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 canary 在隔离 runspace 执行已验证的固定 return，
+用 0/1/5 字节向量核验返回类型、内容和 CRLF framing，不加载或调用 launcher 本身。
+
+```powershell
+& $pwshPath -NoProfile -File scripts/tests/tablet-layout-c1b-candidate-source-offline.ps1
+& $pwshPath -NoProfile -File scripts/tests/tablet-layout-c1b-preflight-r14-checks-offline.ps1
+```
+
+两个常驻回归使用最小 synthetic fixture；不依赖历史 staging、本机账户路径、Git 安装树或真实设备。
+测试分别覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
+空文件、reparse、catalog/identity 漂移与字节 canary。真实冻结输入的派生适配测试另行执行，只能证明源码能够生成和通过 Parser，
+不能升级为真实 preflight 或 smoke 通过。

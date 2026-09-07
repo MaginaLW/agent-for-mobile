@@ -161,6 +161,7 @@ completed 不超过 5 秒；`status=failed` 由独立 closed validator 消费，
 
 1. 完成 outer-verifier 专项回归、全门与无 P0/P1 独审；这些离线结果本身不是 smoke；
 2. 形成最终 clean HEAD，再为该完整 SHA 生成 exact repo-external helper 与 launcher；
+   可复现的 pair/r14 源码准备入口与独立离线回归见 [候选源码准备](T-L1-c1b-candidate-source.md)；review drafts 不是已发布工件；
 3. launcher 固定并持有 self/helper/verifier/pwsh 的 ordinary identity 与 hash；verifier exact dot-source load=`1`，
    captured private strict-parser 与 exact-property `FunctionInfo` 各 invoke=`1`；`status=passed` 时公共 verifier
    `FunctionInfo` invoke=`1`，`status=failed` 时公共 pass verifier invoke=`0`；不得有 inline verifier、fallback 或
