@@ -10,7 +10,7 @@ package dev.magina.gateway.core
  *
  * [approvedAtMs] 初始为空，**仅在真人「允许」胜出时原子写入一次且不可刷新**：
  * 拒绝、超时、执行失败与重复回调都不得设置或刷新它（spec §2.4）。本类只负责把这条约束
- * 表达成"可空且没有 setter"，真正的一次性由 `IntentApprovalStore` 保证（落地切分第 2 片）。
+ * 表达成"可空且没有 setter"，真正的一次性由 [IntentApprovalStore] 保证。该离线模块尚未接入安全门。
  */
 data class ApprovalIntent(
     /** 一次性；与 `confirmationId`/nonce 绑定，一条意图只授权一次执行。 */
@@ -33,7 +33,39 @@ data class ApprovalIntent(
     val createdAtMs: Long,
     /** 真人允许胜出的时刻；`intentTtl` 从这里起算。为空表示尚未获批。 */
     val approvedAtMs: Long? = null,
-)
+    /**
+     * 卡上已批准完整内容的 OCR 基线，仅在进程内存保存。预览可能截断，不能充当它。
+     * 归一全文与摘要/长度由同一次构造绑定，重建时仍与本意图逐项核对；缺失则 fail closed。
+     * 现行 OCR 归一包含与 4 字长度守卫见 STATUS 的比对方式条目，尚未接入安全门。
+     */
+    val ocrBaseline: IntentOcrBaseline? = null,
+) {
+    val contentNormalized: String? get() = ocrBaseline?.normalized
+
+    /** data class 默认字符串会泄漏意图/全文；诊断只保留档位、长度和是否批准。 */
+    override fun toString(): String =
+        "ApprovalIntent(riskTier=$riskTier, contentLength=$contentLength, approved=${approvedAtMs != null})"
+}
+
+/**
+ * 同一份批准全文的一组不可拆分派生值。私有构造、没有 data class copy，不能把他处读回的归一串
+ * 配上本意图的旧摘要。原文计算后不保留；归一明文不落盘、不输出到字符串。
+ */
+class IntentOcrBaseline private constructor(
+    val normalized: String,
+    val sha256: String,
+    val length: Int,
+) {
+    override fun toString(): String = "IntentOcrBaseline(length=$length)"
+
+    companion object {
+        fun fromContent(content: String): IntentOcrBaseline = IntentOcrBaseline(
+            normalized = TextNorm.ocr(content),
+            sha256 = InputCommitEvidence.sha256(content),
+            length = content.length,
+        )
+    }
+}
 
 /** [IntentMatchPolicy.matches] 的结论。拒绝一定带原因——失败信息要能直接指出是哪一行不匹配。 */
 sealed interface IntentMatch {
@@ -117,6 +149,14 @@ object IntentMatchPolicy {
      */
     fun isIntentLive(intent: ApprovalIntent, nowMs: Long, intentTtlMs: Long): Boolean {
         val approvedAt = intent.approvedAtMs ?: return false
-        return nowMs - approvedAt < intentTtlMs
+        if (approvedAt < intent.createdAtMs) return false
+        return withinIntentWindow(approvedAt, nowMs, intentTtlMs)
     }
+}
+
+/** 半开有效区间；倒退、非正预算和减法溢出全部 fail closed，不用可溢出的 start + ttl。 */
+internal fun withinIntentWindow(startMs: Long, nowMs: Long, budgetMs: Long): Boolean {
+    if (budgetMs <= 0 || nowMs < startMs) return false
+    val elapsed = nowMs - startMs
+    return elapsed >= 0 && elapsed < budgetMs
 }

@@ -260,4 +260,32 @@ class ApprovalIntentMatchTest {
                 .contains("过期"),
         )
     }
+
+    @Test
+    fun `时钟早于批准或批准早于创建均不能存活`() {
+        assertFalse(IntentMatchPolicy.isIntentLive(intent, nowMs = 1_999, intentTtlMs = 360_000))
+        assertFalse(
+            IntentMatchPolicy.isIntentLive(intent.copy(approvedAtMs = 999), 2_000, 360_000),
+        )
+    }
+
+    @Test
+    fun `零或负意图 TTL 一律拒绝`() {
+        for (ttl in listOf(0L, -1L, Long.MIN_VALUE)) {
+            assertFalse(IntentMatchPolicy.isIntentLive(intent, nowMs = 2_000, intentTtlMs = ttl))
+        }
+    }
+
+    @Test
+    fun `时间差溢出不能把超期意图变成存活`() {
+        val ancient = intent.copy(createdAtMs = Long.MIN_VALUE, approvedAtMs = Long.MIN_VALUE)
+        assertFalse(IntentMatchPolicy.isIntentLive(ancient, Long.MAX_VALUE, Long.MAX_VALUE))
+    }
+
+    @Test
+    fun `接近 Long 上限的有效时间不依赖到期加法`() {
+        val recent = intent.copy(createdAtMs = Long.MAX_VALUE - 10, approvedAtMs = Long.MAX_VALUE - 5)
+        assertTrue(IntentMatchPolicy.isIntentLive(recent, Long.MAX_VALUE, 6))
+        assertFalse(IntentMatchPolicy.isIntentLive(recent, Long.MAX_VALUE, 5))
+    }
 }

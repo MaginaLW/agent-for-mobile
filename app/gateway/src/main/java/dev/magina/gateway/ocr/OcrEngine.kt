@@ -11,6 +11,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.TextNorm
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
@@ -172,16 +173,5 @@ object OcrEngine {
      * 匹配归一（仅用于比对，不改动展示原文）：去空白、全角→半角、小写化、o→0
      * （Spike S3 实锤：ML Kit 中文模型把数字 0 识成字母 O）。
      */
-    fun norm(s: String): String {
-        val sb = StringBuilder(s.length)
-        for (raw in s) {
-            var c = raw
-            if (c in '！'..'～') c -= 0xFEE0
-            if (c == '　' || c.isWhitespace()) continue
-            c = c.lowercaseChar()
-            if (c == 'o') c = '0'
-            sb.append(c)
-        }
-        return sb.toString()
-    }
+    fun norm(s: String): String = TextNorm.ocr(s)
 }
