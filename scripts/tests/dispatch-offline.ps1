@@ -728,6 +728,35 @@ public static class Program {
         Assert-True $hashConflictRejected '同优先级不同哈希的 Codex 候选没有 fail closed。'
     }
 
+    Test-Case 'gateway 真实配置模板只替换 token 即可构造 Codex launch spec' {
+        $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
+            -ScriptsRoot (Join-Path $RepoRoot 'scripts')
+        $configPath = Join-Path $SentinelDir 'copied-gateway-template.json'
+        Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'configs\gateway-mcp.json.example') `
+            -Destination $configPath
+        Assert-Contains (Get-GatewayConfigProblem -ConfigPath $configPath) '占位符'
+        $template = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
+        Set-Content -LiteralPath $configPath -Encoding utf8 `
+            -Value $template.Replace('<GATEWAY_TOKEN>', $testBearer)
+        Assert-True ($null -eq (Get-GatewayConfigProblem -ConfigPath $configPath)) `
+            '真实模板替换 token 后未通过 gateway 配置预检。'
+        $spec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+            -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.149.0'
+        try {
+            Assert-True ($spec.Arguments -contains 'mcp_servers.gateway.tool_timeout_sec=420') `
+                '真实模板的 420000 毫秒未转换为 Codex 的 420 秒。'
+            Assert-NotMatches ($spec.Arguments -join "`n") ([regex]::Escape($testBearer))
+        }
+        finally {
+            foreach ($key in @($spec.SensitiveEnvironment.Keys)) {
+                $spec.SensitiveEnvironment[$key] = $null
+                [void]$spec.SensitiveEnvironment.Remove($key)
+            }
+            Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Test-Case 'Codex MCP 配置拒绝顶层与字段的单元素数组降维' {
         $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
             -ScriptsRoot (Join-Path $RepoRoot 'scripts')
@@ -1290,6 +1319,29 @@ public static class Program {
         Assert-NotMatches $result.Text '×\s*3\.5|中文(?:文本)?输入通道当前不可用|文件传输助手'
         Assert-NoExternalTools $result
         Assert-NoRepoEffects $before
+    }
+
+    Test-Case '派单设备身份来自任务证据，未知设备不套用历史手机假设' {
+        foreach ($executor in @('mobile', 'gateway')) {
+            foreach ($task in @(
+                '仅完成任务卡中的只读观察；本任务未提供设备型号。',
+                '本任务设备证据：PA2553 / Android 16 / 横屏应用多窗。仅完成任务卡中的只读观察。'
+            )) {
+                $result = Invoke-Dispatch @('-Task', $task, '-Slug', 'offline-device-context',
+                    '-Executor', $executor, '-DryRun')
+                Assert-ExitCode $result 0
+                Assert-Contains $result.Text '设备序列号 `<dry-run-no-device>`'
+                Assert-Contains $result.Text '设备型号、系统版本、姿态与多窗状态以本任务的设备证据或任务卡为准'
+                Assert-Contains $result.Text '未知信息不猜测'
+                Assert-Contains $result.Text $task
+                Assert-NotMatches $result.Text 'vivo X100|OriginOS|1260[×x]2800|360[×x]800|×\s*3\.5'
+                if ($task -notmatch 'PA2553') { Assert-NotMatches $result.Text 'PA2553|Android 16|横屏应用多窗' }
+                Assert-NotMatches $result.Text '\{\{DEVICE\}\}|\{\{BUDGET_POLICY\}\}'
+                if ($executor -eq 'mobile') { Assert-Contains $result.Text 'get_screen_size' }
+                Assert-NoExternalTools $result
+                Assert-NoRepoEffects $before
+            }
+        }
     }
 
     Test-Case '非法 executor 被参数校验拒绝' {

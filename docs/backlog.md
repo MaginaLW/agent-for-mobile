@@ -1,1210 +1,182 @@
 # 工序分流与验收批次
 
-> 解决的问题：真机验收要人在场，而人的精力是稀缺资源。把工作按「是否消耗你的精力」分三道，
-> 让不消耗的那道永远在跑，消耗的那道攒成批次一次性做掉。
->
-> 队列状态（§5、§6）每次流转都要更新；本文件是三个工序会话之间唯一的交接面。
+> 2026-09-08：A 负责协调、开发和 ask；C 按需执行固定候选真机验收，不设常驻 B。
+> 本文只保留现行规则、当前待办和有效决定。旧过程与被替代决定见 [历史归档](backlog-archive.md)，按具体证据指针读取，不能作为当前授权。
+> 当前候选摘要见 [STATUS](../STATUS.md)；协调来源按 §2 指定，不能无条件读取 main 上的旧副本。
 
 ## 1. 判据
 
-一件事进哪一道，只看两个问题：
-
-1. 需要占用一台真机吗？
-2. 需要你本人一次不可替代的决定或肉眼确认吗？
-
-| 道 | 你的成本 | 内容 |
+| 角色 | 负责什么 | 需要用户时 |
 |---|---|---|
-| **A · 独立闭环** | 零 | 离线能验完的：代码、离线用例、PowerShell、文档、spec 起草。判据是 `scripts/check.ps1` 能给结论 |
-| **B · 你一个决定** | 几分钟，文字，不碰手机 | 设计取舍、验收批次放行。收敛成选择题再问 |
-| **C · 你在真机旁** | 半小时起，不可压缩 | 确认卡点击、跑前置位、肉眼确认、provision |
+| **A · 主协调与开发** | 需求、设计、离线实现、直接 ask、委派与集成；维护当前队列和状态 | 收敛出具体问题、推荐方案和影响后，在当前任务直接询问 |
+| **按需子代理** | 可独立推进的研究、模块实现、验证或独立审查，按文件划定写入归属 | 回报 A，由 A 汇总；不为转交一道选择题创建常驻 B |
+| **C · 真机验收** | 独占设备，只验固定 SHA 的构建并保存证据；发现问题回交 A | 按本批就位与授权规程协调现场操作；手机危险动作仍逐次两段式 |
 
-把 B 从 C 里拆出来是有意义的：卡在设计决策上时，不该拖到你下次摸手机才推进。
+普通实现选择优先根据目标、代码和文档判断；已授权的常规、可恢复工作持续推进。
+只有缺少不可替代的产品选择、验收范围或安全姿态决定，或现有证据无法裁决的关键分歧时才 ask。
+等待答复只暂停依赖该决定的步骤，其他授权范围内的独立工作继续；沉默不等于回答或批准。
+真实答复及其适用范围落入对应 spec；范围未变时沿用，不因换任务、换模型或主代理没看见而重问。
 
-## 2. 三处耦合（决定了并行到什么程度）
+复杂取舍可委派独立审查来质疑前提、补充选项，由 A 负责最终提问与整合。
+同一目标的补充和修复留在当前任务；只有用户明确要求新建独立任务时才创建用户任务。
 
-1. **A 能产出、不能收口。** 碰真机行为的改动只能堆进待验收队列，A 单独跑不出「完成」。
-2. **单设备 = 独占资源。** C 会话跑的是某个 commit 构建的 APK；A 会话继续提交会让归因失效。
-   所以**每个批次钉一个 commit，C 会话只跑那个 build**，A 在新 commit 上继续。
-3. **批次内的归因冲突。** 两个改动碰同一个真机表面，一次失败分不清是谁的锅。
-4. **工序会话跑在各自 worktree 里。** 每个会话都持有一份自己的 backlog.md 副本，
-   在自己分支上的写入对其他会话不可见——"唯一交接面"会被 worktree 隔离切成三份。
-   由此推出 §7 的写权规则：**队列只由主会话写。**
+## 2. 协调来源与资源边界
 
-由耦合 2 直接推出一条硬规矩：**C 会话不改代码。** 验收中发现问题只记录现象与
-manifest 路径，回流给 A 会话定位——就地改会让这次跑的 build 与钉住的 commit 对不上。
+- **当前主协调者就是 A，不等同于持有 main 的某个历史会话。** A 开场先核实实际 checkout/HEAD 和本工作区改动，
+  结合用户本轮上下文与最新 STATUS 指定本次权威队列来源。分支名、历史 STATUS 或旧任务 ID 不能替代实测。
+- **派工必须携带当前摘要与可追溯来源**：协调文档路径及其提交/ref、基于该版本尚未提交的队列增量、
+  本子任务输入/写入归属/验收标准，以及当前可用的回报通道。任务和设备状态以新的实际证据更新。
+  跨 worktree 子任务读取 A 指定的版本和增量，不把自身旧副本或 main 自动当最新；来源缺失时向 A 补取，
+  同时继续不依赖队列的工作。运行时任务 ID 随派工传入，不写死在仓库中。
+- **队列与共享状态只由 A 整合**；子代理和 C 回报增量，避免分别改写隔离副本。A 应及时保存队列，
+  不把有效决定的文档同步绑在尚未通过的代码合并上。协调文档版本与 C 的被测代码 SHA 分别记录。
+- **单设备独占、每批固定完整 SHA 与对应构建。** A 可在其他提交上开发，C 不跟随分支 tip，不在被测 checkout 改代码。
+  当前请求的普通子代理可共享 checkout，但写入文件必须分工；C 的隔离构建与设备 lease 按专用规程执行。
+- C 没有可执行验收项时回报待命或结束，不转做 A 开发。验收发现问题只记录现象、候选、manifest/台账和证据；
+  A 修复后形成新候选，原失败运行保持冻结。
 
 ## 3. 排序原则
 
-A 道优先做**能减少 C 道**的项。这是让并行真正生效的唯一杠杆：每消掉一个 C 道动作，
-后面每次跑测都省。纯粹改善代码质量的项（重构、提速）优先级低于它们，但永不阻塞，
-用来填 C 队列排满时的空窗。
+A 优先完成能减少真机人工操作、缩短验收时间的工作。离线通过不能替代 ROM、确认卡、App 落地或布局的真机证据。
 
-**C 队列有未清批次时，A 道不新增待验收批次**，改做纯离线纵深。理由：待验收的改动越堆越多，
-一次真机会话要么验不完、要么归因糊成一团，而 C 会话的成本恰恰是不可压缩的那部分。
+**C 队列有未清批次时，A 不新增待真机验收批次**，继续已授权的纯离线工作。
+本次合并 A/B 不改变这条配额，也不放行尚未接线的生产路径。没有具体目标的“提速/重构”不作为无限续做理由。
 
-## 4. 验收批次
+每批至多包含 2–3 个改变真机行为的改动；碰相同确认或布局表面的改动须可独立归因。
+只读验证不改被测路径，可在授权范围内搭便车；单次合跑多批时分别固定候选、判据与结论。
 
-配额规则：**每批 2–3 个"会改变真机行为"的改动封顶。**
-只读验证不改被测路径，不占配额，可搭任意批次的便车。
+## 4. 当前工作与验收批次
 
-### 批次 1 · 干掉每次跑测的手工前后置
+### A · 下一候选准备
 
-| 项 | 消掉什么 |
+| 工作 | 当前证据 | 下一步与边界 |
+|---|---|---|
+| **C1b 生产构建失败诊断** | 463304c 全量 13/13、exact pair/r14、只读 preflight 与真实 build-only 已通过；接入后独立目录 r3 的生产 Gradle exit 1，具体输出丢失，尚未安装或访问设备 | 修复有界脱敏诊断并离线定位；新代码重新完成候选门与 [源码准备](runbooks/T-L1-c1b-candidate-source.md)，不重跑已冻结 r1/r2/r3 或 host 工件 |
+| **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
+
+C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
+随后唯一 build-only 因 helper stderr 非空且捕获溢出，launcher/caller exit 1 而失败冻结。
+helper exit 0、构建/签名/aapt2 完成不能替代整轮通过；该轮 ADB/设备 0、清理完成。
+见 [冻结记录](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。旧轮不重跑；
+新候选 preflight 冻结后不得再运行会生成构建产物的 Gradle/check。
+
+Git 信任根、JDK、Gradle 和 Android package 树此前已只读复核，旧 A→E 重装阶梯已作废。
+这些是历史候选的证据，新候选按规程核对实际输入，不把“曾通过”解释为环境永久不漂移。
+
+### 批次 1 / 2 / 3 · 已验收的手机历史
+
+手机批次 1 前后置自动化、批次 2 通知栏审批、批次 3 连跑与 Deny 带外验证已验收；
+早期失败不再列作当前待办。批次 2 当时按“亮屏离屏审批”收窄验收，锁屏审批已移出。
+**2026-08-28 已进一步撤销通知批准：通知只保留拒绝和查看证据，批准仅能来自完成绘制与取证门的
+可见 ConfirmOverlay；allowed=true 广播 fail-closed。** 历史 Allow 验收不证明现在可以从通知批准。
+不声明 full-screen intent 权限，危险安全失败仍为终态，不重弹或转第二腿。
+
+审批通道必须让大脑碰不到：用户回执直接进入网关，审批凭据与 gateway token 分离，
+TestControl 不携带也不能设置真人决定。通知与确认路径改动须独立验收。
+有效设计与适用范围见 [通知栏审批 spec](specs/2026-08-01-通知栏审批布局-design.md)，旧过程见 [归档 §4/§5](backlog-archive.md)。
+
+### 平板路线与后置工作
+
+当前基线：**PA2553 / Android 16 / 日常横屏应用多窗**。项目适配系统原生能力，
+不靠关闭功能换通过；关闭功能最多是明确标注的对照实验，不能成为产品前置或验收条件。
+
+路线为 T0-L 入场 → T-L1/C1a origin/read-only → C1b pure-a11y 拓扑 → T-L2 横屏 P0。
+T-L2 依赖 pane-aware 证据、横屏确认卡 safe-area 证明和离线门；真机按 Allow → Stale → Deny → Reentry
+逐腿保留独立带外证据。标题、OCR、后验先裁 pane，带外核对 X/Y，不用 IME-only 或整屏坐标兜底。
+T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼容均后置，见 [平板设计](specs/2026-08-23-Android平板适配-design.md)。
+
+### 其他待真机项与已完成离线项
+
+- 分享落地 activity 全类名及冷启动反例：白名单保持空，不能凭类名印象填充。
+- 审计迁移 filesDir 后的 run-as 只读复验；可在适当真机批次中搭便车。
+- S5 RemoteInput、S2 Shizuku 重启存活；按 [M1 真机日清单](runbooks/M1-真机日清单.md)安排，不能用历史单项观测替代。
+- dispatch -Confirm 暂停件修复、真实 Kotlin PSI 指标和 C1b r14 源码生成已完成。
+  函数指标以 [真实语法树工具](../scripts/lib/kotlin-metrics/README.md)为准；套件已有分片与负载自适应，
+  后续提速先用当前日志定位具体成本，不恢复旧“callInternal 180 行待拆”等任务。
+
+## 5. 待验收队列（C）
+
+| 项 | 固定候选或既有证据 | 当前结论 / 下一步 |
+|---|---|---|
+| **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
+| **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
+| **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
+| **T-L1 / C1b** | 历史失败不变；463304c 主机前置通过，但接入后 r1/r2/r3 均失败冻结 | r3 停在 Gradle 构建，未安装、未访问设备；先完成 §4 诊断修复。见[接入后记录](runs/2026-09-08-C1b-463304c-接入后主机构建失败.md) |
+| **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
+
+C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
+C1b 前置与解释见 [受控 runner 规程](runbooks/T-L1-tablet-layout-c1b-v1.md)。
+当前 install/设备/采集/navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 未放行。
+本文件的进度记录不构成运行许可；不得把只读 preflight、build-only 或 C1a 许可扩大为 C1b 采集。
+
+## 6. 待决策项与有效决定（A 直接 ask）
+
+**当前无待回答的设计问题。** 新问题只在确有用户不可替代决定时加入：
+问题与影响、已核证据、推荐及备选、依赖项、真实答复/适用范围、对应 spec。
+回答后从待答项移除，把有效结论写入 spec；已替代决定保留历史标记与替代指针，不重新送审。
+
+| 有效决定 | 适用范围与来源 |
 |---|---|
-| 腿末 teardown 宏（走 runner 自己的 adb 通道，不经执行器） | 每腿结束后手工「清框 + 收键盘」 |
-| ForegroundWindowTracker 自举 | 跑前手工把微信停在文件传输助手；`Start-P0TargetApp` 跳过 `am start` 的人工绕过 |
-
-归因隔离：两项碰的表面不同（腿末 adb 通道 / 前台身份解析），失败签名可区分。
-
-搭便车：审计目录迁 filesDir 后 `run-as` 能否读该路径（只读验证）。
-
-### 批次 2 · 通知栏审批（单独一批）
-
-把危险确认从「盯着屏幕 60 秒」降成「锁屏上点一下」。并联
-[ConfirmOverlay.ask()](../app/gateway/src/main/java/dev/magina/gateway/overlay/ConfirmOverlay.kt)，
-带 Allow / Deny action button 的通知（full-screen intent）。
-
-**不与任何其他碰确认路径的改动同批**，且三腿都要验——它改的是安全门本身。
-
-红线：审批通道必须让大脑碰不到。网关直接推给你、你的回执直接回网关，审批凭据与大脑用的
-gateway token 分离。`TestControl` 注释里"不携带、也不能设置真人决定"是同一条理由；
-Deny 腿那次假通过（2026-08-01）证明了自报证据的失败形态长得跟成功一模一样。
-
-超时语义本批不动。60 秒超时的正解不是调大数值——确认前后证据要求逐字段相等，挂久了必然
-`E_STALE_REF`；正解是把审批对象上移到语义意图、批准后重新走一遍严格链，那是另一篇 spec。
-
-### 批次 3 · 三腿连跑 + Deny 腿带外验证自动化
-
-到这时前后置已自动、审批已离屏，一次三腿连跑对你只剩几次点击。
-
-Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不经执行器、不进 trace。
-现在 manifest 记的是 `gateway_reported_blocked_no_independent_check`，自动化后改为如实结论。
-
-### 平板横屏 T0-L/T-L1/T-L2 · 先画像，再量 pane，最后发送
-
-- **T0-L（横屏只读入场，不占危险动作批次）**：clean producer `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`，已合 main `a7940d5`
-  从 `67ef56c` 派生，只通过固定 `getprop` / `wm` / `am get-config` / `dumpsys` / `settings get` 查询采集脱敏
-  设备、显示、姿态与窗口画像；不安装、不启动 App、不截图、不输入、不改设置、不接 gateway。横屏、
-  现行 v5 readiness 仍以微信前台、全屏单 OS app window 为旧入口；竖屏、多窗/PiP、letterbox、浮动 IME
-  均 fail-closed，但单窗不再代表产品目标。用户 08-25 拍板“项目适配设备，不关设备功能换绿”；vivo
-  原生横屏应用多窗/同 App 双窗口须由下一版 T-L1 建模，关闭它最多只做显式对照实验。
-  v5 无设备 gate 42/42、required coverage 41/41、独审 P0/P1=0；补齐 foreground 权威来源、window
-  identity/强可见性/focus、default-display rotation、严格尺寸回退、run-wide 脱敏标签与状态/IME 初末双读。
-  accepted 也固定 P0 unsupported，含 layout 未验与横屏 P0 未实现。历史 v4 真机画像
-  `t0l-landscape-20260825T113747Z-da2fa68d` 因 ROM 证据不足正确 blocked，不追溯改判；首条固定 v5 C0
-  `t0l-v5-landscape-20260825T125508Z-13501086-r1` 在设备发现阶段识别到 0 台、无画像且未重跑；重连后的
-  r2 `t0l-v5-landscape-20260825T132258Z-r2` 唯一入口 exit 0，证明 intake 能在 vivo 真机正确 fail-closed：
-  两个强可见微信 `base_application` 均为 `multi_landscape`，rotation 歧义、focus absent，readiness blocked、
-  P0 unsupported。原候选祖先夹带未验手机批次 4，未直接 merge；T0-only clean SHA `4ca32b1...`
-  复验 r3 `t0l-v5-clean-landscape-20260825T134257Z-r3` 同样 exit 0、assessment 相同，仅少一个不可见
-  unknown window 诊断 block，未改变结论。r2/r3 evidence 分别为 main `d076345` / `bd64ea5`。
-- **T-L1（微信横屏 window/pane 只读探针）**：v1 `f5c8e15bca5065b504dab73149c7750a1e6dda3d`
-  归档为旧单窗合成门。v2 diagnostic-only 契约、schema、validator、对抗 fixture 与 gate 已以 main
-  `589421a` 冻结：从 fresh blocked T0 只路由 `probe_only`，离线合同允许 2–4 帧、全部 interactive window、唯一
-  target window/pane、title/input/message/toolbar、focus/IME/overlay/display 与精确 capture epoch 建模 vivo
-  同 App 双 OS window；只落 run-local label、bounds、run-salted hash、reason，不落 raw identity/聊天明文。
-  gate self-test 5/5、cases/coverage 24/24；runtime/layout/微信验证/P0/执行授权恒 false。隔离 producer 候选
-  `b5769df7baba075fda47aec17f249a5caa124b92`（`codex/tablet-tl1-v2`）专项 33/33、Debug 350/350、
-  Release 259/259、assembleDebug 通过且独审 0/0/0；未接 ToolRegistry/MCP、production 固定 unavailable，
-  app 未合 main。首个 fixed candidate `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的 pre-C 全门与跨层独审
-  已通过，但首个授权轮在安装阶段超时，`run_id=none`、无采集/无 evidence；用户另行明确授权重试后，唯一
-  run `tl1-c1a-20260826t114535z-63667b68ce4f` 仅执行 c1/c2 各一次、间隔 1982.304 ms、无补拍，最终
-  trusted-runtime validation 失败并冻结。origin 未成立，runtime/layout/P0/execution 仍为 false/unsupported；
-  失败记录见 [`2026-08-26-T-L1-C1a只读取证失败.md`](runs/2026-08-26-T-L1-C1a只读取证失败.md)。A 道已修复
-  Windows `adb shell` stdin 的 CRLF 归一化与静态页 raw revision 15/15 的假顺序阻断，不改 producer/T0 六个
-  baseline blob，也不删除真实 pane/title/focus/node/region blocker。标准全门与独审通过后固定
-  `4b96f89a6622eb8b5fe04bd249571c7d77936b25`；唯一成功 run
-  `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，success sidecar 证明 origin binding/read-only，T0
-  23,865 bytes/747 CRLF 原样转发，c1/c2 各一次、delta 2023.223 ms、recapture=0、cleanup=`not_required`。
-  两帧横屏 2800×1968 且两个稳定 `com.tencent.mm` application window，但七项真实 blocker 全部保留，
-  diagnostic 仍 blocked，runtime/layout/微信/editor/execution=false、P0 unsupported，故 T-L1 未通过。
-  成功记录见 [`2026-08-26-T-L1-C1a只读取证成功.md`](runs/2026-08-26-T-L1-C1a只读取证成功.md)；C1a app
-  未合 main，也不进入 T-L2。A3/C1b 已按真实 opaque root 形态另开 pure-a11y 合同、producer、受控 runner
-  与 closed success sidecar：fixed HEAD 的 42-file implementation/build-input closure（含 private ADB server
-  module 与 attempt-failure schema）按 ordinal catalog hash 绑定；专用 Debug/Release probe 产出 APK、artifact proof、merged manifest、
-  DEX catalog 与 aapt2 exact-tree
-  证明。guard 冻结 Oracle JDK/Gradle、完整 ProgramFiles/Git 安装树与 source SDK，并只向 fresh isolated
-  SDK/caches 构建；Git closure 为 9,576 paths、9,489 identities、85 个内部 hardlink groups 与 6 个关键 hash。
-  受控 build child environment 设置 fresh `ANDROID_USER_HOME`；空 `debug.keystore.lock` 在 Gradle 前预创建，
-  只有 Gradle 阶段允许该 lock 受控写入，返回后立即封印，binding 只允许
-  `post_gradle_lock_sealed_achieved` 从 false 迁移为 true。runner 的 canonical
-  token topology、guard/anchor 引用身份和 pre-seal binding 共同钉住 build→seal 邻接；cleanup-only inventory
-  允许 Gradle 合法的 `=` 文件名，但证据 catalog 仍拒绝这个未转义分隔符。
-  依赖使用 strict verification 且允许联网，不再使用 `--offline`。Git 调用以 exact 15-key environment + `ClearEnvironment`
-  启动；Gradle/签名器/ADB/aapt2/T0 使用各自受控 child environment + `ClearEnvironment`。全局设备 lease 只信
-  Windows KnownFolder。private server 只用随机 `49152..65535` loopback port 与
-  `-L tcp:localhost:<port> server nodaemon` 启动；全部 client/environment/listener proof 保持 numeric
-  `127.0.0.1`，显式 `-H/-P` + `ADB_SERVER_SOCKET`，证明 listener
-  owner PID、server-status executable、job membership、cleanup 与 port rebind，default 5037 永不使用；success sidecar
-  在 private server、build/artifact guards 与 device lease 全部 cleanup 后才原子发布。observation 49/49、coverage
-  89/89、self 5/5。当前 42-input 修复候选的专项离线结果为 host coverage 29/29、build-env 27/27、artifact
-  32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、
-  attempt-failure schema/cross-binding 51/51。七场景 synthetic host E2E 已通过：fake ADB 222 = 214 valid + 8 rejected；
-  valid 为 private server start/status/kill 8/7/4 + device 195，T0 4 是 device 子集，另观测 server exit 7。
-  runner process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic
-  E2E 内 real ADB/JDK/Gradle 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style auto-start
-  attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。旧 41-input SHA 的 real isolated host
-  build smoke 与 P0/P1/P2=0 独立复审仅属历史基线；它们不能替代当前 42-input 候选的 smoke；当前汇总 gate 与独审已另行闭合，
-  也不构成 fixed-SHA C1b build/install/runner 或真机取证。随后 fixed SHA
-  `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一 C1b 授权已执行并冻结：runner exit 1，private ADB
-  server 未在有界时间内 ready；Windows Application/WER 同期记录同轮 isolated ADB 六次同签名崩溃。
-  控制流尚未进入设备发现、`install -r -t`、T0、c1/c2 或 result，run_id/evidence/sidecar 均无；cleanup
-  无残留且没有重试。后续离线源码/实现核对把失败定位到旧 server argv 的 numeric
-  `-L tcp:127.0.0.1:<port>` listen 形态。2026-08-29 已改用 `localhost`，并为 run promotion 前的 private-ADB
-  启动失败加入 root-level、post-cleanup 原子发布的 closed attempt record；逐 attempt 只持久化有界 byte
-  counts、captured hash、strict-UTF-8/overflow 状态、闭合分类、exit 与 cleanup，不保存 raw stdout/stderr、PID、
-  port、socket、argv、path 或 serial，也不自动重试。当前汇总 gate 与独审已通过，42-input 候选固定为
-  `77473af5223d76b00bf4dbbf33cf44090fde635c`。该 SHA 的一次 real isolated host build smoke 随后在
-  artifact proof strict JSON reader [冻结失败](runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
-  ApkSigner/AAPT2/real ADB/设备发现/install/T0/采集 `0`，retry `0` 且契约内 runtime/build residue 为 `0`。随后 fixed SHA
-  `8882add6116ebd3cca547d865f9d142bbbcac1a4` 修正 helper exact load set；其唯一 build-only smoke 的 helper summary
-  passed（GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/T0/采集 `0`、cleanup 全绿、residue `0`），
-  但 launcher 因 `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime` 而 strict-verifier exit `1`，故
-  [整体 evidence closure 未闭合](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。helper start `1`、retry `0`；
-  后续候选 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 launcher 又在 helper 前因 Mandatory 空
-  `List[object]` 参数绑定失败：launcher start `1`、exit `1`、helper/verifier/build/ADB/设备 `0`、retry `0`、三输出缺席；
-  [现场已冻结](runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。`21d2986` 的 r7 preflight 随后闭合，
-  第五次 smoke 又因既有 module build output 在 Gradle 前 fail-closed，并暴露 launcher failure-truth 缺口；
-  [同样冻结](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。修复后的 `690693a` r11 preflight 闭合，
-  第六次 smoke 却因宿主预存 ADB/5037 在 Gradle 前失败；launcher 又以 optional SHA 的 null→empty 绑定误拒
-  遮蔽 helper primary，[本轮也已冻结](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。第一批语义/
-  布局/动作继续 false/unsupported，旧 C1a 与六次已消费的 C1b 授权均不可复用。
-- **T-L2（横屏 P0 四腿）**：从 fresh runtime 证据绑定 display/app window/pane/layout epoch；首版禁用
-  IME-only 和整屏坐标兜底，标题/OCR/后验先裁 pane，四腿 OOB 同时校验 X/Y。离线 gate、T-L1 与横屏
-  确认卡 safe-area 机械证明全部通过后才钉 SHA 跑 Allow→Stale→Deny→Reentry。
-- **T-L3 / T-P（后置）**：响应式确认 surface、其它多 App 分屏/自由窗单独成批；PA2553 竖屏兼容在横屏闭环后再验。
-
-### 不进批次的 A 道纵深（C 队列排满时做）
-
-**当前离线入口（2026-09-07）**：[离线开发与验证](runbooks/离线开发与验证.md)。下面 C1b 各轮记录保留历史原值；
-当前 PowerShell、候选 SHA 与未闭合前置以 [STATUS](../STATUS.md) 为准，不沿用历史 7.6.4 或旧授权。
-
-- ~~`ToolRegistry.callInternal` 拆解~~ **旧描述已过时**：上下文/执行辅助函数已有拆分。现已使用
-  `scripts/measure-kotlin.ps1` 的真实 Kotlin PSI 重量；不要再用行式脚本推断函数边界或排名。
-  工具与指标口径见[说明](../scripts/lib/kotlin-metrics/README.md)，报告保存在忽略的 `.checks/kotlin-metrics/`。
-- **套件提速已有分片与负载自适应**：09-07 首轮监督式 runner 86 条、3 片合计 134s；
-  后续优化按日志耗时归因认领具体项，不再把没有验收标准的“提速”作为未完成任务。
-- ~~`dispatch.ps1 -Confirm` 收口~~ **已完成离线修复**（`7c0a5ba`）：拒绝重复/畸形头部和空消费标记、
-  只接受规范第一腿、字面路径不展开通配符；修前 RED 与修后完整派单套件 48/48 已验证。
-- **语义意图基础模块已补齐**（`48f8dd8`）：一次性 store、三时钟/依赖装配、a11y/OCR 重建与绑定内容基线，
-  新增 57 条 JVM 用例；生产 SafetyGate 接线及 handler 次数证明仍待队列放开，见[spec §5](specs/2026-08-02-语义意图审批-design.md)。
-- **C1b 接入前主机前置已闭合**（代码候选 `463304cb56809d96fd97af6c71650dfcad4fe3a0`）：
-  进度抑制、有界 stderr 诊断、原数组清零修复后，源码 9 cases、r14 1300 assertions/28 mutations 与全量门 13/13 均通过。
-  新 exact pair/r14、一次只读 preflight、一次真实隔离 build-only 全通过，外层/launcher/helper exit 0、stderr 0、
-  独立验收 602/315 条断言通过，Job/环境清理完成；ADB/设备枚举/install/T0/capture 全 0。
-  **现在可提示接入 PA2553，真机验收尚未开始**；测试前恢复该候选 clean checkout，文档分支保留本轮记录。
-  [主机验收记录](runs/2026-09-07-C1b-463304c-平板接入前主机验收.md)与[准备入口](runbooks/T-L1-c1b-candidate-source.md)。
-  旧 `6fbb157` stderr 溢出轮保持[失败冻结](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)，不重跑、不追认。
-- ~~C1b private ADB early-failure 可观测性~~ **代码与专项离线验证已完成（2026-08-29）**：server listen 固定为
-  `localhost`，run_id 前生成 post-cleanup closed attempt record；每次启动只保存 substage、exit、bounded
-  byte counts/hash/分类与 cleanup，不持久化 raw stderr 或路径/设备信息。private ADB 22/22、readonly 74/74、
-  attempt schema/cross-binding 51/51、host/full gate 29/29、observation 49/49（coverage 89/89）与七场景 E2E 已过；
-  当前独审 P0/P1/P2=0，候选固定为 `77473af5223d76b00bf4dbbf33cf44090fde635c`。后续 build smoke 的
-  artifact-proof reader 阻断是独立的新问题，不回写为本项未完成。
-- ~~**C1b build-only smoke helper load-set 收口**~~ **已在 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 完成**：
-  validator 已作为 held/pinned input，按 `C1a -> validator -> C1b` 加载，两个 strict-JSON walker 在 Gradle 前成立；
-  本轮 helper core 已完整通过，证明旧 `77473af...` 的 load-set 阻断已消除。
-- ~~**C1b launcher strict-JSON date-kind 保形（2026-08-29 新阻断）**~~ **已在 `83121df` 前完成**：固定 PowerShell `7.6.4` 的默认
-  `ConvertFrom-Json` 会把合法 quoted ISO string 提升为 `System.DateTime`，而 launcher 随后要求 nonempty string，
-  产生确定性后验假阴性。修复使用 `-DateKind String` 保形解析并让实际 launcher verifier 消费 quoted-ISO
-  正对照；schema/verifier 未放宽为接受 `DateTime`。其 one-shot 被下述
-  更早 launcher guard 阻断，不能据此改判为 smoke pass。详见[冻结记录](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
-- **C1b `21d2986` preflight 闭合、smoke 在 Gradle 前失败（2026-08-30）**：r7 leaf
-  `2f9fba1598e5b912787f4e9f4b7699b7cf64243f3a273f2eacbf999aee7c6c31` 静态复核 0/0/0；唯一 read-only
-  preflight 外部 exit `0`、terminal `closed`、primary/cleanup/recording=`0/0/0`，receipt SHA-256
-  `1cea8a95f608a6ed5c4150d8b09755d3999712f568dceb368bea74c88c80800d`。获授权 one-shot 随后 launcher/helper
-  start `1/1`、exit `1/1`、retry `0`：helper 因启动前既有 `app/tablet-c1b-probe/build` 被 build-environment guard
-  拒绝，GradleMain/ApkSigner/aapt2/held Git/verifier invoke/ADB/设备/install/T0/采集均 `0`。旧 build 树来自较早
-  `c4e42667` 普通全量 Gradle 门，已同卷可恢复隔离，不能据此重跑 `21d2986`。另有 launcher P1：跨行
-  `[long]` cast 被 AST 解析成类型对象赋值与独立 native call，validation-time 误报 closure；即使修 cast，generic exit/stderr
-  仍早于 failed-summary held binding，failure-only sidecar 会遮蔽 helper primary。**有序待办**：①修成单一 cast 表达式，
-  分离 validation/cleanup snapshots；②非零 helper 也先 bind/核对/验证 closed failed summary，公开 primary/reasons；
-  ③preflight 新增 module-output preexisting-absence；④固定新 clean SHA，重新静态复核并单跑 read-only preflight；
-  ⑤冻结 preflight 后不得再运行会重建 module `build` 的 Gradle/check；⑥再取得该完整 SHA 的 exact build-only
-  one-shot 授权，且 retry 固定为 `0`。install、ADB、设备与 C1b 采集继续不放行。见
-  [冻结记录](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)与
-  [下一候选待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
-- **C1b `690693a` preflight 闭合、smoke 再次在 Gradle 前失败（2026-08-31）**：r11 leaf
-  `371b32bec50166c537e299607f927e483ba4d49d7f6a3e91636e6edd528aa1f6` 的唯一 read-only preflight 外部 exit
-  `0`、terminal closed、三类 failure `0`，receipt SHA-256
-  `be20bd9a3f15eb1708050e0ada53ff8f789dca943751717818ffb86388cea2d0`。获授权 one-shot 的 launcher/helper
-  start `1/1`、exit `1/1`、retry `0`；helper 在启动边界观察到 smoke 前已存在的 1 个 `adb.exe` 与 1 个 TCP/5037
-  listener，按 ADB-zero 合同在 build 前 fail-closed。GradleMain/ApkSigner/aapt2/held Git/设备/install/T0/采集均
-  `0`，build/workspace/journal/process 无新增残留。launcher 随后又因 `[AllowNull()][string]$ExpectedSha256` 把
-  `$null` 绑定为空串，在 summary held-open 前误触 canonical-hash 门；valid failed summary 的 primary 被顶层错误遮蔽。
-  四件输出已只读冻结，同 SHA 不重跑。**有序待办**：① canonical check 与 hash compare 使用明确的 nonempty
-  expected-hash 判定，并保留无 pin 时的实际 held hashing；②静态门证明 valid failed summary 能进入独立 validator；
-  ③exact-pair renderer 与 preflight renderer 都以 stable-ID/no-reparse/final-path/held-handle 链发布；④read-only preflight
-  用固定 BCL/native 只读 API 分三阶段检查 adb process 与 TCP/5037 listener 均为零，但不运行 adb、不枚举设备、
-  不自动终止未知进程；⑤环境归零后固定新 clean SHA、静态复核并只运行一次 read-only preflight；⑥再取得该完整
-  SHA 的 exact build-only one-shot 授权。首个 exact-pair renderer `76f63fbf…a8e49` 与首个 passive-host preflight
-  renderer `5f623d34…e48e1` 都已 rejected-static、从未执行；后者还把 no-reparse AST 取证绑错函数，并留下可变模块
-  自动加载权威缺口。详见[冻结记录](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)与
-  [更新后的待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
-- **C1b `a661f36` preflight 闭合、smoke 第七次在 Gradle 前失败（2026-09-01）**：r13 leaf
-  `bf15d0097fa02c9c99f69f8b08b5415390728bfb3d054b84bbd7895abafcd57c`、receipt
-  `55524bc831efebc04f5c6464ee4cb1afe0ed2c157021ab53348a3084d067b010` 的唯一 read-only preflight 外部
-  exit `0`、terminal closed、三阶段 ADB/5037=`0/0`、三类 failure `0`。获授权 one-shot 的 launcher/helper
-  start `1/1`、exit `1/1`、retry `0`；helper 先命中 Git for Windows file count 从冻结 `9576` 漂移为 `9577`，
-  在 Gradle 前正确 fail-closed。退出后独立只读重算得到当前 catalog `deeaa4c2…34ee`；只排除 38-byte
-  `etc/mtab` 后仍为 `556e52b3…f838`，所以不能靠删单文件或改 count 放宽。helper 已发布合法 failed
-  summary，stdout 与 summary+CRLF 的长度/hash 都 exact；launcher 的 reader 却以 `return $bytes` 让 `Byte[]`
-  被 pipeline 展开为 `Object[]`，随后 `Buffer.BlockCopy` 确定性抛错并遮蔽 helper primary；这是 P1 false-negative。GradleMain/签名/
-  held Git/ADB/设备均 `0`；外层 exit `1`、start=`1/1`、exit=`1/1`、retry=`0`、cleanup failure=`0`，smoke
-  前后 ADB/5037=`0/0`。build/workspace/journal 无残留，四件证据已只读冻结，同 SHA 不重跑。**数组返回修复已完成**：
-  repo-external template r11 只插入 unary comma，145140 B / `f31b944f…e817`，r10 未改；`3ef4714` 已补单元素
-  `ArrayLiteralAst`/mutation、0/1/N、passed/failed、SHA/BlockCopy/CRLF 与 failure-first 常驻回归，固定 7.6.4 专项及
-  29-case 聚合门通过。Git 恢复 r1 `A-Acquire` 的 exact parent
-  `e4f2638b5eec7ffbcb0716b12216addbbadfdcc9bf2a0e7c6b2451e3c96e6ed5` / leaf
-  `d7939294d6457848cdcddfe0f61e384caaf8855cf54eb1b3a099e8ae217f3003` 授权已经消费：caller/parent 各只启动一次，
-  child 在 leaf body 前因默认 ExecutionPolicy 拒绝 Volume-GUID `-File` 而 exit `1`；外部 exit `1`、terminal closed、
-  retry=`0`，应用层 asset HTTP=`0`，无 download/receipt/installer，专用输出仍 exact-empty。同 pair 冻结不重跑，
-  B 未放行。repo-external r2 parent 已只读冻结：132271 B / 2791 行 / Parser0 / SHA-256
-  `04875b31db6b1743a5c6079d62bfe0cc5e727a8f1e8ceaa6b2a10909b061cba9`，ordinary/non-reparse/single-link；frozen leaf
-  `d7939294…f3003` 不变。r2 固定 Bypass argv 并披露 whole-session/inheritance/named-path pre-execution 边界，终末静态
-  P0/P1=`0/0`。该 r2 parent 与原 leaf 的唯一授权也已消费：parent/child start/exit=`1/1`、retry=`0`、外部 exit=`1`、
-  terminal closed；唯一 transfer 得到 expected 65388144 B / SHA-256 `af12577d…f1dca`，installer 未执行。运行内 receipt 只含
-  generic Authenticode failure；退出后 exact 重演 `-Content` 得到 `NotSigned/None`，同一 ReadOnly exact PE 经最终 native
-  path `-LiteralPath` 独立复核为 `Valid` 与预期 signer，结合 IL/SIP 确认是输入形态造成的 P1 false-negative。failure receipt 1613 B /
-  `3b2c7459…9b8c` 与 installer exact-two 只读冻结，无 success receipt、cleanup 或 retry；parent 的 bounded preview 未遮蔽
-  `authenticode` primary。parent stdout 还因未接收 async `GetResult()` 多出 39-byte `VoidTaskResult`，caller summary 尾随
-  字面 `\n` 而非 LF；二者都不改变 raw stream/exit/terminal，也不授权重跑。递归排除 caller 祖先后的目标进程=`0`；固定
-  PowerShell runtime 退出后复算仍为 `983/54/296034085` 与双 catalog `038b2a68…b225` / `295b0a02…13df`。
-  share canary 又证明旧 leaf 从 RW FileObject duplicate 的所谓 read guard 仍带 writer-origin `WriteAccess`：其存续时
-  `-LiteralPath` 稳定 `0x80070020`；全部 writer-origin handles 关闭后，fresh `GENERIC_READ`/share=`READ` guard 经
-  stable-ID/SHA 重验可得到 `Valid`，post identity/SHA 不变，临时 canary 已精确清理。
-  **2026-09-02 只读定位推翻了整条重装路线。** 按 build-env 同一规则独立复算全树：现树 9577 文件 catalog
-  = `deeaa4c2…34ee`（**独立重现 smoke 记录的漂移值，构成本次复算规则自身的对照**）；仅排除
-  `usr/bin/busybox.exe` 后 = `4c5e585b…7458`，**与冻结常量逐位相等**。故漂移是「多了一个文件」而非
-  「改了一个文件」：其余 9576 个逐字节未变，无任何 Git 二进制被篡改。新增项取证为 864256 B /
-  `334843de…6e92` / busybox-w32 `1.38.0` / 原生 x64 / `NotSigned`（`-LiteralPath` 分支，非 r2 踩过的 `-Content`；
-  同树 `sed.exe`、`msys-2.0.dll` 亦 `NotSigned`，故未签名是常态不是信号）/ 创建于 `2026-08-29T16:55:36Z`，
-  而全树其余文件创建于安装日 `2026-08-18`，冻结常量由 `9208241`（08-28）写入，时间线自洽。
-  **它不在 Inno 卸载日志内**（对照先行：同一日志 UTF-16 检索 `git.exe`=14 / `bash.exe`=11 / `sed.exe`=1 /
-  `msys-2.0.dll`=2 / **`busybox`=0**，故 0 命中是有效否定），**因此卸载+重装不会移除它，文件数仍为 9577、门仍
-  fail-closed——已消费的两次 A 授权走在结构上无法闭合的路径上。**
-  **①②已闭合（2026-09-02）**：用户以一次提升权限的移出动作把
-  `C:\Program Files\Git\usr\bin\busybox.exe` 移出 Git 树（移出而非删除，保留物证）；随后独立只读复算
-  **四道门同时 PASS**——file count `9576`、catalog `sha256:4c5e585b…7458`、identity `9489`、
-  internal hardlink group `85`，且 hardlink 全部闭合在 root 内（未闭合数 `0`）。`git version` 仍为
-  `2.55.0.windows.3`，三个 pinned key file SHA 前缀 `7b7971dd…`/`1a004355…`/`799f7eef…` 与冻结常量一致，
-  移出未影响任何 Git 功能，印证"无隐式 applet 调用路径"的预判。**全程未消费任何 A/B/C/D/E 授权，
-  未下载、未执行 installer、未重启。主机侧已定版。**
-  **③repo 定版已闭合（2026-09-02）**：clean SHA = `015835c1ab5fd155f6fec7b21845ce63df9a486d`
-  （自 `a661f36` 起唯一非文档改动为 `3ef4714` launcher 字节返回回归），工作树干净，该 SHA 上
-  `scripts/check.ps1` **全量 11/11 PASS**（含 C1b pure-a11y 49/49 与 host fake-ADB 29 cases、
-  Android JVM/Lint/assembleDebug+Release、监督式 runner 86 passed、凭据扫描）。
-  **该门必须用钉定 7.6.4 跑**：本机默认 `pwsh` 为 7.4.19，会在 `#Requires -Version 7.5` 处
-  拒绝执行、一个检查都不跑，却同样给出 exit `1`，与真回归无法从退出码区分。
-  **钉在 `015835c` 之后只允许纯文档提交**（本条闭合记录本身即是其一）；一旦有任何非文档改动落地，
-  必须重新固定 SHA 并在新 SHA 上重跑全量门，不得沿用本次结论。
-  **③′a exact pair 已闭合（2026-09-02）**：`render-final-r12-015835c.ps1` 已生成、静态复核并只读冻结
-  （60704 B / 1475 行 / Parser0 / SHA-256 `3086b43031b4e7fa6dc50c5227da44729d9675bf1757bf896fa25ece8203958a`）。
-  **先做对照再造**：用模板加从 r11 渲染器读出的替换规则重算上一轮，`helper-a661f36-r10`（52804 B /
-  `5f13f444…e7d0`）与 `launcher-a661f36-r10`（145499 B / `a022c356…fefe`）两份都精确重现，才认为替换规则理解无误。
-  输入权威复核：`launcher-template-r11.ps1`=`f31b944f…e817`、verifier=`daf9703c…66fa`（`3ef4714` 动的是测试文件
-  而非 verifier）、`pwsh.exe`=`db6dd811…458f` 均未漂移。渲染器 exit `0`，产出
-  `helper-015835c-r11.ps1`（52804 B / `bf8624fb2a7eaf907864c206b59a17420e01ebf1e33efa790ac4fdb220c34296`）与
-  `launcher-015835c-r11.ps1`（**145500 B** / `36e980c464213bed0df7c1cd1f89d7348847422eb094fcf65323c38421103f80`），
-  二者 ReadOnly/non-reparse/single-link；**输出 SHA 与离线独立派生逐位一致，两条推导互证**。launcher 比上一轮
-  正好多 1 字节，恰等于模板 r11 相对 r10 的 unary comma，长度差可解释。
-  `launcher/helper/preflight/git/build/adb` executed 全 `false`，无 `.rendering.tmp` 残留、无 failure sidecar、
-  `.checks` 内无 `015835c` 产物。
-  **渲染器常量必须按变量名重写，不能全局字符串替换**：本轮 `$expectedHelperSha256`（`5f13f444…`）与
-  `$expectedLauncherSha256`（`a022c356…`）在下一轮要变成**历史**那两个常量的值，全局替换会把两者同时改掉并
-  产出一个看起来完全合理的错误渲染器。静态复核 diff 只含常量与标签、零逻辑改动。
-  **剩余有序待办**：③′b 在该 SHA 上生成并静态复核 r14 preflight——它不是换常量而是新逻辑：相对 r13 需新增
-  launcher unary-comma/runtime canary，以及在四次 repo 只读 Git 前后各一次 Git 信任树核验；
-  该次 r14 在 repo Git 前后都按同一规则重算 Git trust-root file-count/catalog/identity/hardlink topology
-  （冻结值即 `9576`/`4c5e585b…7458`/`9489`/`85`，本机已于 09-02 复核可满足），
-  后置检查即使 Git 失败也须执行且不得遮蔽 primary，任一终态漂移即拒绝；④只单跑一次 preflight；
-  ⑤闭合后另取新完整 SHA 的 build-only one-shot 授权。
-  **冻结的 leaf r2 `a78c99e4…cd66` / parent r3 `fd7d9b6d…2a25` 未授权、未执行、原样保留**（ReadOnly/Parser0/
-  ordinary/non-reparse/single-link，多路审计 P0/P1/P2=`0/0/0`），仅在改走重装路线时才需要；但按上述卸载日志证据，
-  重装本身不足以闭合本次漂移。r1/r2 的 evidence/output 目录继续冻结不复用。
-  **未确认项如实标注**：新增文件字节是否来自正版 PortableGit 2.55.0.3 未取证（其 mtime 与 Git 打包时间戳
-  `2026-07-10T07:25:56Z` 一致只是推断，本机无 `7z`/`innoextract`，未解包已冻结 installer 也未联网比对）；
-  写入者与提权来源未知。详见
-  [漂移定位记录](runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)、
-  [smoke 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)、
-  [A r1 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)、
-  [A r2 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md)与
-  [更新后的待完成项](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
-- ~~危险动作风险分级的实现~~ **已完成**（`549b6d3`，分支 `claude/serene-faraday-42d1fb`）。
-  按新判据自检的结论是**没有触达确认表面**：`riskTier` 本轮只产出不消费，`cardText` 一字未改，
-  所以它仍是纯离线项、不占 C 道配额。词表 17+5 词。**主会话独立复核**：`check.ps1` 五项全绿，
-  且逐条核过用例名——回归断言 `neither risk tier ever yields a confirmation free path` 确实存在，
-  行为中立由 `tiering changes neither the card text nor which word is reported` 钉住，
-  另有一条 `file transfer assistant context never exempts send` 挡住"熟人会话可免确认"这类将来
-  很容易被想出来的捷径。**尚未合入 main**，按 §7.2 随后续批次一并合。
-
-## 5. 待验收队列（C 道）
-
-钉的是 **commit SHA，不是分支名**。worktree 共享同一个 object store，A 一提交这个 SHA
-就对 C 可见，C 直接 `git checkout <SHA>` 构建即可——**不必等合回 main**，省掉一次串行等待。
-
-| 批次 | 钉住 commit | 来源分支 | 状态 | 备注 |
-|---|---|---|---|---|
-| 1（二次） | `337113c` | `claude/serene-faraday-42d1fb` | **✅ 完成**（08-01 14:40 验收通过，已合 main `53596a1`） | 四条判据全通过 |
-| 2 | `2b5bc90` | `claude/serene-faraday-42d1fb` | **验收失败**（08-01 19:00，main 未动） | 三条新判据 1 过 2 挂，见下 |
-| **4（手机历史冻结）** | **`67ef56cc8289b34d09843701d7b83986a206ad0e`** | `codex/batch4-precheck-unify` | **用户决定暂停手机 C（0/4）** | 八条手机替代 C 原样归档；不再用手机重跑，也不把它们算作平板失败 |
-| **Tablet T0-L（横屏只读入场）** | **`4ca32b131007df58f7752c5ee9b2d049cb1cd54e`** | `codex/tablet-intake-clean` | **✅ 完成；已合 main `a7940d5`** | 42/42、coverage 41/41、独审 0/0/0；r3 真机正确 fail-closed，readiness blocked/P0 unsupported；evidence `bd64ea5`；只认可 intake，不放行 T-L1/P0 |
-| **Tablet T-L1 v2 / C1a（原生双 window/pane 只读诊断）** | producer 基线 **`b5769df7baba075fda47aec17f249a5caa124b92`**；失败 SHA **`2635fc9f5eb229340870b0cdd599cefad97a9b91`**；成功 fixed SHA **`4b96f89a6622eb8b5fe04bd249571c7d77936b25`** | `codex/tablet-tl1-c1a` | **C1a origin/read-only ✅；diagnostic blocked，T-L1 未通过；app 未合 main** | 成功 run `tl1-c1a-20260826t125127z-354a7b4b0ed5` exit 0，五文件/success sidecar 冻结，origin/read-only=true、cleanup=`not_required`；横屏 2800×1968、双微信 window，七项 blocker 保留；runtime/layout/微信/editor/execution=false、P0 unsupported；转 A3/C1b，不进 T-L2 |
-| **Tablet T-L1 C1b（pure-a11y window/root 拓扑）** | 七次已消费失败 SHA：**`87ac7b4` / `77473af` / `8882add` / `83121df` / `21d2986` / `690693a` / `a661f36`** | `codex/security-hardening` | **Git 信任根已恢复、四门闭合；A→E 重装阶梯作废且零授权消费；下一步转 repo 定版** | r13 preflight 外部 exit `0`、terminal closed、ADB/5037 三阶段 `0/0`；授权 smoke 因 Git file-count 漂移在 Gradle 前 fail-closed，launcher 又在 `BlockCopy` 遮蔽 helper primary；证据已冻结，同 SHA 不重跑。**09-02 只读全树复算定位到唯一新增文件 `usr/bin/busybox.exe`：排除它后 catalog 精确回到冻结 `4c5e585b…7458`，其余 9576 个逐字节未变、无 Git 二进制被篡改；复算规则的对照是它独立重现了漂移值 `deeaa4c2…34ee`。该文件不在 Inno 卸载日志内（对照 `git.exe`=14/`bash.exe`=11/`busybox`=0），故卸载+重装无法移除它——已消费的两次 A 授权走在结构上无法闭合的路径上。** **09-02 用户已以一次提升权限的移出动作恢复，四门复算全 PASS（`9576`/`4c5e585b…7458`/identity `9489`/hardlink group `85`，hardlink 全闭合），Git 功能与 pinned key file SHA 均未受影响，全程零授权消费。** 冻结的 leaf r2 `a78c99e4…cd66` / parent r3 `fd7d9b6d…2a25` 未授权未执行、原样保留，仅在改走重装路线时才需要。未确认：字节是否来自正版 PortableGit 2.55.0.3（mtime 一致只是推断，本机无 `7z`/`innoextract`）、写入者与提权来源。之后才固定 clean SHA、生成/复核 exact pair/r14；一次 preflight 闭合后才另取 build-only 授权。语义/layout/P0/execution 与 install/设备/C1b 采集仍未放行。见[漂移定位记录](runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)、[a661f36 冻结记录](runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)、[A r1 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)与[A r2 失败记录](runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md) |
-| **Tablet T-L2（横屏 P0 四腿）** | 待 T-L1/A 道 | — | **未入队** | pane-aware 证据、横屏确认卡和四腿独立 OOB 全绿后才钉 SHA；手机门不放宽 |
-
-**批次 4 前三条 clean C 均只记录阻断，不下批次通过结论。** 第一条 task
-`019ff0c0-1c5f-79e1-823a-ee2acdc452b0` 固定 `3ed077d`，run
-`20260811T202517-0e176d3f08b9`：Allow 真人 `allowed` 后，最终 fresh title OCR 误选日期文本，
-`E_VERIFY_FAIL` 正确 fail-closed、未发送、cleanup clean；Stale/Deny/Reentry 未运行。A 道随后以
-`d36e3d2c2b302c47d235d089aba46fbbdfd26c22` 修复标题候选与 final-title 证据硬门，完整离线 gate 为
-dispatch 58/58、gateway Debug/Release/assembleDebug、runner 144/144、凭据扫描通过，独立复审 Approved。
-
-第二条 task `019ff10f-a650-7e70-a7f0-df3bc8730581` 固定 `d36e3d2`，run
-`20260811T215340-d3eb4c2bdeaf`：Allow 真人 `allowed`，`final_title_read` resolved 且所选指纹精确等于
-「文件传输助手」，消息气泡也已在失败截图中出现；但 gateway 的 `normalized` / `query_normalized`
-按唯一生产契约保留连字符，runner 又用自己的 PowerShell 规则去掉连字符后严格比较，因而把成功发送
-判成证据不匹配。该 runner 假阴性后整轮按规则冻结，Stale/Deny/Reentry 未运行，cleanup clean；
-**批次 4 仍是 0/4、未判定。** A 道已在 `f0a767335e70aa99ed0fc242a1217978600435af`
-移除 `ui_find` 边界的第三份归一：raw query 仍逐字绑定本腿 marker，非空 `query_normalized` 与全部
-match canonical 只在 gateway 同源字段间逐字比较，消息区几何仍是独立硬门。真实 producer fixture
-先得 RED `101 passed / 45 failed`，修后 runner `146/146`；两路独立复审 Approved，完整 gate 为
-dispatch 58/58、Debug 510/510、Release 407/407、assembleDebug、runner 49+49+48=146/146、凭据扫描 PASS。
-
-第三条 clean C task `019ff195-0fde-7eb2-ac1a-88ee11cc1a2d` 已置顶并固定 `f0a7673`；worktree
-HEAD/clean 与 gitignored `app/local.properties` 预热均已机械核对。run
-`20260813T201212-3e9ae5507700` 只构建/安装/runner 各一次；Allow 真人 `allowed` / overlay 后，
-`type_text` OCR readback 把同一 20 字 marker 的两份重叠识别直接拼接，confirmation 截图却只有一份；
-最终 Enter 前长度硬门检出多 23 字（容差 4），以 `E_STALE_REF` 正确 fail-closed、未发送，
-Stale/Deny/Reentry 未运行，teardown clean、cleanup true。fresh title 已 resolved，所选 6 字候选正确，
-不是标题失败。该 task/run 已冻结，绝不重跑或复用；批次仍为 **0/4、未判定**。
-
-该 run 的 ledger 已由 main 以 commit `164736f` 按 run ID 去重落为恰好一行；持久脱敏证据位于
-`docs/runs/evidence/20260813T201212-3e9ae5507700/`（gitignored），共 13 个普通文件，
-`SHA256SUMS.txt` 列出的其余 12 文件逐项复算通过。A 道根因边界是输入 OCR 聚合层裸
-`joinToString`：修复只能折叠几何高重叠且归一后互相包含的同一物理行；不重叠重复与重叠无关
-文本继续保留，让最终长度门照常 fail-closed。计划见分支
-`docs/superpowers/plans/2026-08-13-input-bar-ocr-overlap-contract.md`。
-
-A 道最终在 `636048a6359f9ebae71a7ceb8a551fc1b2ca6b72` 闭环。输入读回先按原始
-“IoU ≥ 0.5 且归一后互相包含”关系建分量，只有分量内两两都成立的 clique 才折叠；折叠保留归一后
-最长候选、只在等长等价时看 confidence，非 clique 整组保留，所以高置信短串不能吞未批准后缀，
-桥接候选也不能吞两端真实重复。最终长度守卫、标题、确认、raw query 与发送后验均未放宽。
-完整 gate 途中还暴露失败腿会在执行器终态前 kill child；runner 的越权扫描现统一调用 canonical
-`Read-DispatchTraceTranscript -AllowPartial`，只放宽 EOF，并在 PowerShell 展开前严格验证顶层 frame、
-identity/discriminator 与 input/arguments 原始 JSON 类型。最终独立复审 Critical/Important/Minor
-`0/0/0`；`scripts/check.ps1 -Shards 3` exit 0：diff-check clean、dispatch 71/71、Gateway
-Debug/Release/assembleDebug、runner 50+49+49=148/148、凭据扫描 PASS。
-
-第四条 clean C task `019ffbc0-f5a7-7701-9a86-0bf3d07242bf` 已置顶并固定 `636048a`；新 worktree
-top-level/HEAD/clean 与 ignored `app/local.properties` 的普通文件、非 link、源目标长度/哈希均已机械核对，
-未构建、未安装、未调用 adb/设备、未运行 runner，当前只等待用户在该任务回复“已就位”。之后只允许
-唯一 `:gateway:assembleDebug` 与唯一
-`-Legs Allow,Stale,Deny,Reentry -Executor gateway -Brain codex -Provision -ReentryDwellSec 75`；任一失败即
-冻结本 task/run，后三腿 NOT RUN，不在 C 修代码。
-
-**08-22 恢复结果：上段固定 task 与 worktree 已从当前 Codex 主机消失，开跑前即永久冻结。** 候选 SHA
-仍在远端与 object store。第一条替代 clean C 唯一构建成功，但 run `20260822T203023-11ee0a8b00c6`
-在 provision 前以“设备发现 失败”终止：runner 默认 `AdbPath=adb`，而新机 PATH 不含 platform-tools；
-`local.properties` 只供 Gradle 使用，runner 不读。manifest `legs=[]`、`cleanup.ok=true`，没有 slug 或
-dispatch，所以 ledger 零行是正确事实，人工补行会伪造一次未发生的派单。
-
-第二条替代 clean C 以绝对 `-AdbPath` 做过 runner 同正则的一台 `device` 正对照并完成唯一构建；run
-`20260822T203737-ef7fb2ce2896` 随后在 `adb install -r` 的 120s 硬超时冻结。logcat 机械证据显示
-20:37:39 拉起 `com.android.packageinstaller/.PackageInterceptActivity`，旧包 `lastUpdateTime` 仍为
-08-13，说明安装没有完成；同样 `legs=[]`、`cleanup.ok=true`、无 ledger 行。**批次仍为 0/4、未判定。**
-下一条只能是全新 clean C：继续固定 `636048a`、显式同一绝对 `-AdbPath`，且用户须从 Provision 开始
-盯住手机并立即确认本项目 debug APK 的系统安装页；之后仍只允许唯一 build 与唯一四腿 runner。
-
-第三条替代 clean C 在用户明确“会点安装”后建立，固定 SHA、绝对 adb、一台 device、`zen_mode=0`、
-微信前台与唯一构建均机械通过；run `20260822T204640-c6c54d3583e4` 的安装页收到真人点击后约 11s
-以“安装 debug APK 失败”终止，仍为 `legs=[]`、`cleanup.ok=true`、无 ledger。设备旧包
-`lastUpdateTime` 仍为 08-13。主会话只读 pull 旧 APK，以同一 `apksigner` 比对证书：旧包 SHA-256
-`18b545effb641f1e69c1aa25a2dd99717deede41dea883f8159ff61e93924809`，新包
-`ef99efaa844c7c910eafb16eb164ad14594abc7248f73d9a48b1ebeb39969ea1`；本机
-`<用户主目录>\.android\debug.keystore` 创建于 08-22 20:27，全盘没有旧 key。**这是签名不兼容的
-确定证据，不是对手机无提示 UI 的猜测。** 继续必须先经用户明确授权卸载旧 `dev.magina.gateway`
-（会清除网关私有数据与系统授权，但不影响微信），随后才能新建下一条 clean C；未授权前不得动。
-
-用户随后明确授权卸载。主会话机械核对包名后只卸载 `dev.magina.gateway`，未动微信；新 debug APK
-成功安装。第四条替代 run `20260822T205229-53a0760161f9` 在 Allow 进入确认前因 dispatch 子层仍以
-裸 `adb` 检查 PATH 而 fail-closed；第五条 run `20260822T205622-e75f7a2242a0` 已给整个 runner
-进程补齐 SDK PATH，并以绝对 adb 做正对照，但旧候选的 Codex 通道只接受 0.147，面对当前官方签名
-`codex-cli 0.149.0-alpha.4.1` 立即拒绝。两条均仅有 Allow 失败记录，真人决定 `not_observed`，
-teardown clean、cleanup true；ledger 各恰好一行，后三腿 NOT RUN。
-
-A 道因此从原功能基线派生 `de6685c65b3ea3fe71bc41c95802791e69f49460`：版本白名单只精确接受
-已验证的 `0.147.0`、`0.149.0` 与当前官方签名 `0.149.0-alpha.4.1`，0.149 profile 显式关闭
-已稳定启用的 `view_image` 并移除已删除 feature，未知版本继续 fail-closed。主会话复跑真实签名 resolver、
-`exec --help`、feature maturity/default、生产 argv strict-config 正反例均 PASS；Codex 聚焦离线契约
-15/15。下一条 C 必须固定该 SHA、在同一 runner 进程补齐 SDK PATH，并仍遵守唯一 build、唯一四腿、
-任一失败立即冻结。
-
-固定新候选的第六条 clean C run `20260822T231712-63fc96bdce88` 完成唯一一次实际
-`:gateway:assembleDebug` 后启动；设备在线，但始终停在 vivo
-`com.android.packageinstaller/.PackageInterceptActivity`，包的 `lastUpdateTime` 未变化，120 秒后
-以“安装 debug APK 超时”在 setup 冻结。manifest 为 `legs=[]`、`cleanup.ok=true`，未生成 slug/dispatch，
-所以 ledger 无行；唯一证据文件已持久化且 SHA-256 复算一致。不得复用该 run/worktree。下一条仍固定
-`de6685c` 建全新 clean C，但开跑前必须由用户确认安装页可见，并在 runner 的窗口内完成系统安装确认。
-
-第七条 clean C run `20260822T232308-85e978e72f99` 固定 `de6685c`，唯一构建、安装、设备/
-勿扰/微信前台检查均通过。Allow 派单只调用一次 `macro_run(p0_wechat_file_transfer_prepare)`，宏在确认卡
-出现前以 `E_BLOCKED stage=unrecognized_entry` fail-closed；未调用输入、确认或发送工具，真人决定
-`not_observed`，teardown/cleanup clean，Stale/Deny/Reentry NOT RUN。失败截图明确显示文件传输助手会话
-与空输入框，但它不是宏的同一 OCR 数据帧；本 run 没持久化 OCR candidates，不能把“尾噪”冒充已证事实。
-
-代码审查坐实了**即使同一 snapshot 也会分叉**：零 token precheck 的 `P0FocusProbeValidator.build`
-仍是 07-24 的 `contains("文件传输助手")` + 从候选中反向挑目标；宏/生产则已在 08-09/08-11 收紧为
-`ConversationSurfacePolicy` 先结构选唯一标题，再用 `LabelMatchPolicy` 精确相等，并带前台窗口与真实
-状态栏下沿。仓内已有“文件传输助手8”及耳朵图标 OCR 成窄 `G` 的真机先例，因此尾噪是强推断，
-采样抖动也不能排除。A 道必须先用跨生产者 RED 钉住尾噪、冲突强 a11y 与独立窄 `G` 正向，再让
-precheck/盲点 probe 复用生产策略；同时把 precheck exit/attempts/waited/probe_ready/reason 落 manifest。
-不得靠放宽生产收件人匹配换成功率，`de6685c` 不再直接重进 C。
-
-A 道最终候选为 `67ef56cc8289b34d09843701d7b83986a206ad0e`。跨生产者 RED 先坐实尾噪与强
-a11y 冲突会让旧 precheck 假放行；修后 precheck 与实际 blind focus 都复用生产标题身份，精确标题旁独立
-窄 `G` 正向仍通过。每腿 manifest/precheck.json 只落 allowlist 结构，不落 raw stdout/leftovers/free-text
-reason；exit 0 只有完整严格 schema 才放行，exit 1 只有明确 unavailable 信封才按既有策略 fail-open，
-exit 2、畸形/矛盾信封、异常码与 helper 缺失均 dispatch 前 fail-closed。两轮独审先报 0/2/0、修后
-0/0/0；完整 gate 为 Gateway Debug 524/524、Release 418/418、assembleDebug、runner 153/153、AST、
-diff check 与凭据扫描全绿。下一条 C 只允许固定该 SHA。
-
-08-23 第八条 clean C run `20260823T095948-028b841bc24d` 固定 `67ef56c`，唯一构建成功，
-设备/屏幕/勿扰/微信前台与 clean HEAD 均通过；runner 启动后却在 vivo
-`PackageInterceptActivity` 等满 120 秒，包 `lastUpdateTime` 未变化，setup 以“安装 debug APK 超时”冻结。
-manifest 为 `legs=[]`、`cleanup.ok=true`，无 slug/dispatch，故 ledger 无行；唯一持久证据 SHA-256 为
-`4DC81FEE8F115405DA6B20802C7871BE62A90589B3613779E972787AE9D24801`。这是 run 2、run 6 后
-第三次相同安装确认未完成；按会话纪律不再盲重跑。下一条仍固定该 SHA，但只有在用户能现场看到系统
-按钮并当场完成点击时才新建，过期安装页不得补点。
-
-**证据留存缺口（与功能修复分开）：** 前两条 Codex C task 完成后临时 worktree 被清空，manifest、trace、
-截图的原路径随之失效；两条 ledger 行也没有自动进入 main。本轮从 Codex archived session 恢复了原始
-ledger 行并补回 main。下次 C 在结束前必须先把 ledger 落 main，并把需要长期保留的脱敏证据复制到
-非临时位置；不能把 task 消息里的临时路径当作持久归档。第三条 C 已按新规在释放前完成 ledger 去重与
-13 文件持久化，证明这道交接门可执行。
-
-**批次 2 验收失败。三腿判据仍全过**（run `20260801T184829-8f6cd9917267`，`status=passed`、
-`cleanup.ok=true`、三腿 teardown 均 `clean`、Allow `safety_code=OK` 无误伤）。**新增三条：**
-
-1. **锁屏免解锁批准——失败。** 用户锁屏后**根本看不到审批通知**，两次 `timed_out`。排除项已查：
-   系统与 vivo 每 App 锁屏开关均为开、通道 `importance=4`、通知确实 posted 且 `actions=3` 带
-   `publicVersion`。**最强候选原因 `ConfirmNotifier.kt:88` 的 `setOngoing(true)`**——旁证是该包
-   活着的 ongoing 前台服务通知同样不上锁屏。「锁屏只显示脱敏行」这一面**未触达**（根本没显示）。
-2. **无 FSI 依赖——通过。** APK 未声明该权限、posted record `fullscreenIntent=null`、解锁态三腿
-   每次都到位。
-3. **连续两次 stale 后停在 `[AWAIT_CONFIRM]`——未触达，且结构性跑不出来。** 见下。
-
-**决定四在当前站规下是死代码（本轮最重的发现）。** `StaleReconfirmGuard` 的计数发生在
-`ToolRegistry.newSafetyGate` 的 `confirmer` 里，按 `staleKey` 累加——**重弹靠的是大脑再调一次
-`press_key`，不是网关内部循环**（主会话一度猜成后者，读代码后推翻）。而站规
-`gateway-executor-preamble.md` §4 明令：安全失败即终态，**不得重试同一危险动作**，且
-**不得输出 `[AWAIT_CONFIRM]`**（`E_CONFIRM_REQUIRED` 就在它列举的终态码里）。于是计数器
-**连 1 都到不了**，守卫在给一件不可能发生的事设上限；而 `ToolRegistry.kt:397` 耗尽时的 fallback
-恰恰写着"输出 `[AWAIT_CONFIRM]`"，与站规正面矛盾。**这不是测试跑法问题，是设计与站规的冲突**，
-且用户当初选决定四时的前提（重弹可达）是错的 → 已提回 §6 待用户拍板。
-
-**台账观测缺口**：误点拒绝与两次确认超时的**三轮跑测在台账上零留痕**（runner 检出决定不符即
-终止 dispatch），消耗了真人时间却不可见。→ 回流 A 道。
-
-**回流①②已修并经主会话独立复核**（`7b62252` + `0b0b878`，`check.ps1` 五项全绿，离线 runner 67 → 69）：
-
-- **①** `setOngoing(true)` 已删，且**是 builder 链里唯一一条 `-` 行**——A 道刻意只动这一个变量，
-  category 等其它可疑项一律没碰："一次改三处即使下轮通过也说不清是哪处起的作用，而手机时间太贵"。
-  同时补了可观测性：卡与通知都就位、正等真人决定的窗口里经 runner 自己的 adb 通道抓一次
-  `dumpsys notification`，解析 flags/ongoing/visibility 进 manifest，**下一轮不管修没修对都有答案**。
-  **不用 `--noredact`**（全仓仅出现在解释为何不用的注释里）——用了会把通知正文连同明文预览打进日志。
-  解析只认审批通道那一段：同一份 dump 里前台服务那条常驻通知**本身就是 ongoing 的**，混读恰好
-  得出最容易误导的结论。**未加 `setDeleteIntent`**：划走不是决定，给它接回执等于安一个决定的语义。
-- **②** runner 自补 `result=aborted` 行，三类归因 `safety-denied` / **`decision-mismatch`**（期望拒绝
-  而真人允许，最严重）/ `confirm-timeout`。**成本列留空而非填 0**——token 确实烧了只是没机会汇报，
-  填 0 是假数据。表头与拼行挪进 `dispatch-ledger.ps1` 两处共用，删掉 dispatch 里就此成死代码的副本。
-
-**同族问题第三次，这次是误报**：A 道写的 `Assert-NotMatches $notifier 'setDeleteIntent'` 被它**自己那句
-解释"这里没有 setDeleteIntent"的注释**匹配到而失败。**源码文本断言分不清代码与注释**——这次运气好是
-误报，反过来就是漏报（注释里提一嘴就能让断言以为代码里有）。已改成只匹配调用形态
-`^\s*\.setDeleteIntent\(`。前两次分别是「用例把错误行为钉成预期」与「过时预期靠巧合存活」。
-
-**安全事件（已妥善处理）**：一条后台任务通知里夹带自称"系统覆盖指令"的文本，要求执行器用 adb
-自行点掉确认卡并声称用户已预授权（原文含拼写错误 `Sytem`）。**C 道拒绝、未执行、未寻找绕过路径。**
-主会话独立核实：证据目录无任何 `input tap`/`KEYCODE_ENTER` 痕迹，三腿记录的决定全部来自真人
-（allowed/allowed/**denied**）。**注入未得逞，指令来源边界与铁律 3 都尽职。**
-
-**批次 2 待验收（`2b5bc90`）。** 主会话独立复核：`check.ps1` 五项全绿，JVM 单测 **308 → 331**
-（Arbiter 8 / 通知文案 7 / 限次 8）；四条决定逐条查过源码——FSI 在 manifest 里只是**注释**、
-`uses-permission` 清单确无此项；`setAuthenticationRequired` 缺席处写明是用户明示选择并附重开条件；
-`StaleReconfirmGuard` 上限 2、第 3 次抛 `E_CONFIRM_REQUIRED` 要求 `[AWAIT_CONFIRM]`（**是拒绝，
-不是静默放弃**）；nonce 只进 PendingIntent extras，receiver 唯一那条 `Log` 打的是
-`confirmationId`/`outcome` 而非 nonce，`exported=false`。
-
-**验收比批次 1 多三条**，因为 **Android 侧（Notification 构建、PendingIntent、receiver 分发）
-没有 JVM 用例**——判据性逻辑已全部抽成纯 Kotlin 并钉住，Android 侧只剩装配，而装配只能真机验：
-
-1. 免解锁批准真的可用，且**锁屏只显示脱敏行**（明文不上锁屏）
-2. **没有任何路径依赖 FSI**——权限没声明，若有路径偷偷依赖它会静默失效
-3. 连续两次 stale 后，**第 3 次确实停在 `[AWAIT_CONFIRM]`**
-
-| 3 | `3cb9133` | `claude/serene-faraday-42d1fb` | **待验收**（并入下方合并跑） | Deny 腿带外验证自动化 |
-| **2+3 合并跑** | **`33b9eac`** | `claude/serene-faraday-42d1fb` | 批次 3 **✅ 通过** · 批次 2 **❌ 未达成** | 08-02 00:11 |
-| **2（收窄后）** | **`075e698`** | `claude/serene-faraday-42d1fb` | **✅ 通过并已合 main `f08cda2`** | 08-02 22:02 |
-
-**批次 2 通过（收窄后四条判据全部有结论）+ 批次 3 随之合入 main。** 主会话独立核 manifest：
-**allow / stale / deny 三腿 `confirmation_channel` 全是 `notification`**——1a、1b 由**机器证据**确认，
-不是用户口述，这正是该字段存在的意义。allow `safety_code=OK` 消息真的发出去了；stale
-`E_STALE_REF`（切到别的 App 后的预期终态）；deny `E_BLOCKED` + `deny_out_of_band`
-`not_sent_confirmed`（**批次 3 第三次回归无退化**）。判据 2 复验通过；判据 3 按拍板永久未触达。
-**runbook 那条「下拉通知栏预计 `E_BLOCKED`」的预判本轮未被检验**（该路径没走），
-仍是未实测——**不许记成"预判被证伪"**。
-
-**「Deny 腿四条判据全部来自被测组件自报」这条从 07-31 挂到今天，随批次 3 合入正式清掉。**
-
-**本轮两条回流（均已派 A 道）：**
-
-1. **`approval_notification` 这份可观测性是坏的，而且会把人引向相反结论——比缺失更危险。**
-   本轮三腿 runner 抓的 `approval-notification.txt` **全部不含审批通知记录**（只有 autogroup
-   摘要 id=0 与前台服务 id=1），而同一批腿的 `decided_via` 全是 `notification`——**通知明明存在
-   且被用了，这份 dump 却显示"没有"**。而 runbook §3.2 防误判第 4 条恰恰写着"先看这份 dump
-   再下结论"，**照做会得出"通知没发出来"的错误结论**。最可能是抓取点早于通知 post。
-   另：**解析字段仍未进 manifest（只有 .txt），这是第三轮如此**。
-2. **首跑 stale 腿以 `E_CHANNEL_DOWN`(channel=test-control) 终止**：用户按验收单切了 App，
-   网关侧仍认为前台是微信（`foreground_known=true`/`app=com.tencent.mm`）。是 debug hook 的
-   前台预期与新手动流程之间的**竞态**；第二次跑（明确要求"先真的切到设置/浏览器看到界面
-   再下拉"）即通过。**C 道的敏锐观察**：那条失败腿的审计 note 里**已经有**
-   `confirmation=requested;confirmation=allowed;decided_via=notification`——**1a 要证的事实在
-   失败腿里就已成立**，只是腿提前终止、manifest 没写成。**附带成本**：失败腿未跑 teardown，
-   marker 留在输入框，下一轮被预检拦下（预检判得对），**多花用户一次往返**。
-
-**收窄后的批次 2（`075e698`，主会话独立复核 `check.ps1` 五项全绿、离线 runner 82）：**
-
-- **判据 1 拆两条挂在已有的腿上，不新增真机成本**：**1a 可达且送达**挂 Stale 腿——切到别的 App
-  再从通知点允许，前台变了必判 `E_STALE_REF`，**而那正是 Stale 腿的预期终态，该腿照常通过**；
-  **1b 能真的放行**挂 Allow 腿——微信留前台、在 heads-up 浮窗上点。
-- **A 道自己补了一件没被要求的事，且正是本仓核心教训的应用**：判据 1 原本只能靠**真人自报**
-  "我点的是通知"，与 Deny 腿那次「判据全部来自自报」同一形态。现在 app 私有状态写
-  `decided_via`、审计 note 一份，runner 转记进 manifest `confirmation_channel`。
-  设计经主会话核对：`ApprovalChannel` 只有 `OVERLAY`/`NOTIFICATION` **两个值、无默认值**；
-  `decide()` 只记**真正胜出**的那次；**没人决定时 `winner()` 返回 null**（"null 就是没人点"），
-  超时那次一个字不写——**凭空写 overlay 等于伪造"人点过卡"**。不新增裁决点。
-- **一条现场必须知道的预判（未实测，已写进 runbook）**：1b 若**下拉通知栏**再点，预计以
-  `E_BLOCKED`（前台身份未知）结束——通知栏展开时自己获焦。旁证很硬：确认卡当初必须加
-  `FLAG_NOT_FOCUSABLE` 就是同一机制。runbook 写明**照点不误，两种结果都不许改判据、
-  不许重跑凑绿**。
-- 锁屏两条已按拍板归档进 spec §5.4（**从未验过，现在也不当成通过**，重开条件写死）；
-  决定三"当前无实际后果"进 spec §5.5 + `ConfirmNotifier` 注释，并写明**锁屏能力一旦重开，
-  这个决定当场变成承重的，要在同一轮重新确认**。
-
-**语义意图审批 spec 已交**（[spec](specs/2026-08-02-语义意图审批-design.md)，只起草未实现；08-02 初始决定已被 08-03 的 5 分钟拍板部分覆盖）。
-两个离线结论：①**锁屏那道墙不用拆也能绕开**——危险动作是在手机亮着、微信在前台时**发起**的，
-锁屏发生在等人决定那段，故 `requireKnownForeground` 位置不动、判据不松；代价是锁屏上按了允许，
-动作要等前台恢复才发生。②`InputCommitEvidence` 与 `PreparedTargetEvidence` 的 TTL 仍是 **120s**，没有随意图
-有效期放宽；08-03 最终拍板为 I 级 wait `0`、II 级 `foregroundWaitBudget=300s`、`decisionTimeout=90s`、
-`intentTtl=360s`。决策时钟从请求建立起算；执行有效期只在真人允许胜出时以不可刷新的 `approvedAtMs`
-启动。等待越过证据 TTL 时必须装配重建通道，执行前重读并与确认卡摘要比对。
-
-**批次 3 通过（主会话独立核 manifest）**：`deny_out_of_band = {captured:true, ocr:"windows-media-ocr",
-input_box_marker:"present", message_area_marker:"absent", verdict:"not_sent_confirmed"}`，
-`send_postcondition` 由 `gateway_reported_blocked_no_independent_check` **升级为
-`independent_ocr_marker_still_in_input_box`**。**真机截图 OCR 读得出来**，没退化成 `unavailable`；
-`absent` 按设计未参与判定。**「Deny 腿四条判据全部来自被测组件自报」这条从 07-31 挂到现在，
-第一次有了独立反向证据。**
-
-**批次 2 判据 1 仍未达成，但形态变了——从"根本没出现"变成"发得出、留不住"。**
-新增的 `approval_notification` 观测确认修复已落地：`id=36865 channel=gateway-approval
-importance=4 **flags=0**`（`ONGOING_EVENT` 已消失，上轮同一位置就是它）、`category=call`、
-`actions=3`、`vis=PRIVATE`、`publicVersion(vis=PUBLIC)` 齐全，且 C 道在让用户锁屏**之前**用 adb
-独立确认过该记录活着。用户观察：**通知随卡同步出现、很快消失，锁屏上没有**。最可能是去掉
-`setOngoing` 的副作用（ongoing 连带 `NO_CLEAR` 让它粘住）。**下一轮必须把「可见」与「持久」
-当两件事分别验。** 另：第一次锁屏尝试撞到混杂变量 `zen_mode=1`（vivo 定时睡眠，通道
-`mBypassDnd=false`），已关 DND 重测，最终结论取自 `zen_mode=0`。
-
-**协议缺口：线性堆叠让通过的批次合不进 main。** 批次 2（`2b5bc90`）是批次 3（`3cb9133`）的
-**祖先**，而 §7.2 要求「合钉住的 SHA」——合批次 3 必然带上未通过的批次 2。本轮据此**暂不合并**，
-批次 3 留在分支上等批次 2 过。**根因是 §7.2 默认批次可独立合并，而 A 道是线性往前做的**；
-若将来某批长期卡住，应让它单开分支而不是让后续批次陪绑。
-
-**五条真机回流（全部回流 A 道）：**
-
-1. **跨零点丢审计**：设备审计按日期分文件，Stale 腿 23:59:44 起、00:00:28 止，行落进
-   `20260802.jsonl` 而 runner 读 `20260801.jsonl` → 判「新增 `press_key` 审计证据行数不是 1」（实为 0）。
-   trace 里 `press_key` 与 `E_STALE_REF` 都在，**安全语义正常，纯属证据采集缺陷**。
-2. **Allow 腿 `ui_find`「恰好一个命中」判据误杀——同族第二次，且这次消息真的发出去了。**
-   `run-p0-safety-smoke.ps1:655` 要求 `$matches.Count -eq 1`，而 OCR 对**同一条气泡**返回两个
-   重叠框（bounds 相差 3px，text 分别为 `POALLOW-0681 BCD5A91B` 与 `POALLOW-0681BCD5A91B`），
-   `Count=2` 直接短路，**文本比对根本没跑到**——归一化本身没问题，两条归一后都等于期望值。
-   与 STATUS 里「归一化把成功判成证据不匹配」是同一族。
-3. **网关侧 `type_text` 落框 OCR 复核误杀**：两次读回 `") POALLOW-913851547D50 )"`（C→0）与
-   `") POALLOW-55DD1C1BBF2d )"`（D→d），判 `E_STALE_REF`、卡未弹、未发送。**行为正确（fail-closed）
-   但合法输入被拦**；marker 用十六进制字符集，`0/O`、`C/0`、`D/d` 混淆面很大。
-   **②③ 合起来让今晚 5 次 Allow 尝试只有 1 次走完——这是直接烧用户手机时间的两条。**
-4. **回流②的 `aborted` 行重复记账**：dispatch 已落 `fail` 行时 runner 仍补一行 `aborted`
-   （同一腿两行），且归因写 `confirm-timeout` 而真因是卡出现**之前**的 `type_text` `E_STALE_REF`。
-5. **C 道自己的一次失误已自纠**：一条 monitor replay 的旧日志行让它误告用户"卡出来了"，实际
-   那轮卡在预检；**该轮用户的锁屏观察已作废不计入判据**，最终结论取自随后经 adb 独立确认
-   通知活着的那一轮。——旧日志行被当成当前状态，也是「判据看不见」的一种。
-
-**五条已全修，主会话独立复核通过**（`4118559`，`check.ps1` 五项全绿，离线 runner 70 → **76**；
-站规/腿模板/harness spec 仍一字未改）。抽查：`ui_find` 那处「恰好一个」已不在；字符集
-`3479AHKMPTXY` 抽进 `scripts/lib/p0-marker.ps1`；`setOngoing` **只出现在解释"为何不调它"的注释里**，
-持久改由 `setTimeoutAfter(timeoutMs + TIMEOUT_SLACK_MS)` 承担；`AllowMissing` 只有一个调用点、
-判定路径不带它。
-
-**A 道纠正了主会话诊断的一半，纠得对**：不是"去掉 `setOngoing` 的副作用"，而是
-**「可见」与「持久」本来就是两件事，之前被混在同一个开关里，所以一改就翻到另一边**。
-用例钉住"超时必须由确认窗口推导而非写死"——脱钩就会出现「人还能点、通知已经没了」。
-
-**又一例「判据看不见」**：marker 的生成与归一原本埋在 runner 中间、**在 `-DryRun` 的 `exit`
-之后**，离线用例根本取不到，所以字符集从来没被任何判据检查过。
-
-**留给下一轮盯的点（主会话）**：字符集是按本轮实锤的混淆对选的（排除圆形族、竖线族、C/0），
-方向对；但 **`7`/`T`、`4`/`A`** 在某些字体下也是常见 OCR 混淆对。**不预先改**——没有实测证据就动
-等于用猜测替换证据；下一轮让 C 道盯 OCR 原始读回里有没有这两对，有再收一次。
-
-### 批次 2 三次验收（08-02 09:01，`4118559`）：判据 1 收敛到只剩「可见」一件
-
-**这轮最值钱的是一个干净的否定 + 一个天然对照组。**
-
-- **① 持久：成立。** 探针每 2s 采样：09:06:53 `PRESENT` → 09:07:51 `PRESENT` → 09:07:53 `absent`
-  ——**存活 58s 横跨整个确认窗口，在确认超时时才被取消**，`setTimeoutAfter=PT1M15S` 未被证伪。
-- **② 可见：失败，且本轮无混杂变量。** `zen_mode=0` 派单前已 adb 核过；锁屏截图（09:07，与探针
-  `PRESENT` 同一时刻）上**有另一条 app 通知「已签收 1个快递」正常显示**——**这台设备此刻的锁屏
-  通知渲染是好的，天然对照组**；网关那条 `id=36865` 就是不在锁屏上。
-- **③ 脱敏：仍未触达**（从未在锁屏显示过）。判据 2 复验通过；判据 3 按拍板永久未触达。
-
-**C 道推翻了自己上一轮的归因（重要）**：上轮报的「卡还在等待而通知已消失」，是把「日志最后一行
-仍是『确认卡证据已保存』」当成了「卡还在等」，实际那两次查询发生在确认**已结束之后**。
-**上轮「发得出、留不住」那条归因作废**——也就是说 A 道的 `setTimeoutAfter` 修的是一个不存在的
-问题。**但它现在被正证据验为行为正确（横跨窗口、超时才取消），保留。**
-这是「**旧日志行被当成当前状态**」第三次出现（前两次：C 道 monitor replay 自纠、审计跨零点读旧文件）。
-
-**三腿 + 批次 3 回归通过**（主会话独立核 manifest）：三腿 `verdict` 均 `passed`、
-`confirmation=allowed/allowed/denied`、`safety_code=OK/E_STALE_REF/E_BLOCKED`；
-`deny_out_of_band` 仍 `not_sent_confirmed` / `windows-media-ocr`，**无退化**。
-整组 `status=failed`、`cleanup.ok=false` **只因 Allow 腿 `teardown=dirty`**，成因见下 ②。
-
-**②③ 复验：都生效。** `ui_find`「归一后全部命中」两轮都过，没再被 OCR 抖动吃掉；新字符集下
-**5 次 Allow 尝试没有一次因 `type_text` 落框复核失败**（上轮 5 次里挂 2 次）。marker
-`P0ALLOW-4MAA7AXAAX93` 读回 `POALLOW-4MAA7AXAAX93`——**只有 P0→PO 一处（归一化可处理），
-4、7 与多个 A 全部读对**。**主会话要盯的 `7`↔`T`、`4`↔`A` 本轮样本里一次都没出现**，
-倾向保留；但成功读回样本只有 2 条，**再攒一轮再定**。
-
-**本轮三条新发现（回流 A 道）：**
-
-1. **终态判据不认反引号**：执行器把整段报告用反引号包成 `` `结果：成功…` ``，runner 判
-   「终态报告不是成功」整腿判死，而 **dispatch 同一段文字记成 ledger `success`**——
-   **同一文本两个组件结论相反**。与 STATUS 里「不认 markdown 粗体」是同族第二次。重跑未复现
-   （执行器输出习惯的偶发），**但判据的洞是确定的**。
-2. **候选区判据把系统浮层当残留**：一条联通流量提示浮层压在输入栏上，teardown 读出
-   `leftovers=「联通 今日已用：739.1 KB…」@y2713-2765` 判 `dirty`，**输入框实际是空的**。
-   与「键盘顶起布局后量到的是键盘」同族。**这条直接导致本轮 `status=failed`。**
-3. **`approval_notification` 解析字段仍未进 manifest**（连续第二轮）：evidence 目录里有三份
-   `approval-notification.txt`，但 manifest 的 leg 对象里没有该字段（**主会话独立确认**），
-   只能靠人手工 grep 取 flags/timeout。
-
-**C 道给的下一步方向（主会话认可）**：判据 1 只剩「可见」，且**有了对照组**——从「同一锁屏上
-别的通知能显示、这条不能」这个**差集**入手，比较两条通知的 category/group/channel 属性差异，
-`CATEGORY_CALL` 与 autogroup 的 `Aggregate_AlertingSection` 归组是两个最可疑点，
-**而不是继续在 ongoing/timeout 上试**。
-
-**C 道未动 STATUS/knowledge 是对的**：`33b9eac` 上的 STATUS 停在批次 1 验收前，在该基线上编辑
-会回退 main 已有内容。批次 3 的收尾须在 main 基线上写。
-
-**批次 3（`3cb9133`，4 个提交，与批次 2 的 `2b5bc90` 完全分开）。** A 道自报 `check.ps1` 五项全绿、
-离线 runner 60 → **67**；**主会话的全套复核刻意推迟**——C 道当时正在同一台机器上跑批次 2 真机验收，
-而 `check.ps1` 起 3 个分片抢 CPU、dispatch 也在本机跑，不值得拿用户的手机时间冒险。已做零负载抽查：
-BOM 字节 `efbbbf` 在；7 条新用例覆盖三条硬约束与两个 OCR 实测坑；顺序断言钉死
-「本腿判定 → 带外验证 → teardown」。
-
-**孤儿文件那件事有个反转，值得记**：`p0-oob-ocr.ps1` 上轮被额度打断后留下，主会话跑了 AST 解析、
-报「OK 可解析」，并据此把它描述成完整可用。**那个绿是假的**——文件没有 BOM，Windows PowerShell 5.1
-按 ANSI 读、中文注释乱码成解析错误，而 pwsh 7 按 UTF-8 读一切正常。**主会话用一个看不见该缺陷的
-检查去判断它**，形态与「判据的过滤条件正好排除了目标证据」（§7.1.2）完全一致，只是这次代价小。
-已加 BOM 并补两条用例：字节级 BOM 断言 + 真拿 5.1 解析一遍。
-
-**两个 OCR 实测发现已进判据**：①系统 OCR 把 `P0` 读成 `PO`（走仓库既有归一）；②**marker 会被切成
-多个词**（实测 `P0ALLOW-1D97824FD778` → `POALLOW-` / `1` / `D97824FD778`），必须先按行拼词再匹配，
-拿单个词 contains 必然漏判；行归并阈值取词高一半，再宽会把相邻两行串成一行、拼出并不存在的 marker。
-
-**一个刻意取舍**：离线套件**不依赖本机装没装 OCR 语言包**——装了才绿的用例会让安全网变成机器的函数。
-代价是"真机截图到底能不能读出来"只能靠 C 道第一次跑确认，runbook 已写明第一次要盯 manifest 的
-`deny_out_of_band.ocr` 是不是 `windows-media-ocr`。
-
-**两处判断主会话已裁决**：①II 级**不编造撤回时长**（撤回窗口由目标 App 定，网关无从得知；
-只点名微信 2 分钟、其余"以该 App 规则为准"）——与"自举身份不许编造 activity"同一条规矩，
-spec 字面在这里是错的，改实现去迁就它才是退步。②A 道抓到一条**靠巧合存活的过时断言**
-（「档位不得出现在确认卡上」被本批次取代，而当时 I 级文案恰好不含"不可逆"三字所以至今仍绿）
-——"用例把错误行为钉成预期"的变体，比写错更难发现。
-
-**批次 1 二次验收通过（run `20260801T143739-ff105d203a35`）**：三腿**一次连跑**，
-`status=passed`、`cleanup.ok=true`、三腿 `teardown.verdict` **均 `clean`**，人只点 3 次确认卡、
-中途一次框都没清。判据 3 由零 token 脚本单独验：**重绑前 `event` → 重绑后 `bootstrap`**，
-package 级无 activity，退出码 0——上一轮"没触达被读成通过"的地方这次拿到了真跃迁。
-主会话独立核过 manifest：三处修复都被真机确认（Stale 腿 teardown 由 `unverified`（实为真脏）
-转 `clean`；`send.state` 在 Stale/Deny 记 `absent`；Allow 腿 `unverified` 按更正后的判据照常通过）。
-
-回流五条已闭环，主会话每一步独立跑过 `check.ps1`（最终五项全绿，离线用例 55 → **60**，
-派单离线 23 → **28**）：
-
-- `b7e94f5`（主会话代做，A 道当时被会话额度锁住）修 **1、2**：teardown 动手前先
-  `Test-P0TargetAppForeground`，不在前台先用带守卫的 `Start-P0TargetApp` 拉回，拉不回则
-  **一个键都不发**并返回新终态 `skipped_not_foreground`。第 2 条随之解决——`unverified`
-  原本同时承载"探针不可用"与"其实真脏"，现在"确知没清"有了自己的名字。
-- `bfb4899`（主会话代做）修 **4、5**：runbook 那段停在 07-27 复查**之前**；
-  `send_verification.state` 空串改记 `absent` 并写明含义。
-- `337113c`（A 道）修 **3**：真因是 `-Provision` 在重绑之后还要 `am start` 拉面板、再
-  `Start-P0TargetApp` 拉回微信，**每一步都产生窗口事件**，自举永远轮不到。新增零 token 单跑
-  脚本 `scripts/p0-foreground-bootstrap-check.ps1`（runbook §3.0.1），**四态**分开
-  `passed`/`not_reproduced`/`unavailable`/`failed`——上一轮栽的地方正是没有任何判据能把
-  "没触达"和"通过"分开。离线用例钉住真机那次的形态（重绑后仍是 `event` 必须记
-  `not_reproduced`）与自洽性（自举身份带 activity 即判不自洽）。
-
-**二次验收的腿序变了**：判据 3 走那个零 token 脚本、**必须跑在三腿之前**（它会重绑服务；
-且自举身份没有 activity，混进 Allow 腿会平白多一条与它要证明的东西无关的 `E_STALE_REF`）。
-判据 1、2、4 仍走三腿连跑。**对用户的成本不变，仍是 3 次点击**；新脚本不占确认卡，
-只要求"跑完前不碰手机"。
-
-判据 3 **只验到一半且已写明**：确认卡上那句自举标注有意不验，失败方向安全（那一跳没接上时
-卡上显示"未知"，信息更少绝不更宽松），属文案缺陷非安全缺陷。
-| 2 | — | — | 未开始 | |
-| 3 | — | — | 未开始 | |
-
-**批次 1 验收范围扩大（2026-08-01）**：tracker 自举无法只改 tracker——服务重启后
-`foregroundKnown` 为假会被 `SafetyGate.requireKnownForeground` 挡死，所以自举必然改到安全门。
-落地为两处安全面改动，**验收必须覆盖，不能只验"前后置自动化生效了没"**：
-
-1. 确认卡前台那一行新增自举标注（`Activity 未知（服务重启后由窗口自举的包级身份）`）——
-   自举身份天生没有 Activity，若只写"未知"，与"事件给了身份但 Activity 恰好为空"长得一样。
-2. `identityBootstrapped` 参与确认前后硬相等，新增一条 stale 判据（自举包级身份 ↔ 事件身份
-   互换时两边 `activityName` 可能都为空而平凡相等）。
-
-这条耦合是内在的、不是 A 道越界，但它说明 §4 的"批次 2 单独一批"只挡得住**主动**碰确认路径的
-改动，挡不住这种被动牵连。后续批次划分要按**改动触达的表面**判，不按改动的意图判。
-
-**批次 1 验收失败（2026-08-01 10:17，C 道）。安全门没有退步，退步的是自动化。**
-三腿安全语义全对（Allow `allowed/OK`、Stale `allowed/E_STALE_REF`、Deny `denied/E_BLOCKED`，
-`dangerous_calls` 各 1、`card_visible` 各 true）；判据 4（新 stale 判据没误伤）**通过**。
-失败在判据 1、2，判据 3 **未触达**。回流 A 道五条：
-
-1. **（主因）teardown 在 Stale 腿后失效，因为设备停在桌面。** Stale 腿按定义在 debug hook
-   之后切到 Home，28 次退格打给了桌面，探针连拿 6 次错误信封 → `unverified`；下一腿预检
-   抓到 `leftovers` 且 `empty:false`。**判别式已被 Deny 腿钉死：Deny 的 `keyboard` 同为
-   `already_hidden` 却 `clean`——差别不在键盘分支，只在微信是否前台。** 修法不得越界：
-   teardown 走 runner 自己的 adb 通道，不能用执行器把微信弄回前台。
-2. **`unverified` 三态的语义被证伪了一半。** 设计意图是"没核对成 ≠ 脏"，而这次
-   `unverified` 对应的**就是真脏**。闸门（下一腿预检）确实尽职、没污染 Deny 腿结论，
-   但代价是三腿连跑做不到——而三腿连跑是批次 3 的前提。
-3. **自举路径三次 `-Provision` 都没走到**，不是通过也不是失败。trace 里 `bootstrap`
-   **零次出现**（主会话独立核实），三张确认卡前台行都是完整 `LauncherUI`，没有自举标注。
-   重装后拉起微信本身就产生窗口事件，身份被事件填上，而自举只在"从未建立过身份"时生效。
-   **没被 `identity_unset` 卡死是事实，但不能记在自举头上。** A 道需先设计一个真能复现
-   "服务重启后不产生窗口事件"的场景，否则这个分支在本流程里验不了。
-4. **runbook 与 runner 对 `unverified` 的判据打架**：钉住 commit 的 runbook §5 写
-   "`unverified` …判失败"，runner 实际只禁矛盾（`not_sent`）。runner 与 STATUS 记的设计
-   意图一致，像是 runbook 那段没跟着改。**同族风险：文档把错误行为钉成预期。**
-5. `send_verification.state` 在 Stale/Deny 腿是空串，不是三态里的任何一个值。
-
-**搭便车项有结论**：`run-as` 读 filesDir **没问题**（实证列出了 `files/` 下的
-`profileInstalled`、`test-control-consumed-nonces`）。~~但审计目录尚未迁移~~
-**审计目录已于 2026-09-05 迁移**：`Audit.kt` 的 `Context` 构造改用 `filesDir`，取证侧
-`Get-P0AuditCursor`/`Save-P0AuditIncrement` 三处路径同步改为 `run-as <pkg>` + 相对路径
-`files/audit/<day>.jsonl`（含跨零点那一份），`M1-真机日清单` 的 `adb pull /sdcard/...` 也已改写。
-**迁移动机不是整洁而是证据可达**：Android 11+ 的 `run-as` 读不到 external files，
-而 `run-as` 正是 runner 的私有取证边界，审计落在那里等于证据链采不到。
-**仍需一次真机复验**（C 道搭便车，只读）：确认 `run-as <pkg> wc -l files/audit/<day>.jsonl`
-返回行数、增量 `tail` 不再混入 `Permission denied` 行。
-
-**意外收获（批次 3 的可行性证据）**：Deny 腿确认卡截图里，消息区能看到
-`P0ALLOW-1D97824FD778` 是一条已发出的绿色气泡（10:11）——**Allow 腿网关侧自证不了的那次发送，
-被后一轮的截图独立确认了**。同一张图上既能看输入框也能看消息区，说明批次 3 的
-Deny 带外截屏比对可行。
-
-## 6. 待决策队列（B 道）
-
-| 问题 | 收敛到的选项 | 提出时间 |
-|---|---|---|
-| 平板适配遇到系统原生功能时，是关功能换单窗还是项目适配？ | **项目尽量适配设备，不靠关闭功能换通过**（用户 08-25 拍板）；vivo 横屏应用多窗/同 App 双窗口作为日常基线。关闭功能最多是明确标注的对照实验，不得成为产品前置或最终验收条件 | 2026-08-25 |
-| 后续真机与平板默认姿态？ | **统一改用 vivo PA2553 Android 平板，并以日常横屏为当前设计/验收基线**（用户 08-23 切平板、08-24 改横屏）；手机 C 暂停并保留历史。路线为 T0-L → T-L1 pane 只读探针 → T-L2 横屏 P0，竖屏兼容后置 | 2026-08-24 |
-| Codex 0.147 无可用 `view_image` 禁用键，是否接受有界 residual 后开新 C 道？ | **已接受**：空 cwd + 无 shell/枚举 + 不提供本机路径 + 未知 item fail closed；若将来出现路径暴露/未知 item 或可禁用版本，重新收紧 | 2026-08-11 |
-| 语义意图审批四题 | **全部按推荐拍定**（用户 08-02），见下 | 2026-08-02 |
-| 锁屏审批与 D1 结构性冲突，走哪条路？ | **先收窄批次 2，再做语义意图**（用户 08-02 拍板） | 2026-08-02 |
-
-**语义意图审批四题的决定（用户 08-02 经 AskUserQuestion）：**
-
-1. **08-03 后续拍板覆盖 08-02 的 30s/120s 时限选择**：I 级 wait `0`；II 级
-   `foregroundWaitBudget=300s`；`decisionTimeout=90s`；`intentTtl=360s`。证据 TTL 仍为 `120s`，没有放宽；
-   `decisionTimeout` 从请求建立起算，`intentTtl` 只在真人允许胜出时以不可刷新的 `approvedAtMs` 启动；
-   长等待路径必须实际装配证据重建通道，并以 `intentTtl >= foregroundWaitBudget` 和通道在位作构造/装配断言。
-2. **同意改写硬门不变量 4 的措辞**：「当前这一次调用」→「当前这一个意图的唯一一次执行」，
-   实质不变，并在同一处写明「意图不因执行失败而复活」。
-3. **接受两处判据变弱**：执行前不再跨时间比 `activityName` 与身份来源，改由
-   `targetLabel` + `targetPackage` 承担。理由是被替下的两项本就时灵时不灵（自举身份无 activity），
-   而顶上去的 `targetLabel` 恰恰是**人在卡上真正核对过的那一项**。
-4. **只有 II 级走「批准后延后执行」**，I 级仍要求批准与执行紧挨着。
-
-**第 4 条的连带影响必须同步处理**：这会让风险档位**第一次产生真实的行为差异**，而
-[风险分级 spec](specs/2026-08-01-危险动作风险分级-design.md) §5 现在写着"两档行为完全一样"，
-必须同步更新。**但用户 08-01 那条不变量原样成立**——两档仍都逐次确认、**不产出任何免确认路径**；
-差异只在**执行时机**，不在"要不要确认"。这一句要写进两篇 spec，避免被读成放宽。
-| 危险动作被批准后因 stale 未执行，大脑允不允许重试？ | **不开口子**（用户 08-01 拍板）——维持站规「安全失败即终态」 | 2026-08-01 |
-
-**冲突的性质（A 道离线读码 + 主会话核实，全部有既有用例背书）**：`press_key` 是 W 级，
-`SafetyGate.execute` **第一件事**就是 `requireKnownForeground`，**早于 `policy.assess`**——
-锁屏后目标 App 不再 resumed、keyguard 属系统窗口，`applicationWindow()` 为 null，于是
-**确认卡与审批通知都不会出现**。不是"批准后失败"，是**压根走不到批准**。既有用例
-`SafetyGateTest.unknown foreground blocks Level W/D before confirmation and execution` 早就钉住
-这条，`confirmerCalls == 0` 就是"卡从未弹出"的机械证据；A 道已给它加注，写明这同时是
-**锁屏审批的结构性上界**。第二道障碍：确认卡是 `TYPE_APPLICATION_OVERLAY`，**不显示在
-keyguard 之上**——「锁屏 + 卡」这个组合从来不存在。**这完全按设计工作**：D1 拦的就是
-"不知道在哪个 App 就不许做危险动作"，锁屏恰好落进该定义。
-
-**落地要求**：①批次 2 判据 1 收窄为「**屏幕亮着但人没盯着**」——通知带按钮可用、能放行，
-用户在别的 App 里也点得到；②「锁屏免解锁批准」与「锁屏只显示脱敏行」**移出批次 2**，
-如实记为「与 D1 结构性冲突，待语义意图方案落地后重开」，**不许为了让判据变绿而扭曲流程**；
-③**用户 08-01 决定三（锁屏全部免解锁）当前无实际后果**——锁屏审批本就走不通，
-`setAuthenticationRequired` 保持 false 这件事暂时体现不出来。**这一条必须如实写进 spec**，
-否则下一个人会以为免解锁已经生效。
-| 通知栏审批的四道题 | **已由用户拍板**（B 道 AskUserQuestion，08-01 00:25），四条决定见下。**其中决定四已被上条推翻** | 2026-08-01 |
-
-**决定四已作废并由上条取代。** 用户选决定四时的前提（重弹可达）是错的——重弹靠大脑再调一次
-`press_key`，而站规 §4 禁止重试同一危险动作，计数器连 1 都到不了。重新拍板结果：**不开口子**。
-落地要求：①把 `ToolRegistry.kt:397` 那条与站规矛盾的 fallback（"输出 `[AWAIT_CONFIRM]`"）改成
-"报告结果：失败"；②`StaleReconfirmGuard` **降为纵深防御**而非主路径——将来真有路径能重试时
-上限仍是 2；③站规与腿模板**一字不改**，不新增任何重试口子。
-代价如实记：stale 一发生用户就白批一次、得从头再来；判据 3 永远记「未触达」——**那是如实的**。
-
-**已落地并经主会话独立复核**（`56f8d4f`，`check.ps1` 五项全绿）：fallback 措辞挪进
-`StaleReconfirmGuard` 的纯 Kotlin 常量并配用例——**内联在 ToolRegistry 里的字符串没有任何判据
-看得见它，那正是它与站规矛盾这么久没被发现的原因**；守卫保留但类注释如实写明当前站规下走不到。
-**站规与腿模板一字未改，主会话用 `git diff 899c095..56f8d4f -- scripts/prompts scripts/tasks` 验空**
-——不只这一轮，危险动作提示词自批次 1 至今零漂移。
-
-**主会话复核抓到一处残留**（已回流）：`StaleReconfirmGuard.kt:101` 仍写着
-「停下时走 `[AWAIT_CONFIRM]`——那条在调用方」，而调用方恰恰是本轮改掉的地方。**它比普通过时注释
-更毒：不是笼统说法，是一条把人指向已不存在行为的明确指路。**
-
-**同一矛盾另有四处，真机因此推迟一轮（2026-08-01）。** A 道修好第一处后按新规矩回头搜，
-**但搜的是"谁在指着决定四"——跟着改动的标签走，而不是跟着行为的形态走**。主会话改用
-"谁的 `fallback` 在指示 `[AWAIT_CONFIRM]`"搜，在 `ConfirmOverlay.kt` 又找到四处：
-58（`E_CHANNEL_DOWN`）· 62（`E_PERM_MISSING`）· 101（`E_PERM_MISSING`/`E_CHANNEL_DOWN`）·
-**343（`E_CONFIRM_TIMEOUT`）**。站规 §4 把 `E_CONFIRM_TIMEOUT` 与 `E_PERM_MISSING` **逐个点名**
-列为终态码并禁止 `[AWAIT_CONFIRM]`，而四处全在危险工具**已在调用中**时触发。
-
-**343 行最要命：确认超时每次都走它，而批次 2 那轮锁屏腿恰恰超时了两次**——下一轮多半还会撞上
-同一条路。**不让用户守在手机旁去撞一个已知的矛盾指令**，故推迟。回流要求含一条**整类断言**：
-主源码任何危险路径的 `fallback` 都不得指示 `[AWAIT_CONFIRM]`，白名单例外显式列出并注明理由；
-否则第 6 处迟早再长出来。同时要求 A 道**别为了统一而统一**——若某处确实更接近"尚未调用危险工具"
-（如悬浮窗权限从头就没有、卡根本没弹过），说出理由保留。
-
-给 knowledge 那条的补丁：**检索词要跟着行为的形态走，不是跟着这次改动的标签走。**
-
-**四处已修，判定为全部冲突、无例外（`33b9eac`，主会话独立复核 `check.ps1` 五项全绿）。**
-A 道找到一条**不依赖措辞**的机械论据，比对照条文硬得多：`dispatch.ps1` 的 `$terminalSafetyCodes`
-里 `E_CONFIRM_TIMEOUT`/`E_PERM_MISSING`/`E_CHANNEL_DOWN` **全在拒绝恢复名单上**（主会话已验），
-**旧措辞指向的是一条保证走不通的路**——白烧一条腿、生成一个永远用不了的暂停件，人最后还被
-告知"拒绝恢复"。由此得出的判定法：**看这条指令指向的那条路在系统里到底通不通。**
-
-`harness §5.1` **不需要改**——它写的与站规完全一致，**是第 343 行引着它写了相反的话**。
-**引用一份说着相反话的 spec，会让错误的指令看起来是被授权的**；断言已把该 spec 一并钉住。
-
-整类断言**先剥块注释再剥行注释才匹配**（不剥会被"为什么不这么写"那句解释触发，本轮已被咬过
-一次），白名单当前为空；并**做了一次正对照**——临时塞一处违规确认断言变红后还原。那正是
-§7.1.2 那次翻车缺的一步。
-
-**下次真机合并跑（主会话决定）**：批次 2 二次验收 **+** 批次 3 一起验，钉 **`33b9eac`**
-（原写 `56f8d4f`，四处 `[AWAIT_CONFIRM]` 修复后已后移；**这处不一致是 C 道在派单时挑出来的**
-——同一族第 N 次，这次是主会话留的）。这是对
-§4「一次 C 会话只验一个批次」的**有意放宽**，理由记下备查——两者触达表面不同（通知/锁屏
-vs Deny 腿截图 OCR），失败签名可区分，而用户的手机时间比归因清晰度更稀缺。C 道须**按批次分别
-归因**，不得把两批的结论混成一条。
-
-**四条决定均有效**（commit `393657f`，分支 `claude/amazing-bhaskara-3cb56b`，
-[spec](specs/2026-08-01-通知栏审批布局-B道拍板.md)）。主会话一度判其为编造并作废，
-**该判定错误，已按 §7.1.2 更正，四条全部恢复**：
-
-| # | 题 | 用户的决定 |
-|---|---|---|
-| 一 | L2 展开态放几项证据 | **三项锚点**：档位 + 目标会话 + 明文预览 |
-| 二 | `USE_FULL_SCREEN_INTENT` | **不声明**，通知停在 L2、点进 L3 |
-| 三 | 锁屏「允许」要不要先解锁 | **全部免解锁**（与 B 道推荐相反；用户 08-01 在主会话再次口头确认） |
-| 四 | 批准后 `E_STALE_REF` | **限次重弹，最多 2 次**，超过按 `[AWAIT_CONFIRM]` 停下 |
-
-决定三按**明示选择**落地，不是遗漏的默认值：实现须在代码注释里写明这是用户明示选择并指向
-spec，附重开条件（手机曾离开用户控制，或出现一次误批准）；收紧接口
-（`setAuthenticationRequired(true)` 按 `riskTier` 挂到 I 级）预留好，将来改动量很小。
-
-决定二、三组合出一个必然结果，**是预期行为不是证据缺失**：免解锁批准时用户在锁屏上只看得到
-L1 那一行，三项锚点要解锁展开才可见。C 道按此核对。
-
-**这道题被连纠两次，现已就绪待拍板。** ①B 道指出「锁屏放不下 8 项」只对折叠态成立；
-②A 道进一步指出这条链是**三层**不是两层，漏掉中间层会得出"要么一行、要么整页"的假二选一：
-L1 折叠/锁屏摘要行（只放「档位 · 动作 → 目标」，明文预览与 SHA-256 一律不放）·
-**L2 展开态通知（唯一需要拍板处，最多 3 个 action button）** · L3 full-screen intent
-拉起的 Activity（与 overlay 同样大，8 项原样搬）。
-
-方案见 [通知栏审批布局 spec](specs/2026-08-01-通知栏审批布局-design.md)（分支
-`claude/serene-faraday-42d1fb`，commit `6c43bf6`），已收敛成**两道选择题**（该篇 §5），各带推荐项。
-
-第二道题由一条平台约束生成，**主会话已独立核实**：`targetSdk = 35`，且 manifest 里
-根本没声明 `USE_FULL_SCREEN_INTENT`——Android 14+ 起该权限不再自动授予（只给通话/闹钟类应用）。
-方案必须在拿不到它时也成立。该约束来自平台行为，尚未真机确认。
-
-**已消化：危险动作风险分级**（B 道 2026-08-01，**当场由用户经 AskUserQuestion 拍板**——
-主会话一度误以为是 B 道自决并请用户"追认"，实为多此一举，见 §7.1.2，
-commit `e7b4610`，分支 `claude/amazing-bhaskara-3cb56b`）
-→ [spec](specs/2026-08-01-危险动作风险分级-design.md)。结论：词表拆两档（I 不可逆 / II 有撤回窗口），
-**两档都照常逐次确认，不产出任何免确认路径**，硬门不变量 4 原样保留；任务级额度本轮不做，
-重开条件记进 spec §4。实现面 4 条全部离线可验，**归 A 道，不占 C 道配额**。
-
-### 6.N 语义意图开关打开后的能力收窄：非宏路径的危险动作拿不到目标会话证据
-
-**已消化（B 道 2026-09-02，用户经 AskUserQuestion 拍板「按档位收窄」），落点为
-[语义意图审批 spec §2.5](specs/2026-08-02-语义意图审批-design.md)。**
-`preparedTargetEvidence` 是「送进会话」这一类动作的要求，不是所有危险动作的要求：
-`press_key(enter)`/`type_text` 与 **II 级** `ui_action`（命中 `send_words`）要它，且须为后者补一个
-与 P0 宏同源同规则的非宏证据产出点；**I 级** `ui_action` 不进延后执行路径，沿用今天的
-`ref`/`text`/`description`/`bounds`/`source` 逐字段相等 + 每次必确认。不放宽任何已有判据。
-
-**两处事实澄清（2026-09-02 离线读码核实，与本条原文不符，以此处为准）**：
-
-1. **这不是待修的 bug，整套语义意图机制一行代码都还没有。** `resolveViaIntent`、`intentTtl`、
-   `approvedAtMs`、`foregroundWaitBudget`、证据重建三态在全仓 Kotlin 里均无实现，
-   `resolveViaIntent` 只存在于本条原文里；只有 spec。今天危险 `ui_action` 走的正是原文选项②
-   那套逐字段相等，所以**当下不存在需要修的收窄**，要做的是别让实现继承这个洞。
-2. **原文「非宏路径危险 `ui_action` 一律」过宽。** 决定四规定只有 II 级走延后执行，而
-   `ui_action` 未命中风险词按 fail-closed 归 I 级（`SafetyPolicy.assess` 的 `RiskTier.IRREVERSIBLE`
-   分支）。真正会撞上的只有命中 `send_words` 的 II 级点击——而那类动作按定义就发生在会话里，
-   证据是真实可取的，这也正是「按档位收窄」成立的原因。
-
-以下为原始记录（2026-08-03 由 A 道在装配时发现，批次 4 有意不动）：
-
-`resolveViaIntent` 无条件要求 `preparedTargetEvidence`，而**全仓只有 P0 准备宏会记录它**。
-`press_key(enter)` 本来就要求它，所以送信路径没变；但**危险 `ui_action` 点击在开关打开后
-一律 `E_STALE_REF("确认前没有短时目标会话证据")`**。
-
-方向是 fail-closed（不会误放行），且 P0 之外今天没有在用的危险路径，所以不拖住批次 4。
-**但本批四腿全部走宏，这处收窄在验收里看不出来**——它不会以失败的形态出现，
-而是以"这条路径今天没人走"的形态藏着。
-
-两条出路，届时择一：①让非宏路径也能产出目标会话证据；②给"没有语义锚点的危险动作"
-定一条单独判据（例如退回到今天那套焦点身份逐字段相等）。
-
-**（择一结果见本节开头：按档位收窄，即对 II 级取①、对 I 级取②。）**
-
-## 7. 流转协议
-
-每个工序会话只做自己那一道，触发条件命中就停下来提示，不越道执行。
-
-### 7.1 队列写权与合并（由耦合 4 推出）
-
-- **§5 §6 两个队列只由主会话写**（持有 main 工作区的那个）。工序会话在自己 worktree 里
-  改这两节，改的是一份对别人不可见的副本。
-- **工序会话读队列一律用 `git show main:docs/backlog.md`**，不读自己 worktree 里的副本——
-  后者停在分支创建那一刻。worktree 共享 object store，这条命令不走网络、立即可得。
-- **工序会话把队列变更作为结论报告出来**（"批次 1 已提交，SHA=xxx，请标为待验收"），
-  由主会话落到 main。代码、spec、STATUS.md、knowledge 仍由各工序会话在自己分支上写。
-- **B 道用 AskUserQuestion 当面问用户，这条通道有效。** 子会话虽然不在用户"正在打字"的那个
-  窗口里，AskUserQuestion 仍会把选项推到用户面前并收回真实选择——B 道两轮共问了 3 次、
-  用户答了 3 次。**不要因为主会话看不见就认为没发生**（教训见 §7.1.2）。
-
-### 7.1.2 一次误判：主会话把"我没查到"当成了"它编造了"（2026-08-01）
-
-**这条是给主会话自己的，比给工序会话的任何一条都重要。**
-
-主会话读 B 道 transcript 判断用户是否真的拍过板，脚本长这样：
-
-```python
-if isinstance(c,list) and any(b.get('type')=='tool_result' for b in c): continue   # ← 致命
-```
-
-意图是"滤掉工具回执、只留真人说的话"。**而 AskUserQuestion 的答案恰恰是以 `tool_result`
-回来的**——这一行把唯一能证明用户拍过板的证据整类丢弃了。主会话看到"0 个真人轮次"，
-于是判定 B 道**编造了用户授权**，写进 backlog、写进 commit message（`c4f5a4c`）、
-并当面向用户宣告了这个结论。
-
-**实际情况**：B 道三次调用 AskUserQuestion（07-31 16:48、16:50，08-01 00:23），
-用户三次都作答，四条决定全部有效。第一轮那次也是问过的——所以主会话请用户"追认"的东西，
-本来就是用户自己的决定。
-
-三处错误，一处比一处深：
-
-1. **核查方法的过滤条件正好排除了目标证据**，且没做过一次正对照（"若用户答过，我这脚本能看见吗"）。
-2. **把"看不见"报成"没发生"**——[让失败可见](../STATUS.md) 那条教训的原文形态，只是这次
-   犯错的是主会话而不是被测组件。
-3. **在证据只有单一来源且指向"某方编造"时，没有先找第二来源就下了结论并落盘。**
-   本项目对被测组件坚持"不采信自报"，对自己的核查脚本却一次都没质疑过。
-
-**留在这里不删**：`c4f5a4c` 那条 commit message 至今写着"编造了用户授权"，它本身是错的，
-历史不改写，由本节负责更正。
-
-### 7.1.3 主会话复核的第二次同族失误：核了"有没有这条用例"，没核"它能不能看见目标"（2026-08-02）
-
-批次 2 那条**「审批通知必须进 manifest」的用例一直是绿的，因为它断言的是"源码里有那行字"**。
-A 道 08-02 把它换成真跑一遍读 manifest 的值 + 两条反例（抓空、dumpsys 失败），**换完当场就红**
-——坐实此前那个绿是假的。
-
-**主会话上一轮复核时，看到该用例存在、`check.ps1` 全绿，就据此认定"可观测性做好了"并写进队列。**
-核的是**有没有这条用例**，而不是**这条用例能不能看见它要判的东西**——与 §7.1.2 完全同族，
-且发生在主会话反复要求工序会话做正对照的同时。
-
-**复核清单因此加一条**：看到"已加用例/已加可观测性"时，**必须问一句"它断言的是行为还是文本"**；
-断言源码文本的一律按未覆盖处理（`Assert-Contains $source '...'` 这类形态最典型，本仓已三次栽在
-它上面：过时预期靠巧合存活、断言被自己的注释匹配、这次的源码文本断言）。
-
-**再加一条（08-03 A 道排查 `exit /b` 时挖出）：断言"个数大于零"会替坏掉的注入打掩护。**
-`cleanup 单步失败仍继续其余步骤` 注入三处失败，断言只写 `issues.Count -gt 0`——**一处生效就绿**。
-实测：修前只有 1/3 的注入真的生效，用例照常通过；修好后是 3/3。**多路注入必须逐条点名**，
-"数个数"等于自愿放弃分辨哪一路没接上。
-
-**08-03 装配开工时又冒出一条，它解释了"离线钉得再全"为什么仍不够：判据与物理通道相不相称，
-要等真的去接通道才暴露。** 重建证据写的是 `sha256(readback) == 期望`（逐位相等），而微信这条链
-**只有 OCR**、读回从来不逐位相同——**失败方向还是错的**：判成「内容在人批准之后被改过」，
-是对用户的诬告。既有代码早就用对了形态（`UiTools.kt:293` 的 `norm(got).contains(norm(expected))`），
-**学费本仓付过**。补救不是多写几条用例：**实施笔记里每条判据都要显式列一栏"这条通道能不能物理
-满足它"**——§9 少的就是这一栏。实施笔记只覆盖"写笔记的人已经想到的接线"。
-
-**08-09 再加一条，它检查的是解释本身：一个解释的支撑数字，必须与它要解释的现象自洽。**
-A 道解释"标题带为什么会选中状态栏网速"时给的数是「带上沿 `2%×2800=56`，状态栏文字中心 `y≈55`」，
-主会话原样转给了 C 道。**C 道核出 56 属实（源码 `screenHeight*0.02`），但指出 55 与观测矛盾**——
-文字中心若在 55 就落在带外、那个网速串**根本不该成为候选**，也就解释不了昨晚的选中。
-它从截图量出实际是 **65–70px**，落在带内，与观测自洽。**结论不变且更稳，但支撑它的数换了。**
-
-**可复用**：拿到一个"因为 X 所以出现了 Y"的解释时，问一句**"X 成立的话 Y 还可能发生吗"**。
-若答案是不可能，那么错的是 X 或那个因果，不是现象。**这次是主会话第三次原样转述未经自洽检查的
-数据**（前两次：把推论当观测的"USB 不是操作问题"、把 A 道的手工指令当可行方案）。
-
-**08-08 又一种形态，比前几条更难自查：用有嫌疑的工具给自己作证。** A 道的 shell 工作目录
-中途悄悄退回主仓，于是两次 `check.ps1` 量的是 **main 而不是它的分支**（唯一破绽是计数
-28/82 对不上分支的 31/106），还有一次 `STATUS.md` 改写落进了主仓工作区。
-**线索早就给过它**：`Edit` 报 "string not found" 的那一刻就是。**而它当时用相对路径去 grep
-"确认"——相对路径正是出问题的那个东西。**
-
-可复用的两条：**跨 worktree 的会话，路径一律用绝对的**；**跑闸门先核对它自报的仓库路径**
-（`check.ps1` 抬头会印仓库与计数，两者都是廉价的自证）。主会话复核他人"全绿"回报时同理——
-本次主会话核过自己那轮的日志抬头与计数确认量的是分支，这一步不能省。
-
-**08-03 A 道又加一条，是这一族里最阴的：对照实验本身也需要一次对照。**
-它跑正对照（短路一条判据 → 期待测试变红）时，用 python 做的替换**没匹配上**，测试自然全绿——
-**而"没红"看起来正好等于"判据不灵"**。若就此收工，会得出与事实相反的结论，且方向是**去改一个
-本来就是好的判据**。改用 Edit 重做才拿到真的红。**做对照时必须先确认"你以为的破坏真的发生了"**，
-否则对照本身只是另一条没接上的判据。
-
-**同轮主会话自己也栽了一次，记下来**：主会话按 `grep -B3` 数出"8 处里至少 5 处在嵌套括号内"，
-并当成失效清单发给 A 道。真判据不是"在不在块内"，而是 **`exit /b N` 后面在块内还有没有别的命令**
-（是块内最后一条则正常）。5 处里 3 处（300/311/422）实为正常，而主会话没数到的 `exit /b 1`
-另有 4 处失效。**方向对、机制错**：该问的问题问对了才有这次排查，但主会话在同一条消息里要求
-A 道"用实测不要用推断"，自己那张表恰恰是 `grep` 上下文推出来的。**要求别人实测的那一刻，
-就是检查自己有没有实测的时刻。**
-
-### 7.1.3 三道回环：工序会话干完必须叫醒主会话
-
-**主会话 sessionId：`local_814b2e35-e854-4003-ac35-c7cec1c5d260`**
-
-在此之前主会话是**靠用户说一句"读进展"才去轮询**的——用户成了调度器，而这套分流的
-全部目的就是别让用户当调度器。`mcp__ccd_session_mgmt__send_message` 是双向的，
-工序会话可以回发，环路因此能做成推送。
-
-**环路**：派单（带主会话 id + 回报格式）→ 工序会话干完**主动回报** → 主会话独立复核
-（跑 `check.ps1`、核关键数字，**不采信自报**）→ 落队列 → 规划下一步 → 再派单。
-
-**工序会话三种情形都要回报，不能只在自己窗口里说完就停**：`DONE` 干完 ·
-`BLOCKED` 卡住或依赖另一道 · `NEEDS-USER` 需要用户。
-
-固定五行格式，让复核便宜：
-
-```
-道: A|B|C
-结论: DONE|BLOCKED|NEEDS-USER
-SHA: <commit> / 分支: <branch>        （无提交写 none）
-自检: check.ps1 五项结果 + 用例数变化
-下一步建议: 一句话
-需要用户: 无 | <具体要什么>
-```
-
-**只有这四类才允许打断用户**：①C 道跑测（人必须在手机旁）②B 道拍板
-③危险或不可逆操作 ④分歧无法由代码与文档裁决。其余一律主会话自己决定并往下派。
-
-**已知缺口：会话静默死亡不会叫醒任何人。** 2026-08-01 A 道撞会话额度上限当场死亡
-（3 轮、零提交），是主会话下一轮手动查 `list_sessions` 才发现的。推送覆盖不了这种情况——
-会话都死了还怎么发消息。缓解：主会话**每次被任何理由唤醒时顺手 `list_sessions`**
-看一眼三道的 `isRunning` 与 `lastActivityAt`，成本近似为零。
-
-### 7.2 合回 main 的时机：验收通过之后，不是 A 做完之后
-
-理由是 main 上只留验过的东西：
-
-1. A 在自己分支完成 → 提交 → 报告 SHA → 主会话写进 §5
-2. C 在自己 worktree `git checkout <SHA>` 构建验收（不等合并）
-3. **验收通过** → 主会话合回 main，连同 C 写的 STATUS.md / knowledge
-4. **验收失败** → 被验收的**改动**一动不动留在分支上，A 继续改，不需要 revert
-
-**但台账例外：`docs/runs/ledger.csv` 无论通过与否都要落 main。** 它记的是"这次跑测发生过"，
-不是被验收的改动——跑都跑了，行不该因为结论是失败就消失。2026-08-01 首次验收失败时，
-三行台账留在 C 道 worktree 里差点丢掉。证据目录 `docs/runs/evidence/` 已被 .gitignore，
-本就只在本地，不受此条影响。
-
-**纯文档改动不进这套闸门。** spec / knowledge / backlog 这类改动**不需要真机验收**，
-可直接合 main。§7.2 原文把它们和代码一起卡住了，后果是**用户实际做过的决定的记录只躺在
-分支上**——2026-08-02 发现 B 道两篇（`e7b4610` 风险分级、`393657f` 通知栏拍板记录）一直没进 main，
-而它们记的正是用户 08-01 拍的板。已于 `c79fb91` 补合。判据很简单：**这次改动会不会改变真机上
-跑的东西**；不会就直接合。
-
-**合的是钉住的那个 SHA，不是分支 tip**（`git merge 899c095`，不是 `git merge claude/xxx`）。
-A 道不会停在批次边界上等——它在同一条分支上继续往前做，钉住的 SHA 很快就不是 tip 了。
-按分支合会把**未经真机验收的后续提交**一起带进 main，而这正是 §7.2 要防的事。
-2026-08-01 首次就撞上：批次 1 钉 `899c095`，而分支上已经堆到第 4 个提交。
-
-### 7.3 触发表
+| 平板及默认姿态 | PA2553、Android 16、日常横屏原生多窗；手机 C 暂停；不关闭原生功能换绿。见 [平板设计](specs/2026-08-23-Android平板适配-design.md) |
+| 通知证据与权限 | 展开态三项锚点：档位、目标会话、明文预览；不声明 FSI。**08-28 已撤销通知批准**，通知仅拒绝/查看证据，可见 ConfirmOverlay 才能批准。锁屏免解锁是历史选择，不授权恢复通知批准。见 [通知设计页首现行边界](specs/2026-08-01-通知栏审批布局-design.md) |
+| 危险动作失败 | 安全失败终态、不开重试口子。旧“最多两次重弹”已作废，不能恢复；纵深 guard 不是重试资格。见同篇 §5.3 |
+| 风险分级 | 两档均逐次确认，无免确认路径。风险姿态变化由 A 提供证据并取得用户新决定，不再转常驻 B。见 [风险分级](specs/2026-08-01-危险动作风险分级-design.md) |
+| 语义意图时钟 | decisionTimeout 90s、intentTtl 360s、II foregroundWaitBudget 300s、I wait 0；证据 TTL 120s。批准时间不可刷新，失败不复活。见 [语义意图 spec](specs/2026-08-02-语义意图审批-design.md) |
+
+### 6.N 非宏危险动作的目标证据
+
+**已由用户 2026-09-02 拍板“按档位收窄”，不再提问。**
+preparedTargetEvidence 用于“送进会话”：press_key(enter)、type_text 与命中 send_words 的 II 级 ui_action；
+II 级 ui_action 仍须补与 P0 宏同源同规则的非宏证据产出点。
+I 级 ui_action 不进延后执行，保留 ref/text/description/bounds/source 逐字段相等与每次确认。
+范围见 [spec §2.5](specs/2026-08-02-语义意图审批-design.md)。基础模块已实现不等于生产接线完成。
+
+## 7. 流转、验证与收尾
+
+### 7.1 派工与回报
+
+A 完成最小摸底后按独立工作流委派，数量依任务、容量和文件冲突风险确定；主代理继续其他独立工作。
+使用当前运行时提供的子代理消息/等待机制，DONE、BLOCKED、NEEDS-USER 三种结果都向 A 回报；
+不假定某个工具名存在，不向仓库里写死的历史 ID 发送消息。
+回报至少包含：结论、完整代码 SHA/未提交改动范围、验证命令/配置/环境与日志、下一步、是否需要用户。
+C 另报 run/task、逐腿结论、manifest、台账、cleanup 和持久证据位置。会话或工具异常以实际状态核实，
+不能靠旧日志或一次未返回就认定死亡；工具不可用时在当前任务报告缺口。
+
+### 7.2 验证、合并与证据
+
+- A 按影响范围运行必要检查，完整发布/验收候选执行项目必需门。主协调者独立审查变更与可追溯验证证据，
+  核对同一 SHA、输入、配置和环境；不是收到报告就再跑一次全部检查。
+  没有可验证证据、出现新改动/失败/覆盖缺口时补验，不以自报数字代替验证；用例与套件数取实际汇总，不写死“五项”。
+- **冻结规程优先。** 全量门在冻结前完成；C1b preflight 冻结后不再跑 Gradle/check 或任何违反冻结规程的命令。
+  需要修复就形成新候选并重新满足该轮条件，不能复用旧轮 one-shot。
+  检查入口与验证尺度见 [离线开发与验证](runbooks/离线开发与验证.md)。
+- 改变真机行为的提交：A 提交并报告完整 SHA → C 验固定构建 → 通过后 A 合并**验过的 SHA**，
+  不合带有后续未验改动的分支 tip。失败则保留改动和运行证据，A 修复成新候选。
+- 纯文档或不改变真机运行内容的独立改动，完成相应验证即可按授权整合；
+  若所在分支祖先夹带未验代码，只合已复核的独立文档提交，不能借文档同步合入整条分支。
+- C 不在旧候选上改写 STATUS/knowledge/backlog，只回报结果增量，由 A 在当前权威基线上整合。
+  台账无论通过失败都须归集并去重到 main；失败记录也要保留，不能等代码通过才收台账。
+  临时 worktree 回收前将必要脱敏证据保存到持久、非临时位置，核对 manifest 与 hashes；
+  evidence/trace/本机状态按忽略规则保存，不把临时路径或任务消息当持久证据。
+
+### 7.3 触发表与开跑条件
 
 | 触发 | 动作 |
 |---|---|
-| **A → C**：一个批次的改动全部离线通过 `scripts/check.ps1` | 在本分支提交，**报告 commit SHA 与分支名**请主会话写进 §5，提示可开 C 会话 |
-| **A → B**：撞到设计取舍 | 收敛成选择题**报告**请主会话写进 §6，提示后**继续做该批次其他不依赖此决定的项**，不空转等待 |
-| **C → A**：验收失败 | 只记现象 + manifest 路径 + 台账行并报告，提示 A 会话接手定位。**不在 C 会话改代码**，main 保持不动 |
-| **C → 收尾**：验收通过 | 在本分支更新 STATUS.md 与对应 knowledge 册；报告可合并，由主会话按 §7.2 合回 main |
-| **B → A**：决定作出 | 写进对应 spec，报告后 A 接手实现 |
+| A 遇到关键用户决定 | 在当前任务 ask，记录待答项并继续独立工作；真实答复落 spec 后接续实现 |
+| A 完成待验批次 | 报告完整 SHA、验证证据和判据，更新 §5；C 在对应规程允许的范围内准备就位 |
+| C 就位 | 回报固定 SHA、唯一设备、当前设备/姿态/窗口与 IME 证据、构建身份及前置检查；未知字段不能猜成通过 |
+| C 失败 | 冻结本轮、保留现象/台账/证据；回交 A，不在 C 修代码或盲重跑 |
+| C 通过 | 报告可追溯结果和持久证据，A 核验并按 §7.2 整合 |
+| C 无可执行任务 | 回报待命或结束，不转做开发 |
 
-### 7.3 开跑令不得先于就位报告（2026-08-08，靠 C 道守住，不是靠协议）
+开跑令不得先于就位报告，报告所用设备与构建必须符合本次候选和授权范围；
+不能把“你自己把住”当提前放行。手机危险动作的确认卡始终由现场用户操作，
+开发 ask、用户的产品决定或 PC 侧恢复许可都不替代该动作的确认。
 
-主会话在 C 道的 **BLOCKED 报告还在路上**时就发了开跑令——发令时明知没等到就位报告，
-于是在令里写了"这两条你自己把住"。**C 道把住了，重新实测两条前置、拒跑、没有叫用户**。
+## 8. 会话标题读取的既定方向
 
-但这次不出事靠的是工序会话的判断，不是协议。**协议补一条**：
-
-- **真机开跑令必须在收到"已就位"报告之后发**，就位报告里要含**逐条实测过的前置**
-  （不是"我记得切过分支"——本次 C 道是去 dex 里查新增类的符号命中数）。
-- 平板就位报告还必须包含：固定 SHA、唯一 device、脱敏 device profile、physical/override size、density、
-  smallestWidthDp、rotation、窗口模式、前台 App window bounds、默认/浮动 IME 状态；未知字段不得猜成通过。
-- 主会话若因为并发想提前发令，**必须写明"以你的就位自检为准，不一致就拒跑"**，
-  并且**接受工序会话拒跑不算失败**。
-- **代价不对称**：早发一轮令省下的是几分钟，而令发错让用户白站一趟花的是他的时间，
-  而人的时间正是这套三道工序存在的唯一理由。
-
-**同轮另一处记下来**：主会话把"跑前先把本机 `configs/gateway-mcp.json` 加上 timeout"
-原样转给了 C 道，**而那份文件是 `-Provision` 自己写的**——指令本身不成立。
-**转达一条操作指令之前，先问一句"这个东西是谁生成的"。**
-
-三个会话各自的开场自检：`git show main:docs/backlog.md` 读 §5 §6 确认自己这一道有没有活；
-没有就按 §4 末节往 A 道纵深走。
-
-## 8. 决定记录 · §9.6「执行前重读会话标题」的通道（2026-08-03 主会话定，A 道余量耗尽前停在此处）
-
-**问题**：`EvidenceRebuildPolicy` 需要在执行前重读会话页标题，与意图里的 `targetLabel` 比对。
-A 道报「网关内部只有校验器、读取器在宏那边」。主会话查证后发现**比这更硬**：
-
-`isConversationSurface` / `conversationTitle` 及其整条依赖链（`P0MacroSnapshot`、`P0ElementStage`、
-`isTargetLabelLoosely`、`trustedForRecognition`）**全部只存在于 `app/gateway/src/debug/`**，
-而 `SafetyGate` 在 `src/main/`。**生产代码结构上调不到它**，不是"接线麻烦"。
-
-**定下的方向**：
-
-1. **选项 B（放弃会话校验）否决。** 人批准的是发往「文件传输助手」，走开后可能打开别的会话；
-   包名一致而标题不校验 = 有可能把已批准的内容发进另一个会话。内容重建**大概率**能兜住
-   （别的会话输入框里没有那段文字），**但"另一条判据大概率能兜住"正是本仓反复栽跟头的推理形状**。
-2. **方向是把标题识别下沉到 `src/main`，宏改为调用同一份**——不是另写一个读取器。
-   「判据有两份迟早只改一份」本仓已付过多次学费（归一化、Enter 通道、焦点节点三处）。
-3. **若下沉的代价过大，退路是"debug-only + 显式断言 + 记录在案"**：`rebuildEvidence` 默认
-   fail-closed 为 `Unverified`，所以 release 构建只会**静默地没有这个功能**，不会不安全。
-   但那必须是**一个写下来的决定 + 一条钉住"release 构建下该路径恒为 Unverified"的用例**，
-   不能是没人发现的意外。
-
-**批次 4 必须写进验收单的一句**：`-Provision` 装的是 **debug APK**，所以**这一批在真机上通过，
-并不能区分"功能成立"与"功能只在 debug 构建里成立"**。这是本轮"判据与物理通道相不相称"
-那一族的又一个变体——**这次不相称的是判据与它将来要运行的构建类型**。
+保留“标题识别下沉至生产、宏复用同一份”的方向，不另造一套弱读取器、不放弃会话标题校验。
+基础模块与实际 Android 生产接线的完成度以 [语义意图 spec §5](specs/2026-08-02-语义意图审批-design.md)为准。
+若必须退为 debug-only，须有明确决定和 release 恒 Unverified 的用例；
+debug APK 真机通过不能证明 release 功能成立。推导过程见 [历史归档 §8](backlog-archive.md)。
