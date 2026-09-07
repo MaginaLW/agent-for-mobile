@@ -25,9 +25,9 @@ function Invoke-C1bRealBuildSmokeVerifierOfflineTest([string]$Path){
 }
 Invoke-C1bAuxiliaryOfflineTest $AdbProvenanceTests 'C1b adb provenance offline tests' '^tablet-layout-c1b adb provenance offline: 6 passed, 0 failed$'
 Invoke-C1bAuxiliaryOfflineTest $Aapt2ProvenanceTests 'C1b aapt2 provenance offline tests' '^tablet-layout-c1b aapt2 provenance offline: 15 passed, 0 failed, 7 aapt2 executions$'
-Invoke-C1bAuxiliaryOfflineTest $ReadOnlyTests 'C1b host mechanical read-only offline tests' '^RESULT passed=74 failed=0$'
+Invoke-C1bAuxiliaryOfflineTest $ReadOnlyTests 'C1b host mechanical read-only offline tests' '^RESULT passed=80 failed=0$'
 Invoke-C1bAuxiliaryOfflineTest $ArtifactProofTests 'C1b artifact proof offline tests' '^tablet-layout-c1b artifact proof offline: 32 passed, 0 failed$'
-Invoke-C1bAuxiliaryOfflineTest $BuildEnvironmentTests 'C1b build environment offline tests' '^tablet-layout-c1b build environment offline: 27 passed, 0 failed, 0 JDK/Gradle executions$'
+Invoke-C1bAuxiliaryOfflineTest $BuildEnvironmentTests 'C1b build environment offline tests' '^tablet-layout-c1b build environment offline: 28 passed, 0 failed, 0 JDK/Gradle executions$'
 Invoke-C1bAuxiliaryOfflineTest $AdbServerTests 'C1b private adb server offline tests' '^\{"schema":"tablet-layout-c1b-adb-server-offline/v1","passed":22,"failed":0,"real_adb_executed":false,"real_jdk_or_gradle_executed":false\}$'
 Invoke-C1bAuxiliaryOfflineTest $AttemptFailureTests 'C1b attempt failure schema offline tests' '^tablet-layout-c1b attempt failure schema offline: 51 passed, 0 failed$'
 Invoke-C1bRealBuildSmokeVerifierOfflineTest $RealBuildSmokeVerifierTests

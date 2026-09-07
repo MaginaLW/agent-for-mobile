@@ -838,3 +838,11 @@ r3 的实际 Gradle exit `1` 被通用进程函数缩成一行错误，内部 st
 新的生产 Gradle 调用和新 helper 显式启用失败诊断：先对完整捕获文本移除控制序列并脱敏环境秘密、
 路径、凭据行、URL 和不透明长值，再各保留最多 4096 字符的 stdout/stderr 尾部。脱敏异常仅返回不可用标记，
 不回退原文；非零退出、1 MiB 总捕获门、超时与 finally 清理保持。新原文不能补回历史已丢失的诊断。
+
+## Windows CMD fixture 必须显式规定换行（2026-09-08）
+
+PowerShell here-string 的内部换行来自源码文件，`Set-Content` 不会把内部 LF 自动变成 CRLF。
+因此同一个 Git blob 在旧 CRLF checkout 通过，不代表全新 LF clone 的生成 CMD 行为一致。
+监督式 runner 的 fake ADB 曾在 LF 下 exit 0 却输出空设备列表；只规范生成内容为 CRLF 即恢复。
+生成 Windows CMD 时应集中规范换行，并验证字节及 fake 设备发现，不能放宽生产的唯一设备判据。
+同时增加专项用例时同步精确汇总消费者，保留零失败/零跳过门；完整候选必须用最终 checkout 实测。
