@@ -299,6 +299,15 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 
 ## 横屏路线与硬边界
 
+- **隔离构建必须覆盖 Kotlin 项目状态（2026-09-08，无机验证）**：候选 `4cafd99` 将 Kotlin
+  persistent directory 指向本轮 fresh runtime，并关闭项目 `.gradle` 兼容写；完整门 13/13 通过。
+  独立真实构建前须隔离完整门生成的 `.kotlin`、`.gradle` 与 probe build，避免已有目录掩盖首次创建问题。
+  `463304c` r3 的内部 Gradle 错误未保存，不能据此追认为该历史失败的唯一根因；本轮真实隔离构建仍待运行。
+- **同一 commit 的工作树原始字节也须实绑（2026-09-08，无机验证）**：候选生成器先复现冻结模板，
+  再按最终目录的实际原始字节绑定七项 loader 及 verifier；不能先归一化换行后再宣称 raw hash 一致。
+  Windows 离线 fake CMD 夹具须显式生成 CRLF；源码改为 LF 的 clone 曾让设备列表夹具返回空，
+  该现象属于宿主测试夹具，不能推断真实平板未连接。证据见[候选失败与修复记录](../../runs/2026-09-08-C1b-0386ee7-候选整合门失败.md)。
+
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生

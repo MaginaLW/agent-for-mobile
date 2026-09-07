@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | Kotlin 状态与诊断专项通过；0386ee7 完整门失败保留。计数/CMD 修复后 runner 86/86；候选源码改绑最终 raw hash 后 source 14/14、真实模板纯内存 5/5 | 固定新 SHA，完成完整门与 [源码准备](runbooks/T-L1-c1b-candidate-source.md)，再实建；不重跑已冻结 r1/r2/r3 或 host 工件，不追认历史缺失错误 |
+| **C1b 生产构建隔离与诊断** | 4cafd99 完整门 13/13、源码独审 476 项通过；PairRender/r14/preflight exit 0，独立复核 759/694/1062 项通过。管理员启动被系统报告取消，BuildOnly caller 未启动；历史失败记录保留 | 用户确认重新发起管理员构建后，按 [源码准备](runbooks/T-L1-c1b-candidate-source.md) 完成唯一 build-only 及独立复核，再进入固定候选设备流程；不重跑已冻结工件，不追认历史缺失错误 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
@@ -101,7 +101,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 历史失败不变；463304c 主机前置通过，但接入后 r1/r2/r3 均失败冻结 | r3 停在 Gradle 构建，未安装、未访问设备；先完成 §4 诊断修复。见[接入后记录](runs/2026-09-08-C1b-463304c-接入后主机构建失败.md) |
+| **T-L1 / C1b** | 历史失败不变；463304c 接入后 r1/r2/r3 失败冻结。4cafd99 完整门及只读预检通过，管理员启动被系统报告取消 | 未安装、未访问设备；先完成 §4 待管理员启动的真实 BuildOnly 及后续设备前置。见[接入后记录](runs/2026-09-08-C1b-463304c-接入后主机构建失败.md)和[当前主机记录](runs/2026-09-08-C1b-4cafd99-主机验收.md) |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
