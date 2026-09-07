@@ -126,6 +126,12 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 但未直接归属 mutex owner，不能把“看见进程”冒充句柄所有权证据。保留环境失败、不干预其他任务，
 按 [离线验证规程](../../runbooks/离线开发与验证.md)协调后再验受影响门，不能宣称整合门全绿。
 
+**同日恢复结果**：确认 mutex 已不存在、旧进程已退出后，在 clean `da9ab53` 只复跑 C1b host 离线聚合门，
+exit 0；build-environment 27/27、verifier 19/19 零跳过、fake-ADB 29/29，真实 ADB 调用 0。
+本次未改锁、门限或代码，处理方法是避开占用后补验；原失败记录保留，恢复证据另存
+`.checks/agent-workflow-c1b-host-recheck.log`、同名 `.summary.json` / `.receipt.json`。
+这关闭了原环境失败，不把分次验证改写成一次整合门全绿，也不扩大 Android 构建或真机结论。
+
 ### Codex C 证据必须在临时 worktree 回收前持久化（2026-08-12）
 
 批次 4 的两条 Codex C 结束后，临时 worktree 被清理，manifest、trace、截图路径随之失效，
