@@ -176,9 +176,16 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 ### 不进批次的 A 道纵深（C 队列排满时做）
 
-- `ToolRegistry.callInternal` 拆解（180 行，当前第二长；最长为 `ConfirmOverlay.ask` 307 行）
-- 套件提速
-- `dispatch.ps1 -Confirm` 收口
+**当前离线入口（2026-09-07）**：[离线开发与验证](runbooks/离线开发与验证.md)。下面 C1b 各轮记录保留历史原值；
+当前 PowerShell、候选 SHA 与未闭合前置以 [STATUS](../STATUS.md) 为准，不沿用历史 7.6.4 或旧授权。
+
+- ~~`ToolRegistry.callInternal` 拆解~~ **旧描述已过时**：上下文/执行辅助函数已有拆分。现已使用
+  `scripts/measure-kotlin.ps1` 的真实 Kotlin PSI 重量；不要再用行式脚本推断函数边界或排名。
+  工具与指标口径见[说明](../scripts/lib/kotlin-metrics/README.md)，报告保存在忽略的 `.checks/kotlin-metrics/`。
+- **套件提速已有分片与负载自适应**：09-07 首轮监督式 runner 86 条、3 片合计 134s；
+  后续优化按日志耗时归因认领具体项，不再把没有验收标准的“提速”作为未完成任务。
+- ~~`dispatch.ps1 -Confirm` 收口~~ **已完成离线修复**（`7c0a5ba`）：拒绝重复/畸形头部和空消费标记、
+  只接受规范第一腿、字面路径不展开通配符；修前 RED 与修后完整派单套件 48/48 已验证。
 - ~~C1b private ADB early-failure 可观测性~~ **代码与专项离线验证已完成（2026-08-29）**：server listen 固定为
   `localhost`，run_id 前生成 post-cleanup closed attempt record；每次启动只保存 substage、exit、bounded
   byte counts/hash/分类与 cleanup，不持久化 raw stderr 或路径/设备信息。private ADB 22/22、readonly 74/74、

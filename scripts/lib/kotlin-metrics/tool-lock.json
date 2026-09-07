@@ -1,0 +1,6 @@
+{
+  "version": "1.23.8",
+  "kotlinVersion": "2.0.21",
+  "url": "https://repo.maven.apache.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/1.23.8/detekt-cli-1.23.8-all.jar",
+  "sha256": "3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245"
+}
