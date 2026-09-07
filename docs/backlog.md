@@ -188,12 +188,13 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
   只接受规范第一腿、字面路径不展开通配符；修前 RED 与修后完整派单套件 48/48 已验证。
 - **语义意图基础模块已补齐**（`48f8dd8`）：一次性 store、三时钟/依赖装配、a11y/OCR 重建与绑定内容基线，
   新增 57 条 JVM 用例；生产 SafetyGate 接线及 handler 次数证明仍待队列放开，见[spec §5](specs/2026-08-02-语义意图审批-design.md)。
-- **C1b r14 源码任务已完成**（`b0aaa28`）：可复现转换与 pre/finally-post/字节 canary，9 cases + 545 assertions/10 mutations；
-  [准备入口](runbooks/T-L1-c1b-candidate-source.md)已就位。`6fbb157` 已补齐符号链接能力、全量 13/13，正式 exact
-  工件与只读 preflight 均已通过；唯一 build-only 因 helper stderr 非空且溢出被外层拒绝，不能通知接平板。
-  本轮构建/签名/aapt2 完成、ADB 0、清理完成。启动进度、有界错误诊断及原数组清零已补齐源码，
-  短回归为 9 cases + 1300 assertions/28 mutations；完整门和新候选 one-shot 尚待验收。
-  旧轮不重跑，见[冻结记录](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。
+- **C1b 接入前主机前置已闭合**（代码候选 `463304cb56809d96fd97af6c71650dfcad4fe3a0`）：
+  进度抑制、有界 stderr 诊断、原数组清零修复后，源码 9 cases、r14 1300 assertions/28 mutations 与全量门 13/13 均通过。
+  新 exact pair/r14、一次只读 preflight、一次真实隔离 build-only 全通过，外层/launcher/helper exit 0、stderr 0、
+  独立验收 602/315 条断言通过，Job/环境清理完成；ADB/设备枚举/install/T0/capture 全 0。
+  **现在可提示接入 PA2553，真机验收尚未开始**；测试前恢复该候选 clean checkout，文档分支保留本轮记录。
+  [主机验收记录](runs/2026-09-07-C1b-463304c-平板接入前主机验收.md)与[准备入口](runbooks/T-L1-c1b-candidate-source.md)。
+  旧 `6fbb157` stderr 溢出轮保持[失败冻结](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)，不重跑、不追认。
 - ~~C1b private ADB early-failure 可观测性~~ **代码与专项离线验证已完成（2026-08-29）**：server listen 固定为
   `localhost`，run_id 前生成 post-cleanup closed attempt record；每次启动只保存 substage、exit、bounded
   byte counts/hash/分类与 cleanup，不持久化 raw stderr 或路径/设备信息。private ADB 22/22、readonly 74/74、

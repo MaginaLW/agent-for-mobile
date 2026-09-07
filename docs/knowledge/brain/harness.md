@@ -786,3 +786,10 @@ stderr 共 2,439,272 bytes，超过 1 MiB 捕获上限。只存 hash/计数而�
 因此应在源头关闭进度，保留空 stderr 与 overflow 门；不能仅凭 CLIXML 头、exit 0 或 helper 摘要放行。
 generic launcher/preflight JSON 含合法 `5.0` 阈值，不适用 helper summary 专属的“全部数字必须 Int64”规则；
 generic reader 应拒绝重复键并按各字段合同验证，helper 的 strict reader 保持原样。
+
+修复后的 `463304c` 唯一真实 build-only 已闭合：helper/launcher/caller exit 均为 0，stderr 0 bytes、
+overflow false，公开 strict verifier 与外层独立读回均通过，清理完成。这验证了新候选的修复效果，
+不证明旧轮未保存的 2.4 MB 内容。捕获前缀仍最多 1 MiB，并独立标明全流总长度/hash 与未捕获长度。
+清理捕获数组时，PowerShell 子表达式须用 unary comma 保留原 `byte[]` 引用，否则可能只清掉枚举后的副本。
+实际隔离 smoke 约 23 分钟，耗时主要在工具树/权限保护与反复复核；中途没有 APK 或日志不等于进程挂起。
+结果、哈希与边界见[接入前主机验收](../../runs/2026-09-07-C1b-463304c-平板接入前主机验收.md)。

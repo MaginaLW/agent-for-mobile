@@ -12,6 +12,12 @@ false/unsupported。
 
 ## A 道固定条件
 
+**当前结果（2026-09-07）**：代码候选 `463304cb56809d96fd97af6c71650dfcad4fe3a0` 的主机前置已闭合，
+包括全量门 13/13、exact pair/r14、一次只读 preflight 和一次真实隔离 build-only；stderr 0、清理完成。
+见[本轮主机验收](../runs/2026-09-07-C1b-463304c-平板接入前主机验收.md)。本轮用户明确要求准备完成后提示接入，
+因此现在可以提示连接平板；第 5 项的真机阶段授权仍须在开始 build/install/只读采集前落实，本轮没有执行设备操作。
+收尾纯 Markdown 提交只保存记录；真机 runner 前恢复上述候选的 clean checkout，不能把文档 SHA 作为已验候选。
+
 通知用户连接平板前，必须同时满足：
 
 1. 工作树 clean，并把完整 40 位 commit SHA 固定到本次候选；
@@ -34,7 +40,8 @@ real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 
 `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败；
 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 又在 helper 前因 launcher 空集合参数绑定失败；
 `21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 则在 Gradle 前因既有 module build output 被 fresh-output guard 拒绝。
-所以 A 道固定条件第 2 项仍不满足，不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代。
+截至上述历史轮次，A 道固定条件第 2 项尚未满足；当前闭合结果见本节开头。
+不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代当前候选的整轮验收。
 
 ## 2026-08-30 `83121df` real build-only smoke 结果
 
