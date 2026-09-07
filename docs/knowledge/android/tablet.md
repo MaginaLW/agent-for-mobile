@@ -302,7 +302,9 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 - **隔离构建必须覆盖 Kotlin 项目状态（2026-09-08，无机验证）**：候选 `4cafd99` 将 Kotlin
   persistent directory 指向本轮 fresh runtime，并关闭项目 `.gradle` 兼容写；完整门 13/13 通过。
   独立真实构建前须隔离完整门生成的 `.kotlin`、`.gradle` 与 probe build，避免已有目录掩盖首次创建问题。
-  `463304c` r3 的内部 Gradle 错误未保存，不能据此追认为该历史失败的唯一根因；本轮真实隔离构建仍待运行。
+  `463304c` r3 的内部 Gradle 错误未保存，不能据此追认为该历史失败的唯一根因。
+  用户确认后的 `4cafd99` 真实隔离 BuildOnly 已实际 exit 0，独立复核 789 项通过、错误流为空且清理完成，
+  项目 `.kotlin`/`.gradle` 仍 absent；该结果只归于本候选主机构建，不替代生产 runner 或平板验收。
 - **同一 commit 的工作树原始字节也须实绑（2026-09-08，无机验证）**：候选生成器先复现冻结模板，
   再按最终目录的实际原始字节绑定七项 loader 及 verifier；不能先归一化换行后再宣称 raw hash 一致。
   Windows 离线 fake CMD 夹具须显式生成 CRLF；源码改为 LF 的 clone 曾让设备列表夹具返回空，
