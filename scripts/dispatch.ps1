@@ -780,6 +780,9 @@ $childExit = [AgentMobileDispatchSuspendedChild]::Run(
 finally { $executableGuard.Dispose() }
 exit $childExit
 '@
+    # 固定启动脚本统一使用 LF，避免 CRLF 检出放大 -EncodedCommand，超过 Windows
+    # CreateProcess 的 32767 字符上限；用户 prompt/arguments 仍由独立 payload 原样传递。
+    $wrapper = $wrapper.Replace("`r`n", "`n")
     $wrapperEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = (Get-Process -Id $PID).Path

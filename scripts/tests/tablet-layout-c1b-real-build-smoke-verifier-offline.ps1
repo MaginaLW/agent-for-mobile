@@ -164,7 +164,8 @@ if ($csharpSource -match '(?i)(CreateProcess[A-Za-z0-9_]*|ShellExecute[A-Za-z0-9
     throw 'Verifier embedded C# contains process or dynamic-loading capability.'
 }
 $usingNamespaces = [string[]]@([regex]::Matches(
-    $csharpSource, '(?m)^using (?<namespace>[A-Za-z0-9_.]+);$') |
+    # PowerShell preserves checkout CRLF in the here-string AST value.
+    $csharpSource, '(?m)^using (?<namespace>[A-Za-z0-9_.]+);\r?$') |
     ForEach-Object { $_.Groups['namespace'].Value })
 [Array]::Sort($usingNamespaces, [StringComparer]::Ordinal)
 $expectedNamespaces = [string[]]@(

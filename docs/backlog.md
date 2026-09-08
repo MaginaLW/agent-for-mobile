@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | 4cafd99 完整门 13/13、exact host/preflight、唯一真实 BuildOnly 全部通过；实建独立复核 789 项、错误流为空、清理完成。r2 安装及 needs-user 历史不变 | r3 wrapper/runner exit 1，仅保留通用 execute 错误；开发目录最小安全 Message/Data 修复通过 25/25 专项及独审，C1b 整合门实际 exit 0（29/29、真实 ADB 0）。r3 原因仍未知，冻结 clone 不变，无 r4，不重跑旧工件 |
+| **C1b 生产构建隔离与诊断** | 4cafd99 主机通过、r2 安装与 needs-user、r3 失败历史均保留；开发目录安全 Message/Data 修复已验证。后续 b1dc064 完整门 10 PASS / 3 FAIL / 0 SKIP | 三处 CRLF 问题已完成专项修复及独审，待重新固定 SHA 与完整主机门；旧 clone 不变、无新设备尝试。见[新候选准备](runs/2026-09-08-C1b-新候选主机准备.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；

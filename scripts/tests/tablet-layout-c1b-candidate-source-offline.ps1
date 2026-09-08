@@ -21,6 +21,13 @@ function Assert-Rejected {
     try { & $Body } catch { $caught = $_ }
     Assert-Test ($null -ne $caught -and $caught.Exception.Message -match $Pattern) "Expected rejection: $Pattern"
 }
+function Assert-FixtureNewline {
+    param([string]$Source,[ValidateSet('LF','CRLF')][string]$Style)
+    $lf = $Source.Replace("`r`n", "`n")
+    Assert-Test ($lf.Contains("`n") -and -not $lf.Contains("`r")) 'Fixture must contain lines without standalone CR.'
+    $expected = if ($Style -ceq 'CRLF') { $lf.Replace("`n", "`r`n") } else { $lf }
+    Assert-Test ($Source -ceq $expected) "Fixture does not use only $Style newlines."
+}
 function New-FixtureLibraryHashes {
     param([string]$Digit='a')
     return [ordered]@{
@@ -99,15 +106,23 @@ foreach ($buffer in @(
 '@
     $template = '$versions = @(''7.6.4'', ''7.6.4'', ''7.6.4'')' + "`n" +
         '    $childBootstrapSource = @' + "'`n" + $bootstrap + "`n'@`n" + $tail
-    $updated = Update-C1bLauncherCandidateTemplate $template
-    $launcherText = $template
+    # here-string 跟随 checkout 换行；仅归一合成 fixture，冻结输入仍按原始字节校验。
+    $template = $template.Replace("`r`n", "`n")
     function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
-    . ([scriptblock]::Create((New-C1bLauncherRendererTransformSource $template)))
-    Assert-Test ($launcherText -ceq $updated) 'Renderer and in-memory transformations differ.'
-    Assert-Rejected { Update-C1bLauncherCandidateTemplate $updated } 'cardinality'
-    Assert-Rejected { Update-C1bLauncherCandidateTemplate ($template.Replace('captured_byte_length =','other_length =')) } 'cardinality'
-    $updatedCrLf = Update-C1bLauncherCandidateTemplate ($template.Replace("`r`n", "`n").Replace("`n", "`r`n"))
-    Assert-Test ($updatedCrLf.Replace("`r`n", "`n") -ceq $updated.Replace("`r`n", "`n")) 'Source transformations changed newline semantics.'
+    $updated = $null
+    foreach ($style in @('LF','CRLF')) {
+        $inputTemplate = if ($style -ceq 'CRLF') { $template.Replace("`n", "`r`n") } else { $template }
+        Assert-FixtureNewline $inputTemplate $style
+        $transformed = Update-C1bLauncherCandidateTemplate $inputTemplate
+        Assert-FixtureNewline $transformed $style
+        $launcherText = $inputTemplate
+        . ([scriptblock]::Create((New-C1bLauncherRendererTransformSource $inputTemplate)))
+        Assert-Test ($launcherText -ceq $transformed) "Launcher renderer and in-memory transformations differ for $style."
+        Assert-Rejected { Update-C1bLauncherCandidateTemplate $transformed } 'cardinality'
+        Assert-Rejected { Update-C1bLauncherCandidateTemplate ($inputTemplate.Replace('captured_byte_length =','other_length =')) } 'cardinality'
+        if ($style -ceq 'LF') { $updated = $transformed }
+        else { Assert-Test ($transformed.Replace("`r`n", "`n") -ceq $updated) 'Source transformations changed newline semantics.' }
+    }
 
     $updatedAst = Get-C1bCandidateSourceAst $updated
     $dataStatements = @($updatedAst.EndBlock.Statements | Where-Object {
@@ -222,8 +237,15 @@ function Assert-TL1C1bPreflightGitTreeContinuity { param($Before,$After) }
 function Assert-TL1C1bPreflightLauncherByteReturn { param($LauncherAst) return @{Passed=$true} }
 function Assert-TL1C1bPreflightLauncherStreamContract { param($LauncherAst) return @{Passed=$true} }
 '@
-$fixture = $declarations + "`n" + $body
+$fixture = ($declarations + "`n" + $body).Replace("`r`n", "`n")
+Assert-FixtureNewline $fixture 'LF'
 $patched = Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixture -ChecksSource $checks -Constants $constants
+Assert-FixtureNewline $patched 'LF'
+$fixtureCrLf = $fixture.Replace("`n", "`r`n")
+Assert-FixtureNewline $fixtureCrLf 'CRLF'
+$patchedCrLf = Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixtureCrLf -ChecksSource $checks -Constants $constants
+Assert-FixtureNewline $patchedCrLf 'CRLF'
+Assert-Test ($patchedCrLf.Replace("`r`n", "`n") -ceq $patched) 'Preflight LF/CRLF transformations differ.'
 function Invoke-Fixture {
     param([bool]$FailPre,[bool]$FailGit,[bool]$FailPost)
     $ps = [Management.Automation.PowerShell]::Create()
@@ -280,14 +302,24 @@ function Invoke-TL1C1aProcess {
         -Environment $environment -ClearEnvironment -TimeoutSec 300)
 '@
     $hashes=New-FixtureLibraryHashes 'b'
-    $template=(New-FixtureLibraryMapSource (New-FixtureLibraryHashes)) + "`n" + $template
-    $updated = Update-C1bHelperCandidateTemplate $template $hashes
-    $helperText = $template
+    $template=((New-FixtureLibraryMapSource (New-FixtureLibraryHashes)) + "`n" + $template).Replace("`r`n", "`n")
     function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
-    . ([scriptblock]::Create((New-C1bHelperRendererTransformSource $template $hashes)))
-    Assert-Test ($helperText -ceq $updated) 'Helper renderer differs from candidate transformation.'
-    $crlf = $template.Replace("`r`n","`n").Replace("`n","`r`n")
-    Assert-Test ((Update-C1bHelperCandidateTemplate $crlf $hashes).Replace("`r`n","`n") -ceq $updated.Replace("`r`n","`n")) 'Helper CRLF transformation differs.'
+    $updated = $null
+    foreach ($style in @('LF','CRLF')) {
+        $inputTemplate = if ($style -ceq 'CRLF') { $template.Replace("`n", "`r`n") } else { $template }
+        Assert-FixtureNewline $inputTemplate $style
+        $transformed = Update-C1bHelperCandidateTemplate $inputTemplate $hashes
+        Assert-FixtureNewline $transformed $style
+        $helperText = $inputTemplate
+        . ([scriptblock]::Create((New-C1bHelperRendererTransformSource $inputTemplate $hashes)))
+        Assert-Test ($helperText -ceq $transformed) "Helper renderer differs from candidate transformation for $style."
+        Assert-Rejected { Update-C1bHelperCandidateTemplate $transformed $hashes } 'cardinality'
+        Assert-Rejected { Update-C1bHelperCandidateTemplate ($inputTemplate.Replace('-TimeoutSec 300)', '-TimeoutSec 299)')) $hashes } 'cardinality'
+        $separator = if ($style -ceq 'CRLF') { "`r`n" } else { "`n" }
+        Assert-Rejected { Update-C1bHelperCandidateTemplate ($inputTemplate + $separator + $inputTemplate) $hashes } 'one top-level'
+        if ($style -ceq 'LF') { $updated = $transformed }
+        else { Assert-Test ($transformed.Replace("`r`n", "`n") -ceq $updated) 'Helper LF/CRLF transformations differ.' }
+    }
     $actualHashes=Read-FixtureLibraryMap $updated
     Assert-Test ($actualHashes.Count-eq7-and
         ($actualHashes.Keys-join',')-ceq($hashes.Keys-join',')-and
@@ -305,9 +337,6 @@ function Invoke-TL1C1aProcess {
     Assert-Test ($null -ne $script:helperForwarded -and $script:helperForwarded.FailureDiagnostics.IsPresent -and
         $script:helperForwarded.ClearEnvironment.IsPresent -and $script:helperForwarded.TimeoutSec -eq 300 -and
         $script:helperForwarded.FilePath -ceq 'fixture-java.exe') 'Helper wrapper did not forward diagnostics unchanged.'
-    Assert-Rejected { Update-C1bHelperCandidateTemplate $updated $hashes } 'cardinality'
-    Assert-Rejected { Update-C1bHelperCandidateTemplate ($template.Replace('-TimeoutSec 300)', '-TimeoutSec 299)')) $hashes } 'cardinality'
-    Assert-Rejected { Update-C1bHelperCandidateTemplate ($template + "`n" + $template) $hashes } 'one top-level'
 }
 Test-Case 'library map replacement leaves equal historical hashes and other maps intact' {
     $oldMap=New-FixtureLibraryMapSource (New-FixtureLibraryHashes)

@@ -180,8 +180,8 @@ function Invoke-Dispatch {
 }
 
 function Test-Case {
-    param([string]$Name, [scriptblock]$Body)
-    if ($Name -notlike $Filter) { return }
+    param([string]$Name, [scriptblock]$Body, [string]$FilterName = $Name)
+    if ($FilterName -notlike $Filter) { return }
     try {
         & $Body
         $script:Passed++
@@ -192,6 +192,41 @@ function Test-Case {
         Write-Host "FAIL  $Name" -ForegroundColor Red
         Write-Host "      $($_.Exception.Message -replace "`r?`n", "`n      ")"
     }
+}
+
+function Test-DispatchSourceLineEndings {
+    param([string]$Name, [scriptblock]$CaseBody)
+    if ($Name -notlike $Filter) { return }
+    $originalSourceBytes = [IO.File]::ReadAllBytes($DispatchPath)
+    $lfSource = [Text.Encoding]::UTF8.GetString($originalSourceBytes).Replace("`r`n", "`n")
+    try {
+        foreach ($lineEnding in @('LF', 'CRLF')) {
+            Test-Case -Name "$Name [$lineEnding]" -FilterName $Name -Body {
+                $source = if ($lineEnding -ceq 'CRLF') { $lfSource.Replace("`n", "`r`n") } else { $lfSource }
+                [IO.File]::WriteAllText($DispatchPath, $source, [Text.UTF8Encoding]::new($false))
+                # 预算包含当前实际 pwsh 路径、引号、固定参数和终止 NUL；随后完整运行
+                # 同一拒绝/端到端 case，防止只在 LF 开发工作区通过而 CRLF 检出无法启动。
+                $tokens = $null
+                $parseErrors = $null
+                $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+                Assert-True ($parseErrors.Count -eq 0) '测试设施错误：换行形式改写后语法无效。'
+                $wrapperAssignments = @($ast.FindAll({
+                    param($node)
+                    $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                        $node.Left.Extent.Text -ceq '$wrapper' -and
+                        $node.Right.Expression -is [Management.Automation.Language.StringConstantExpressionAst]
+                }, $true))
+                Assert-True ($wrapperAssignments.Count -eq 1) '测试设施错误：固定 gate wrapper 不唯一。'
+                $wrapperValue = $wrapperAssignments[0].Right.Expression.Value.Replace("`r`n", "`n")
+                $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapperValue))
+                $commandLine = '"' + $PwshPath + '" -NoProfile -EncodedCommand ' + $encoded
+                Assert-True (($commandLine.Length + 1) -le 32767) `
+                    "当前 gate wrapper 命令行超过 CreateProcess 上限：$($commandLine.Length + 1) / 32767。"
+                & $CaseBody
+            }
+        }
+    }
+    finally { [IO.File]::WriteAllBytes($DispatchPath, $originalSourceBytes) }
 }
 
 function Invoke-TranscriptFixture {
@@ -917,7 +952,7 @@ public static class Program {
             'Claude 失败终态被误要求 success-only 计量字段。'
     }
 
-    Test-Case 'cmd/bat executable 与 Model 参数含 shell 元字符时 fail closed' {
+    Test-DispatchSourceLineEndings 'cmd/bat executable 与 Model 参数含 shell 元字符时 fail closed' {
         $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
         Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
         $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
@@ -983,7 +1018,7 @@ public static class Program {
         }
     }
 
-    Test-Case 'fake Codex 端到端锁住 argv、环境、exit code、partial 与 usage' {
+    Test-DispatchSourceLineEndings 'fake Codex 端到端锁住 argv、环境、exit code、partial 与 usage' {
         $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
         Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
         $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
