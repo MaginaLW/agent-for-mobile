@@ -13,14 +13,14 @@ $AttemptFailureTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-attempt-fa
 $RealBuildSmokeVerifierTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-real-build-smoke-verifier-offline.ps1'
 . $C1aLibrary;. $Validator;. $Library
 function Invoke-C1bAuxiliaryOfflineTest([string]$Path,[string]$Operation,[string]$SuccessPattern){
-    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $Operation -TimeoutSec 180
+    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $Operation -TimeoutSec 180 -FailureDiagnostics
     $last=@($test.Text-split'\r?\n'|Where-Object{$_-cne''})|Select-Object -Last 1
     if($last-cnotmatch$SuccessPattern){throw "$Operation summary 欺骗：$last"}
 }
 . (Join-Path $PSScriptRoot 'lib\check-summary.ps1')
 function Invoke-C1bRealBuildSmokeVerifierOfflineTest([string]$Path){
     $operation='C1b real build smoke verifier offline tests'
-    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $operation -TimeoutSec 180
+    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $operation -TimeoutSec 180 -FailureDiagnostics
     Assert-C1bRealBuildSmokeVerifierSummary -Stdout $test.Text -Stderr $test.Stderr -ExpectedPowerShellVersion $PSVersionTable.PSVersion.ToString()
 }
 Invoke-C1bAuxiliaryOfflineTest $AdbProvenanceTests 'C1b adb provenance offline tests' '^tablet-layout-c1b adb provenance offline: 6 passed, 0 failed$'
@@ -33,7 +33,7 @@ Invoke-C1bAuxiliaryOfflineTest $AttemptFailureTests 'C1b attempt failure schema 
 Invoke-C1bRealBuildSmokeVerifierOfflineTest $RealBuildSmokeVerifierTests
 $gateRunId='c1b-host-gate-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
 $gateStartedAtUtc=[DateTimeOffset]::UtcNow;$gateStopwatch=[Diagnostics.Stopwatch]::StartNew()
-try{$result=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Tests,'-GateRunId',$gateRunId) -Operation 'C1b host fake-ADB offline tests' -TimeoutSec 300}
+try{$result=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Tests,'-GateRunId',$gateRunId) -Operation 'C1b host fake-ADB offline tests' -TimeoutSec 300 -FailureDiagnostics}
 finally{$gateStopwatch.Stop();$gateCompletedAtUtc=[DateTimeOffset]::UtcNow}
 if($result.Text-cnotmatch'^([^\r\n]+)\r?\n$'){throw 'C1b host tests 必须只输出一行 summary。'};$summaryRaw=$Matches[1]
 $gateElapsedMilliseconds=[long]$gateStopwatch.ElapsedMilliseconds
