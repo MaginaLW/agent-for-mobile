@@ -101,7 +101,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 历史失败不变；4cafd99 r2 capture/observer exit 0、wrapper/runner exit 2；独立 reader exit 0 / 252 断言 / cleanup 0，verified、needs-user、overall false | 本轮安装及 APK/package 校验成立，未进入 T0/c1/c2，采集/layout/P0/execution 仍待。用户已启用探针并恢复现场，r3 准备中、尚未启动；保留 r2，不复用尝试目录。见[r2 记录](runs/2026-09-08-C1b-4cafd99-r2-等待无障碍服务.md) |
+| **T-L1 / C1b** | 历史失败不变；4cafd99 r2 capture/observer exit 0、wrapper/runner exit 2；独立 reader exit 0 / 252 断言 / cleanup 0，verified、needs-user、overall false | 本轮安装及 APK/package 校验成立，未进入 T0/c1/c2，采集/layout/P0/execution 仍待。用户已启用探针并恢复现场，r3 已进入唯一受控运行，终态待核验；保留 r2，不复用尝试目录。见[r2 记录](runs/2026-09-08-C1b-4cafd99-r2-等待无障碍服务.md) |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
