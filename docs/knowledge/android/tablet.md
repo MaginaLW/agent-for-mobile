@@ -320,6 +320,8 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 
 - **C1b `needs-user` exit 2 的边界（2026-09-08，r2 真机）**：该分支位于一次安装及 APK/package 校验之后、T0/c1/c2 之前；表示无障碍服务未启用或未绑定，不能简化为一定是开关关闭。runner 不改系统设置，用户须在系统无障碍中人工启用“平板 C1b 只读探针”，并恢复原横屏、多窗及微信现场。人工回复后另开受审尝试，不能重用已消费目录；reader 的 exit 0 / `verified` 只确认终态证据，`overall_run_passed=false` 仍是未通过。r2 原始四份收据/流由 root 读回后设置只读，哈希不变，不能追称 producer 已封存。见[r2 记录](../../runs/2026-09-08-C1b-4cafd99-r2-等待无障碍服务.md)。
 
+- **通用客户端错误不能证明具体失败阶段（2026-09-08，r3 真机）**：`C1b guarded private client 失败 (execute)` 没有保留具体 Operation、内部退出码或原错误；源码 catch 的诊断丢失已定位，不能据此判断是 install、T0 或 content 操作，也不能把 `failure_evidence=[]` 当作零设备调用。安全 Message/Data 诊断修复进行中，旧冻结结果不追认。独立 reader exit 0 只证明失败终态读回成立；r3 的 `overall_run_passed=false` 不改变。主机构建路径和本轮 ACL journal 已不存在也不替代独立逐项 ACL 或 private ADB 残留审计。见[r3 记录](../../runs/2026-09-08-C1b-4cafd99-r3-启用探针后验证.md)。
+
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
