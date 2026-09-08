@@ -318,6 +318,8 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   发布的 JSON 状态不能单独证明封存成功，外层仍须实际 exit 0，并回读只读属性及原始哈希。
   见[真机前复核记录](../../runs/2026-09-08-C1b-4cafd99-真机前入口复核.md)。
 
+- **C1b `needs-user` exit 2 的边界（2026-09-08，r2 真机）**：该分支位于一次安装及 APK/package 校验之后、T0/c1/c2 之前；表示无障碍服务未启用或未绑定，不能简化为一定是开关关闭。runner 不改系统设置，用户须在系统无障碍中人工启用“平板 C1b 只读探针”，并恢复原横屏、多窗及微信现场。人工回复后另开受审尝试，不能重用已消费目录；reader 的 exit 0 / `verified` 只确认终态证据，`overall_run_passed=false` 仍是未通过。r2 原始四份收据/流由 root 读回后设置只读，哈希不变，不能追称 producer 已封存。见[r2 记录](../../runs/2026-09-08-C1b-4cafd99-r2-等待无障碍服务.md)。
+
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
