@@ -77,6 +77,49 @@ function Assert-ProcessDiagnostic($ProcessDiagnostic) {
     }
 }
 
+function Get-GuardedClientDiagnostic(
+    $Failure, [string]$OperationClass, [string]$Substage, [string[]]$ForbiddenText) {
+    $diagnostic = $Failure.Exception.Data['TL1C1bPrivateAdbClientDiagnostic']
+    Assert-True ($null -ne $diagnostic) 'guarded client failure 缺少结构化诊断。'
+    Assert-True ($diagnostic.schema -ceq
+        'tablet-layout-c1b-private-adb-guarded-client-diagnostic/v1' -and
+        $diagnostic.client_kind -ceq 'Adb' -and
+        $diagnostic.operation_class -ceq $OperationClass -and
+        $diagnostic.failure_substage -ceq $Substage -and
+        $diagnostic.diagnostic_complete -is [bool] -and $diagnostic.diagnostic_complete) `
+        'guarded client 类型/操作分类/失败子阶段诊断漂移。'
+    $process = $diagnostic.process
+    Assert-True ((@($process.PSObject.Properties.Name | Sort-Object) -join ',') -ceq
+        'exit_code,exit_observed,started,stderr,stdout' -and
+        $process.started -is [bool] -and $process.exit_observed -is [bool]) `
+        'guarded client process 字段或观测类型不闭合。'
+    if (-not $process.exit_observed) {
+        Assert-True ($null -eq $process.exit_code) '未观测退出时 exit_code 必须为 null。'
+    }
+    foreach ($stream in @($process.stdout, $process.stderr)) {
+        Assert-True ((@($stream.PSObject.Properties.Name | Sort-Object) -join ',') -ceq
+            'maximum_bytes,observed_bytes,overflowed' -and
+            [long]$stream.observed_bytes -ge 0 -and [long]$stream.maximum_bytes -ge 4096 -and
+            $stream.overflowed -is [bool]) 'guarded client stream 有界统计字段无效。'
+    }
+    Assert-True ($diagnostic.cleanup.status -cin @('completed','failed')) `
+        'guarded client cleanup 状态无效。'
+    $message = [string]$Failure.Exception.Message
+    foreach ($safeLabel in @('Adb',$OperationClass,$Substage,'exit_observed','exit_code',
+            'stdout','stderr','observed_bytes','overflowed')) {
+        Assert-True ($message.Contains($safeLabel, [StringComparison]::OrdinalIgnoreCase)) `
+            'guarded client message 缺少安全操作或数值诊断字段。'
+    }
+    $serialized = $diagnostic | ConvertTo-Json -Depth 8 -Compress
+    $exceptionText = $Failure.Exception.ToString()
+    foreach ($canary in $ForbiddenText) {
+        Assert-True (-not $message.Contains($canary) -and
+            -not $serialized.Contains($canary) -and -not $exceptionText.Contains($canary)) `
+            'guarded client message/Data/exception 泄露输入、原始输出或内部异常哨兵。'
+    }
+    return $diagnostic
+}
+
 function Get-FailureCanaryObservation($State, [string]$Stage) {
     $text = "$Stage|$($State.Root)|$($State.Secret)|诊断|$('Z' * 512)"
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes($text)
@@ -398,6 +441,12 @@ public static class Program {
             return 0;
         }
         if (args[4] == "devices") {
+            if (Mode == "guarded_timeout") {
+                Console.Write("guarded-timeout-stdout-canary");
+                Console.Out.Flush();
+                WriteFailureCanary("guarded-timeout-stderr");
+                while (true) Thread.Sleep(1000);
+            }
             if (Mode == "business_auto_start") {
                 try { SendService(port, "host:kill", false); } catch { }
                 for (int attempt = 0; attempt < 100; attempt++) {
@@ -680,6 +729,48 @@ try {
             'fake adb invocation log 泄露 serial。'
     }
 
+    Test-Case 'guarded diagnostic 仅将实际整数 ExitCode 记录为已观测退出' {
+        $stdout = [TL1C1bBoundedWriteStream]::new(4096)
+        $stderr = [TL1C1bBoundedWriteStream]::new(1048576)
+        try {
+            foreach ($case in @(
+                [pscustomobject]@{ Name = 'null'; Value = $null; Observed = $false },
+                [pscustomobject]@{ Name = 'nonnumeric-string'; Value = 'not-an-exit'; Observed = $false },
+                [pscustomobject]@{ Name = 'numeric-string'; Value = '0'; Observed = $false },
+                [pscustomobject]@{ Name = 'integer-zero'; Value = 0; Observed = $true },
+                [pscustomobject]@{ Name = 'integer-nonzero'; Value = 23; Observed = $true })) {
+                $fakeProcess = [pscustomobject]@{
+                    HasExited = $true
+                    ExitCodeValue = $case.Value
+                    ExitCodeGetterCalls = 0
+                }
+                $fakeProcess | Add-Member -MemberType ScriptProperty -Name ExitCode -Value {
+                    $this.ExitCodeGetterCalls++
+                    return $this.ExitCodeValue
+                }
+                $diagnostic = New-TL1C1bPrivateAdbGuardedProcessDiagnostic `
+                    -Started ([pscustomobject]@{ Process = $fakeProcess }) `
+                    -Stdout $stdout -Stderr $stderr -MaximumOutputBytes 4096
+                Assert-True ($fakeProcess.ExitCodeGetterCalls -eq 1 -and $diagnostic.started -and
+                    $diagnostic.exit_observed -eq $case.Observed -and
+                    $diagnostic.stdout.observed_bytes -eq 0 -and
+                    $diagnostic.stderr.observed_bytes -eq 0) `
+                    "ExitCode getter 未读取或观测状态错误：$($case.Name)"
+                if ($case.Observed) {
+                    Assert-True ($diagnostic.exit_code -is [int] -and
+                        $diagnostic.exit_code -eq $case.Value) `
+                        "有效整数 ExitCode 未原样保留：$($case.Name)"
+                } else {
+                    Assert-True ($null -eq $diagnostic.exit_code) `
+                        "未观测 ExitCode 被强转成有效退出码：$($case.Name)"
+                }
+            }
+        } finally {
+            $stdout.Dispose()
+            $stderr.Dispose()
+        }
+    }
+
     Test-Case 'guarded buffered client 保留 binary stdin 与 AllowFailure 语义' {
         $state = New-FakeState 'guarded-buffered' 'buffered_semantics'
         $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
@@ -711,12 +802,26 @@ try {
                 -ClearEnvironment -TimeoutSec 5 -AllowFailure -ClientKind Adb
             Assert-True ($allowed.ExitCode -eq 23 -and $allowed.Text -ceq 'failure-output' -and
                 $allowed.Stderr -ceq 'fixture-error') 'AllowFailure 返回语义漂移。'
-            [void](Assert-Throws {
+            $operationCanary = 'OPERATION-CANARY-' + $state.Secret + '-TOKEN'
+            $failure = Assert-Throws {
                 Invoke-TL1C1bPrivateAdbGuardedProcess `
                     -Guard $guard -FilePath $FakeAdb -Arguments $failureArguments `
-                    -Operation 'fake guarded strict exit' -ProcessEnvironment $environment `
+                    -Operation $operationCanary -ProcessEnvironment $environment `
                     -ClearEnvironment -TimeoutSec 5 -ClientKind Adb | Out-Null
-            } '非零 exit 未 fail closed。')
+            } '非零 exit 未 fail closed。'
+            $diagnostic = Get-GuardedClientDiagnostic $failure 'device_fingerprint' 'process_exit' `
+                @($operationCanary,$state.Root,$state.Secret,'FAKE123','ro.build.fingerprint',
+                    'failure-output','fixture-error')
+            Assert-True ($diagnostic.process.started -and $diagnostic.process.exit_observed -and
+                [int]$diagnostic.process.exit_code -eq 23 -and
+                [long]$diagnostic.process.stdout.observed_bytes -eq 14 -and
+                [long]$diagnostic.process.stderr.observed_bytes -eq 13 -and
+                [long]$diagnostic.process.stdout.maximum_bytes -eq 1048576 -and
+                [long]$diagnostic.process.stderr.maximum_bytes -eq 1048576 -and
+                -not $diagnostic.process.stdout.overflowed -and
+                -not $diagnostic.process.stderr.overflowed -and
+                $diagnostic.cleanup.status -ceq 'completed') `
+                'guarded nonzero 退出码/双流统计/cleanup 诊断未保留。'
 
             $guardState = Get-TL1C1bPrivateAdbGuardState $guard
             $readUriC1a = "'content://dev.magina.gateway.tablet.c1a/status/tl1-c1b-test?nonce=n-$('d' * 32)'"
@@ -782,13 +887,24 @@ try {
                 -ClearEnvironment -PrivateAdbServerGuard $guard) -ceq 'FAKE123') `
                 'C1a devices 未走 guarded client。'
             $prefix = Get-TL1C1bPrivateAdbClientArguments $guard
-            [void](Assert-Throws {
+            $operationCanary = 'OPERATION-CANARY-' + $state.Secret + '-TOKEN'
+            $failure = Assert-Throws {
                 Invoke-TL1C1bPrivateAdbGuardedProcess -Guard $guard -FilePath $FakeAdb `
                     -Arguments ($prefix + @('-s','FAKE123','exec-out','cat','/data/app/fake/base.apk')) `
-                    -Operation 'fake guarded hash overflow' -ProcessEnvironment $environment `
+                    -Operation $operationCanary -ProcessEnvironment $environment `
                     -ClearEnvironment -TimeoutSec 5 -OutputMode Sha256 `
                     -MaximumOutputBytes 1048576 -ClientKind Adb | Out-Null
-            } '超过 guarded streaming 上限未失败。')
+            } '超过 guarded streaming 上限未失败。'
+            $diagnostic = Get-GuardedClientDiagnostic $failure 'installed_apk_read' 'output_overflow' `
+                @($operationCanary,$state.Root,$state.Secret,'FAKE123','/data/app/fake/base.apk')
+            Assert-True ($diagnostic.process.started -and
+                $diagnostic.process.stdout.overflowed -and
+                [long]$diagnostic.process.stdout.observed_bytes -gt 1048576 -and
+                [long]$diagnostic.process.stdout.maximum_bytes -eq 1048576 -and
+                [long]$diagnostic.process.stderr.observed_bytes -eq 0 -and
+                -not $diagnostic.process.stderr.overflowed -and
+                $diagnostic.cleanup.status -ceq 'completed') `
+                'guarded streaming overflow 分类或有界统计诊断漂移。'
             [void](Assert-TL1C1bPrivateAdbServerGuardUnchanged $guard)
             $hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
                 [Security.Cryptography.HashAlgorithmName]::SHA256)
@@ -812,6 +928,65 @@ try {
             Assert-True ($actual -ceq $expected) 'guarded streaming SHA 与 >1 MiB fixture 不一致。'
             [void](Assert-TL1C1bPrivateAdbServerGuardUnchanged $guard)
         } finally { [void](Close-TL1C1bPrivateAdbServerGuard $guard) }
+    }
+
+    foreach ($cleanupFails in @($false,$true)) {
+        $caseName = if ($cleanupFails) { 'guarded-timeout-cleanup-failure' } else { 'guarded-timeout' }
+        Test-Case "$caseName 保留 cleanup 前未退出快照且不泄露哨兵" {
+            $state = New-FakeState $caseName 'guarded_timeout'
+            $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                -StartupTimeoutSec 5 -ClientTimeoutSec 2 -PortAttemptCount 4
+            $originalContained =
+                (Get-Item -LiteralPath Function:\Wait-TL1C1bPrivateAdbEndpointContained).ScriptBlock
+            $script:GuardedCleanupMockCalls = 0
+            try {
+                $environment = Get-TL1C1bPrivateAdbClientEnvironment $guard
+                $prefix = Get-TL1C1bPrivateAdbClientArguments $guard
+                $operationCanary = 'OPERATION-CANARY-' + $state.Secret + '-TOKEN'
+                try {
+                    if ($cleanupFails) {
+                        Set-Item -LiteralPath Function:\Wait-TL1C1bPrivateAdbEndpointContained `
+                            -Value {
+                                param([int]$Port, [int]$ExpectedProcessId, [int]$TimeoutMs)
+                                $script:GuardedCleanupMockCalls++
+                                throw 'GUARDED-CLEANUP-EXCEPTION-CANARY'
+                            }
+                    }
+                    $watch = [Diagnostics.Stopwatch]::StartNew()
+                    $failure = Assert-Throws {
+                        Invoke-TL1C1bPrivateAdbGuardedProcess -Guard $guard -FilePath $FakeAdb `
+                            -Arguments ($prefix + @('devices')) -Operation $operationCanary `
+                            -ProcessEnvironment $environment -ClearEnvironment -TimeoutSec 1 `
+                            -ClientKind Adb | Out-Null
+                    } 'guarded devices timeout 未 fail closed。'
+                    $watch.Stop()
+                } finally {
+                    Set-Item -LiteralPath Function:\Wait-TL1C1bPrivateAdbEndpointContained `
+                        -Value $originalContained
+                }
+                Assert-True ($watch.Elapsed.TotalSeconds -lt 8) 'guarded timeout cleanup 未保持有界。'
+                $diagnostic = Get-GuardedClientDiagnostic $failure 'device_discovery' 'timeout' `
+                    @($operationCanary,$state.Root,$state.Secret,'guarded-timeout-stdout-canary',
+                        'guarded-timeout-stderr','GUARDED-CLEANUP-EXCEPTION-CANARY')
+                $expectedStderr = Get-FailureCanaryObservation $state 'guarded-timeout-stderr'
+                Assert-True ($diagnostic.process.started -and
+                    -not $diagnostic.process.exit_observed -and $null -eq $diagnostic.process.exit_code -and
+                    [long]$diagnostic.process.stdout.observed_bytes -eq
+                        [Text.Encoding]::UTF8.GetByteCount('guarded-timeout-stdout-canary') -and
+                    [long]$diagnostic.process.stderr.observed_bytes -eq $expectedStderr.Bytes -and
+                    [long]$diagnostic.process.stdout.maximum_bytes -eq 1048576 -and
+                    [long]$diagnostic.process.stderr.maximum_bytes -eq 1048576 -and
+                    -not $diagnostic.process.stdout.overflowed -and
+                    -not $diagnostic.process.stderr.overflowed) `
+                    'timeout 主失败快照丢失或被 cleanup 的进程退出观测覆盖。'
+                $expectedCleanup = if ($cleanupFails) { 'failed' } else { 'completed' }
+                Assert-True ($diagnostic.cleanup.status -ceq $expectedCleanup -and
+                    $script:GuardedCleanupMockCalls -eq [int]$cleanupFails) `
+                    'cleanup 故障未独立记录或未命中受控 mock。'
+                [void](Assert-TL1C1bPrivateAdbServerGuardUnchanged $guard)
+            } finally { [void](Close-TL1C1bPrivateAdbServerGuard $guard) }
+            Assert-StateHasNoLivePort $state
+        }
     }
 
     Test-Case '实际 C1a devices 路径在 auto-start child 进入前 fail closed' {

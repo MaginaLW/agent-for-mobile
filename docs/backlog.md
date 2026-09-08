@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | 4cafd99 完整门 13/13、exact host/preflight、唯一真实 BuildOnly 全部通过；实建独立复核 789 项、错误流为空、清理完成。r2 安装及 needs-user 历史不变 | r3 wrapper/runner exit 1，仅保留通用 execute 错误；catch 丢失原诊断，A 正在开发目录做最小安全 Message/Data 修复，验证结果待补。冻结 clone 不变，无 r4，不重跑旧工件 |
+| **C1b 生产构建隔离与诊断** | 4cafd99 完整门 13/13、exact host/preflight、唯一真实 BuildOnly 全部通过；实建独立复核 789 项、错误流为空、清理完成。r2 安装及 needs-user 历史不变 | r3 wrapper/runner exit 1，仅保留通用 execute 错误；开发目录最小安全 Message/Data 修复通过 25/25 专项及独审，C1b 整合门实际 exit 0（29/29、真实 ADB 0）。r3 原因仍未知，冻结 clone 不变，无 r4，不重跑旧工件 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
@@ -101,7 +101,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | r2 安装及 needs-user 结果保留；r3 capture/observer exit 0、wrapper/runner exit 1；独立 reader exit 0 / 242 断言 / cleanup 0，verified、failed、overall false | r3 缺具体 Operation 和 failure evidence，不能推断安装、绑定、T0/c1/c2 完成或设备调用为零；采集/layout/P0/execution 仍待。失败已后置封存，诊断修复进行中，无新尝试。见[r3 记录](runs/2026-09-08-C1b-4cafd99-r3-启用探针后验证.md) |
+| **T-L1 / C1b** | r2 安装及 needs-user 结果保留；r3 capture/observer exit 0、wrapper/runner exit 1；独立 reader exit 0 / 242 断言 / cleanup 0，verified、failed、overall false | r3 缺具体 Operation 和 failure evidence，不能推断安装、绑定、T0/c1/c2 完成或设备调用为零；采集/layout/P0/execution 仍待。失败已后置封存，开发目录诊断修复不改变旧终态，无新尝试。见[r3 记录](runs/2026-09-08-C1b-4cafd99-r3-启用探针后验证.md) |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
