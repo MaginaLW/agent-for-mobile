@@ -118,7 +118,8 @@ switch -Exact ($key) {
   $countPath=Join-Path $state 'a11y-count.txt';$count=if(Test-Path -LiteralPath $countPath){[int](Get-Content -LiteralPath $countPath -Raw)}else{0}
   $count++;Set-Content -LiteralPath $countPath -Value $count -NoNewline
   $boundAfter=if([string]::IsNullOrWhiteSpace($env:TABLET_C1A_FAKE_BOUND_AFTER)){1}else{[int]$env:TABLET_C1A_FAKE_BOUND_AFTER}
-  if($count-ge$boundAfter){[Console]::Out.Write('Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC]]}')}
+  $label=if([string]::IsNullOrWhiteSpace($env:TABLET_C1A_FAKE_A11Y_LABEL)){'执行网关'}else{$env:TABLET_C1A_FAKE_A11Y_LABEL}
+  if($count-ge$boundAfter){[Console]::Out.Write("Bound services:{Service[label=$label, feedbackType[FEEDBACK_GENERIC]]}")}
   else{[Console]::Out.Write("Enabled services: dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService`nBound services: com.other/.Service")}
   exit 0
  }
@@ -570,19 +571,43 @@ try {
         Assert-True (-not(Test-TL1C1aA11yReady $component 'Bound services:{Service[label=执行网关X, feedbackType[FEEDBACK_GENERIC]]}').Ready) '相似 label 冒充 bound'
         Assert-True (-not(Test-TL1C1aA11yReady $component 'Bound services:{Service[notlabel=执行网关, feedbackType[FEEDBACK_GENERIC]]}').Ready) 'label 字段后缀冒充 bound'
         Assert-True (-not(Test-TL1C1aA11yReady $component "Bound services:`n  ComponentInfo{x$short}").Ready) 'component 子串冒充 bound'
-        $fake=New-FakeTools;$priorState=$env:TABLET_C1A_FAKE_STATE;$priorAfter=$env:TABLET_C1A_FAKE_BOUND_AFTER;$priorError=$env:TABLET_C1A_FAKE_A11Y_ERROR
+        $probeLabel='平板 C1b 只读探针'
+        $probeBound="Bound services:{Service[label=$probeLabel, feedbackType[FEEDBACK_GENERIC]]}"
+        Assert-True (Test-TL1C1aA11yReady $component $probeBound -ExpectedLabel $probeLabel).Ready 'C1b exact label-only bound 未识别'
+        Assert-True (-not(Test-TL1C1aA11yReady $component $probeBound).Ready) 'C1a 默认错误接受 C1b label'
+        Assert-True (-not(Test-TL1C1aA11yReady $component 'Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC]]}' -ExpectedLabel $probeLabel).Ready) 'C1b 错误接受旧 C1a label'
+        foreach($badBound in @(
+            "Bound services:{Service[label=${probeLabel}X, feedbackType[FEEDBACK_GENERIC]]}",
+            "Bound services:{Service[notlabel=$probeLabel, feedbackType[FEEDBACK_GENERIC]]}",
+            "Bound services:{}`nEnabled services:{Service[label=$probeLabel, feedbackType[FEEDBACK_GENERIC]]}",
+            "Enabled services:{Service[label=$probeLabel, feedbackType[FEEDBACK_GENERIC]]}`nBound services: com.other/.Service"
+        )){
+            Assert-True (-not(Test-TL1C1aA11yReady $component $badBound -ExpectedLabel $probeLabel).Ready) 'C1b label 或 Bound section 边界失效'
+        }
+        foreach($badEnabled in @('', 'com.other/.Service', "${component}:$short", "x$component", "${component}X")){
+            $state=Test-TL1C1aA11yReady $badEnabled $probeBound -ExpectedLabel $probeLabel
+            Assert-True (-not$state.Enabled-and-not$state.Bound-and-not$state.Ready) 'C1b label 绕过唯一精确 enabled component'
+        }
+        Assert-True (Test-TL1C1aA11yReady $short "Bound services:`n  ComponentInfo{$component}`nCrashed services: none" -ExpectedLabel $probeLabel).Ready 'C1b label 参数破坏精确组件 bound'
+        $fake=New-FakeTools;$priorState=$env:TABLET_C1A_FAKE_STATE;$priorAfter=$env:TABLET_C1A_FAKE_BOUND_AFTER;$priorError=$env:TABLET_C1A_FAKE_A11Y_ERROR;$priorLabel=$env:TABLET_C1A_FAKE_A11Y_LABEL
         try{
-            $env:TABLET_C1A_FAKE_STATE=$fake.State;$env:TABLET_C1A_FAKE_BOUND_AFTER='3';$env:TABLET_C1A_FAKE_A11Y_ERROR=$null
+            $env:TABLET_C1A_FAKE_STATE=$fake.State;$env:TABLET_C1A_FAKE_BOUND_AFTER='3';$env:TABLET_C1A_FAKE_A11Y_ERROR=$null;$env:TABLET_C1A_FAKE_A11Y_LABEL=$null
             $waited=Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' 2 50
             Assert-True ($waited.Ready-and$waited.Attempts-eq3) '延迟 bound 未在有界等待内识别'
             Remove-Item -LiteralPath (Join-Path $fake.State 'a11y-count.txt') -Force
+            $env:TABLET_C1A_FAKE_A11Y_LABEL=$probeLabel
+            $probeWaited=Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' 2 50 -ExpectedLabel $probeLabel
+            Assert-True ($probeWaited.Ready-and$probeWaited.Attempts-eq3) 'Wait 未将 C1b label 传入有界轮询'
+            $wrongLabel=Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' 1 50
+            Assert-True ($wrongLabel.Enabled-and-not$wrongLabel.Bound-and-not$wrongLabel.Ready) 'Wait 默认错误接受 C1b bound label'
+            $env:TABLET_C1A_FAKE_A11Y_LABEL=$null
             $env:TABLET_C1A_FAKE_BOUND_AFTER='999'
             $timed=Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' 1 50
             Assert-True (-not$timed.Ready) 'bound 超时被判 ready'
             $env:TABLET_C1A_FAKE_A11Y_ERROR='1'
             $blocked=$false;try{[void](Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' 1 50)}catch{$blocked=$true}
             Assert-True $blocked 'dumpsys accessibility 错误未 fail closed'
-        }finally{$env:TABLET_C1A_FAKE_STATE=$priorState;$env:TABLET_C1A_FAKE_BOUND_AFTER=$priorAfter;$env:TABLET_C1A_FAKE_A11Y_ERROR=$priorError}
+        }finally{$env:TABLET_C1A_FAKE_STATE=$priorState;$env:TABLET_C1A_FAKE_BOUND_AFTER=$priorAfter;$env:TABLET_C1A_FAKE_A11Y_ERROR=$priorError;$env:TABLET_C1A_FAKE_A11Y_LABEL=$priorLabel}
         $source=(Get-Content -LiteralPath $RunnerPath -Raw)+(Get-Content -LiteralPath $LibraryPath -Raw)
         Assert-True ($source -notmatch '(?i)settings[\x27\x22, ]+(put|delete)|ime[\x27\x22, ]+(enable|disable|set)') 'runner 含设置修改'
     }

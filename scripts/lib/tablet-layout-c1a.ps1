@@ -1076,7 +1076,8 @@ function Get-TL1C1aBoundAccessibilitySections {
 function Test-TL1C1aA11yReady {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$EnabledText,
-        [Parameter(Mandatory)][AllowEmptyString()][string]$BoundText
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BoundText,
+        [ValidateNotNullOrEmpty()][string]$ExpectedLabel = $script:TL1C1aA11yLabel
     )
     $separator = $script:TL1C1aA11yComponent.IndexOf('/')
     $packageName = $script:TL1C1aA11yComponent.Substring(0, $separator)
@@ -1095,7 +1096,7 @@ function Test-TL1C1aA11yReady {
             '(?![A-Za-z0-9_.])'
         $shortPattern = '(?<![A-Za-z0-9_.])' + [regex]::Escape($shortComponent) +
             '(?![A-Za-z0-9_.])'
-        $labelPattern = '(?:^|[\[,{\s])label=' + [regex]::Escape($script:TL1C1aA11yLabel) + '(?=[,\]])'
+        $labelPattern = '(?:^|[\[,{\s])label=' + [regex]::Escape($ExpectedLabel) + '(?=[,\]])'
         foreach ($section in @(Get-TL1C1aBoundAccessibilitySections $BoundText)) {
             if ([regex]::IsMatch($section, $fullPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -or
                 [regex]::IsMatch($section, $shortPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -or
@@ -1116,12 +1117,13 @@ function Wait-TL1C1aA11yReady {
         [ValidateRange(50,1000)][int]$PollIntervalMs = 1000,
         [hashtable]$ProcessEnvironment,
         [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [AllowNull()]$PrivateAdbServerGuard,
+        [ValidateNotNullOrEmpty()][string]$ExpectedLabel = $script:TL1C1aA11yLabel
     )
     $enabledText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_enabled `
         -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
         -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
-    $enabledState = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText ''
+    $enabledState = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText '' -ExpectedLabel $ExpectedLabel
     if (-not $enabledState.Enabled) {
         return [pscustomobject]@{ Enabled=$false; Bound=$false; Ready=$false; Attempts=0; WaitMs=0L }
     }
@@ -1132,7 +1134,7 @@ function Wait-TL1C1aA11yReady {
         $boundText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_bound `
             -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
             -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
-        $state = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText $boundText
+        $state = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText $boundText -ExpectedLabel $ExpectedLabel
         if ($state.Ready -or $watch.Elapsed.TotalSeconds -ge $MaximumWaitSec) {
             return [pscustomobject]@{
                 Enabled=$state.Enabled; Bound=$state.Bound; Ready=$state.Ready

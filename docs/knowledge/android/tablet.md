@@ -320,6 +320,8 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 
 - **C1b `needs-user` exit 2 的边界（2026-09-08，r2 真机）**：该分支位于一次安装及 APK/package 校验之后、T0/c1/c2 之前；表示无障碍服务未启用或未绑定，不能简化为一定是开关关闭。runner 不改系统设置，用户须在系统无障碍中人工启用“平板 C1b 只读探针”，并恢复原横屏、多窗及微信现场。人工回复后另开受审尝试，不能重用已消费目录；reader 的 exit 0 / `verified` 只确认终态证据，`overall_run_passed=false` 仍是未通过。r2 原始四份收据/流由 root 读回后设置只读，哈希不变，不能追称 producer 已封存。见[r2 记录](../../runs/2026-09-08-C1b-4cafd99-r2-等待无障碍服务.md)。
 
+- **共享无障碍检查须绑定实际应用标签（2026-09-09，离线复现与平板 d1 实测）**：C1a 旧标签“执行网关”不能直接用于 C1b“平板 C1b 只读探针”。当 Bound section 只含新标签而无组件时，旧函数会将已 enabled 的服务判为未 bound；共享 Test/Wait 已增加显式 `ExpectedLabel`，C1a 默认保持不变，C1b caller 和 readonly AST 门固定其实际标签。匹配仍要求 enabled 精确组件唯一命中及 Bound section 内精确字段，不接受仅在 Enabled/Binding/Crashed 段出现的名称。[AOSP dump 源码](https://android.googlesource.com/platform/frameworks/base/%2B/HEAD/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java)也使用应用解析标签，不能将 label-only 格式仅归因于厂商。平板 d1 两次只读采样的当前 user 0 Bound 段均为新标签，旧函数两次误报，修复函数对相同原文重放均 Ready；约 7 秒完成，未构建或重装。源码缺陷和历史运行根因分开判断；旧 r2 缺原始数据，不能追认其唯一原因。见[诊断与修复记录](../../runs/2026-09-09-C1b-无障碍标签诊断与修复.md)。
+
 - **通用客户端错误不能证明具体失败阶段（2026-09-08，r3 真机）**：`C1b guarded private client 失败 (execute)` 没有保留具体 Operation、内部退出码或原错误；源码 catch 的诊断丢失已定位，不能据此判断是 install、T0 或 content 操作，也不能把 `failure_evidence=[]` 当作零设备调用。开发目录已补安全 Message/Data：精确参数校验后生成常量操作分类，记录失败子阶段、清理前实际退出码及双流有界统计；缺失退出码保留 null，清理失败不覆盖主错误，不输出原始参数或设备文本。结构化 Data 尚无新增独立落盘接口，安全 Message 经现有 stderr 保留；旧冻结结果不追认。独立 reader exit 0 只证明失败终态读回成立；r3 的 `overall_run_passed=false` 不改变。主机构建路径和本轮 ACL journal 已不存在也不替代独立逐项 ACL 或 private ADB 残留审计。见[r3 记录](../../runs/2026-09-08-C1b-4cafd99-r3-启用探针后验证.md)。
 
 1. **T0-L** 只证明设备/姿态/OS window 可用于继续测量；固定输出

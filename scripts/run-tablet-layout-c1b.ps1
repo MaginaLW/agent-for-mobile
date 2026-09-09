@@ -487,7 +487,7 @@ try {
     $installedShaBefore=Get-TL1C1aInstalledApkHostSha256 $AdbPath $serial $installedPathBefore 180 -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard
     if($installedShaBefore-cne$expectedArtifactSha){throw 'C1b installed APK 与本地 APK 不一致。'}
     $packageBefore=Get-TL1C1aPackageBinding (Invoke-TL1C1aAdb -AdbPath $AdbPath -Serial $serial -Name package_dump -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard).Text
-    $a11y=Wait-TL1C1aA11yReady $AdbPath $serial -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard
+    $a11y=Wait-TL1C1aA11yReady $AdbPath $serial -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard -ExpectedLabel '平板 C1b 只读探针'
     if(-not$a11y.Ready){
         $needsUserPayload=[pscustomobject][ordered]@{schema='tablet-layout-c1b-needs-user/v1';status='needs-user';reason_code='a11y_service_not_enabled_or_bound';settings_changed=$false;retry_allowed_after_user_action=$true}
         throw 'C1b 需要用户启用并绑定无障碍服务。'

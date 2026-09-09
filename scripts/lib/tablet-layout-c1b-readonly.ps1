@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:f47e30ce0a7c5e3773f9176afbe13c42b1bf953bdbbdb606043d30d3575df89d'
+    'sha256:32c6c591cb6399e40d593bc343de937ed665294304295a340689cfbdf591dd4e'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -931,6 +931,13 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
                -not$guard.VariablePath.IsUnqualified-or
                $guard.VariablePath.UserPath-cne'adbServerGuard'){
                 throw "C1b runner $commandName 必须绑定 exact -PrivateAdbServerGuard `$adbServerGuard。"
+            }
+            if($commandName-ceq'Wait-TL1C1aA11yReady'){
+                $expectedLabel=Get-TL1C1bReadonlyNamedArgumentAst $call 'ExpectedLabel'
+                if($expectedLabel-isnot[Management.Automation.Language.StringConstantExpressionAst]-or
+                   $expectedLabel.Value-cne'平板 C1b 只读探针'){
+                    throw 'C1b runner a11y 必须绑定 exact -ExpectedLabel 平板 C1b 只读探针。'
+                }
             }
         }
     }

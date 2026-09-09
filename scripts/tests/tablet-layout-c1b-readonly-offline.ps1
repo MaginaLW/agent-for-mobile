@@ -117,6 +117,11 @@ try{
     $proof=$null;$t0Proof=$null
     Pass ast_positive {
         $script:proof=Assert-TL1C1bRunnerReadOnlyAst $runner;if($proof.schema-cne'tablet-layout-c1b-runner-readonly-ast/v1'){throw 'schema'}
+        $probeStrings=[xml][IO.File]::ReadAllText((Join-Path $root 'app\tablet-c1b-probe\src\main\res\values\strings.xml'))
+        if([string]$probeStrings.resources.SelectSingleNode('string[@name="app_name"]').InnerText-cne'平板 C1b 只读探针'){throw 'C1b a11y expected label 与 APK app_name 不一致。'}
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner " -ExpectedLabel '平板 C1b 只读探针'" '' 'a11y-label-missing.ps1')} 'missing C1b a11y label accepted' -SemanticReason (ExactReason 'Wait-TL1C1aA11yReady 必须有且仅有一个 -ExpectedLabel。')
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner " -ExpectedLabel '平板 C1b 只读探针'" " -ExpectedLabel '执行网关'" 'a11y-label-old.ps1')} 'old C1a a11y label accepted' -SemanticReason (ExactReason 'C1b runner a11y 必须绑定 exact -ExpectedLabel 平板 C1b 只读探针。')
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner " -ExpectedLabel '平板 C1b 只读探针'" ' -ExpectedLabel $serial' 'a11y-label-dynamic.ps1')} 'dynamic C1b a11y label accepted' -SemanticReason (ExactReason 'C1b runner a11y 必须绑定 exact -ExpectedLabel 平板 C1b 只读探针。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ' -FailureDiagnostics)' ')' 'build-diagnostic-missing.ps1')} 'build failure diagnostics missing accepted' -SemanticReason (ExactReason 'C1b runner fresh build 必须使用 bare -FailureDiagnostics；不得省略或显式绑定 false。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ' -FailureDiagnostics)' ' -FailureDiagnostics:$false)' 'build-diagnostic-false.ps1')} 'build failure diagnostics false accepted' -SemanticReason (ExactReason 'C1b runner fresh build 必须使用 bare -FailureDiagnostics；不得省略或显式绑定 false。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    `":tablet-c1b-probe:clean`"" 'double-clean.ps1')} 'double-quoted clean accepted' -SemanticReason (ExactReason 'C1b runner 禁止 Gradle clean/WrapperMain 执行面。')
