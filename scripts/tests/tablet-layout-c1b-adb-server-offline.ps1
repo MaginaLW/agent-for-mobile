@@ -81,6 +81,9 @@ function Get-GuardedClientDiagnostic(
     $Failure, [string]$OperationClass, [string]$Substage, [string[]]$ForbiddenText) {
     $diagnostic = $Failure.Exception.Data['TL1C1bPrivateAdbClientDiagnostic']
     Assert-True ($null -ne $diagnostic) 'guarded client failure 缺少结构化诊断。'
+    Assert-True ((@($diagnostic.PSObject.Properties.Name) -join ',') -ceq
+        'schema,client_kind,operation_class,failure_substage,diagnostic_complete,install_failure_code,process,cleanup') `
+        'guarded client diagnostic 字段不闭合。'
     Assert-True ($diagnostic.schema -ceq
         'tablet-layout-c1b-private-adb-guarded-client-diagnostic/v1' -and
         $diagnostic.client_kind -ceq 'Adb' -and
@@ -482,6 +485,35 @@ public static class Program {
             Console.Error.Write("fixture-error");
             return 23;
         }
+        if (Mode.StartsWith("install_diag_", StringComparison.Ordinal)) {
+            string detail = "INSTALL-BODY-CANARY|" + StateRoot + "|敏感-token";
+            string frame = "Failure [INSTALL_FAILED_USER_RESTRICTED: " + detail + "]";
+            if (Mode == "install_diag_stderr") {
+                Console.WriteLine("Performing Streamed Install");
+                Console.Error.WriteLine("adb: failed to install " + SelfPath + ": " + frame);
+            } else if (Mode == "install_diag_unknown") {
+                Console.Error.WriteLine("Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE: " + detail + "]");
+            } else if (Mode == "install_diag_truncated") {
+                Console.Write(frame.Substring(0, frame.Length - 1));
+            } else {
+                Console.WriteLine(frame);
+                Console.Out.Flush();
+                if (Mode == "install_diag_conflict")
+                    Console.Error.WriteLine("Failure [INSTALL_FAILED_VERSION_DOWNGRADE]");
+                else if (Mode == "install_diag_stdout_utf8")
+                    Console.OpenStandardOutput().WriteByte(255);
+                else if (Mode == "install_diag_stderr_utf8")
+                    Console.OpenStandardError().WriteByte(255);
+                else if (Mode == "install_diag_stdout_overflow")
+                    Console.Write(new string('X', 8192));
+                else if (Mode == "install_diag_stderr_overflow")
+                    Console.Error.Write(new string('X', 1048577));
+                else if (Mode == "install_diag_timeout")
+                    while (true) Thread.Sleep(1000);
+                else Console.Error.Write(detail);
+            }
+            return 23;
+        }
         if (args.Length == 9 && args[4] == "-s" && args[6] == "exec-out" &&
             args[7] == "cat" && args[8].EndsWith("/base.apk", StringComparison.Ordinal)) {
             byte[] block = new byte[65536];
@@ -768,6 +800,78 @@ try {
         } finally {
             $stdout.Dispose()
             $stderr.Dispose()
+        }
+    }
+
+    Test-Case 'install failure 固定分类拒绝未知、多码、装饰、控制字符及不完整 frame' {
+        $code = 'INSTALL_FAILED_USER_RESTRICTED'
+        $cases = @(
+            @{ Out = "Failure [$code]"; Err = ''; Expected = $code }
+            @{ Out = ''; Err = "adb: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code }
+            @{ Out = "Failure [$code]"; Err = 'Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'; Expected = $null }
+            @{ Out = "Failure [${code}: INSTALL_PARSE_FAILED_NOT_APK]"; Err = ''; Expected = $null }
+            @{ Out = 'Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE]'; Err = ''; Expected = $null }
+            @{ Out = "Failure [${code}_SECRET]"; Err = ''; Expected = $null }
+            @{ Out = "Failure [${code}: secret-body"; Err = ''; Expected = $null }
+            @{ Out = "prefix Failure [$code]"; Err = ''; Expected = $null }
+            @{ Out = "Failure [$code] suffix"; Err = ''; Expected = $null }
+            @{ Out = "Failure [${code}: nested[secret]]"; Err = ''; Expected = $null }
+            @{ Out = "Failure [$code]"; Err = "`e[31msecret"; Expected = $null }
+            @{ Out = 'Failure [install_failed_user_restricted]'; Err = ''; Expected = $null })
+        foreach ($case in $cases) {
+            $actual = Get-TL1C1bPrivateAdbInstallFailureCode $case.Out $case.Err
+            Assert-True ($actual -ceq $case.Expected) 'install failure 分类误接受或泄露非固定值。'
+        }
+    }
+
+    foreach ($case in @(
+        @{ Name = 'stdout'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
+        @{ Name = 'stderr'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
+        @{ Name = 'conflict'; Substage = 'process_exit'; Code = $null }
+        @{ Name = 'unknown'; Substage = 'process_exit'; Code = $null }
+        @{ Name = 'truncated'; Substage = 'process_exit'; Code = $null }
+        @{ Name = 'stdout_utf8'; Substage = 'stdout_utf8'; Code = $null }
+        @{ Name = 'stderr_utf8'; Substage = 'stderr_utf8'; Code = $null }
+        @{ Name = 'stdout_overflow'; Substage = 'output_overflow'; Code = $null }
+        @{ Name = 'stderr_overflow'; Substage = 'output_overflow'; Code = $null }
+        @{ Name = 'timeout'; Substage = 'timeout'; Code = $null }
+        @{ Name = 'noninstall'; Substage = 'process_exit'; Code = $null })) {
+        Test-Case "guarded install failure 安全诊断 $($case.Name)" {
+            $state = New-FakeState ('install-diagnostic-' + $case.Name) ('install_diag_' + $case.Name)
+            $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+                -StartupTimeoutSec 5 -ClientTimeoutSec 2 -PortAttemptCount 4
+            try {
+                $environment = Get-TL1C1bPrivateAdbClientEnvironment $guard
+                $prefix = Get-TL1C1bPrivateAdbClientArguments $guard
+                $tail = if ($case.Name -ceq 'noninstall') {
+                    @('-s','FAKE123','shell','getprop','ro.build.fingerprint')
+                } else { @('-s','FAKE123','install','-r','-t',$FakeAdb) }
+                $operationClass = if ($case.Name -ceq 'noninstall') {
+                    'device_fingerprint'
+                } else { 'package_install' }
+                $failure = Assert-Throws {
+                    Invoke-TL1C1bPrivateAdbGuardedProcess -Guard $guard -FilePath $FakeAdb `
+                        -Arguments ($prefix + $tail) -Operation 'install-operation-canary' `
+                        -ProcessEnvironment $environment -ClearEnvironment -TimeoutSec 2 `
+                        -MaximumOutputBytes 4096 -ClientKind Adb | Out-Null
+                } 'fake install failure 未 fail closed。'
+                $forbidden = @($state.Root,$state.Secret,$FakeAdb,'FAKE123','敏感-token',
+                    'INSTALL-BODY-CANARY','install-operation-canary','Failure [',
+                    'INSTALL_FAILED_UNREVIEWED_VENDOR_CODE')
+                if ($null -eq $case.Code) { $forbidden += 'INSTALL_FAILED_USER_RESTRICTED' }
+                $diagnostic = Get-GuardedClientDiagnostic $failure $operationClass `
+                    $case.Substage $forbidden
+                Assert-True ($diagnostic.install_failure_code -ceq $case.Code) `
+                    'guarded install failure 提取门或固定码漂移。'
+                if ($null -ne $case.Code) {
+                    Assert-True ($failure.Exception.Message.Contains('install_failure_code=' + $case.Code) -and
+                        $diagnostic.process.exit_observed -and $diagnostic.process.exit_code -eq 23 -and
+                        -not $diagnostic.process.stdout.overflowed -and
+                        -not $diagnostic.process.stderr.overflowed -and
+                        $diagnostic.cleanup.status -ceq 'completed') `
+                        '有效 install failure 未保留安全码与真实退出诊断。'
+                }
+            } finally { [void](Close-TL1C1bPrivateAdbServerGuard $guard) }
         }
     }
 

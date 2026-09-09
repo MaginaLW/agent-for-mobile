@@ -2109,6 +2109,44 @@ function Get-TL1C1bPrivateAdbGuardedOperationClass {
     return 'adb_business'
 }
 
+function Get-TL1C1bPrivateAdbInstallFailureCode {
+    param([AllowEmptyString()][string]$Stdout, [AllowEmptyString()][string]$Stderr)
+
+    # Only called for a rejected install exit after BOTH streams drained without
+    # overflow and decoded as strict UTF-8. Return a local constant, never text.
+    # AOSP installStatusToString defines these constants; doCommitSession emits
+    # Failure [<status message>]. This deliberately bounded subset is fail closed.
+    # https://android.googlesource.com/platform/frameworks/base/+/android17-release/core/java/android/content/pm/PackageManager.java
+    # https://android.googlesource.com/platform/frameworks/base/+/android11-release/services/core/java/com/android/server/pm/PackageManagerShellCommand.java
+    $allowed = @(
+        'INSTALL_FAILED_ALREADY_EXISTS', 'INSTALL_FAILED_INVALID_APK',
+        'INSTALL_FAILED_INVALID_URI', 'INSTALL_FAILED_INSUFFICIENT_STORAGE',
+        'INSTALL_FAILED_DUPLICATE_PACKAGE', 'INSTALL_FAILED_NO_SHARED_USER',
+        'INSTALL_FAILED_UPDATE_INCOMPATIBLE', 'INSTALL_FAILED_SHARED_USER_INCOMPATIBLE',
+        'INSTALL_FAILED_MISSING_SHARED_LIBRARY', 'INSTALL_FAILED_REPLACE_COULDNT_DELETE',
+        'INSTALL_FAILED_DEXOPT', 'INSTALL_FAILED_OLDER_SDK',
+        'INSTALL_FAILED_CONFLICTING_PROVIDER', 'INSTALL_FAILED_NEWER_SDK',
+        'INSTALL_FAILED_TEST_ONLY', 'INSTALL_FAILED_CPU_ABI_INCOMPATIBLE',
+        'INSTALL_FAILED_MISSING_FEATURE', 'INSTALL_FAILED_CONTAINER_ERROR',
+        'INSTALL_FAILED_INVALID_INSTALL_LOCATION', 'INSTALL_FAILED_MEDIA_UNAVAILABLE',
+        'INSTALL_FAILED_VERIFICATION_TIMEOUT', 'INSTALL_FAILED_VERIFICATION_FAILURE',
+        'INSTALL_FAILED_PACKAGE_CHANGED', 'INSTALL_FAILED_UID_CHANGED',
+        'INSTALL_FAILED_VERSION_DOWNGRADE', 'INSTALL_FAILED_INTERNAL_ERROR',
+        'INSTALL_FAILED_USER_RESTRICTED')
+    $text = $Stdout + "`n" + $Stderr
+    # A second status-like token, controls, an incomplete frame or a decorated
+    # token is ambiguous. Details may contain secrets but are never returned.
+    if ($text -cmatch '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]' -or
+        [regex]::Matches($text, '(?i:INSTALL_)').Count -ne 1) { return $null }
+    $frames = [regex]::Matches($text,
+        '(?m)^(?:adb: failed to install [^\r\n]+: )?Failure \[(?<code>INSTALL_FAILED_[A-Z0-9_]+)(?::[^\r\n\[\]]*)?\]\r?$')
+    if ($frames.Count -ne 1) { return $null }
+    foreach ($code in $allowed) {
+        if ($frames[0].Groups['code'].Value -ceq $code) { return $code }
+    }
+    return $null
+}
+
 function New-TL1C1bPrivateAdbGuardedProcessDiagnostic {
     param(
         [AllowNull()]$Started,
@@ -2198,6 +2236,7 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
     $cleanupComplete = $true
     $diagnosticComplete = $true
     $processDiagnostic = $null
+    $installFailureCode = $null
     $failureCategory = 'create-job'
     $result = $null
     try {
@@ -2297,7 +2336,13 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
             }
         }
         $failureCategory = 'process_exit'
-        if (-not $AllowFailure -and $result.ExitCode -ne 0) { throw 'nonzero exit' }
+        if (-not $AllowFailure -and $result.ExitCode -ne 0) {
+            if ($operationClass -ceq 'package_install' -and $OutputMode -ceq 'Text') {
+                $installFailureCode = Get-TL1C1bPrivateAdbInstallFailureCode `
+                    $result.Text $result.Stderr
+            }
+            throw 'nonzero exit'
+        }
         $failureCategory = 'postcondition'
         [void](Assert-TL1C1bPrivateAdbServerStateUnchanged $state)
         $failureCategory = 'none'
@@ -2358,6 +2403,7 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
             operation_class = $operationClass
             failure_substage = $failureCategory
             diagnostic_complete = $diagnosticComplete
+            install_failure_code = $installFailureCode
             process = $processDiagnostic
             cleanup = [pscustomobject][ordered]@{
                 status = if ($cleanupComplete) { 'completed' } else { 'failed' }
@@ -2373,6 +2419,9 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
                 $processDiagnostic.exit_observed, $exitSummary, $processDiagnostic.stdout.observed_bytes,
                 $processDiagnostic.stdout.overflowed, $processDiagnostic.stderr.observed_bytes,
                 $processDiagnostic.stderr.overflowed)
+        }
+        if ($null -ne $installFailureCode) {
+            $summary += '; install_failure_code=' + $installFailureCode
         }
         $exception = [InvalidOperationException]::new(
             "C1b guarded private client 失败 ($ClientKind/$operationClass/$failureCategory; $summary; cleanup=$($diagnostic.cleanup.status))。")
