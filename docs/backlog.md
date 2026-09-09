@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | d1 只读诊断 exit 0、6 次业务读取、清理完成；两组 Bound 新标签使旧函数误报，修复后原始数据重放均 Ready。C1a 15/15、coverage 50/50、readonly 80/80、host 聚合29/29（真实ADB 0）及独审通过。r2 needs-user 及旧冻结证据不变 | 修复候选 `a0e2c8b` 全量 13/0/0、PairRender/PreflightRender/Preflight 各一次通过，唯一 BuildOnly 已授权并通过（caller/launcher/helper 0，独立 789 项、cleanup 0、真实 ADB 0）；新 binding/ready 闭合后按 fresh 场景采集，当前无需反复开关探针。见[新候选主机准备](runs/2026-09-09-C1b-a0e2c8b-真机前主机准备.md)。d1 仅诊断，T0/c1/c2 未通过，无生产 r3。见[诊断与修复记录](runs/2026-09-09-C1b-无障碍标签诊断与修复.md) |
+| **C1b 生产构建隔离与诊断** | d1 只读诊断 exit 0、6 次业务读取、清理完成；两组 Bound 新标签使旧函数误报，修复后原始数据重放均 Ready。C1a 15/15、coverage 50/50、readonly 80/80、host 聚合29/29（真实ADB 0）及独审通过。r2 needs-user 及旧冻结证据不变 | 修复候选 `a0e2c8b` 全量 13/0/0、PairRender/PreflightRender/Preflight 各一次通过，唯一 BuildOnly 已授权并通过（caller/launcher/helper 0，独立 789 项、cleanup 0、真实 ADB 0）；新 r1 binding/ready 与 59 项入口预检已闭合，等待 ready 发布后的 fresh 场景确认后单次采集，当前无需反复开关探针。见[新候选主机准备](runs/2026-09-09-C1b-a0e2c8b-真机前主机准备.md)。d1 仅诊断，T0/c1/c2 未通过，无生产 r3。见[诊断与修复记录](runs/2026-09-09-C1b-无障碍标签诊断与修复.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
