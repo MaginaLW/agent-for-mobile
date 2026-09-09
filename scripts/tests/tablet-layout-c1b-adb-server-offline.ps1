@@ -488,9 +488,15 @@ public static class Program {
         if (Mode.StartsWith("install_diag_", StringComparison.Ordinal)) {
             string detail = "INSTALL-BODY-CANARY|" + StateRoot + "|敏感-token";
             string frame = "Failure [INSTALL_FAILED_USER_RESTRICTED: " + detail + "]";
-            if (Mode == "install_diag_stderr") {
+            if (Mode == "install_diag_stderr" || Mode == "install_diag_stderr_windows" ||
+                Mode == "install_diag_stderr_windows_bad_dot" ||
+                Mode == "install_diag_stderr_windows_suffix") {
+                string program = "adb";
+                if (Mode == "install_diag_stderr_windows") program = "adb.exe";
+                else if (Mode == "install_diag_stderr_windows_bad_dot") program = "adbxexe";
+                else if (Mode == "install_diag_stderr_windows_suffix") program = "adb.exe.bad";
                 Console.WriteLine("Performing Streamed Install");
-                Console.Error.WriteLine("adb: failed to install " + SelfPath + ": " + frame);
+                Console.Error.WriteLine(program + ": failed to install " + SelfPath + ": " + frame);
             } else if (Mode == "install_diag_unknown") {
                 Console.Error.WriteLine("Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE: " + detail + "]");
             } else if (Mode == "install_diag_truncated") {
@@ -808,6 +814,10 @@ try {
         $cases = @(
             @{ Out = "Failure [$code]"; Err = ''; Expected = $code }
             @{ Out = ''; Err = "adb: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code }
+            @{ Out = "Performing Streamed Install`r`n"; Err = "adb.exe: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code }
+            @{ Out = ''; Err = "adbxexe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
+            @{ Out = ''; Err = "adb.exe.bad: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
+            @{ Out = ''; Err = "prefixadb.exe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
             @{ Out = "Failure [$code]"; Err = 'Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'; Expected = $null }
             @{ Out = "Failure [${code}: INSTALL_PARSE_FAILED_NOT_APK]"; Err = ''; Expected = $null }
             @{ Out = 'Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE]'; Err = ''; Expected = $null }
@@ -827,6 +837,9 @@ try {
     foreach ($case in @(
         @{ Name = 'stdout'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
         @{ Name = 'stderr'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
+        @{ Name = 'stderr_windows'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
+        @{ Name = 'stderr_windows_bad_dot'; Substage = 'process_exit'; Code = $null }
+        @{ Name = 'stderr_windows_suffix'; Substage = 'process_exit'; Code = $null }
         @{ Name = 'conflict'; Substage = 'process_exit'; Code = $null }
         @{ Name = 'unknown'; Substage = 'process_exit'; Code = $null }
         @{ Name = 'truncated'; Substage = 'process_exit'; Code = $null }

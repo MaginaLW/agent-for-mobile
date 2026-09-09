@@ -2118,6 +2118,8 @@ function Get-TL1C1bPrivateAdbInstallFailureCode {
     # Failure [<status message>]. This deliberately bounded subset is fail closed.
     # https://android.googlesource.com/platform/frameworks/base/+/android17-release/core/java/android/content/pm/PackageManager.java
     # https://android.googlesource.com/platform/frameworks/base/+/android11-release/services/core/java/com/android/server/pm/PackageManagerShellCommand.java
+    # ADB error_exit prefixes Basename(GetExecutablePath()): adb.exe on Windows.
+    # https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/client/adb_client.cpp
     $allowed = @(
         'INSTALL_FAILED_ALREADY_EXISTS', 'INSTALL_FAILED_INVALID_APK',
         'INSTALL_FAILED_INVALID_URI', 'INSTALL_FAILED_INSUFFICIENT_STORAGE',
@@ -2139,7 +2141,7 @@ function Get-TL1C1bPrivateAdbInstallFailureCode {
     if ($text -cmatch '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]' -or
         [regex]::Matches($text, '(?i:INSTALL_)').Count -ne 1) { return $null }
     $frames = [regex]::Matches($text,
-        '(?m)^(?:adb: failed to install [^\r\n]+: )?Failure \[(?<code>INSTALL_FAILED_[A-Z0-9_]+)(?::[^\r\n\[\]]*)?\]\r?$')
+        '(?m)^(?:adb(?:\.exe)?: failed to install [^\r\n]+: )?Failure \[(?<code>INSTALL_FAILED_[A-Z0-9_]+)(?::[^\r\n\[\]]*)?\]\r?$')
     if ($frames.Count -ne 1) { return $null }
     foreach ($code in $allowed) {
         if ($frames[0].Groups['code'].Value -ceq $code) { return $code }

@@ -314,7 +314,8 @@ cross-binding、secret absence 与 artifact hash 读回。任一 cleanup 或读�
 
 guarded client 的安装非零退出只在双流完整、未溢出且严格 UTF-8 解码后提取固定允许列表错误码。
 `install_failure_code` 为本地固定 `INSTALL_FAILED_*` 常量或 null；安全 Message 仅在有明确码时追加该字段，
-不导出安装器正文、路径或输出内容 hash。未知码、多码、装饰、截断及非安装错误保持 null；
+不导出安装器正文、路径或输出内容 hash。完整失败行允许 ADB 的字面 `adb:` 或 Windows `adb.exe:` 前缀，
+近似程序名（如 `adbxexe`、`adb.exe.bad`）不接受。未知码、多码、装饰、截断及非安装错误保持 null；
 该诊断不证明安装成功，也不授权改参数、卸载、放宽失败门或自动重试。缺失旧原始流时不能回补历史错误码。
 
 受控 build、private ADB server、安装、T0、provider、capture、时序、schema、hash、设备/APK 漂移或 cleanup 任一失败，都只原子保留
