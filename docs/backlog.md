@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | 8b3bb5d 主机证据复核复用；新 r2 工具独审 693 断言、绑定与前缀 59 断言闭合，用户在 ready 后重新确认现场；C 已唯一启动 r2。r1 unauthorized 失败仍冻结，未知阶段保持原结论 | 等本轮真实退出和独立终态核验；不重复启动，不将用户 USB 授权回复或主机通过当作真机通过。见[r2 当前记录](runs/2026-09-09-C1b-8b3bb5d-r2-真机验证.md) |
+| **C1b 生产构建隔离与诊断** | 8b3bb5d r2 已连接、安装及核验包，a11y 检查返回 needs-user；capture/observer 0/0、wrapper/runner 2/2；reader 0、252 断言、cleanup 0、overall false，T0 未开始。16 文件已封存，r1 及旧失败不变 | 核实设置页当前开关状态；已开启则准备受控只读 enabled/bound 诊断，核实标签/格式/时序疑点。当前 payload 无法分辨 Enabled/Bound；无 r3 或自动重试。见[r2 终态记录](runs/2026-09-09-C1b-8b3bb5d-r2-真机验证.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
