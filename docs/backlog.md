@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | 09-12 `d11e22e/r3` rev1主机准备通过；用户已确认本轮现场，C于UTC09:39唯一启动，outer16492/capture30900/observer31564，重试0 | 等实际wrapper/runner终态、独立reader与外层审查；不重跑r2/d1，不以旧安装现状证明本轮安装身份。T0/c1/c2、布局/P0/T-L2仍待。见[r3记录](runs/2026-09-12-C1b-d11e22e-r3-正式采集.md)、[只读诊断](runs/2026-09-12-C1b-安装状态只读诊断.md) |
+| **C1b 生产构建隔离与诊断** | 09-12 `d11e22e/r3` 已到c1，返回capture_c1_failed；capture/observer0、wrapper/runner1，reader269项/独审1457项通过，206文件封存 | 首帧异常被通用catch隐藏；先离线补受限阶段/原因诊断与失败持久化及相应验证，再建新固定候选，不重跑r3。c1/c2、布局/P0/T-L2仍待。见[r3记录](runs/2026-09-12-C1b-d11e22e-r3-正式采集.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
