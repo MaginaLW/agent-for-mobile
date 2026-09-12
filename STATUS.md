@@ -3,7 +3,7 @@
 > 2026-09-12 更新；只保留影响下一步的结论，历史细节见 [归档](docs/status-archive.md)。
 
 - **协作改为 A 协调、开发与直接 ask，C 按需验固定候选**；取消常驻 B，独立研究/实现/审查交给子代理。当前队列与有效决定见 [backlog](docs/backlog.md)，旧过程见[历史归档](docs/backlog-archive.md)。派工携带实际协调来源，不固定读 main 或历史任务 ID；冻结候选不因通用复核重复构建。当前分支与 HEAD 以 Git 实测为准。
-- **`d11e22e/r2` 安装等待超时，118份材料已封存**：capture/observer实际exit 0，wrapper/runner实际exit 1；安装客户端未观察到退出码或输出，cleanup completed。用户报告已允许安装，最终安装状态仍待只读核对；本轮reader242项、外层独审1457项通过，终态failed/overall false，未取得T0/c1/c2或布局/P0通过证据。r1的125份失败材料保持原终态。Windows前缀诊断修复6fe6ff7已离线通过，但不改变超时策略。见[r2记录](docs/runs/2026-09-10-C1b-d11e22e-r2-重推验证.md)。
+- **平板探针当前已安装，无障碍已启用并绑定**（09-12只读d1）：版本0.1.0-c1b-read-only，7次业务读取、实际exit 0、清理通过，未重新安装。此前`d11e22e/r2`在安装等待超时结束，118份材料已封存；只读现状不改写r2的failed，也不证明当前APK的r2来源。下一步仍是新一轮正式C1b采集与安装身份绑定，T0/c1/c2、布局/P0尚未通过。见[只读诊断](docs/runs/2026-09-12-C1b-安装状态只读诊断.md)与[r2记录](docs/runs/2026-09-10-C1b-d11e22e-r2-重推验证.md)。
 - **本次执行器修订与验证（09-08）**：两份站规改用任务设备证据，移除固定手机型号/分辨率假设；gateway 配置模板补齐超时。派单离线 50/50、监督式 runner 86/86、台账 7/7 及凭据扫描通过。原 `check.ps1 -SkipGradle` 记录为 **11 PASS / 1 FAIL / 1 SKIP**，唯一失败是 C1b 宿主全局 mutex 占用；原日志 `.checks/agent-workflow-check.log` 与限定诊断原样保留。
 - **C1b 锁冲突已补验闭环（09-08）**：锁释放后，在 clean `da9ab5321ef0ca16e4972089e22cb8d0747d759a` 单独复跑 C1b host 离线聚合门，exit 0；包括 build-environment 27/27、verifier 19/19 零跳过、fake-ADB 29/29，真实 ADB 0。日志 `.checks/agent-workflow-c1b-host-recheck.log`、同名 `.summary.json` 与 `.receipt.json` 绑定本次输入和结果。未改互斥机制或门限，未干预其他任务；未重跑整套检查，Android JVM/Lint/构建仍未覆盖，不改称原整合门全绿或真机验收通过。
 - **历史 `463304c` 接入尝试已失败冻结；该候选当时尚未安装或访问平板。** 其主机前置确已通过；随后 r1 被外层环境注入挡住，r2 被共享目录 HEAD 漂移挡住，独立目录 r3 的实际 Gradle 构建 exit 1。具体 Gradle 错误丢失，不把失败归因于平板或追认为唯一根因。见[历史记录](docs/runs/2026-09-08-C1b-463304c-接入后主机构建失败.md)；后续 `4cafd99` 安装结果见下文。

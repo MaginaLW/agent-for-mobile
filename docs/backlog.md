@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | `d11e22e/r2` 安装timeout，capture/observer 0、wrapper/runner 1；reader242项、外层独审1457项通过，failed/overall false，118份材料封存。r1及更早失败保持原终态 | 用户本轮报告已允许安装，实际安装客户端没有退出码/输出；先做单独只读包及无障碍状态诊断，不重装、不重跑r2。T0/c1/c2、布局/P0/T-L2仍待。Windows前缀修复6fe6ff7已离线40/40、host29/29，不改变本次超时。见[r2记录](runs/2026-09-10-C1b-d11e22e-r2-重推验证.md) |
+| **C1b 生产构建隔离与诊断** | 09-12独立只读d1确认当前探针已装、无障碍enabled/bound/ready为true；7次业务读取，exit0、清理通过。`d11e22e/r2`安装timeout仍为failed，118份材料封存 | 新一轮正式C1b采集与安装身份绑定待完成；不重跑r2/d1，不以现状改写r2失败或证明APK的本轮来源。T0/c1/c2、布局/P0/T-L2仍待。见[只读诊断](runs/2026-09-12-C1b-安装状态只读诊断.md)、[r2记录](runs/2026-09-10-C1b-d11e22e-r2-重推验证.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
