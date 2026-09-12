@@ -2110,7 +2110,11 @@ function Get-TL1C1bPrivateAdbGuardedOperationClass {
 }
 
 function Get-TL1C1bPrivateAdbInstallFailureCode {
-    param([AllowEmptyString()][string]$Stdout, [AllowEmptyString()][string]$Stderr)
+    param(
+        [AllowEmptyString()][string]$Stdout,
+        [AllowEmptyString()][string]$Stderr,
+        [ref]$ExtractionStatus
+    )
 
     # Only called for a rejected install exit after BOTH streams drained without
     # overflow and decoded as strict UTF-8. Return a local constant, never text.
@@ -2138,14 +2142,33 @@ function Get-TL1C1bPrivateAdbInstallFailureCode {
     $text = $Stdout + "`n" + $Stderr
     # A second status-like token, controls, an incomplete frame or a decorated
     # token is ambiguous. Details may contain secrets but are never returned.
-    if ($text -cmatch '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]' -or
-        [regex]::Matches($text, '(?i:INSTALL_)').Count -ne 1) { return $null }
+    # The optional status describes this parser's decision, never an install cause.
+    if ($text -cmatch '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]') {
+        if ($null -ne $ExtractionStatus) { $ExtractionStatus.Value = 'unsafe_control' }
+        return $null
+    }
+    $tokenCount = [regex]::Matches($text, '(?i:INSTALL_)').Count
+    if ($tokenCount -ne 1) {
+        if ($null -ne $ExtractionStatus) {
+            $ExtractionStatus.Value = if ($tokenCount -eq 0) {
+                'no_status_token'
+            } else { 'ambiguous_status_tokens' }
+        }
+        return $null
+    }
     $frames = [regex]::Matches($text,
         '(?m)^(?:adb(?:\.exe)?: failed to install [^\r\n]+: )?Failure \[(?<code>INSTALL_FAILED_[A-Z0-9_]+)(?::[^\r\n\[\]]*)?\]\r?$')
-    if ($frames.Count -ne 1) { return $null }
-    foreach ($code in $allowed) {
-        if ($frames[0].Groups['code'].Value -ceq $code) { return $code }
+    if ($frames.Count -ne 1) {
+        if ($null -ne $ExtractionStatus) { $ExtractionStatus.Value = 'frame_rejected' }
+        return $null
     }
+    foreach ($code in $allowed) {
+        if ($frames[0].Groups['code'].Value -ceq $code) {
+            if ($null -ne $ExtractionStatus) { $ExtractionStatus.Value = 'recognized' }
+            return $code
+        }
+    }
+    if ($null -ne $ExtractionStatus) { $ExtractionStatus.Value = 'unsupported_code' }
     return $null
 }
 
@@ -2239,6 +2262,7 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
     $diagnosticComplete = $true
     $processDiagnostic = $null
     $installFailureCode = $null
+    $installFailureExtraction = 'not_attempted'
     $failureCategory = 'create-job'
     $result = $null
     try {
@@ -2341,7 +2365,7 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
         if (-not $AllowFailure -and $result.ExitCode -ne 0) {
             if ($operationClass -ceq 'package_install' -and $OutputMode -ceq 'Text') {
                 $installFailureCode = Get-TL1C1bPrivateAdbInstallFailureCode `
-                    $result.Text $result.Stderr
+                    $result.Text $result.Stderr ([ref]$installFailureExtraction)
             }
             throw 'nonzero exit'
         }
@@ -2424,6 +2448,9 @@ function Invoke-TL1C1bPrivateAdbGuardedProcess {
         }
         if ($null -ne $installFailureCode) {
             $summary += '; install_failure_code=' + $installFailureCode
+        }
+        if ($operationClass -ceq 'package_install') {
+            $summary += '; install_failure_extraction=' + $installFailureExtraction
         }
         $exception = [InvalidOperationException]::new(
             "C1b guarded private client 失败 ($ClientKind/$operationClass/$failureCategory; $summary; cleanup=$($diagnostic.cleanup.status))。")

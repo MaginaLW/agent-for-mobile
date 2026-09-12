@@ -488,7 +488,11 @@ public static class Program {
         if (Mode.StartsWith("install_diag_", StringComparison.Ordinal)) {
             string detail = "INSTALL-BODY-CANARY|" + StateRoot + "|敏感-token";
             string frame = "Failure [INSTALL_FAILED_USER_RESTRICTED: " + detail + "]";
-            if (Mode == "install_diag_stderr" || Mode == "install_diag_stderr_windows" ||
+            if (Mode == "install_diag_no_status") {
+                Console.Write("install-no-status-stdout|" + detail);
+                Console.Error.Write("install-no-status-stderr|" + detail);
+                return 1;
+            } else if (Mode == "install_diag_stderr" || Mode == "install_diag_stderr_windows" ||
                 Mode == "install_diag_stderr_windows_bad_dot" ||
                 Mode == "install_diag_stderr_windows_suffix") {
                 string program = "adb";
@@ -812,43 +816,56 @@ try {
     Test-Case 'install failure 固定分类拒绝未知、多码、装饰、控制字符及不完整 frame' {
         $code = 'INSTALL_FAILED_USER_RESTRICTED'
         $cases = @(
-            @{ Out = "Failure [$code]"; Err = ''; Expected = $code }
-            @{ Out = ''; Err = "adb: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code }
-            @{ Out = "Performing Streamed Install`r`n"; Err = "adb.exe: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code }
-            @{ Out = ''; Err = "adbxexe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
-            @{ Out = ''; Err = "adb.exe.bad: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
-            @{ Out = ''; Err = "prefixadb.exe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null }
-            @{ Out = "Failure [$code]"; Err = 'Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'; Expected = $null }
-            @{ Out = "Failure [${code}: INSTALL_PARSE_FAILED_NOT_APK]"; Err = ''; Expected = $null }
-            @{ Out = 'Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE]'; Err = ''; Expected = $null }
-            @{ Out = "Failure [${code}_SECRET]"; Err = ''; Expected = $null }
-            @{ Out = "Failure [${code}: secret-body"; Err = ''; Expected = $null }
-            @{ Out = "prefix Failure [$code]"; Err = ''; Expected = $null }
-            @{ Out = "Failure [$code] suffix"; Err = ''; Expected = $null }
-            @{ Out = "Failure [${code}: nested[secret]]"; Err = ''; Expected = $null }
-            @{ Out = "Failure [$code]"; Err = "`e[31msecret"; Expected = $null }
-            @{ Out = 'Failure [install_failed_user_restricted]'; Err = ''; Expected = $null })
+            @{ Out = "Failure [$code]"; Err = ''; Expected = $code; Extraction = 'recognized' }
+            @{ Out = ''; Err = "adb: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code; Extraction = 'recognized' }
+            @{ Out = "Performing Streamed Install`r`n"; Err = "adb.exe: failed to install C:\private\app.apk: Failure [${code}: secret-body]`r`n"; Expected = $code; Extraction = 'recognized' }
+            @{ Out = ''; Err = "adbxexe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = ''; Err = "adb.exe.bad: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = ''; Err = "prefixadb.exe: failed to install C:\private\app.apk: Failure [$code]"; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = "Failure [$code]"; Err = 'Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'; Expected = $null; Extraction = 'ambiguous_status_tokens' }
+            @{ Out = "Failure [${code}: INSTALL_PARSE_FAILED_NOT_APK]"; Err = ''; Expected = $null; Extraction = 'ambiguous_status_tokens' }
+            @{ Out = 'Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE]'; Err = ''; Expected = $null; Extraction = 'unsupported_code' }
+            @{ Out = "Failure [${code}_SECRET]"; Err = ''; Expected = $null; Extraction = 'unsupported_code' }
+            @{ Out = "Failure [${code}: secret-body"; Err = ''; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = "prefix Failure [$code]"; Err = ''; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = "Failure [$code] suffix"; Err = ''; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = "Failure [${code}: nested[secret]]"; Err = ''; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = "Failure [$code]"; Err = "`e[31msecret"; Expected = $null; Extraction = 'unsafe_control' }
+            @{ Out = 'Failure [install_failed_user_restricted]'; Err = ''; Expected = $null; Extraction = 'frame_rejected' }
+            @{ Out = ''; Err = ''; Expected = $null; Extraction = 'no_status_token' }
+            @{ Out = 'synthetic-stdout-canary'; Err = 'synthetic-stderr-canary'; Expected = $null; Extraction = 'no_status_token' }
+            @{ Out = 'Failure [synthetic-unknown-message]'; Err = ''; Expected = $null; Extraction = 'no_status_token' }
+            @{ Out = ''; Err = "`e[31msynthetic-control-canary"; Expected = $null; Extraction = 'unsafe_control' }
+            @{ Out = "Failure [$code]"; Err = "Failure [INSTALL_FAILED_VERSION_DOWNGRADE]`e"; Expected = $null; Extraction = 'unsafe_control' }
+            @{ Out = ''; Err = "adb.exe: failed to install C:\install_cache\app.apk: Failure [$code]"; Expected = $null; Extraction = 'ambiguous_status_tokens' }
+            @{ Out = "Failure [${code}: line1`nline2]"; Err = ''; Expected = $null; Extraction = 'frame_rejected' })
         foreach ($case in $cases) {
             $actual = Get-TL1C1bPrivateAdbInstallFailureCode $case.Out $case.Err
             Assert-True ($actual -ceq $case.Expected) 'install failure 分类误接受或泄露非固定值。'
+            $extraction = 'EXTRACTION-INPUT-CANARY'
+            $withStatus = Get-TL1C1bPrivateAdbInstallFailureCode `
+                $case.Out $case.Err ([ref]$extraction)
+            Assert-True ($withStatus -ceq $case.Expected -and $extraction -ceq $case.Extraction) `
+                'install failure 可选诊断改变原code/null结果或未返回固定提取分类。'
         }
     }
 
     foreach ($case in @(
-        @{ Name = 'stdout'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
-        @{ Name = 'stderr'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
-        @{ Name = 'stderr_windows'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED' }
-        @{ Name = 'stderr_windows_bad_dot'; Substage = 'process_exit'; Code = $null }
-        @{ Name = 'stderr_windows_suffix'; Substage = 'process_exit'; Code = $null }
-        @{ Name = 'conflict'; Substage = 'process_exit'; Code = $null }
-        @{ Name = 'unknown'; Substage = 'process_exit'; Code = $null }
-        @{ Name = 'truncated'; Substage = 'process_exit'; Code = $null }
-        @{ Name = 'stdout_utf8'; Substage = 'stdout_utf8'; Code = $null }
-        @{ Name = 'stderr_utf8'; Substage = 'stderr_utf8'; Code = $null }
-        @{ Name = 'stdout_overflow'; Substage = 'output_overflow'; Code = $null }
-        @{ Name = 'stderr_overflow'; Substage = 'output_overflow'; Code = $null }
-        @{ Name = 'timeout'; Substage = 'timeout'; Code = $null }
-        @{ Name = 'noninstall'; Substage = 'process_exit'; Code = $null })) {
+        @{ Name = 'stdout'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED'; Extraction = 'recognized' }
+        @{ Name = 'stderr'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED'; Extraction = 'recognized' }
+        @{ Name = 'stderr_windows'; Substage = 'process_exit'; Code = 'INSTALL_FAILED_USER_RESTRICTED'; Extraction = 'recognized' }
+        @{ Name = 'stderr_windows_bad_dot'; Substage = 'process_exit'; Code = $null; Extraction = 'frame_rejected' }
+        @{ Name = 'stderr_windows_suffix'; Substage = 'process_exit'; Code = $null; Extraction = 'frame_rejected' }
+        @{ Name = 'conflict'; Substage = 'process_exit'; Code = $null; Extraction = 'ambiguous_status_tokens' }
+        @{ Name = 'unknown'; Substage = 'process_exit'; Code = $null; Extraction = 'unsupported_code' }
+        @{ Name = 'truncated'; Substage = 'process_exit'; Code = $null; Extraction = 'frame_rejected' }
+        @{ Name = 'no_status'; Substage = 'process_exit'; Code = $null; Extraction = 'no_status_token' }
+        @{ Name = 'stdout_utf8'; Substage = 'stdout_utf8'; Code = $null; Extraction = 'not_attempted' }
+        @{ Name = 'stderr_utf8'; Substage = 'stderr_utf8'; Code = $null; Extraction = 'not_attempted' }
+        @{ Name = 'stdout_overflow'; Substage = 'output_overflow'; Code = $null; Extraction = 'not_attempted' }
+        @{ Name = 'stderr_overflow'; Substage = 'output_overflow'; Code = $null; Extraction = 'not_attempted' }
+        @{ Name = 'timeout'; Substage = 'timeout'; Code = $null; Extraction = 'not_attempted' }
+        @{ Name = 'noninstall'; Substage = 'process_exit'; Code = $null; Extraction = $null })) {
         Test-Case "guarded install failure 安全诊断 $($case.Name)" {
             $state = New-FakeState ('install-diagnostic-' + $case.Name) ('install_diag_' + $case.Name)
             $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
@@ -870,19 +887,67 @@ try {
                 } 'fake install failure 未 fail closed。'
                 $forbidden = @($state.Root,$state.Secret,$FakeAdb,'FAKE123','敏感-token',
                     'INSTALL-BODY-CANARY','install-operation-canary','Failure [',
-                    'INSTALL_FAILED_UNREVIEWED_VENDOR_CODE')
+                    'INSTALL_FAILED_UNREVIEWED_VENDOR_CODE',
+                    'install-no-status-stdout|','install-no-status-stderr|')
                 if ($null -eq $case.Code) { $forbidden += 'INSTALL_FAILED_USER_RESTRICTED' }
                 $diagnostic = Get-GuardedClientDiagnostic $failure $operationClass `
                     $case.Substage $forbidden
                 Assert-True ($diagnostic.install_failure_code -ceq $case.Code) `
                     'guarded install failure 提取门或固定码漂移。'
+                $message = [string]$failure.Exception.Message
+                $extractionLabelCount = [regex]::Matches($message, 'install_failure_extraction=').Count
+                if ($null -eq $case.Extraction) {
+                    Assert-True ($extractionLabelCount -eq 0) '非install命令导出安装提取分类。'
+                } else {
+                    Assert-True ($extractionLabelCount -eq 1 -and
+                        $message.Contains('; install_failure_extraction=' + $case.Extraction + '; cleanup=')) `
+                        '安全Message未保留唯一固定提取分类。'
+                }
                 if ($null -ne $case.Code) {
-                    Assert-True ($failure.Exception.Message.Contains('install_failure_code=' + $case.Code) -and
-                        $diagnostic.process.exit_observed -and $diagnostic.process.exit_code -eq 23 -and
+                    Assert-True ($message.Contains('install_failure_code=' + $case.Code)) `
+                        '有效 install failure 未保留安全码。'
+                }
+                if ($case.Substage -ceq 'process_exit') {
+                    $detail = 'INSTALL-BODY-CANARY|' + $state.Root + '|敏感-token'
+                    $frame = 'Failure [INSTALL_FAILED_USER_RESTRICTED: ' + $detail + ']'
+                    $newline = [Environment]::NewLine
+                    $expectedOut = $frame + $newline
+                    $expectedErr = $detail
+                    $expectedExit = 23
+                    switch -CaseSensitive ($case.Name) {
+                        { $_ -cin @('stderr','stderr_windows','stderr_windows_bad_dot','stderr_windows_suffix') } {
+                            $program = switch -CaseSensitive ($case.Name) {
+                                'stderr' { 'adb' }
+                                'stderr_windows' { 'adb.exe' }
+                                'stderr_windows_bad_dot' { 'adbxexe' }
+                                'stderr_windows_suffix' { 'adb.exe.bad' }
+                            }
+                            $expectedOut = 'Performing Streamed Install' + $newline
+                            $expectedErr = $program + ': failed to install ' + $FakeAdb + ': ' + $frame + $newline
+                        }
+                        'conflict' { $expectedErr = 'Failure [INSTALL_FAILED_VERSION_DOWNGRADE]' + $newline }
+                        'unknown' {
+                            $expectedOut = ''
+                            $expectedErr = 'Failure [INSTALL_FAILED_UNREVIEWED_VENDOR_CODE: ' + $detail + ']' + $newline
+                        }
+                        'truncated' { $expectedOut = $frame.Substring(0, $frame.Length - 1); $expectedErr = '' }
+                        'no_status' {
+                            $expectedOut = 'install-no-status-stdout|' + $detail
+                            $expectedErr = 'install-no-status-stderr|' + $detail
+                            $expectedExit = 1
+                        }
+                    }
+                    Assert-True ($diagnostic.process.started -and $diagnostic.process.exit_observed -and
+                        $diagnostic.process.exit_code -is [int] -and
+                        $diagnostic.process.exit_code -eq $expectedExit -and
+                        $diagnostic.process.stdout.observed_bytes -eq [Text.Encoding]::UTF8.GetByteCount($expectedOut) -and
+                        $diagnostic.process.stderr.observed_bytes -eq [Text.Encoding]::UTF8.GetByteCount($expectedErr) -and
+                        $diagnostic.process.stdout.maximum_bytes -eq 4096 -and
+                        $diagnostic.process.stderr.maximum_bytes -eq 1048576 -and
                         -not $diagnostic.process.stdout.overflowed -and
                         -not $diagnostic.process.stderr.overflowed -and
                         $diagnostic.cleanup.status -ceq 'completed') `
-                        '有效 install failure 未保留安全码与真实退出诊断。'
+                        '含null-code的原生失败未保留精确退出、双流字节、上限与清理诊断。'
                 }
             } finally { [void](Close-TL1C1bPrivateAdbServerGuard $guard) }
         }

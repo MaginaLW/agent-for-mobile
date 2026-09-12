@@ -253,6 +253,13 @@ implementation snapshot 与所有 artifact hash 复核。
 
 ## 失败与归因
 
+受控安装失败的安全Message可附加 `install_failure_extraction`，只使用本地固定常量：
+`not_attempted/unsafe_control/no_status_token/ambiguous_status_tokens/frame_rejected/unsupported_code/recognized`。
+这是错误码提取过程的分类，不是设备安装失败的根因。`recognized`时仍仅提取原允许列表中的错误码；
+其余结果保持code为null，不扩展允许列表或失败行语法。未完整排空、溢出、解码失败等未进入提取的情况为
+`not_attempted`。结构化guarded-client diagnostic/v1字段不变；不导出安装器正文、路径或输出内容hash，
+不改变失败退出、清理或重试边界，历史空诊断也不能据新分类回填。
+
 private ADB server、安装、provider、capture、读取、schema、hash、freshness 或 sidecar 任一失败即冻结该 run；failure evidence 只保存
 闭合 reason code 与 false/unsupported 结论，不泄漏 serial/nonce/build challenge/raw UI。不得自动重试，不得在 abort
 后继续 status/result/采集，也不得用 fixture 或 C1a evidence 补造成功。旧 `tablet-layout-observation/v2` evidence

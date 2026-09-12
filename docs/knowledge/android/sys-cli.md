@@ -76,6 +76,15 @@ M1a 主通道 = a11y windows 里找 `TYPE_INPUT_METHOD` 窗口（拿可见性 + 
 - 代码侧：NotificationListenerService 拿到 `StatusBarNotification` → `Notification.actions[i].getRemoteInputs()` → 填 `RemoteInput` 的 result bundle → `PendingIntent.send(context, 0, fillInIntent)`。
 - 预期（spec §5.3 已判断）：微信国内版大概率不带 RemoteInput，价值在短信/邮件/国际 IM；S5 实测定论。
 
+## 9. ADB 安装失败的解释边界
+
+🔵 官方源码查阅，2026-09-13；不作为本轮平板根因实测。
+[AOSP Android 16的单APK streamed install](https://android.googlesource.com/platform/packages/modules/adb/+/refs/tags/android-16.0.0_r1/client/adb_install.cpp)
+在连接、文件传输或远端非Success响应时均可非零退出，不保证含 `Failure [INSTALL_FAILED_…]`。
+因此错误码为null不能单独区分“本来无码”与“未通过提取规则”，也不能推断用户取消、签名冲突或权限问题。
+C1b以固定 `install_failure_extraction` 分类解释提取过程，保留原码允许列表与拒绝边界；
+不输出安装器正文、路径或输出内容hash。新分类不能回填旧失败，见[本轮诊断记录](../../runs/2026-09-13-C1b-安装诊断补全.md)。
+
 ## 参考来源（均为社区/官方文档，命令生效性以真机为准）
 
 - 蓝牙 CLI 与 dumpsys 状态：adb-shell.com bluetooth_manager；dzone AOSP Bluetooth debugging（STATE_ON=12）

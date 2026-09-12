@@ -323,6 +323,9 @@ guarded client 的安装非零退出只在双流完整、未溢出且严格 UTF-
 不导出安装器正文、路径或输出内容 hash。完整失败行允许 ADB 的字面 `adb:` 或 Windows `adb.exe:` 前缀，
 近似程序名（如 `adbxexe`、`adb.exe.bad`）不接受。未知码、多码、装饰、截断及非安装错误保持 null；
 该诊断不证明安装成功，也不授权改参数、卸载、放宽失败门或自动重试。缺失旧原始流时不能回补历史错误码。
+安装失败Message另附固定 `install_failure_extraction`，区分未尝试提取、控制字符、无状态token、
+多个状态token、失败行未接受、未支持的码与识别成功，枚举见[失败合同](../contracts/tablet-layout-c1b-v1.md#失败与归因)。
+非零安装退出本身不保证有 `Failure [INSTALL_FAILED_…]`；该分类只解释提取流程，不直接证明设备根因。
 
 受控 build、private ADB server、安装、T0、provider、capture、时序、schema、hash、设备/APK 漂移或 cleanup 任一失败，都只原子保留
 `tablet-layout-c1b-failure.json` 与已经产生的只读证据；不发布 success sidecar，不自动重试，不借 fixture、
