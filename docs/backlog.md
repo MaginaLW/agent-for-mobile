@@ -51,7 +51,7 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 生产构建隔离与诊断** | 501761f完整门13/0/0；Gradle219/JVM1128/监督runner86通过。原隔离exit1保留，新只读恢复两遍身份/内容/拓扑核对通过；最终binding实际exit0，clean/395tracked/8metadata。host Stage和ready尚无 | 继续正式主机准备与入口核验，到下一次平板介入前停止。见[当前记录](runs/2026-09-12-C1b-501761f-主机验收与真机入口.md) |
+| **C1b 生产构建隔离与诊断** | 501761f完整门13/0/0；Gradle219/JVM1128/监督runner86通过。原隔离exit1保留，新只读恢复与最终binding通过；三个主机Stage的caller/reader六个exit均0，311份证据冻结。BuildOnly/host acceptance/ready尚无 | 继续主机构建与入口核验，到下一次平板介入前停止。见[当前记录](runs/2026-09-12-C1b-501761f-主机验收与真机入口.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
