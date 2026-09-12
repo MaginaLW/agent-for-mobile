@@ -27,7 +27,7 @@ internal enum class C1bCaptureFailureKind(val wire: String) {
 internal class C1bCaptureFailure(
     val stage: C1bCaptureFailureStage,
     val kind: C1bCaptureFailureKind,
-) : RuntimeException("C1b capture failed", null, false, false)
+) : Exception("C1b capture failed", null, false, false)
 
 internal fun c1bCaptureFailureKind(failure: Exception): C1bCaptureFailureKind = when (failure) {
     is SecurityException -> C1bCaptureFailureKind.SECURITY

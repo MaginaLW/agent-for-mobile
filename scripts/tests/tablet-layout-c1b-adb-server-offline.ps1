@@ -1238,14 +1238,31 @@ try {
                 -StartupTimeoutSec 4 -ClientTimeoutSec 1 -PortAttemptCount 1 | Out-Null
         } 'child-owned listener 未被拒绝。'
         $diagnostic = Get-StartupDiagnostic $failure
+        $closedSubstages = @(
+            'server_job_create','server_process_start','server_stream_drain',
+            'server_job_membership','server_process_exit_before_ready',
+            'server_process_exit_during_status','server_output_overflow','listener_ownership',
+            'server_status_client','server_status_contract','server_ready_recheck',
+            'startup_timeout','server_attempt_cleanup','port_selection_timeout','unexpected_failure')
+        $safeFinalSubstage = if ($diagnostic.final_substage -is [string] -and
+            $diagnostic.final_substage -cin $closedSubstages) { $diagnostic.final_substage } else { 'invalid' }
+        $safeAttemptCount = if (($diagnostic.server_attempt_count -is [int] -or
+            $diagnostic.server_attempt_count -is [long]) -and $diagnostic.server_attempt_count -in 0..32) {
+            $diagnostic.server_attempt_count.ToString([Globalization.CultureInfo]::InvariantCulture)
+        } else { 'invalid' }
         Assert-True ($diagnostic.final_substage -ceq 'server_process_exit_before_ready' -and
             $diagnostic.server_attempt_count -eq 1) `
-            'child listener 的 active-limit failure substage 不明确。'
+            "child listener 的 active-limit failure substage 不明确。actual_final_substage=$safeFinalSubstage; actual_server_attempt_count=$safeAttemptCount"
         $attempt = @($diagnostic.attempts)[0]
         Assert-StartupAttemptDiagnostic $attempt
+        $safeAttemptSubstage = if ($attempt.terminal_substage -is [string] -and
+            $attempt.terminal_substage -cin $closedSubstages) { $attempt.terminal_substage } else { 'invalid' }
+        $safeListenerObserved = if ($attempt.listener_observed -is [bool]) {
+            $attempt.listener_observed.ToString().ToLowerInvariant()
+        } else { 'invalid' }
         Assert-True ($attempt.terminal_substage -ceq 'server_process_exit_before_ready' -and
             -not [bool]$attempt.listener_observed) `
-            'child listener attempt 未证明在 listener ready 前退出。'
+            "child listener attempt 未证明在 listener ready 前退出。actual_terminal_substage=$safeAttemptSubstage; actual_listener_observed=$safeListenerObserved"
         Assert-True (@(Get-FakeInvocationLines $state | Where-Object {
                     $_ -match '--listener-child,[0-9]{5}'
                 }).Count -eq 0) 'child-owned listener 已越过 server Job active process limit。'
