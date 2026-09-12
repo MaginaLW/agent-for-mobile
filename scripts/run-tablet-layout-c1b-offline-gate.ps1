@@ -2,7 +2,7 @@
 [CmdletBinding()]param()
 $ErrorActionPreference='Stop';Set-StrictMode -Version 3.0;[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Text.UTF8Encoding]::new($false)
 $RepoRoot=[IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent));$Pwsh=(Get-Process -Id $PID).Path
-$C1aLibrary=Join-Path $PSScriptRoot 'lib\tablet-layout-c1a.ps1';$Validator=Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v1-validator.ps1';$Library=Join-Path $PSScriptRoot 'lib\tablet-layout-c1b.ps1';$Tests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-host-offline.ps1'
+$C1aLibrary=Join-Path $PSScriptRoot 'lib\tablet-layout-c1a.ps1';$Validator=Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v1-validator.ps1';$Library=Join-Path $PSScriptRoot 'lib\tablet-layout-c1b.ps1'
 $AdbProvenanceTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-adb-provenance-offline.ps1'
 $Aapt2ProvenanceTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-aapt2-provenance-offline.ps1'
 $ReadOnlyTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-readonly-offline.ps1'
@@ -11,6 +11,7 @@ $BuildEnvironmentTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-build-en
 $AdbServerTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-adb-server-offline.ps1'
 $AttemptFailureTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-attempt-failure-offline.ps1'
 $CaptureFailureTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-capture-failure-offline.ps1'
+$HostProcessTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-host-process-offline.ps1'
 $RealBuildSmokeVerifierTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-real-build-smoke-verifier-offline.ps1'
 . $C1aLibrary;. $Validator;. $Library
 function Invoke-C1bAuxiliaryOfflineTest([string]$Path,[string]$Operation,[string]$SuccessPattern){
@@ -32,10 +33,11 @@ Invoke-C1bAuxiliaryOfflineTest $BuildEnvironmentTests 'C1b build environment off
 Invoke-C1bAuxiliaryOfflineTest $AdbServerTests 'C1b private adb server offline tests' '^\{"schema":"tablet-layout-c1b-adb-server-offline/v1","passed":40,"failed":0,"real_adb_executed":false,"real_jdk_or_gradle_executed":false\}$'
 Invoke-C1bAuxiliaryOfflineTest $AttemptFailureTests 'C1b attempt failure schema offline tests' '^tablet-layout-c1b attempt failure schema offline: 51 passed, 0 failed$'
 Invoke-C1bAuxiliaryOfflineTest $CaptureFailureTests 'C1b capture failure diagnostics offline tests' '^\{"schema":"tablet-layout-c1b-capture-failure-offline/v1","passed":13,"failed":0,"assertions":138,"real_adb_call_count":0,"runner_entrypoint_executed":false\}$'
+Invoke-C1bAuxiliaryOfflineTest $HostProcessTests 'C1b host process budget offline tests' '^\{"schema":"tablet-layout-c1b-host-process-offline/v1","passed":14,"failed":0,"assertions":66,"real_adb_call_count":0,"host_e2e_executed":false\}$'
 Invoke-C1bRealBuildSmokeVerifierOfflineTest $RealBuildSmokeVerifierTests
 $gateRunId='c1b-host-gate-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
 $gateStartedAtUtc=[DateTimeOffset]::UtcNow;$gateStopwatch=[Diagnostics.Stopwatch]::StartNew()
-try{$result=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Tests,'-GateRunId',$gateRunId) -Operation 'C1b host fake-ADB offline tests' -TimeoutSec 300 -FailureDiagnostics}
+try{$result=Invoke-TL1C1bHostOfflineTests -RepoRoot $RepoRoot -GateRunId $gateRunId}
 finally{$gateStopwatch.Stop();$gateCompletedAtUtc=[DateTimeOffset]::UtcNow}
 if($result.Text-cnotmatch'^([^\r\n]+)\r?\n$'){throw 'C1b host tests 必须只输出一行 summary。'};$summaryRaw=$Matches[1]
 $gateElapsedMilliseconds=[long]$gateStopwatch.ElapsedMilliseconds

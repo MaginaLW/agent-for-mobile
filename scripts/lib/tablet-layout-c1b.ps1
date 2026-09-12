@@ -8,6 +8,8 @@ $script:TL1C1bProtocolSchema = 'tablet-c1b-control/v1'
 $script:TL1C1bSidecarSchema = 'tablet-layout-c1b-sidecar/v1'
 $script:TL1C1bObservationSchema = 'tablet-layout-observation/c1b-v1'
 $script:TL1C1bPackageName = 'dev.magina.gateway'
+# 整套纯离线 host suite 的编排预算；不用于单 runner 或设备操作。
+$script:TL1C1bHostOfflineTimeoutSeconds = 600
 $script:TL1C1bCaptureReasonDetails = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 foreach($phase in @('c1','c2')){
     foreach($stage in @('binding','display','probe','frame_validation','unknown')){
@@ -987,6 +989,114 @@ function Assert-TL1C1bSidecarCrossBindings {
     }
 }
 
+function Invoke-TL1C1bHostOfflineTests {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][ValidatePattern('^c1b-host-gate-[a-zA-Z0-9-]{1,80}$')][string]$GateRunId
+    )
+    $operation='C1b host fake-ADB offline tests'
+    # 只允许固定测试入口；拒绝 traversal、ADS 和任何祖先 reparse point。
+    if(-not[IO.Path]::IsPathFullyQualified($RepoRoot)-or$RepoRoot-match'[\x00-\x1f]' -or
+       $RepoRoot.Substring(2).Contains(':')){throw "$operation repository path 无效。"}
+    $root=[IO.Path]::GetFullPath($RepoRoot)
+    if(-not$root.Equals($RepoRoot.Replace('/','\'),[StringComparison]::OrdinalIgnoreCase)){
+        throw "$operation repository path 必须 canonical。"
+    }
+    $testPath=Join-Path $root 'scripts/tests/tablet-layout-c1b-host-offline.ps1'
+    $entry=Get-Item -LiteralPath $testPath -Force -ErrorAction SilentlyContinue
+    if($null-eq$entry-or$entry.PSIsContainer){throw "$operation 固定测试入口不存在。"}
+    for($item=$entry;$null-ne$item;$item=if($item-is[IO.FileInfo]){$item.Directory}else{$item.Parent}){
+        if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw "$operation path reparse 被拒绝。"}
+    }
+    . (Join-Path $PSScriptRoot 'tablet-layout-c1b-adb-server.ps1')
+    $pwsh=[Environment]::ProcessPath
+    if([IO.Path]::GetFileName($pwsh)-cne'pwsh.exe'){throw "$operation 必须由 pwsh.exe 执行。"}
+    $environment=[Environment]::GetEnvironmentVariables()
+    $arguments=[string[]]@('-NoLogo','-NoProfile','-NonInteractive','-WorkingDirectory',$root,'-File',$testPath,'-GateRunId',$GateRunId)
+    $stdout=[TL1C1bBoundedWriteStream]::new(1MB);$stderr=[TL1C1bBoundedWriteStream]::new(1MB)
+    $job=$null;$started=$null;$stdoutTask=$null;$stderrTask=$null;$sourceGuard=$null
+    $failure='start';$failed=$false;$cleanupComplete=$true;$detail='';$result=$null
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    try{
+        $sourceGuard=[IO.File]::Open($testPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        # 复用既有原子 Job 启动；外层容纳离线子树，内部 ADB Job 的限额不变。
+        $job=[TL1C1bPrivateAdbNative]::CreateKillOnCloseJob(64)
+        $started=[TL1C1bPrivateAdbNative]::StartInJob($pwsh,$arguments,
+            (ConvertTo-TL1C1bPrivateAdbEnvironmentEntries $environment),$job)
+        $started.StandardInput.Dispose()
+        $stdoutTask=$started.StandardOutput.CopyToAsync($stdout)
+        $stderrTask=$started.StandardError.CopyToAsync($stderr)
+        $failure='stream'
+        while($true){
+            if($stdout.Overflowed-or$stderr.Overflowed){$failure='output_overflow';throw 'bounded output overflow'}
+            if($stdoutTask.IsFaulted-or$stderrTask.IsFaulted-or$stdoutTask.IsCanceled-or$stderrTask.IsCanceled){throw 'stream failed'}
+            if($watch.Elapsed.TotalSeconds-ge$script:TL1C1bHostOfflineTimeoutSeconds){$failure='timeout';throw 'bounded timeout'}
+            # Native exit 和双流 EOF 都必须落在同一个 deadline 内。
+            if($started.Process.HasExited-and$stdoutTask.IsCompleted-and$stderrTask.IsCompleted){break}
+            Start-Sleep -Milliseconds 10
+        }
+        [void]$stdoutTask.GetAwaiter().GetResult();[void]$stderrTask.GetAwaiter().GetResult()
+        if($stdout.Overflowed-or$stderr.Overflowed){$failure='output_overflow';throw 'bounded output overflow'}
+        $failure='utf8'
+        $bytes=$stdout.Snapshot();$stderrBytes=$stderr.Snapshot()
+        $text=ConvertFrom-TL1C1aStrictUtf8 $bytes $operation
+        $stderrText=ConvertFrom-TL1C1aStrictUtf8 $stderrBytes "$operation stderr"
+        $failure='process_exit'
+        if($started.Process.ExitCode-ne0){
+            try{
+                $sensitive=[Collections.Generic.List[string]]::new()
+                $sensitive.Add($root);$sensitive.Add($testPath);$sensitive.Add($pwsh)
+                foreach($entry in $environment.GetEnumerator()){
+                    if($entry.Key-match'(?i)password|passwd|secret|token|authorization|cookie|credential|api.?key|private.?key|nonce|challenge|lease|HOME|ROOT|^(?:USERNAME|COMPUTERNAME|TEMP|TMP)$'){$sensitive.Add([string]$entry.Value)}
+                }
+                $detail="`nstdout (sanitized, max 4096 chars):`n"+(ConvertTo-TL1C1aFailureDiagnostic $text $sensitive.ToArray())+
+                    "`nstderr (sanitized, max 4096 chars):`n"+(ConvertTo-TL1C1aFailureDiagnostic $stderrText $sensitive.ToArray())
+            }catch{$detail="`n<sanitized process diagnostics unavailable>"}
+            throw 'nonzero native exit'
+        }
+        $result=[pscustomobject]@{ExitCode=[int]$started.Process.ExitCode;Bytes=$bytes;Text=$text;Stderr=$stderrText}
+        $failure='none'
+    }catch{$failed=$true}
+    finally{
+        # 即使父进程已退出，关闭 Job 也结束仍持有 pipe 的后代。
+        if($null-ne$job){try{$job.Dispose()}catch{$cleanupComplete=$false}}
+        if($null-ne$started){
+            try{
+                if(-not$started.Process.WaitForExit(2000)){
+                    $started.Process.Kill($true)
+                    if(-not$started.Process.WaitForExit(2000)){$cleanupComplete=$false}
+                }
+            }catch{$cleanupComplete=$false}
+        }
+        foreach($task in @($stdoutTask,$stderrTask)){
+            if($null-ne$task){try{if(-not$task.Wait(1000)){$cleanupComplete=$false}}catch{$cleanupComplete=$false}}
+        }
+        $exitCode=$null;$exitObserved=$false
+        if($null-ne$started){try{if($started.Process.HasExited){$exitObserved=$true;$exitCode=[int]$started.Process.ExitCode}}catch{$cleanupComplete=$false}}
+        $diagnostic=[pscustomobject][ordered]@{
+            schema='tablet-layout-c1b-host-process/v1';terminal_substage=$failure
+            exit_observed=$exitObserved;exit_code=$exitCode
+            stdout_eof=($null-ne$stdoutTask-and$stdoutTask.Status-eq[Threading.Tasks.TaskStatus]::RanToCompletion)
+            stderr_eof=($null-ne$stderrTask-and$stderrTask.Status-eq[Threading.Tasks.TaskStatus]::RanToCompletion)
+            stdout_observed_bytes=[long]$stdout.ObservedBytes;stderr_observed_bytes=[long]$stderr.ObservedBytes
+            stdout_captured_bytes=[int]$stdout.Snapshot().Length;stderr_captured_bytes=[int]$stderr.Snapshot().Length
+            cleanup_completed=$cleanupComplete
+        }
+        if($null-ne$started){try{$started.Dispose()}catch{$cleanupComplete=$false}}
+        if($null-ne$sourceGuard){try{$sourceGuard.Dispose()}catch{$cleanupComplete=$false}}
+        $stdout.Dispose();$stderr.Dispose();$watch.Stop()
+        $diagnostic.cleanup_completed=$cleanupComplete
+    }
+    if(-not$cleanupComplete){$failed=$true;if($failure-ceq'none'){$failure='cleanup';$diagnostic.terminal_substage=$failure}}
+    if($failed){
+        $exception=[InvalidOperationException]::new("$operation 失败 ($failure; exit=$exitCode)。$detail")
+        $exception.Data['TL1C1bHostOfflineProcessDiagnostic']=$diagnostic
+        throw $exception
+    }
+    $result|Add-Member -NotePropertyName Diagnostic -NotePropertyValue $diagnostic
+    return $result
+}
+
 function ConvertFrom-TL1C1bOfflineSummary {
     param(
         [Parameter(Mandatory)][string]$Raw,
@@ -1013,7 +1123,7 @@ function ConvertFrom-TL1C1bOfflineSummary {
     }
     try{$started=[DateTimeOffset]::ParseExact($value.started_at_utc,'yyyy-MM-ddTHH:mm:ss.fffffffZ',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal);$completed=[DateTimeOffset]::ParseExact($value.completed_at_utc,'yyyy-MM-ddTHH:mm:ss.fffffffZ',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal)}catch{throw 'C1b offline summary 时间戳错误。'}
     $now=[DateTimeOffset]::UtcNow
-    $maximumSpanMilliseconds=[long]300000
+    $maximumSpanMilliseconds=[long]$script:TL1C1bHostOfflineTimeoutSeconds*1000
     $envelopeToleranceMilliseconds=[long]15000
     $summarySpanMilliseconds=($completed-$started).TotalMilliseconds
     if($GateCompletedAtUtc-lt$GateStartedAtUtc-or$GateElapsedMilliseconds-lt0-or$GateElapsedMilliseconds-gt$maximumSpanMilliseconds-or

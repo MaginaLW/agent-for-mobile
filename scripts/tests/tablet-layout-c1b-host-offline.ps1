@@ -4,6 +4,8 @@ param([Parameter(Mandatory)][string]$GateRunId)
 
 $ErrorActionPreference='Stop';Set-StrictMode -Version 3.0;[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Text.UTF8Encoding]::new($false)
 $RepoRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+# pwsh -WorkingDirectory 设置 provider 位置；显式同步后续原生 ProcessStartInfo 的 cwd。
+[Environment]::CurrentDirectory=$RepoRoot
 $Runner=Join-Path $RepoRoot 'scripts\run-tablet-layout-c1b.ps1'
 $C1aLibrary=Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1a.ps1'
 $Validator=Join-Path $RepoRoot 'scripts\lib\tablet-layout-observation-c1b-v1-validator.ps1'
@@ -226,6 +228,26 @@ public static class FakeAdb { public static int Main(string[] a){
         $gateStarted=[DateTimeOffset]::UtcNow.AddSeconds(-1);$gateCompleted=[DateTimeOffset]::UtcNow;$gateElapsed=[long]1000
         $summary=[ordered]@{schema='tablet-layout-c1b-host-offline-summary/v1';gate_run_id=$GateRunId;started_at_utc=$gateStarted.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'");completed_at_utc=$gateCompleted.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'");status='passed';fake_adb=$true;real_adb_call_count=[long]0;test_case_count=[long]$script:TL1C1bRequiredOfflineCoverage.Count;coverage_case_count=[long]$script:TL1C1bRequiredOfflineCoverage.Count;coverage=$script:TL1C1bRequiredOfflineCoverage;claims=[ordered]@{runtime_origin_verified=$false;runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false;editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false}}
         [void](ConvertFrom-TL1C1bOfflineSummary ($summary|ConvertTo-Json -Depth 8 -Compress) $GateRunId $gateStarted $gateCompleted $gateElapsed)
+        Assert-True ($script:TL1C1bHostOfflineTimeoutSeconds-eq600) 'host suite budget 漂移'
+        foreach($milliseconds in @(599999,600000)){
+            $x=($summary|ConvertTo-Json -Depth 8)|ConvertFrom-Json -DateKind String
+            $boundaryStart=$gateCompleted.AddMilliseconds(-$milliseconds)
+            $x.started_at_utc=$boundaryStart.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'")
+            [void](ConvertFrom-TL1C1bOfflineSummary ($x|ConvertTo-Json -Depth 8 -Compress) $GateRunId $boundaryStart $gateCompleted $milliseconds)
+        }
+        foreach($dimension in @('summary_span','gate_elapsed')){
+            $x=($summary|ConvertTo-Json -Depth 8)|ConvertFrom-Json -DateKind String
+            $span=if($dimension-ceq'summary_span'){600001}else{600000}
+            $elapsed=if($dimension-ceq'gate_elapsed'){600001}else{600000}
+            $boundaryStart=$gateCompleted.AddMilliseconds(-$span)
+            $x.started_at_utc=$boundaryStart.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'")
+            Assert-Throws {ConvertFrom-TL1C1bOfflineSummary ($x|ConvertTo-Json -Depth 8 -Compress) $GateRunId $boundaryStart $gateCompleted $elapsed} "summary $dimension 600001ms 未拒绝"
+        }
+        foreach($dimension in @('start_envelope','completion_envelope','elapsed_envelope')){
+            $testStart=$gateStarted;$testEnd=$gateCompleted;$testElapsed=$gateElapsed
+            switch($dimension){start_envelope{$testStart=$gateStarted.AddMilliseconds(-15001)};completion_envelope{$testEnd=$gateCompleted.AddMilliseconds(15001)};elapsed_envelope{$testElapsed=[long]17000}}
+            Assert-Throws {ConvertFrom-TL1C1bOfflineSummary ($summary|ConvertTo-Json -Depth 8 -Compress) $GateRunId $testStart $testEnd $testElapsed} "summary $dimension drift 未拒绝"
+        }
         foreach($mutation in @('extra','fake','count','claim','reversed','old','future','overlong','elapsed_mismatch')){
             $x=($summary|ConvertTo-Json -Depth 8)|ConvertFrom-Json -DateKind String;$testGateStarted=$gateStarted;$testGateCompleted=$gateCompleted;$testElapsed=$gateElapsed
             switch($mutation){
