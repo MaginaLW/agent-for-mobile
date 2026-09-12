@@ -49,12 +49,17 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 
 ### A · 下一候选准备
 
+**09-13 当前协调增量：** 根目录的实现尚停留在旧开发线；最新队列和实现已核定为
+`codex/c1b-device-build-diagnostics` 的 `c43652a9b16d9fa743e48332dea967d0c6d80ccb`。
+本轮直接以该 SHA 建立新的普通独占 clone，按 A1—A5 准备，不将尚未验收的实现合入 main。
+新候选完整门执行中，尚未冻结或 Ready；后续状态及跨分支证据入口见[本轮记录](runs/2026-09-13-C1b-c43652a-候选准备.md)。
+
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 构建输出修复后的新候选** | 463304c 已补 launcher 进度抑制、有界 stderr 诊断、真实数组清零；短回归为 9 cases + 1300 assertions / 28 mutations | 新代码完成完整门，固定 clean 完整 SHA，按 [源码准备](runbooks/T-L1-c1b-candidate-source.md)生成并独审 exact 工件；后续 preflight/build-only 按对应规程，不复用旧轮授权 |
+| **C1b 安装诊断修复后的新候选** | 501761f/r1 安装失败已封存；7a3ef68 专项 41/41、离线整合 29/29 已通过。c43652a 已建新 clone，完整门执行中 | 按最新协调来源的规程完成 A1 输入、A2 全量门、A3 exact 工件/只读 preflight、A4 唯一 BuildOnly、A5 Ready；新现场在 Ready 后安排，旧轮不重跑 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
-C1b 上一候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
+C1b 历史候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
 随后唯一 build-only 因 helper stderr 非空且捕获溢出，launcher/caller exit 1 而失败冻结。
 helper exit 0、构建/签名/aapt2 完成不能替代整轮通过；该轮 ADB/设备 0、清理完成。
 见 [冻结记录](runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。旧轮不重跑；
@@ -101,7 +106,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 七次旧 one-shot 与随后 6fbb157 build-only 均失败冻结 | 源码修复后等待 §4 新候选完整验收；尚无本次可运行的设备采集候选 |
+| **T-L1 / C1b** | 最新 501761f/r1 在安装阶段失败并已封存；更早轮次保留原终态 | c43652a 按 §4 完成新候选主机准备，当前尚未 Ready；安装根因、T0/c1/c2 及采集通过均未证实 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
