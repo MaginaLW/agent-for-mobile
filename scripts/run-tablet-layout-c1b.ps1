@@ -89,6 +89,7 @@ $archivedDebugManifestGuard=$null;$archivedReleaseManifestGuard=$null
 $archivedProofPath=$null;$archivedDebugApkPath=$null;$archivedReleaseApkPath=$null
 $archivedDebugManifestPath=$null;$archivedReleaseManifestPath=$null
 $controlRaw=[Collections.Generic.List[string]]::new();$statusReadCount=0
+$capturePhase=$null;$providerFailure=$null
 $abortExpectedGeneration=0L;$abortExpectedC1Count=0;$abortExpectedC2Count=0;$abortExpectedCommitted=[string[]]@()
 $exitCode=1;$successMessage=$null;$needsUserPayload=$null;$sidecarPath=$null;$pendingSidecarBytes=$null
 
@@ -238,10 +239,12 @@ function Assert-C1bHostReadOnlyFrozenState {
 function Write-C1bFailureEvidence([string]$ReasonCode) {
     if(-not[string]::IsNullOrWhiteSpace($c1bDirectory)-and(Test-Path -LiteralPath $c1bDirectory -PathType Container)){
         $path=Join-Path $c1bDirectory 'tablet-layout-c1b-failure.json';if(Test-Path -LiteralPath $path){return}
-        $payload=[ordered]@{schema='tablet-layout-c1b-failure/v1';run_id=$runId;status='failed';reason_code=$ReasonCode
+        $payload=[ordered]@{schema='tablet-layout-c1b-failure/v2';run_id=$runId;status='failed';reason_code=$ReasonCode
+            provider_failure=$providerFailure
             cleanup=if(-not $sessionStarted-or$sessionConsumed){'not_required'}elseif($abortAttempted-and$abortSucceeded){'completed'}else{'failed'}
             runtime_origin_verified=$false;runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false
             editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false}
+        Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)
         [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload);return
     }
     if(-not[string]::IsNullOrWhiteSpace($runId)-or[string]::IsNullOrWhiteSpace($attemptId)-or
@@ -306,7 +309,14 @@ function Read-C1bControl([string]$Name,[string]$Uri) {
         -PrivateAdbServerGuard $adbServerGuard
     if($Name-ceq'content_status'){$script:statusReadCount++}
     $controlRaw.Add($result.Text)
-    return ConvertFrom-TL1C1bControl $result.Text $runId $ExpectedCommitSha $expectedArtifactSha $buildChallenge
+    $control=ConvertFrom-TL1C1bControl $result.Text $runId $ExpectedCommitSha $expectedArtifactSha $buildChallenge
+    if($Name-cin@('content_c1','content_c2','content_status')-and$null-ne$capturePhase-and$control.state-ceq'failed'){
+        $verifiedFailure=ConvertTo-TL1C1bCaptureFailure $control $capturePhase $generation
+        if($null-eq$script:providerFailure){$script:providerFailure=$verifiedFailure}
+        Set-C1bAbortExpectedSnapshot $control
+        throw "C1b provider capture 失败：$($verifiedFailure.reason_code)。"
+    }
+    return $control
 }
 function Set-C1bAbortExpectedSnapshot($Control) {
     $script:abortExpectedGeneration=[long]$Control.generation
@@ -549,7 +559,7 @@ try {
     if(-not$start.provider.a11y_service_ready-or$start.provider.version_name-cne$packageBefore.VersionName-or[long]$start.provider.version_code-ne$packageBefore.VersionCode){throw 'C1b provider/package/a11y 绑定失败。'}
 
     $captureWatch=[Diagnostics.Stopwatch]::StartNew();$c1Requested=Get-C1bTimestamp
-    $c1Initial=Read-C1bControl content_c1 $uris.c1
+    $capturePhase='c1';$c1Initial=Read-C1bControl content_c1 $uris.c1
     if($c1Initial.state-eq'ready_c2'){$c1Ready=$c1Initial}else{
         Assert-TL1C1bControlTuple $c1Initial capturing_c1 wait $generation 1 0 @() 'c1'
         Set-C1bAbortExpectedSnapshot $c1Initial
@@ -558,7 +568,7 @@ try {
     Assert-TL1C1bControlTuple $c1Ready ready_c2 capture_c2 $generation 1 0 @('c1') $null;Set-C1bAbortExpectedSnapshot $c1Ready;$c1Committed=Get-C1bTimestamp
     $hostWait=[Diagnostics.Stopwatch]::StartNew();while($hostWait.ElapsedMilliseconds-lt900){Start-Sleep -Milliseconds ([Math]::Min(100,900-[int]$hostWait.ElapsedMilliseconds))};$hostWait.Stop()
     if($captureWatch.ElapsedMilliseconds-ge15000){throw 'C1b c2 前已越过总时序门。'}
-    $c2Requested=Get-C1bTimestamp;$c2Initial=Read-C1bControl content_c2 $uris.c2
+    $c2Requested=Get-C1bTimestamp;$capturePhase='c2';$c2Initial=Read-C1bControl content_c2 $uris.c2
     if($c2Initial.state-eq'complete'){$complete=$c2Initial}else{
         Assert-TL1C1bControlTuple $c2Initial capturing_c2 wait $generation 1 1 @('c1') 'c2'
         Set-C1bAbortExpectedSnapshot $c2Initial

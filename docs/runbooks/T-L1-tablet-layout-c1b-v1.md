@@ -312,6 +312,12 @@ cross-binding、secret absence 与 artifact hash 读回。任一 cleanup 或读�
 
 ## 失败与冻结
 
+新候选在首次或第二次帧读取失败时通过固定阶段/异常类别原因码保留受限诊断，见
+[合同中的原因码与 failure/v2](../contracts/tablet-layout-c1b-v1.md#受限采集失败原因)。
+运行结束后核对 `provider_failure` 的阶段、原因和计数，区分 null（没有完整可接受诊断）与 unknown（已捕获但未分类）。
+异常类别不直接证明权限、布局或用户操作原因；不导出异常正文、栈或界面内容，不改超时或自动重试。
+新 terminal reader须接受并严格验证failure/v2，不能沿用只识别旧v1字段的历史读回脚本。
+
 guarded client 的安装非零退出只在双流完整、未溢出且严格 UTF-8 解码后提取固定允许列表错误码。
 `install_failure_code` 为本地固定 `INSTALL_FAILED_*` 常量或 null；安全 Message 仅在有明确码时追加该字段，
 不导出安装器正文、路径或输出内容 hash。完整失败行允许 ADB 的字面 `adb:` 或 Windows `adb.exe:` 前缀，

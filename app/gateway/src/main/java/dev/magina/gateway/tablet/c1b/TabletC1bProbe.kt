@@ -6,6 +6,45 @@ import java.time.format.DateTimeFormatterBuilder
 internal interface C1bWindowHandle
 internal interface C1bNodeHandle
 
+/** Closed diagnostic values only; these identify a boundary/type, never an exception message or root cause. */
+internal enum class C1bCaptureFailureStage(val wire: String) {
+    BINDING("binding"),
+    DISPLAY("display"),
+    PROBE("probe"),
+    FRAME_VALIDATION("frame_validation"),
+    UNKNOWN("unknown"),
+}
+
+internal enum class C1bCaptureFailureKind(val wire: String) {
+    SECURITY("security"),
+    ILLEGAL_ARGUMENT("illegal_argument"),
+    ILLEGAL_STATE("illegal_state"),
+    UNSUPPORTED("unsupported"),
+    UNKNOWN("unknown"),
+}
+
+/** Does not retain the source exception, its cause, suppressed exceptions, stack or any device content. */
+internal class C1bCaptureFailure(
+    val stage: C1bCaptureFailureStage,
+    val kind: C1bCaptureFailureKind,
+) : RuntimeException("C1b capture failed", null, false, false)
+
+internal fun c1bCaptureFailureKind(failure: Exception): C1bCaptureFailureKind = when (failure) {
+    is SecurityException -> C1bCaptureFailureKind.SECURITY
+    is IllegalArgumentException -> C1bCaptureFailureKind.ILLEGAL_ARGUMENT
+    is IllegalStateException -> C1bCaptureFailureKind.ILLEGAL_STATE
+    is UnsupportedOperationException -> C1bCaptureFailureKind.UNSUPPORTED
+    else -> C1bCaptureFailureKind.UNKNOWN
+}
+
+internal inline fun <T> c1bCaptureStage(stage: C1bCaptureFailureStage, read: () -> T): T = try {
+    read()
+} catch (failure: C1bCaptureFailure) {
+    throw failure
+} catch (failure: Exception) {
+    throw C1bCaptureFailure(stage, c1bCaptureFailureKind(failure))
+}
+
 /**
  * The only platform dependency surface for C1b. Every method returns one read-only fact. The interface exposes no
  * mutation, target selection, application lifecycle, image capture, text dump, or external storage capability.
@@ -77,10 +116,13 @@ internal class TabletC1bProbe(
     private val limits: C1bProbeLimits = C1bProbeLimits(),
     private val now: () -> Instant = Instant::now,
 ) {
-    fun capture(request: C1bCaptureRequest): C1bRawFrame {
+    fun capture(request: C1bCaptureRequest): C1bRawFrame =
+        c1bCaptureStage(C1bCaptureFailureStage.PROBE) { captureFrame(request) }
+
+    private fun captureFrame(request: C1bCaptureRequest): C1bRawFrame {
         val diagnosticCodes = linkedSetOf<String>()
         val revisionBefore = readRevision("revision_before_read_failed")
-        val display = port.display()
+        val display = c1bCaptureStage(C1bCaptureFailureStage.DISPLAY) { port.display() }
         val windowsAttempt = attempt { port.windows().toList() }
         val allHandles = windowsAttempt.value.orEmpty()
         var windowsTruncated = !windowsAttempt.succeeded || allHandles.size > limits.maximumWindows

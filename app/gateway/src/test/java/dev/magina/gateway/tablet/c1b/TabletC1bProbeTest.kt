@@ -12,6 +12,79 @@ import java.time.Instant
 
 class TabletC1bProbeTest {
     @Test
+    fun captureFailureStagesKeepOnlyClosedTypesAndNeverRetainSourceExceptions() {
+        val secret = "private-title /private/content/path"
+        val hostile = object : Exception() {
+            override val message: String get() = throw AssertionError("must not read message")
+            override fun toString(): String = throw AssertionError("must not render exception")
+        }
+        val failures = listOf(
+            SecurityException(secret, Exception(secret)) to C1bCaptureFailureKind.SECURITY,
+            IllegalArgumentException(secret) to C1bCaptureFailureKind.ILLEGAL_ARGUMENT,
+            IllegalStateException(secret) to C1bCaptureFailureKind.ILLEGAL_STATE,
+            UnsupportedOperationException(secret) to C1bCaptureFailureKind.UNSUPPORTED,
+            hostile to C1bCaptureFailureKind.UNKNOWN,
+        )
+        C1bCaptureFailureStage.entries.forEach { stage ->
+            failures.forEach { (source, kind) ->
+                val failure = captureFailure { c1bCaptureStage(stage) { throw source } }
+                failure.addSuppressed(source)
+                assertEquals(stage, failure.stage)
+                assertEquals(kind, failure.kind)
+                assertNull(failure.cause)
+                assertTrue(failure.stackTrace.isEmpty())
+                assertTrue(failure.suppressed.isEmpty())
+                assertFalse(failure.toString().contains(secret))
+                assertEquals("C1b capture failed", failure.message)
+            }
+        }
+        val inner = C1bCaptureFailure(C1bCaptureFailureStage.DISPLAY, C1bCaptureFailureKind.SECURITY)
+        assertTrue(inner === captureFailure { c1bCaptureStage(C1bCaptureFailureStage.PROBE) { throw inner } })
+    }
+
+    @Test
+    fun probeClassifiesDisplayAndOtherFatalBoundariesWithoutChangingReadFallbacks() {
+        val base = FakePort(windowList = emptyList())
+        val displayPort = object : TabletC1bReadPort by base {
+            override fun display(): C1bDisplayRead = throw SecurityException("private display detail")
+        }
+        val displayFailure = captureFailure { TabletC1bProbe(displayPort).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.DISPLAY, displayFailure.stage)
+        assertEquals(C1bCaptureFailureKind.SECURITY, displayFailure.kind)
+
+        val revisionPort = object : TabletC1bReadPort by base {
+            override fun currentRevision(): Long = throw SecurityException("private revision detail")
+        }
+        val revisionFailure = captureFailure { TabletC1bProbe(revisionPort).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.PROBE, revisionFailure.stage)
+        // The pre-existing attempt converts revision read rejection to a fixed IllegalStateException.
+        assertEquals(C1bCaptureFailureKind.ILLEGAL_STATE, revisionFailure.kind)
+
+        val clockFailure = captureFailure {
+            TabletC1bProbe(base, now = { throw UnsupportedOperationException("private time") }).capture(request())
+        }
+        assertEquals(C1bCaptureFailureStage.PROBE, clockFailure.stage)
+        assertEquals(C1bCaptureFailureKind.UNSUPPORTED, clockFailure.kind)
+        val windowsPort = object : TabletC1bReadPort by base {
+            override fun windows(): List<C1bWindowHandle> = throw SecurityException("private windows")
+        }
+        val degraded = TabletC1bProbe(windowsPort, now = { FIRST_AT }).capture(request())
+        assertTrue(degraded.windowsTruncated)
+        assertTrue("window_inventory_truncated" in degraded.diagnosticCodes)
+    }
+
+    @Test
+    fun diagnosticBoundaryDoesNotCatchErrors() {
+        val fatal = AssertionError("synthetic fatal error")
+        try {
+            c1bCaptureStage(C1bCaptureFailureStage.PROBE) { throw fatal }
+            throw AssertionError("expected original error")
+        } catch (observed: AssertionError) {
+            assertTrue(fatal === observed)
+        }
+    }
+
+    @Test
     fun rootOnlyTreeKeepsRootHandleBindingAndSubtreeStatusSeparate() {
         val root = node(token = 101, windowId = 11)
         val frame = capture(listOf(window(11, root = root)))
@@ -1037,6 +1110,13 @@ class TabletC1bProbeTest {
         assertTrue("subtree_capture_incomplete" in result.reasonCodes)
         assertTrue(result.reasonCodes.none { it.endsWith("_read_failed") || it.startsWith("node_") })
         assertTrue(result.reasonCodes.all { it in CONTRACT_REASON_CODES })
+    }
+
+    private fun captureFailure(block: () -> Unit): C1bCaptureFailure = try {
+        block()
+        throw AssertionError("expected closed capture failure")
+    } catch (failure: C1bCaptureFailure) {
+        failure
     }
 
     private fun capture(

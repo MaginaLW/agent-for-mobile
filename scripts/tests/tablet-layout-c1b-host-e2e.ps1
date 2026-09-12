@@ -115,8 +115,8 @@ function Read-FailureEvidenceStrict([string]$Path){
     $bytes=[IO.File]::ReadAllBytes($Path)
     try{$raw=ConvertFrom-TL1C1aStrictUtf8 $bytes 'C1b E2E failure evidence';$value=ConvertFrom-TL1C1bClosedJson $raw}
     finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}
-    Assert-TL1C1bExactObjectKeys $value @('schema','run_id','status','reason_code','cleanup','runtime_origin_verified','runtime_evidence','layout_accepted','wechat_layout_verified','editor_action_ready','p0_capability','execution_grant') 'failure evidence'
-    Check ($value.schema-ceq'tablet-layout-c1b-failure/v1') 'failure evidence schema drift'
+    Assert-TL1C1bFailureEvidence $value
+    Check ($null-eq$value.provider_failure) 'failure evidence unexpected provider diagnostic'
     return $value
 }
 function Read-AttemptFailureEvidenceStrict([string]$Path,[string]$SchemaPath){

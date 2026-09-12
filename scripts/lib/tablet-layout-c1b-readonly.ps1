@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:32c6c591cb6399e40d593bc343de937ed665294304295a340689cfbdf591dd4e'
+    'sha256:fa6c633c7600aa58b1bfa2170a423e84a0895838f8df02f9ed9a3043f3e083b6'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -501,6 +501,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Assert-TL1C1aOrdinaryPath=3','Assert-TL1C1aT0DeviceBinding=1',
         'Assert-TL1C1bAapt2TrustGuardUnchanged=1','Assert-TL1C1bAbortTerminalControl=1',
         'Assert-TL1C1bBuildEnvironmentFrozen=2','Assert-TL1C1bControlTuple=5',
+        'Assert-TL1C1bFailureEvidence=1',
         'Assert-TL1C1bPrivateAdbServerGuardUnchanged=2',
         'Assert-TL1C1bPublishedEvidenceBinding=2','Assert-TL1C1bReadOnlyArtifactProof=2',
         'Assert-TL1C1bRunnerReadOnlyAst=2','Assert-TL1C1bSidecarCrossBindings=2',
@@ -510,6 +511,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'ConvertFrom-C1bSignerDigest=2','ConvertFrom-TL1C1aStrictUtf8=3',
         'ConvertFrom-TL1C1bClosedJson=1','ConvertFrom-TL1C1bControl=1',
         'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=9',
+        'ConvertTo-TL1C1bCaptureFailure=1',
         'ConvertTo-TL1C1bReadOnlyCounts=1','Copy-TL1C1bGuardedArtifactAtomic=5',
         'Find-C1bTrustedGitPath=1','Get-C1bImplementationHashes=1',
         'Get-C1bTimestamp=6','Get-DispatchGlobalLockPath=1','Get-Item=3',
@@ -532,7 +534,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Read-C1bControl=6','Resolve-TL1C1bBuildEnvironmentGitRoot=1',
         'Resolve-TL1C1bBuildEnvironmentOrdinaryDirectory=1',
         'Seal-TL1C1bBuildEnvironmentDebugKeystoreLock=1',
-        'Set-C1bAbortExpectedSnapshot=5','Set-StrictMode=1','Sort-Object=1',
+        'Set-C1bAbortExpectedSnapshot=6','Set-StrictMode=1','Sort-Object=1',
         'Split-Path=1','Start-Sleep=1','Test-Json=3','Test-Path=7',
         'Test-TabletLayoutObservationC1BV1TrustedRuntimeFile=1',
         'Test-TL1C1aDeviceBinding=2','Wait-TL1C1aA11yReady=1',
@@ -1095,6 +1097,56 @@ $gradleArguments=[string[]]@(@($gradleInvocation.Arguments)+@(Get-TL1C1bBuildEnv
         $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and
         $node.Left.VariablePath.UserPath -ceq 'Name'
     }, $true)).Count -ne 0) { throw 'Read-C1bControl 禁止改写 $Name。' }
+
+    # A failed capture may publish only the validated tuple; diagnostics add no device call.
+    $expectedControlTail = @(
+        '$control=ConvertFrom-TL1C1bControl $result.Text $runId $ExpectedCommitSha $expectedArtifactSha $buildChallenge',
+        @'
+if($Name-cin@('content_c1','content_c2','content_status')-and$null-ne$capturePhase-and$control.state-ceq'failed'){
+    $verifiedFailure=ConvertTo-TL1C1bCaptureFailure $control $capturePhase $generation
+    if($null-eq$script:providerFailure){$script:providerFailure=$verifiedFailure}
+    Set-C1bAbortExpectedSnapshot $control
+    throw "C1b provider capture 失败：$($verifiedFailure.reason_code)。"
+}
+'@,
+        'return $control'
+    )
+    $controlStatements = [object[]]@($readFunction.Body.EndBlock.Statements)
+    if ($controlStatements.Count -lt 3) { throw 'C1b runner capture failure tuple binding 漂移。' }
+    for ($index=0; $index -lt 3; $index++) {
+        if (($controlStatements[$controlStatements.Count-3+$index].Extent.Text -replace '[\s`]+','') -cne
+            ($expectedControlTail[$index] -replace '[\s`]+','')) {
+            throw 'C1b runner capture failure tuple binding 漂移。'
+        }
+    }
+    $failureWriter = Get-TL1C1bReadonlyFunction $parsed.Ast 'Write-C1bFailureEvidence' 'C1b runner'
+    $failureBranch = $failureWriter.Body.EndBlock.Statements[0]
+    if ($failureBranch -isnot [Management.Automation.Language.IfStatementAst]) {
+        throw 'C1b runner failure evidence validator/write binding 漂移。'
+    }
+    $failureStatements = [object[]]@($failureBranch.Clauses[0].Item2.Statements)
+    $expectedFailureTail = @(
+        'Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)',
+        '[void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)',
+        'return'
+    )
+    if ($failureStatements.Count -lt 4) { throw 'C1b runner failure evidence validator/write binding 漂移。' }
+    for ($index=0; $index -lt 3; $index++) {
+        if (($failureStatements[$failureStatements.Count-3+$index].Extent.Text -replace '[\s`]+','') -cne
+            ($expectedFailureTail[$index] -replace '[\s`]+','')) {
+            throw 'C1b runner failure evidence validator/write binding 漂移。'
+        }
+    }
+    $providerFields = @($failureStatements[$failureStatements.Count-4].FindAll({param($node)
+        $node -is [Management.Automation.Language.HashtableAst]
+    }, $true) | ForEach-Object { $_.KeyValuePairs } | Where-Object {
+        $_.Item1 -is [Management.Automation.Language.StringConstantExpressionAst] -and
+        $_.Item1.Value -ceq 'provider_failure'
+    })
+    if ($providerFields.Count -ne 1 -or
+        ($providerFields[0].Item2.Extent.Text -replace '[\s`]+','') -cne '$providerFailure') {
+        throw 'C1b runner failure evidence validator/write binding 漂移。'
+    }
 
     foreach ($call in @($parsed.Ast.FindAll({param($node)
         $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-TL1C1aAdb'

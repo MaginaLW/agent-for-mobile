@@ -8,6 +8,15 @@ $script:TL1C1bProtocolSchema = 'tablet-c1b-control/v1'
 $script:TL1C1bSidecarSchema = 'tablet-layout-c1b-sidecar/v1'
 $script:TL1C1bObservationSchema = 'tablet-layout-observation/c1b-v1'
 $script:TL1C1bPackageName = 'dev.magina.gateway'
+$script:TL1C1bCaptureReasonDetails = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+foreach($phase in @('c1','c2')){
+    foreach($stage in @('binding','display','probe','frame_validation','unknown')){
+        foreach($category in @('security','illegal_argument','illegal_state','unsupported','unknown')){
+            $script:TL1C1bCaptureReasonDetails.Add("capture_${phase}_${stage}_${category}",
+                [pscustomobject]@{phase=$phase;stage=$stage;category=$category})
+        }
+    }
+}
 $script:TL1C1bExpectedTitleHash = 'sha256:5d3510ec998c991305fcede15b32be9ea1c4061d82ab15a3994a38faa243311c'
 $script:TL1C1bGoogleAdbSignerSubject = 'CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US'
 $script:TL1C1bImplementationPathMap = [ordered]@{
@@ -377,6 +386,9 @@ function ConvertFrom-TL1C1bControl {
         $value.producer_artifact_sha256 -cne $ExpectedArtifactSha256) {
         throw 'C1b control producer binding 失败。'
     }
+    if($value.reason_code-is[string]-and$script:TL1C1bCaptureReasonDetails.ContainsKey($value.reason_code)){
+        [void](ConvertTo-TL1C1bCaptureFailure $value $script:TL1C1bCaptureReasonDetails[$value.reason_code].phase $value.generation)
+    }
     return $value
 }
 
@@ -416,7 +428,7 @@ function Assert-TL1C1bAbortTerminalControl {
     }
     $reasonAllowed=switch([string]$Control.state){
         absent {@('coordinator_closed','nonce_reused','replay_ledger_full','run_id_reused','session_not_found')}
-        failed {@('a11y_service_replaced','a11y_service_unavailable','build_identity_mismatch','capture_c1_failed','capture_c1_timeout','capture_c2_failed','capture_c2_timeout','capture_sequence_invalid','capture_timeout_scheduler_rejected','capture_worker_inline','capture_worker_rejected','observation_assembly_failed','session_expiry_scheduler_rejected','start_replayed','t0_invalid')}
+        failed {@('a11y_service_replaced','a11y_service_unavailable','build_identity_mismatch','capture_c1_failed','capture_c1_timeout','capture_c2_failed','capture_c2_timeout','capture_sequence_invalid','capture_timeout_scheduler_rejected','capture_worker_inline','capture_worker_rejected','observation_assembly_failed','session_expiry_scheduler_rejected','start_replayed','t0_invalid')+@($script:TL1C1bCaptureReasonDetails.Keys)}
         aborted {@('coordinator_shutdown','session_aborted')}
         expired {@('session_expired')}
         default {throw 'C1b abort 未进入允许终态。'}
@@ -443,6 +455,80 @@ function Assert-TL1C1bAbortTerminalControl {
         (@($Control.committed_tokens)-join"`n")-cne($ExpectedCommitted-join"`n")){
         throw 'C1b abort terminal 未绑定发起前 trusted snapshot。'
     }
+    if($script:TL1C1bCaptureReasonDetails.ContainsKey([string]$Control.reason_code)){
+        $detail=$script:TL1C1bCaptureReasonDetails[[string]$Control.reason_code]
+        $captureTuple=if($detail.phase-ceq'c1'){'1|0|'}else{'1|1|c1'}
+        if($ExpectedGeneration-lt1-or$expectedTuple-cne$captureTuple){throw 'C1b capture failure reason/prefix tuple 不一致。'}
+    }
+}
+
+function ConvertTo-TL1C1bCaptureFailure {
+    param(
+        [Parameter(Mandatory)]$Control,
+        [Parameter(Mandatory)][ValidateSet('c1','c2')][string]$Phase,
+        [Parameter(Mandatory)][long]$ExpectedGeneration
+    )
+    if($Phase-cnotin@('c1','c2')-or$ExpectedGeneration-lt1-or$Control.state-cne'failed'){
+        throw 'C1b capture failure phase/state 不成立。'
+    }
+    $c2Count=if($Phase-ceq'c2'){1}else{0}
+    $committed=[string[]]@();if($Phase-ceq'c2'){$committed=[string[]]@('c1')}
+    Assert-TL1C1bAbortTerminalControl $Control $ExpectedGeneration 1 $c2Count $committed
+    $stage=$null;$category=$null
+    if($script:TL1C1bCaptureReasonDetails.ContainsKey([string]$Control.reason_code)){
+        $detail=$script:TL1C1bCaptureReasonDetails[[string]$Control.reason_code]
+        if($detail.phase-cne$Phase){throw 'C1b capture failure reason/phase 不一致。'}
+        $stage=$detail.stage;$category=$detail.category
+    }elseif(([string]$Control.reason_code-cmatch'^capture_c[12]_(failed|timeout)$')-and
+        -not([string]$Control.reason_code).StartsWith("capture_${Phase}_",[StringComparison]::Ordinal)){
+        throw 'C1b capture failure legacy reason/phase 不一致。'
+    }
+    # Copy only the verified closed tuple. Never retain provider identity, nonce, or raw control.
+    return [pscustomobject][ordered]@{
+        phase=$Phase;stage=$stage;category=$category;reason_code=[string]$Control.reason_code
+        generation=[long]$Control.generation;c1_requests_accepted=[long]1;c2_requests_accepted=[long]$c2Count
+        committed_tokens=[object[]]@($committed);recapture_count=[long]0
+    }
+}
+
+function Assert-TL1C1bFailureEvidence {
+    param([Parameter(Mandatory)]$Value)
+    Assert-TL1C1bExactObjectKeys $Value @(
+        'schema','run_id','status','reason_code','provider_failure','cleanup','runtime_origin_verified',
+        'runtime_evidence','layout_accepted','wechat_layout_verified','editor_action_ready','p0_capability','execution_grant'
+    ) 'failure evidence'
+    foreach($name in @('schema','run_id','status','reason_code','cleanup','p0_capability')){
+        if($Value.$name-isnot[string]){throw 'C1b failure evidence string 类型错误。'}
+    }
+    if($Value.schema-cne'tablet-layout-c1b-failure/v2'-or$Value.run_id-cnotmatch'^[a-z0-9][a-z0-9._-]{0,79}$'-or
+        $Value.status-cne'failed'-or$Value.reason_code-cne'c1b_runner_failed'-or
+        $Value.cleanup-cnotin@('not_required','completed','failed')-or$Value.p0_capability-cne'unsupported'){
+        throw 'C1b failure evidence scalar 闭集错误。'
+    }
+    foreach($name in @('runtime_origin_verified','runtime_evidence','layout_accepted','wechat_layout_verified','editor_action_ready','execution_grant')){
+        if($Value.$name-isnot[bool]-or$Value.$name){throw 'C1b failure evidence 不得声明通过。'}
+    }
+    if($null-eq$Value.provider_failure){return}
+    $detail=$Value.provider_failure
+    Assert-TL1C1bExactObjectKeys $detail @(
+        'phase','stage','category','reason_code','generation','c1_requests_accepted','c2_requests_accepted','committed_tokens','recapture_count'
+    ) 'failure evidence/provider_failure'
+    if($detail.phase-isnot[string]-or$detail.phase-cnotin@('c1','c2')-or$detail.reason_code-isnot[string]-or
+        ($null-ne$detail.stage-and$detail.stage-isnot[string])-or($null-ne$detail.category-and$detail.category-isnot[string])){
+        throw 'C1b failure evidence diagnostic string 类型错误。'
+    }
+    foreach($name in @('generation','c1_requests_accepted','c2_requests_accepted','recapture_count')){
+        if($detail.$name-isnot[long]){throw 'C1b failure evidence diagnostic counter 类型错误。'}
+    }
+    if($detail.committed_tokens-isnot[object[]]){throw 'C1b failure evidence committed token 类型错误。'}
+    foreach($token in $detail.committed_tokens){if($token-isnot[string]){throw 'C1b failure evidence committed token 类型错误。'}}
+    $control=[pscustomobject]@{
+        ok=$false;state='failed';next='none';in_flight_token=$null;reason_code=$detail.reason_code
+        generation=$detail.generation;c1_requests_accepted=$detail.c1_requests_accepted
+        c2_requests_accepted=$detail.c2_requests_accepted;committed_tokens=$detail.committed_tokens;recapture_count=$detail.recapture_count
+    }
+    $expected=ConvertTo-TL1C1bCaptureFailure $control $detail.phase $detail.generation
+    if($detail.stage-cne$expected.stage-or$detail.category-cne$expected.category){throw 'C1b failure evidence stage/category 与reason不一致。'}
 }
 
 function Wait-TL1C1bTerminalState {
@@ -466,7 +552,7 @@ function Wait-TL1C1bTerminalState {
             }
             return $control
         }
-        if ($control.state -cne $capturingState) { throw "C1b status 提前终止：$($control.state)/$($control.reason_code)。" }
+        if ($control.state -cne $capturingState) { throw 'C1b status 提前终止；未接受未经验证的终态诊断。' }
         if ($capturingState -eq 'capturing_c1') {
             Assert-TL1C1bControlTuple $control capturing_c1 wait $Generation 1 0 @() 'c1'
         } else {

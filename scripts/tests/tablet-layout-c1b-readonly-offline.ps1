@@ -141,6 +141,39 @@ try{
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner ':tablet-c1b-probe:verifyTabletC1bReadOnlyArtifact' ':tablet-c1b-probe:assembleDebug' 'gradle-task-rebind.ps1')} 'Gradle task rebinding accepted' -SemanticReason (ExactReason 'C1b runner held launcher assignment closure 漂移。')
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '                Assert-C1bImplementationSnapshot' "                Write-Output 'skip-post-write-implementation-snapshot'" 'implementation-postwrite-removed.ps1')} 'post-write implementation snapshot removal accepted' -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移。')
     }
+    Pass capture_failure_control_bindings {
+        foreach($case in @(
+            @('$control $capturePhase $generation','$control $capturePhase $control.generation','generation'),
+            @('$control $capturePhase $generation','$control $control.in_flight_token $generation','phase'),
+            @("@('content_c1','content_c2','content_status')","@('content_c1','content_c2','content_abort')",'abort'),
+            @('$script:providerFailure=$verifiedFailure','$script:providerFailure=$control','raw-control')
+        )){
+            Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner $case[0] $case[1] ("capture-failure-"+$case[2]+'.ps1'))} `
+                'unverified capture failure binding accepted' `
+                -SemanticReason (ExactReason 'C1b runner capture failure tuple binding 漂移。')
+        }
+    }
+    Pass capture_failure_writer_binding {
+        foreach($case in @(
+            @('provider_failure=$providerFailure','provider_failure=$control','raw-control'),
+            @('Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)','Assert-TL1C1bFailureEvidence ([pscustomobject]$providerFailure)','wrong-payload')
+        )){
+            Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner $case[0] $case[1] ("failure-writer-"+$case[2]+'.ps1'))} `
+                'unvalidated failure evidence write accepted' `
+                -SemanticReason (ExactReason 'C1b runner failure evidence validator/write binding 漂移。')
+        }
+    }
+    Pass capture_failure_validator_required {
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)' '' 'failure-validator-removed.ps1')} `
+            'failure evidence validator removal accepted' `
+            -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移。')
+    }
+    Pass capture_failure_no_extra_device_read {
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '$verifiedFailure=ConvertTo-TL1C1bCaptureFailure' `
+            "[void](Read-C1bControl content_c1 `$uris.c1)`n        `$verifiedFailure=ConvertTo-TL1C1bCaptureFailure" 'failure-extra-capture.ps1')} `
+            'diagnostic recapture accepted' `
+            -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Read-C1bControl。')
+    }
     Pass t0_positive {$script:t0Proof=Assert-TL1C1bT0ReadOnlySurface $t0Runner $t0Library;if($t0Proof.query_invocation_counts.devices-ne1){throw 'devices'}}
     Pass parse_error {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' 'try { {' 'parse.ps1')} 'parse error accepted'}
     Pass ampersand_dynamic {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    & `$AdbPath version" 'amp.ps1')} 'dynamic invocation accepted' -SemanticReason (ExactReason 'C1b runner 禁止 ampersand dynamic invocation。')}

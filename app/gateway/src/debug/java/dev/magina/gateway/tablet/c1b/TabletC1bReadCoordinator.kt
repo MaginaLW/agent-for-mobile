@@ -299,8 +299,10 @@ internal class TabletC1bReadCoordinator<S : Any, F : Any, O : Any>(
         }
         val frame = try {
             frameReader.read(job.expectedServiceIdentity, job.token)
-        } catch (_: Exception) {
-            failJob(job, "capture_${job.token}_failed")
+        } catch (failure: Exception) {
+            val stage = (failure as? C1bCaptureFailure)?.stage ?: C1bCaptureFailureStage.UNKNOWN
+            val kind = (failure as? C1bCaptureFailure)?.kind ?: c1bCaptureFailureKind(failure)
+            failJob(job, "capture_${job.token}_${stage.wire}_${kind.wire}")
             return
         }
         if (!jobMayContinue(job)) return

@@ -193,6 +193,28 @@ validator、T0/provider/device/APK 与冻结实现绑定后，宿主才可标记
 generation_exhausted` 即使属于全协议 absent reason，也不能证明 cleanup 完成。任何畸形 terminal 都不得把 cleanup
 标为 completed。
 
+### 受限采集失败原因
+
+control/v1 保持原字段集合，新增固定原因码集合
+`capture_<c1|c2>_<binding|display|probe|frame_validation|unknown>_<security|illegal_argument|illegal_state|unsupported|unknown>`，
+恰有50种组合。旧 `capture_c1_failed/capture_c2_failed` 等既有原因码保留。
+这是闭集扩展；producer、宿主解析器及读回器须随固定候选配套，旧消费者遇到新码应拒绝，不能宣称完全兼容。
+
+| 阶段 | 表示的异常边界 |
+|---|---|
+| `binding` | worker 获取并校验当前运行绑定 |
+| `display` | probe 读取显示信息 |
+| `probe` | 其余帧读取，包括 revision、窗口遍历和帧元数据 |
+| `frame_validation` | controller 核对返回帧的 ID、token、title hash |
+| `unknown` | reader 抛出未带受限阶段标记的异常 |
+
+类别只标识边界捕获的异常类型；`security` 不能直接解释为权限根因。未知异常归固定 `unknown`，
+未知 wire 原因码则拒绝。阶段标记不保留原异常 message、cause、stack、suppressed exceptions、节点文字或路径；
+外层保留已有受限阶段标记，不覆盖更具体的内层阶段。
+新码只能出现在 `failed`，`generation>0`，且 `ok=false/next=none/in_flight_token=null/recapture_count=0`。
+c1 对应 accepted `(1,0)`、committed `[]`；c2 对应 `(1,1)`、committed `[c1]`，token 与计数不符立即拒绝。
+正常输出、deadline、accepted/committed 语义、取消、abort和不重试的边界保持不变。
+
 ## 成功 sidecar
 
 成功 sidecar 必须符合 `tablet-layout-c1b-sidecar/v1`，绑定：
@@ -235,6 +257,22 @@ private ADB server、安装、provider、capture、读取、schema、hash、fres
 闭合 reason code 与 false/unsupported 结论，不泄漏 serial/nonce/build challenge/raw UI。不得自动重试，不得在 abort
 后继续 status/result/采集，也不得用 fixture 或 C1a evidence 补造成功。旧 `tablet-layout-observation/v2` evidence
 永不按 C1b schema 重算。
+
+普通 run 的新失败记录使用 `tablet-layout-c1b-failure/v2`，与旧 v1 分开解释。
+顶层 exact 字段为 `schema/run_id/status/reason_code/cleanup/provider_failure/runtime_origin_verified/runtime_evidence/`
+`layout_accepted/wechat_layout_verified/editor_action_ready/p0_capability/execution_grant`。
+`status=failed`、`reason_code=c1b_runner_failed`；所有 runtime/layout/action 声明固定 false，P0固定 unsupported，
+cleanup 仍只允许 `not_required/completed/failed`。
+
+`provider_failure` 为 null，或 exact 九字段对象：
+`phase/stage/category/reason_code/generation/c1_requests_accepted/c2_requests_accepted/committed_tokens/recapture_count`。
+phase 固定 c1/c2；新原因码与 stage/category、阶段及计数严格对应，generation为正Int64、计数为Int64、
+committed_tokens为严格字符串数组。已接受的旧原因码没有细分诊断时，stage/category均为null，不将旧错误追认为已定位原因。
+
+runner 只在本轮 capture/status 的 provider/build 绑定及完整 failed tuple校验后复制首次诊断。
+后续abort不能覆盖它；畸形、跨generation、跨阶段或未知原因不写入该对象，仍使整轮失败。
+消费者必须核对 v2 exact字段、标量类型、固定安全声明及诊断的跨字段一致性；原始control、nonce、build challenge、
+异常正文和堆栈均不进入失败记录。旧v1只用于读取旧证据，不将旧轮补写为v2或据此重跑。
 
 若 private ADB 在 run promotion 前启动失败，runner 不创建普通 run 目录，而是在全部 cleanup 完成后原子发布唯一
 root-level `docs/runs/evidence/tablet-layout-c1b-attempt-<attempt_id>.json`。该文件必须符合

@@ -56,16 +56,20 @@ internal class TabletC1bRuntimeController<S : Any>(
         scheduler = scheduler,
         currentServiceIdentity = currentServiceIdentity,
         frameReader = C1bFrameReader { service, token ->
-            val request = bindingForWorker(token)
-            val raw = frameCapture.capture(
-                serviceIdentity = service,
-                captureId = "capture-$token",
-                captureToken = token,
-                expectedTitleHash = request.expectedTitleHash,
-            )
-            require(raw.captureId == "capture-$token" && raw.capture.token == token &&
-                raw.expectedTitleHash == request.expectedTitleHash
-            ) { "C1b frame binding changed during capture" }
+            val request = c1bCaptureStage(C1bCaptureFailureStage.BINDING) { bindingForWorker(token) }
+            val raw = c1bCaptureStage(C1bCaptureFailureStage.PROBE) {
+                frameCapture.capture(
+                    serviceIdentity = service,
+                    captureId = "capture-$token",
+                    captureToken = token,
+                    expectedTitleHash = request.expectedTitleHash,
+                )
+            }
+            c1bCaptureStage(C1bCaptureFailureStage.FRAME_VALIDATION) {
+                require(raw.captureId == "capture-$token" && raw.capture.token == token &&
+                    raw.expectedTitleHash == request.expectedTitleHash
+                ) { "C1b frame binding changed during capture" }
+            }
             BoundFrame(request, raw)
         },
         assembler = C1bFrameAssembler { c1, c2 ->

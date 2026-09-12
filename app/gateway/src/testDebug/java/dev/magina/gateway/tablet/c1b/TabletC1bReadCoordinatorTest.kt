@@ -11,6 +11,86 @@ import java.util.concurrent.TimeUnit
 class TabletC1bReadCoordinatorTest {
 
     @Test
+    fun `closed capture diagnostics preserve both token counts cleanup and first terminal wins`() {
+        listOf("c1", "c2").forEach { failedToken ->
+            C1bCaptureFailureStage.entries.forEach { stage ->
+                C1bCaptureFailureKind.entries.forEach { kind ->
+                    val h = Harness()
+                    val lease = h.coordinator.begin("run-diagnostic").lease
+                    h.readerBehavior = { _, token ->
+                        if (token == failedToken) throw C1bCaptureFailure(stage, kind)
+                        Frame("frame-$token")
+                    }
+                    h.coordinator.requestCapture(lease, "c1")
+                    h.worker.runNext()
+                    if (failedToken == "c2") {
+                        h.coordinator.requestCapture(lease, "c2")
+                        h.worker.runNext()
+                    }
+                    val failed = h.coordinator.status(lease)
+                    assertEquals(C1bReadState.FAILED, failed.state)
+                    assertEquals("capture_${failedToken}_${stage.wire}_${kind.wire}", failed.reasonCode)
+                    assertEquals(1, failed.c1RequestsAccepted)
+                    assertEquals(if (failedToken == "c2") 1 else 0, failed.c2RequestsAccepted)
+                    assertEquals(if (failedToken == "c2") listOf("c1") else emptyList<String>(), failed.committedTokens)
+                    assertEquals(null, failed.inFlightToken)
+                    assertEquals(0, failed.recaptureCount)
+                    assertEquals(0, h.assemblerCalls)
+                    assertTrue(h.scheduler.entries.all { it.cancelled })
+                    assertTrue(h.coordinator.result(lease) is C1bResultRead.Control)
+                    assertEquals(failed, h.coordinator.requestCapture(lease, failedToken))
+                    assertEquals(failed, h.coordinator.abort(lease))
+                    h.clock.now = 2_000L
+                    h.scheduler.entries.indices.forEach { h.scheduler.fire(it, evenIfCancelled = true) }
+                    assertEquals(failed, h.coordinator.status(lease))
+                    assertEquals(0, h.worker.queuedCount)
+                    assertEquals(if (failedToken == "c2") 2 else 1, h.readerCalls.size)
+                    assertEquals(C1bReadState.READY_C1, h.coordinator.begin("run-after-failure").state)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `unmarked exceptions have unknown stage without reading hostile exception text`() {
+        val h = Harness()
+        h.readerBehavior = { _, _ ->
+            throw object : Exception() {
+                override val message: String get() = throw AssertionError("must not read private message")
+                override fun toString(): String = throw AssertionError("must not render private exception")
+            }
+        }
+        val lease = h.coordinator.begin("run-unknown-failure").lease
+        h.coordinator.requestCapture(lease, "c1")
+        h.worker.runNext()
+        assertEquals("capture_c1_unknown_unknown", h.coordinator.status(lease).reasonCode)
+        assertTrue(h.scheduler.entries.all { it.cancelled })
+    }
+
+    @Test
+    fun `late diagnostic cannot overwrite abort or timeout`() {
+        listOf(false, true).forEach { abort ->
+            val h = Harness()
+            val lease = h.coordinator.begin("run-late-diagnostic").lease
+            h.readerBehavior = { _, _ ->
+                if (abort) h.coordinator.abort(lease) else {
+                    h.clock.now = 100L
+                    h.scheduler.fire(1)
+                }
+                throw C1bCaptureFailure(C1bCaptureFailureStage.PROBE, C1bCaptureFailureKind.SECURITY)
+            }
+            h.coordinator.requestCapture(lease, "c1")
+            h.worker.runNext()
+            val final = h.coordinator.status(lease)
+            assertEquals(if (abort) "session_aborted" else "capture_c1_timeout", final.reasonCode)
+            assertEquals(1, final.c1RequestsAccepted)
+            assertEquals(0, final.c2RequestsAccepted)
+            assertEquals(0, final.recaptureCount)
+            assertTrue(h.scheduler.entries.all { it.cancelled })
+        }
+    }
+
+    @Test
     fun `happy path is asynchronous serial single-shot and result is consumed once`() {
         val h = Harness()
         val started = h.coordinator.begin("run-happy")
