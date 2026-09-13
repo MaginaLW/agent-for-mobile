@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.charset.StandardCharsets
@@ -170,6 +172,132 @@ class TabletC1bProbeTest {
         assertEquals(2_800, display.width)
         assertEquals(1_968, display.height)
         assertEquals("landscape", display.orientation)
+    }
+
+    @Test
+    fun contextDisplayIsPreservedWithoutConsultingDefaultDisplay() {
+        val associated = Any()
+        var contextReads = 0
+        val selected = c1bDisplayOrDefault(
+            contextDisplay = { contextReads += 1; associated },
+            defaultDisplay = { throw AssertionError("must not replace the associated display") },
+        )
+        assertSame(associated, selected)
+        assertEquals(1, contextReads)
+    }
+
+    @Test
+    fun unassociatedContextUsesExistingDefaultDisplayOnce() {
+        val contextReads = listOf<() -> Any?>(
+            { null },
+            { throw UnsupportedOperationException("context has no display association") },
+        )
+        contextReads.forEach { readContext ->
+            val fallback = Any()
+            var primaryCalls = 0
+            var fallbackCalls = 0
+            val selected = c1bDisplayOrDefault(
+                contextDisplay = { primaryCalls += 1; readContext() },
+                defaultDisplay = { fallbackCalls += 1; fallback },
+            )
+            assertSame(fallback, selected)
+            assertEquals(1, primaryCalls)
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun contextSecurityAndOtherFailuresDoNotTriggerDefaultDisplay() {
+        val failures = listOf(
+            SecurityException("display permission denied"),
+            IllegalArgumentException("invalid context"),
+            IllegalStateException("context stopped"),
+            Exception("unknown display failure"),
+            AssertionError("fatal display failure"),
+        )
+        failures.forEach { failure ->
+            var fallbackCalls = 0
+            val observed = assertThrows(Throwable::class.java) {
+                c1bDisplayOrDefault<Any>(
+                    contextDisplay = { throw failure },
+                    defaultDisplay = { fallbackCalls += 1; Any() },
+                )
+            }
+            assertSame(failure, observed)
+            assertEquals(0, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun missingDefaultDisplayRemainsUnavailable() {
+        var fallbackCalls = 0
+        val selected = c1bDisplayOrDefault<Any>(
+            contextDisplay = { throw UnsupportedOperationException("no associated display") },
+            defaultDisplay = { fallbackCalls += 1; null },
+        )
+        assertNull(selected)
+        assertEquals(1, fallbackCalls)
+    }
+
+    @Test
+    fun defaultDisplayFailuresArePropagatedWithoutAnotherLookup() {
+        val failures = listOf(
+            UnsupportedOperationException("default display unsupported"),
+            SecurityException("default display denied"),
+            IllegalStateException("default display unavailable"),
+        )
+        failures.forEach { failure ->
+            var fallbackCalls = 0
+            val observed = assertThrows(Exception::class.java) {
+                c1bDisplayOrDefault<Any>(
+                    contextDisplay = { throw UnsupportedOperationException("no associated display") },
+                    defaultDisplay = { fallbackCalls += 1; throw failure },
+                )
+            }
+            assertSame(failure, observed)
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun defaultResolutionDoesNotRelaxDisplayIdAndRealMetricsValidation() {
+        val invalid = listOf(
+            Triple(-1, 2_800, 1_968), Triple(17, 2_800, 1_968),
+            Triple(0, 0, 1_968), Triple(0, 2_800, 0),
+            Triple(0, 16_385, 1_968), Triple(0, 2_800, 16_385),
+            Triple(0, 1_968, 1_968),
+        )
+        invalid.forEach { metrics ->
+            var fallbackCalls = 0
+            val selected = c1bDisplayOrDefault(
+                contextDisplay = { null },
+                defaultDisplay = { fallbackCalls += 1; metrics },
+            )!!
+            assertThrows(IllegalArgumentException::class.java) {
+                c1bDisplayFromRealMetrics(selected.first, selected.second, selected.third)
+            }
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun remainingDisplayUnsupportedFailureStopsBeforeWindowReads() {
+        val base = FakePort(windowList = emptyList())
+        var windowReads = 0
+        val port = object : TabletC1bReadPort by base {
+            override fun display(): C1bDisplayRead = throw UnsupportedOperationException("private metrics detail")
+            override fun windows(): List<C1bWindowHandle> {
+                windowReads += 1
+                return emptyList()
+            }
+        }
+        val failure = captureFailure { TabletC1bProbe(port).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.DISPLAY, failure.stage)
+        assertEquals(C1bCaptureFailureKind.UNSUPPORTED, failure.kind)
+        assertEquals(0, windowReads)
+        assertNull(failure.cause)
+        assertTrue(failure.stackTrace.isEmpty())
+        assertFalse(failure.toString().contains("private"))
     }
 
     @Test

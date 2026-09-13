@@ -40,9 +40,12 @@ private class AndroidTabletC1bReadPort(
     override fun currentRevision(): Long = revisionProvider()
 
     override fun display(): C1bDisplayRead {
-        val current = service.display ?: service.getSystemService(DisplayManager::class.java)
-            ?.getDisplay(Display.DEFAULT_DISPLAY)
-            ?: error("C1b display unavailable")
+        val current = c1bDisplayOrDefault(
+            contextDisplay = { service.display },
+            defaultDisplay = {
+                service.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+            },
+        ) ?: error("C1b display unavailable")
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         current.getRealMetrics(metrics)
@@ -156,6 +159,16 @@ internal fun c1bMatchWindowTitle(
         actual.fill(0)
         expected.fill(0)
     }
+}
+
+/** Context.getDisplay may reject a service without a display association; only that read may fall back. */
+internal inline fun <T : Any> c1bDisplayOrDefault(contextDisplay: () -> T?, defaultDisplay: () -> T?): T? {
+    val current = try {
+        contextDisplay()
+    } catch (_: UnsupportedOperationException) {
+        null
+    }
+    return current ?: defaultDisplay()
 }
 
 internal fun c1bDisplayFromRealMetrics(displayId: Int, widthPixels: Int, heightPixels: Int): C1bDisplayRead =
