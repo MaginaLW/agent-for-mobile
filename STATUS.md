@@ -2,7 +2,7 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：新固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A3 已通过；用户已授权本 SHA 单次 BuildOnly、独立读回及终态封存，唯一构建已启动，等待真实终态。** 完整门 13/13 PASS、JVM 1156 项、Gradle 219 个任务均通过，独立结果读回 733 项通过。最终 400 项 tracked/8 项 metadata、三个唯一主机 Stage 及独立读回均闭合；165 份主机证据已冻结，最终独审 1172 项通过。提案数据独审 9345 项通过；本次启动前独审实际退出 0，5859 项检查、219 份原始文件一致。见[本轮 BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+**当前任务：新固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A4 已通过，主机合同为 `host_accepted_no_device`；下一项是 A5 正式主机准备，Ready 和设备验收尚未成立。** 完整门 13/13 PASS、JVM 1156 项、Gradle 219 个任务均通过。获本轮明确授权后，唯一 BuildOnly 自然结束，实际退出 0；一次独立读回 789 项通过，终态封存实际退出 0。17 份内部结果和 7 份外部捕获分别封存；最终独审实际退出 0，11186 项检查、245 份原始文件一致，原 A3 的 165 项及最终 8 项 metadata/index v2/400 均未漂移，cleanup 0、ADB/设备操作 0、重试 0。见[本轮 BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 旧 `c43652a/r1` 已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
 - 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。新 SHA 仅获本次 BuildOnly 范围授权，A5 / Ready 与设备执行不在本轮范围内；原冻结候选不重跑，原项目继续负责协调文档。
