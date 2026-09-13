@@ -2,12 +2,14 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：** 固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的唯一设备 r1 已失败并封存，wrapper/runner 均退出 1，诊断为“当前识别到 0 台”。后续独立只读诊断的三次查询均识别到 1 台 `device`，私有服务清理通过；当前没有复现零设备，但未定位原失败根因。正式 reader 242 项及终审 1,795 项检查通过，仅核定 r1 失败证据。下一项是补齐设备发现的调用位置、双流和服务状态证据，再准备新的单次复验；r1 不重跑、r2 未建立。原具体调用点、安装/T0/c1/c2 次数及宿主整体清理尚未核定，显示回退未获真机验收。见[设备发现诊断](docs/runs/2026-09-13-C1b-a878d12-设备发现诊断.md)和[本轮设备执行](docs/runs/2026-09-13-C1b-a878d12-设备执行.md)。
+**当前任务：** 设备发现证据的离线修复已提交 `1be3e4badde8c5d1c8b9ec3bc9beb56a92c5ee2f`，位于普通开发分支 `codex/c1b-display-context-fallback`。安装前和采集后分别保存发现记录，首次失败也能留证；原单设备判据与命令数不变。C1b 主机聚合门实际退出 0、32/32 coverage，C1a 回归 15/15、50/50 coverage；提交后 14 份输入与验证字节一致、工作树 clean。下一项是以新完整 SHA 建立独占候选并执行完整主机准备，同时让新 collector/reader/freezer 纳入两份 checkpoint JSON。当前没有新 Ready 或设备 r2，未合入 main。见[离线修复与交接](docs/runs/2026-09-13-C1b-设备发现证据离线修复.md)。
 
-**已完成的主机阶段：** 固定候选的 A1—A5 已通过，Ready 原始记录为 `host_ready_waiting_for_device_assistance`。八个 A5 主机阶段实际退出均为 0；支撑审计 15,833 项、313 份原始文件通过，绑定发布及 59 项主机预检通过，最终独审 7,708 项、82 份原始文件通过。Ready 和读回记录已只读保存。同 SHA 的 A1—A4 证据包括完整门 13/13、JVM 1156 项，以及唯一 BuildOnly、789 项读回和封存通过；A5 没有在冻结候选运行普通 Git、Gradle/check 或重跑 BuildOnly，ADB/设备操作 0。见 [A5 主机准备](docs/runs/2026-09-13-C1b-a878d12-A5主机准备.md)、[BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+旧 `a878d12/r1` 因“当前识别到 0 台”失败并封存，wrapper/runner 均退出 1；reader 242 项和终审 1,795 项仅核定失败记录。后续独立三次查询均为 1 台 `device`，未复现原失败。原具体调用点、安装/T0/c1/c2 次数、宿主整体清理及根因仍未知，显示回退未获真机验收。见[设备发现诊断](docs/runs/2026-09-13-C1b-a878d12-设备发现诊断.md)和[设备执行](docs/runs/2026-09-13-C1b-a878d12-设备执行.md)。
+
+**旧候选 a878d12 的主机阶段：** 固定候选的 A1—A5 已通过，Ready 原始记录为 `host_ready_waiting_for_device_assistance`。八个 A5 主机阶段实际退出均为 0；支撑审计 15,833 项、313 份原始文件通过，绑定发布及 59 项主机预检通过，最终独审 7,708 项、82 份原始文件通过。Ready 和读回记录已只读保存。同 SHA 的 A1—A4 证据包括完整门 13/13、JVM 1156 项，以及唯一 BuildOnly、789 项读回和封存通过；A5 没有在冻结候选运行普通 Git、Gradle/check 或重跑 BuildOnly，ADB/设备操作 0。见 [A5 主机准备](docs/runs/2026-09-13-C1b-a878d12-A5主机准备.md)、[BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 旧 `c43652a/r1` 已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
-- 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。A5 后新“确认”授权的 a878d12/r1 已执行并消费；当前“0 台设备”诊断不足以证明显示回退实现失败，后续需新的单次复验条件。原冻结轮不重跑，原项目继续负责协调文档。
+- 旧设备轮只执行一次、未重试；a878d12 的显示修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。A5 后新“确认”授权的 a878d12/r1 已执行并消费；当前“0 台设备”诊断不足以证明显示回退实现失败，后续需新的单次复验条件。原冻结轮不重跑，原项目继续负责协调文档。
 - 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有实现合入 main。
 
 ## 09-08 历史快照
