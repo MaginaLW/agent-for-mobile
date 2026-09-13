@@ -52,11 +52,11 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 **09-13 当前协调增量：** 根目录的实现尚停留在旧开发线；最新队列和实现已核定为
 `codex/c1b-device-build-diagnostics` 的 `c43652a9b16d9fa743e48332dea967d0c6d80ccb`。
 本轮直接以该 SHA 建立新的普通独占 clone，按 A1—A5 准备，不将尚未验收的实现合入 main。
-新候选 A1—A4 已完成：完整门 13/13、JVM 1,128 项通过，唯一只读 preflight、明确授权后的唯一 BuildOnly 和独立读回/封存均通过，主机状态 `host_accepted_no_device`。A5 正式入口/辅助审查和九源发布已完成，support/binding/prefix/Ready 仍待闭合。见[准备记录](runs/2026-09-13-C1b-c43652a-候选准备.md)及[本轮执行](runs/2026-09-13-C1b-c43652a-BuildOnly.md)。
+新候选 A1—A5 主机准备已完成：完整门 13/13、JVM 1,128 项通过，唯一只读 preflight、明确授权后的唯一 BuildOnly 和独立读回/封存均通过。A5 正式审查、九源发布、support/binding/prefix/Ready 均通过，状态 `host_ready_waiting_for_device_assistance`；新的现场确认和单次设备授权仍待用户提供。见[准备记录](runs/2026-09-13-C1b-c43652a-候选准备.md)及[本轮执行](runs/2026-09-13-C1b-c43652a-BuildOnly.md)。
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b 安装诊断修复后的新候选** | 501761f/r1 安装失败已封存；c43652a 的 A1—A4 完成，host_accepted_no_device；A5 正式入口/辅助审查和九源发布完成 | 先 support 实际验证，再 binding/prefix/Ready；之后新现场确认，设备仍未执行；旧轮不重跑 |
+| **C1b 安装诊断修复后的新候选** | 501761f/r1 安装失败已封存；c43652a 的 A1—A5 主机准备完成，Ready 已发布，设备目录只有 binding | 新现场确认并针对固定 SHA/Ready 授权一次 build/install/只读采集后，C 才可执行；设备仍未执行，旧轮不重跑 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 历史候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；
@@ -106,7 +106,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 最新 501761f/r1 在安装阶段失败并已封存；更早轮次保留原终态 | c43652a 已 host_accepted_no_device，待 A5 闭合，尚未 Ready；安装根因、T0/c1/c2 及采集通过均未证实 |
+| **T-L1 / C1b** | 最新 501761f/r1 在安装阶段失败并已封存；更早轮次保留原终态 | c43652a 已 host_ready_waiting_for_device_assistance，等待新现场与设备授权；安装根因、T0/c1/c2 及采集通过均未证实 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
