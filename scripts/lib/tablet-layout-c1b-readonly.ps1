@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:fa6c633c7600aa58b1bfa2170a423e84a0895838f8df02f9ed9a3043f3e083b6'
+    'sha256:11a15c51cb6be49b70def369cc5b0b19bf3489f73053683b86bbae78f8d8719d'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -474,7 +474,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
             'ConvertFrom-C1bSignerDigest','Assert-C1bFrozenState',
             'Assert-C1bPrivateAdbServerFrozenState','Assert-C1bArtifactFrozenState',
             'Assert-C1bArchivedArtifactEvidence','Assert-C1bHostReadOnlyFrozenState',
-            'Write-C1bFailureEvidence','Read-C1bControl',
+            'Write-C1bFailureEvidence','Write-C1bDiscoveryEvidence','Read-C1bControl',
             'Set-C1bAbortExpectedSnapshot'
         ),[StringComparer]::Ordinal)
     $runnerFunctions=@($parsed.Ast.FindAll({param($node)
@@ -515,7 +515,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'ConvertTo-TL1C1bReadOnlyCounts=1','Copy-TL1C1bGuardedArtifactAtomic=5',
         'Find-C1bTrustedGitPath=1','Get-C1bImplementationHashes=1',
         'Get-C1bTimestamp=6','Get-DispatchGlobalLockPath=1','Get-Item=3',
-        'Get-Process=1','Get-TL1C1aFileSha256=6',
+        'Get-Process=1','Get-TL1C1aFileSha256=7',
         'Get-TL1C1aInstalledApkHostSha256=2','Get-TL1C1aInstalledApkPath=2',
         'Get-TL1C1aPackageBinding=2','Get-TL1C1aSha256Bytes=1',
         'Get-TL1C1aSha256Text=7','Get-TL1C1aSingleDevice=2',
@@ -525,6 +525,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Get-TL1C1bBuildEnvironmentGradleArguments=1',
         'Get-TL1C1bBuildEnvironmentGradleInvocation=1',
         'Get-TL1C1bPackagedAxmlDumpBinding=2','Get-TL1C1bPrivateAdbClientEnvironment=1',
+        'Get-TL1C1bPrivateAdbServerDiagnostic=1',
         'Get-TL1C1bTranscriptSha256=1','Get-TL1C1bZipDexProof=1',
         'Invoke-TL1C1aAdb=9','Invoke-TL1C1aProcess=3','Invoke-TL1C1bAdb=3',
         'Invoke-TL1C1bPrivateAdbGuardedProcess=1','Join-Path=63','New-Item=1',
@@ -538,7 +539,8 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Split-Path=1','Start-Sleep=1','Test-Json=3','Test-Path=7',
         'Test-TabletLayoutObservationC1BV1TrustedRuntimeFile=1',
         'Test-TL1C1aDeviceBinding=2','Wait-TL1C1aA11yReady=1',
-        'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-Host=2',
+        'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-Host=3',
+        'Write-C1bDiscoveryEvidence=2','Write-TL1C1bDeviceDiscoveryEvidence=1',
         'Write-TL1C1aBytesAtomic=4','Write-TL1C1aJsonAtomic=2'
     )){
         $separator=$spec.LastIndexOf('=')
@@ -569,13 +571,13 @@ function Assert-TL1C1bRunnerReadOnlyAst {
     $expectedRunnerMemberCounts=
         [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
     foreach($spec in [string[]]@(
-        'Add=8','AddSeconds=1','Clear=5','Clone=1','Contains=1','Dispose=1',
+        'Add=8','AddSeconds=1','Clear=6','Clone=1','Contains=1','Dispose=1',
         'Equals=2','Format=1','GetBytes=5','GetEnumerator=3','GetFolderPath=2',
-        'GetFullPath=9','GetRelativePath=2','GetTempPath=1',
+        'GetFullPath=9','GetRelativePath=3','GetTempPath=1',
         'IsNullOrWhiteSpace=9','IsPathFullyQualified=4','Matches=1','Min=1',
-        'new=9','ReadAllBytes=2','ReferenceEquals=1','Replace=2','StartNew=2',
+        'new=9','ReadAllBytes=2','ReferenceEquals=1','Replace=3','StartNew=2',
         'StartsWith=1','Stop=2','ToArray=2','ToHexString=2',
-        'ToLowerInvariant=3','ToString=1','TrimEnd=2','WriteLine=1'
+        'ToLowerInvariant=3','ToString=1','TrimEnd=2','WriteLine=2'
     )){
         $separator=$spec.LastIndexOf('=')
         $expectedRunnerMemberCounts.Add(
@@ -1175,6 +1177,92 @@ if($Name-cin@('content_c1','content_c2','content_status')-and$null-ne$capturePha
     }
     Assert-TL1C1bReadonlyExpectedCounts $c1aActual $script:TL1C1bReadonlyC1aCounts 'C1b runner C1a'
     Assert-TL1C1bReadonlyExpectedCounts $c1bActual $script:TL1C1bReadonlyC1bCounts 'C1b runner C1b'
+    # Keep both original device reads in their main-body positions. A diagnostic
+    # must publish from finally even when parsing fails before run-id promotion.
+    $discoveryCalls=@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.CommandAst]-and
+        $node.GetCommandName()-ceq'Get-TL1C1aSingleDevice'
+    },$true))
+    $discoverySpecs=@(
+        [pscustomobject]@{Serial='serial';Hash='serialHash';Checkpoint='before_install'},
+        [pscustomobject]@{Serial='postSerial';Hash='postSerialHash';Checkpoint='after_capture'}
+    )
+    if($discoveryCalls.Count-ne2){throw 'C1b runner discovery checkpoint/ref/finally binding 漂移。'}
+    $discoveryTryStatements=[Collections.Generic.List[object]]::new()
+    for($discoveryIndex=0;$discoveryIndex-lt2;$discoveryIndex++){
+        $call=$discoveryCalls[$discoveryIndex]
+        $spec=$discoverySpecs[$discoveryIndex]
+        $discoveryTry=$call
+        while($null-ne$discoveryTry-and
+              $discoveryTry-isnot[Management.Automation.Language.TryStatementAst]){
+            $discoveryTry=$discoveryTry.Parent
+        }
+        if($null-eq$discoveryTry-or$discoveryTry.Parent-ne$mainTry.Body-or
+           $discoveryTry.CatchClauses.Count-ne0-or$null-eq$discoveryTry.Finally){
+            throw 'C1b runner discovery checkpoint/ref/finally binding 漂移。'
+        }
+        $discoveryBody=[object[]]@($discoveryTry.Body.Statements)
+        $discoveryFinal=[object[]]@($discoveryTry.Finally.Statements)
+        $expectedDiscoveryAssignment='$'+$spec.Serial+
+            '=Get-TL1C1aSingleDevice$AdbPath-ProcessEnvironment$adbEnvironment'+
+            '-ClearEnvironment-PrivateAdbServerGuard$adbServerGuard'+
+            '-DiscoveryDiagnostic([ref]$discoveryDiagnostic)'
+        $expectedDiscoveryFinal="Write-C1bDiscoveryEvidence'"+$spec.Checkpoint+
+            "'`$discoveryDiagnostic`$discoveryFailed"
+        $statementIndex=[Array]::IndexOf($statements,$discoveryTry)
+        if($discoveryBody.Count-ne2-or$discoveryFinal.Count-ne1-or
+           $statementIndex-lt2-or$statementIndex+1-ge$statements.Count-or
+           $discoveryBody[0]-isnot[Management.Automation.Language.AssignmentStatementAst]-or
+           (($discoveryBody[0].Extent.Text-replace'[\s`]+','')-cne$expectedDiscoveryAssignment)-or
+           (($discoveryBody[1].Extent.Text-replace'[\s`]+','')-cne'$discoveryFailed=$false')-or
+           (($discoveryFinal[0].Extent.Text-replace'[\s`]+','')-cne$expectedDiscoveryFinal)-or
+           (($statements[$statementIndex-2].Extent.Text-replace'[\s`]+','')-cne'$discoveryDiagnostic=$null')-or
+           (($statements[$statementIndex-1].Extent.Text-replace'[\s`]+','')-cne'$discoveryFailed=$true')-or
+           (($statements[$statementIndex+1].Extent.Text-replace'[\s`]+','')-cne
+                ('$'+$spec.Hash+'=Get-TL1C1aSha256Text$'+$spec.Serial))){
+            throw 'C1b runner discovery checkpoint/ref/finally binding 漂移。'
+        }
+        $discoveryTryStatements.Add($discoveryTry)
+    }
+    $installCall=@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.CommandAst]-and
+        $node.GetCommandName()-ceq'Invoke-TL1C1aAdb'-and
+        $node.Extent.Text.Contains('-Name install ',[StringComparison]::Ordinal)
+    },$true))
+    $resultCall=@($parsed.Ast.FindAll({param($node)
+        $node-is[Management.Automation.Language.CommandAst]-and
+        $node.GetCommandName()-ceq'Invoke-TL1C1bAdb'-and
+        $node.Extent.Text.Contains('-Name content_result ',[StringComparison]::Ordinal)
+    },$true))
+    if($installCall.Count-ne1-or$resultCall.Count-ne1-or
+       $discoveryTryStatements[0].Extent.EndOffset-ge$installCall[0].Extent.StartOffset-or
+       $discoveryTryStatements[1].Extent.StartOffset-le$resultCall[0].Extent.EndOffset){
+        throw 'C1b runner discovery checkpoint/ref/finally binding 漂移。'
+    }
+    $discoveryWriter=Get-TL1C1bReadonlyFunction $parsed.Ast 'Write-C1bDiscoveryEvidence' 'C1b runner'
+    $expectedDiscoveryWriter=@'
+function Write-C1bDiscoveryEvidence([string]$Checkpoint,$Diagnostic,[bool]$DiscoveryFailed) {
+    try {
+        $serverDiagnostic=$null
+        try{$serverDiagnostic=Get-TL1C1bPrivateAdbServerDiagnostic $adbServerGuard}catch{}
+        $path=Write-TL1C1bDeviceDiscoveryEvidence -RepoRoot $RepoRoot -AttemptId $attemptId `
+            -ExpectedCommitSha $ExpectedCommitSha -Checkpoint $Checkpoint -Diagnostic $Diagnostic -ServerDiagnostic $serverDiagnostic
+        $relativePath=[IO.Path]::GetRelativePath($RepoRoot,$path).Replace('\','/')
+        Write-Host ("C1b discovery evidence: checkpoint=$Checkpoint; path=$relativePath; sha256="+(Get-TL1C1aFileSha256 $path))
+    }catch{
+        [Console]::Error.WriteLine("C1b discovery evidence publication failed: checkpoint=$Checkpoint.")
+        if(-not$DiscoveryFailed){throw 'C1b discovery evidence publication failed.'}
+    }finally{
+        if($null-ne$Diagnostic){foreach($name in @('stdout_bytes','stderr_bytes')){
+            $bytes=$Diagnostic.$name;if($null-ne$bytes-and$bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}
+        }}
+    }
+}
+'@
+    if(($discoveryWriter.Extent.Text-replace'[\s`]+','')-cne
+       ($expectedDiscoveryWriter-replace'[\s`]+','')){
+        throw 'C1b runner discovery writer fail-closed/redaction binding 漂移。'
+    }
     return [pscustomobject][ordered]@{
         schema = 'tablet-layout-c1b-runner-readonly-ast/v1'
         runner_sha256 = $parsed.Sha256

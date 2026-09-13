@@ -25,7 +25,7 @@ false/unsupported。
 通知用户连接平板前，必须同时满足：
 
 1. 工作树 clean，并把完整 40 位 commit SHA 固定到本次候选；
-2. C1b observation gate、full offline gate（host coverage 29/29）、七场景 host E2E、针对当前 42-input fixed SHA 的
+2. C1b observation gate、full offline gate（host coverage 32/32、含 12 次合成 runner 调用的 host E2E）、针对当前 42-input fixed SHA 的
    real isolated host build smoke 与旧 v2/C1a 回归全部通过；
 3. build-env、artifact proof、ADB、aapt2、readonly 专项 gate 与凭据扫描全部通过；
 4. 独立审查无 P0/P1；

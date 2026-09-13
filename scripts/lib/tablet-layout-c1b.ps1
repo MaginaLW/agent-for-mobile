@@ -74,7 +74,9 @@ $script:TL1C1bRequiredOfflineCoverage = [string[]]@(
     'summary_deception_rejection','sdk_adb_trust_root','runner_e2e_success','runner_e2e_result_control_abort',
     'runner_e2e_malformed_abort_fail_closed','runner_e2e_tamper_abort',
     'runner_e2e_early_private_adb_server_exit','runner_e2e_early_private_adb_status_client_exit',
-    'runner_e2e_early_device_lease_cleanup_failure'
+    'runner_e2e_early_device_lease_cleanup_failure',
+    'runner_e2e_discovery_before_install_zero','runner_e2e_discovery_after_capture_zero',
+    'runner_e2e_discovery_writer_fail_closed'
 )
 
 if($null-eq('TL1C1bFileIdentity'-as[type])){
@@ -310,6 +312,68 @@ function Invoke-TL1C1bAdb {
     }
     if($result.Stderr.Length-ne0){throw "C1b adb/$Name stderr 必须 exact empty。"}
     return $result
+}
+
+function ConvertTo-TL1C1bDiscoveryRaw {
+    param([AllowNull()][byte[]]$Bytes)
+    if($null-eq$Bytes){return $null}
+    if($Bytes.Length-gt65536){throw 'C1b discovery raw 超出 64 KiB；拒绝不完整证据。'}
+    $hash='sha256:'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes))).ToLowerInvariant()
+    return [ordered]@{byte_length=$Bytes.Length;sha256=$hash;encoding='base64';data=[Convert]::ToBase64String($Bytes)}
+}
+
+function Write-TL1C1bDeviceDiscoveryEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][ValidatePattern('(?-i)^[a-z0-9][a-z0-9._-]{0,79}$')][string]$AttemptId,
+        [Parameter(Mandatory)][ValidatePattern('(?-i)^[0-9a-f]{40}$')][string]$ExpectedCommitSha,
+        [Parameter(Mandatory)][ValidateSet('before_install','after_capture',IgnoreCase=$false)][string]$Checkpoint,
+        [AllowNull()]$Diagnostic,
+        [AllowNull()]$ServerDiagnostic
+    )
+    $discovery=$null
+    if($null-ne$Diagnostic){
+        if($Diagnostic.schema-cne'tablet-layout-device-discovery-diagnostic/v1'){throw 'C1b discovery diagnostic schema 不匹配。'}
+        $discovery=[ordered]@{}
+        foreach($key in @('started_utc','completed_utc','actual_exit','device_count','device_states','outcome','failure_stage','client_failure_substage',
+            'stdout_capture_status','stdout_observed_byte_count','stderr_capture_status','stderr_observed_byte_count','stderr_capture_basis')){
+            $discovery[$key]=$Diagnostic.$key
+        }
+        $discovery.stdout=ConvertTo-TL1C1bDiscoveryRaw $Diagnostic.stdout_bytes
+        $discovery.stderr=ConvertTo-TL1C1bDiscoveryRaw $Diagnostic.stderr_bytes
+    }
+    $server=$null
+    if($null-ne$ServerDiagnostic){
+        $server=[ordered]@{}
+        foreach($key in @('schema','captured_utc','guard_verified','server_running_verified','server_pid','server_socket','server_executable_sha256')){
+            $server[$key]=$ServerDiagnostic.$key
+        }
+        $status=$ServerDiagnostic.startup_server_status
+        $server.startup_server_status=[ordered]@{availability=$status.availability;captured_utc=$status.captured_utc;
+            encoding=$status.encoding;representation=$status.representation;raw=ConvertTo-TL1C1bDiscoveryRaw $status.bytes}
+        foreach($name in @('stdout','stderr')){
+            $stream=$ServerDiagnostic.$name
+            $server[$name]=[ordered]@{availability=$stream.availability;captured_utc=$stream.captured_utc;
+                captured_bytes=$stream.captured_bytes;observed_bytes=$stream.observed_bytes;maximum_bytes=$stream.maximum_bytes;
+                overflowed=$stream.overflowed;eof_observed=$stream.eof_observed;scope=$stream.scope;
+                raw=ConvertTo-TL1C1bDiscoveryRaw $stream.snapshot_bytes}
+        }
+    }
+    $payload=[ordered]@{schema='tablet-layout-c1b-device-discovery-evidence/v1';attempt_id=$AttemptId;checkpoint=$Checkpoint;
+        expected_commit_sha=$ExpectedCommitSha;recorded_at_utc=[DateTime]::UtcNow.ToString('O');
+        discovery=$discovery;server=$server;server_diagnostic_available=($null-ne$ServerDiagnostic);
+        diagnostic_only=$true;device_acceptance_verified=$false;cleanup_verified_by_this_record=$false}
+    $path=Join-Path $RepoRoot ("docs/runs/evidence/tablet-layout-c1b-discovery-$AttemptId-$Checkpoint.json")
+    # A fresh clone has no ignored evidence directory before the first device read.
+    # Require the tracked parent, validate before creating only this fixed child,
+    # then let the atomic writer revalidate the path and opened file identity.
+    if(-not(Test-Path -LiteralPath (Join-Path $RepoRoot 'docs/runs') -PathType Container)){
+        throw 'C1b discovery evidence tracked parent directory 不存在。'
+    }
+    [void](Assert-TL1C1aOrdinaryPath $RepoRoot $path -AllowMissingLeaf)
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
+    return Write-TL1C1aJsonAtomic $RepoRoot $path $payload
 }
 
 function Assert-TL1C1bExactObjectKeys {

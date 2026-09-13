@@ -236,6 +236,23 @@ function Assert-C1bHostReadOnlyFrozenState {
         throw 'C1b host read-only AST proof 漂移。'
     }
 }
+function Write-C1bDiscoveryEvidence([string]$Checkpoint,$Diagnostic,[bool]$DiscoveryFailed) {
+    try {
+        $serverDiagnostic=$null
+        try{$serverDiagnostic=Get-TL1C1bPrivateAdbServerDiagnostic $adbServerGuard}catch{}
+        $path=Write-TL1C1bDeviceDiscoveryEvidence -RepoRoot $RepoRoot -AttemptId $attemptId `
+            -ExpectedCommitSha $ExpectedCommitSha -Checkpoint $Checkpoint -Diagnostic $Diagnostic -ServerDiagnostic $serverDiagnostic
+        $relativePath=[IO.Path]::GetRelativePath($RepoRoot,$path).Replace('\','/')
+        Write-Host ("C1b discovery evidence: checkpoint=$Checkpoint; path=$relativePath; sha256="+(Get-TL1C1aFileSha256 $path))
+    }catch{
+        [Console]::Error.WriteLine("C1b discovery evidence publication failed: checkpoint=$Checkpoint.")
+        if(-not$DiscoveryFailed){throw 'C1b discovery evidence publication failed.'}
+    }finally{
+        if($null-ne$Diagnostic){foreach($name in @('stdout_bytes','stderr_bytes')){
+            $bytes=$Diagnostic.$name;if($null-ne$bytes-and$bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}
+        }}
+    }
+}
 function Write-C1bFailureEvidence([string]$ReasonCode) {
     if(-not[string]::IsNullOrWhiteSpace($c1bDirectory)-and(Test-Path -LiteralPath $c1bDirectory -PathType Container)){
         $path=Join-Path $c1bDirectory 'tablet-layout-c1b-failure.json';if(Test-Path -LiteralPath $path){return}
@@ -486,7 +503,12 @@ try {
     $adbEnvironment=Get-TL1C1bPrivateAdbClientEnvironment $adbServerGuard
     [void](Assert-C1bPrivateAdbServerFrozenState)
 
-    $serial=Get-TL1C1aSingleDevice $AdbPath -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard;$serialHash=Get-TL1C1aSha256Text $serial
+    $discoveryDiagnostic=$null;$discoveryFailed=$true
+    try{
+        $serial=Get-TL1C1aSingleDevice $AdbPath -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard -DiscoveryDiagnostic ([ref]$discoveryDiagnostic)
+        $discoveryFailed=$false
+    }finally{Write-C1bDiscoveryEvidence 'before_install' $discoveryDiagnostic $discoveryFailed}
+    $serialHash=Get-TL1C1aSha256Text $serial
     $preBinding=Test-TL1C1aDeviceBinding `
         (Invoke-TL1C1aAdb -AdbPath $AdbPath -Serial $serial -Name fingerprint -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard).Text `
         (Invoke-TL1C1aAdb -AdbPath $AdbPath -Serial $serial -Name boot_id -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard).Text
@@ -589,7 +611,12 @@ try {
         $observationObject.upstream_t0.producer_commit_sha-cne$script:TL1C1aT0Baseline-or
         $observationObject.upstream_t0.captured_at-cne$t0Object.captured_at_utc){throw 'C1b observation 与 provider/T0 独立锚点不一致。'}
 
-    $postSerial=Get-TL1C1aSingleDevice $AdbPath -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard;$postSerialHash=Get-TL1C1aSha256Text $postSerial
+    $discoveryDiagnostic=$null;$discoveryFailed=$true
+    try{
+        $postSerial=Get-TL1C1aSingleDevice $AdbPath -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard -DiscoveryDiagnostic ([ref]$discoveryDiagnostic)
+        $discoveryFailed=$false
+    }finally{Write-C1bDiscoveryEvidence 'after_capture' $discoveryDiagnostic $discoveryFailed}
+    $postSerialHash=Get-TL1C1aSha256Text $postSerial
     $postBinding=Test-TL1C1aDeviceBinding `
         (Invoke-TL1C1aAdb -AdbPath $AdbPath -Serial $serial -Name fingerprint -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard).Text `
         (Invoke-TL1C1aAdb -AdbPath $AdbPath -Serial $serial -Name boot_id -ProcessEnvironment $adbEnvironment -ClearEnvironment -PrivateAdbServerGuard $adbServerGuard).Text

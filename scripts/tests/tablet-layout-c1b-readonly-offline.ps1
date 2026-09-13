@@ -174,6 +174,50 @@ try{
             'diagnostic recapture accepted' `
             -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Read-C1bControl。')
     }
+    Pass discovery_checkpoint_and_ref_bindings {
+        foreach($case in @(
+            @(' -DiscoveryDiagnostic ([ref]$discoveryDiagnostic)','','missing-ref'),
+            @(' -DiscoveryDiagnostic ([ref]$discoveryDiagnostic)',' -DiscoveryDiagnostic ([ref]$providerFailure)','wrong-ref'),
+            @("Write-C1bDiscoveryEvidence 'before_install'","Write-C1bDiscoveryEvidence 'after_capture'",'wrong-checkpoint'),
+            @("Write-C1bDiscoveryEvidence 'before_install'","Write-C1bDiscoveryEvidence `$runId",'dynamic-checkpoint'),
+            @("'before_install' `$discoveryDiagnostic `$discoveryFailed","'before_install' `$providerFailure `$discoveryFailed",'wrong-payload'),
+            @("'after_capture' `$discoveryDiagnostic `$discoveryFailed","'after_capture' `$discoveryDiagnostic `$false",'failure-flag'),
+            @('$discoveryDiagnostic=$null;$discoveryFailed=$true','$discoveryDiagnostic=$providerFailure;$discoveryFailed=$true','stale-diagnostic'),
+            @('$discoveryDiagnostic=$null;$discoveryFailed=$true','$discoveryDiagnostic=$null;$discoveryFailed=$false','early-success'),
+            @('$discoveryFailed=$false','$discoveryFailed=$true','success-flag')
+        )){
+            Throws {Assert-TL1C1bRunnerReadOnlyAst (MutateOnce $runner $case[0] $case[1] ("discovery-binding-"+$case[2]+'.ps1'))} `
+                'discovery checkpoint/ref/result binding mutation accepted' `
+                -SemanticReason (ExactReason 'C1b runner discovery checkpoint/ref/finally binding 漂移。')
+        }
+    }
+    Pass discovery_finally_required {
+        foreach($checkpoint in @('before_install','after_capture')){
+            $anchor="}finally{Write-C1bDiscoveryEvidence '$checkpoint' `$discoveryDiagnostic `$discoveryFailed}"
+            $replacement="}catch{Write-C1bDiscoveryEvidence '$checkpoint' `$discoveryDiagnostic `$discoveryFailed}"
+            Throws {Assert-TL1C1bRunnerReadOnlyAst (MutateOnce $runner $anchor $replacement ("discovery-catch-"+$checkpoint+'.ps1'))} `
+                'discovery evidence omitted on a successful read accepted' `
+                -SemanticReason (ExactReason 'C1b runner discovery checkpoint/ref/finally binding 漂移。')
+        }
+        Throws {Assert-TL1C1bRunnerReadOnlyAst (MutateOnce $runner `
+            "Write-C1bDiscoveryEvidence 'before_install' `$discoveryDiagnostic `$discoveryFailed" '' 'discovery-publish-removed.ps1')} `
+            'discovery evidence publication removal accepted' `
+            -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Write-C1bDiscoveryEvidence。')
+    }
+    Pass discovery_writer_fail_closed_and_redaction {
+        foreach($case in @(
+            @('if(-not$DiscoveryFailed)','if($DiscoveryFailed)','inverted-failure'),
+            @("throw 'C1b discovery evidence publication failed.'",'return','swallowed-failure'),
+            @('-AttemptId $attemptId','-AttemptId $runId','run-id-coupling'),
+            @('Get-TL1C1bPrivateAdbServerDiagnostic $adbServerGuard','Get-TL1C1bPrivateAdbServerDiagnostic $otherGuard','wrong-guard'),
+            @('checkpoint=$Checkpoint; path=$relativePath; sha256=','checkpoint=$Checkpoint; path=$path; sha256=','absolute-path-output'),
+            @('$bytes=$Diagnostic.$name','$bytes=$providerFailure.$name','wrong-buffer-clear')
+        )){
+            Throws {Assert-TL1C1bRunnerReadOnlyAst (MutateOnce $runner $case[0] $case[1] ("discovery-writer-"+$case[2]+'.ps1'))} `
+                'discovery writer error/redaction binding mutation accepted' `
+                -SemanticReason (ExactReason 'C1b runner discovery writer fail-closed/redaction binding 漂移。')
+        }
+    }
     Pass t0_positive {$script:t0Proof=Assert-TL1C1bT0ReadOnlySurface $t0Runner $t0Library;if($t0Proof.query_invocation_counts.devices-ne1){throw 'devices'}}
     Pass parse_error {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' 'try { {' 'parse.ps1')} 'parse error accepted'}
     Pass ampersand_dynamic {Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'try {' "try {`n    & `$AdbPath version" 'amp.ps1')} 'dynamic invocation accepted' -SemanticReason (ExactReason 'C1b runner 禁止 ampersand dynamic invocation。')}

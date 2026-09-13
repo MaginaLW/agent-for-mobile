@@ -361,6 +361,16 @@ public static class Program {
             Console.Out.Write(new String('X', 131072));
             Console.Out.Flush();
         }
+        if (Mode == "diagnostic_snapshot") {
+            byte[] stdout = new byte[] { 0, 255, 65, 13, 10 };
+            byte[] stderr = new byte[] { 254, 66, 10 };
+            Stream stdoutStream = Console.OpenStandardOutput();
+            Stream stderrStream = Console.OpenStandardError();
+            stdoutStream.Write(stdout, 0, stdout.Length);
+            stderrStream.Write(stderr, 0, stderr.Length);
+            stdoutStream.Flush();
+            stderrStream.Flush();
+        }
         if (Mode == "hang_without_listener") {
             while (true) Thread.Sleep(1000);
         }
@@ -436,7 +446,12 @@ public static class Program {
                 Thread.Sleep(1500);
                 return 91;
             }
-            Console.Write(SendService(port, "host:server-status", true));
+            string statusText = SendService(port, "host:server-status", true);
+            if (Mode == "diagnostic_snapshot") {
+                File.WriteAllText(Path.Combine(StateRoot, "startup-server-status.txt"),
+                    statusText, new UTF8Encoding(false, true));
+            }
+            Console.Write(statusText);
             return 0;
         }
         if (args[4] == "kill-server") {
@@ -769,6 +784,143 @@ try {
             'fake adb 子进程环境泄露 serial/trace。'
         Assert-True (($lines -join "`n") -notmatch [regex]::Escape($state.Secret)) `
             'fake adb invocation log 泄露 serial。'
+    }
+
+    Test-Case 'ready server 诊断复用 startup status、原字节快照且不增加 adb 命令' {
+        $state = New-FakeState 'server-diagnostic' 'diagnostic_snapshot'
+        $beforeOpen = [DateTime]::UtcNow
+        $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+            -StartupTimeoutSec 5 -ClientTimeoutSec 2 -PortAttemptCount 4 `
+            -MaximumOutputBytes 4096
+        $afterOpen = [DateTime]::UtcNow
+        try {
+            $beforeLines = @(Get-FakeInvocationLines $state)
+            $diagnostic = Get-TL1C1bPrivateAdbServerDiagnostic -Guard $guard
+            $again = Get-TL1C1bPrivateAdbServerDiagnostic -Guard $guard
+            $afterLines = @(Get-FakeInvocationLines $state)
+            Assert-True ($beforeLines.Count -eq 2 -and
+                ($beforeLines -join "`n") -ceq ($afterLines -join "`n")) `
+                'server 诊断 getter 增加了 adb client/server 命令。'
+            $guardState = Get-TL1C1bPrivateAdbGuardState $guard
+            Assert-True ($diagnostic.schema -ceq
+                    'tablet-layout-c1b-private-adb-server-diagnostic/v1' -and
+                $diagnostic.guard_verified -and $diagnostic.server_running_verified -and
+                $diagnostic.server_pid -eq $guardState.ProcessId -and
+                $diagnostic.server_socket -ceq $guardState.ServerSocket -and
+                $diagnostic.server_executable_sha256 -ceq $guardState.AdbExecutableSha256) `
+                'server 诊断未绑定实际 guarded PID/socket/executable。'
+            $expectedStatus = [IO.File]::ReadAllBytes(
+                (Join-Path $state.Root 'startup-server-status.txt'))
+            $status = $diagnostic.startup_server_status
+            $statusUtc = [DateTime]::Parse($status.captured_utc,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind)
+            Assert-True ($status.availability -ceq 'observed' -and
+                $status.encoding -ceq 'strict_utf8' -and
+                $status.representation -ceq
+                    'lossless_utf8_reencoding_of_validated_client_stdout' -and
+                [Convert]::ToBase64String($status.bytes) -ceq
+                    [Convert]::ToBase64String($expectedStatus) -and
+                $statusUtc.Kind -eq [DateTimeKind]::Utc -and
+                $statusUtc -ge $beforeOpen -and $statusUtc -le $afterOpen -and
+                $status.captured_utc -ceq $again.startup_server_status.captured_utc) `
+                'server-status 未保留原响应字节/初始采集 UTC，或 getter 伪造新采集。'
+            foreach ($streamCase in @(
+                @{ Name = 'stdout'; Bytes = [byte[]]@(0,255,65,13,10) }
+                @{ Name = 'stderr'; Bytes = [byte[]]@(254,66,10) })) {
+                $snapshot = $diagnostic.($streamCase.Name)
+                Assert-True ($snapshot.availability -ceq 'observed' -and
+                    [Convert]::ToBase64String($snapshot.snapshot_bytes) -ceq
+                        [Convert]::ToBase64String($streamCase.Bytes) -and
+                    $snapshot.captured_bytes -eq $streamCase.Bytes.Length -and
+                    $snapshot.observed_bytes -eq $streamCase.Bytes.Length -and
+                    $snapshot.maximum_bytes -eq 4096 -and -not $snapshot.overflowed -and
+                    $snapshot.eof_observed -is [bool] -and -not $snapshot.eof_observed -and
+                    $snapshot.scope -ceq 'bounded_inflight_snapshot_not_final_stream_readback') `
+                    'server stream 快照内容/边界/非 EOF 语义不准确。'
+                $callerBytes = $snapshot.snapshot_bytes
+                $callerBytes[0] = 99
+                Assert-True ($snapshot.snapshot_bytes[0] -eq $streamCase.Bytes[0] -and
+                    $again.($streamCase.Name).snapshot_bytes[0] -eq $streamCase.Bytes[0]) `
+                    'server stream 字节数组未与调用者隔离。'
+            }
+            $callerStatus = $status.bytes
+            $callerStatus[0] = 99
+            Assert-True ($status.bytes[0] -eq $expectedStatus[0] -and
+                $again.startup_server_status.bytes[0] -eq $expectedStatus[0]) `
+                'startup status 字节数组未与调用者隔离。'
+            [void](Assert-Throws { $diagnostic.server_pid = 123 } 'server snapshot 标量可写。')
+            [void](Assert-Throws { $diagnostic.stdout.observed_bytes = 0 } 'stream snapshot 标量可写。')
+        } finally {
+            [void](Close-TL1C1bPrivateAdbServerGuard $guard -ShutdownTimeoutSec 3)
+        }
+        Assert-StateHasNoLivePort $state
+    }
+
+    Test-Case 'server stream 快照保留 overflow 且不可读取的证据为 unknown' {
+        $stream = [TL1C1bBoundedWriteStream]::new(4)
+        try {
+            $stream.Write([byte[]]@(1,2,3,4,5,6), 0, 6)
+            $snapshot = Get-TL1C1bPrivateAdbServerStreamSnapshot $stream $null
+            Assert-True ($snapshot.availability -ceq 'observed' -and
+                $snapshot.captured_bytes -eq 4 -and $snapshot.observed_bytes -eq 6 -and
+                $snapshot.maximum_bytes -eq 4 -and $snapshot.overflowed -and
+                $null -eq $snapshot.eof_observed -and
+                ($snapshot.snapshot_bytes -join ',') -ceq '1,2,3,4') `
+                'server stream overflow 截断或 missing drain task 语义不准确。'
+        } finally { $stream.Dispose() }
+        foreach ($unavailableStream in @($stream, $null)) {
+            $unknown = Get-TL1C1bPrivateAdbServerStreamSnapshot $unavailableStream $null
+            Assert-True ($unknown.availability -ceq 'unknown' -and
+                $null -eq $unknown.captured_utc -and $null -eq $unknown.snapshot_bytes -and
+                $null -eq $unknown.captured_bytes -and $null -eq $unknown.observed_bytes -and
+                $null -eq $unknown.maximum_bytes -and $null -eq $unknown.overflowed -and
+                $null -eq $unknown.eof_observed) `
+                'unavailable stream 被误写为零字节、未 overflow 或已 EOF。'
+        }
+        $unknownStatus = [TL1C1bPrivateAdbServerStatusSnapshot]::new($null, $null)
+        Assert-True ($unknownStatus.availability -ceq 'unknown' -and
+            $null -eq $unknownStatus.bytes -and $null -eq $unknownStatus.captured_utc -and
+            $null -eq $unknownStatus.encoding -and $null -eq $unknownStatus.representation) `
+            'unavailable startup status 被误写成空响应或已观测。'
+    }
+
+    Test-Case 'server diagnostic getter 拒绝伪造、已关闭 guard 及失效 listener' {
+        $state = New-FakeState 'diagnostic-guard-rejection'
+        $guard = Open-TL1C1bPrivateAdbServerGuard $FakeAdb $state.Environment `
+            -StartupTimeoutSec 5 -ClientTimeoutSec 2 -PortAttemptCount 4
+        $beforeLines = @(Get-FakeInvocationLines $state)
+        try {
+            [void](Assert-Throws {
+                Get-TL1C1bPrivateAdbServerDiagnostic ([pscustomobject]@{ Id = $guard.Id }) |
+                    Out-Null
+            } 'server diagnostic 接受伪造 guard 类型。')
+            [void](Assert-Throws {
+                Get-TL1C1bPrivateAdbServerDiagnostic (
+                    [TL1C1bPrivateAdbGuardHandle]::new($guard.Id)) | Out-Null
+            } 'server diagnostic 接受相同 ID 的伪造 guard identity。')
+            $originalOwner =
+                (Get-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbListenerOwned).ScriptBlock
+            try {
+                Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbListenerOwned `
+                    -Value { param($Port, $ExpectedProcessId) return $false }
+                [void](Assert-Throws {
+                    Get-TL1C1bPrivateAdbServerDiagnostic $guard | Out-Null
+                } 'server diagnostic 在 listener 证明失效后仍返回 verified。')
+            } finally {
+                Set-Item -LiteralPath Function:\Test-TL1C1bPrivateAdbListenerOwned `
+                    -Value $originalOwner
+            }
+            Assert-True (($beforeLines -join "`n") -ceq
+                (@(Get-FakeInvocationLines $state) -join "`n")) `
+                'diagnostic 拒绝 guard 时增加了 adb 命令。'
+        } finally {
+            [void](Close-TL1C1bPrivateAdbServerGuard $guard -ShutdownTimeoutSec 3)
+        }
+        [void](Assert-Throws {
+            Get-TL1C1bPrivateAdbServerDiagnostic $guard | Out-Null
+        } 'server diagnostic 接受 disposed guard。')
+        Assert-StateHasNoLivePort $state
     }
 
     Test-Case 'guarded diagnostic 仅将实际整数 ExitCode 记录为已观测退出' {
@@ -1208,6 +1360,9 @@ try {
             Assert-TL1C1bPrivateAdbServerGuardUnchanged $guard | Out-Null
         } '被覆写的 Binding 未被拒绝。')
         [void](Assert-Throws {
+            Get-TL1C1bPrivateAdbServerDiagnostic $guard | Out-Null
+        } 'server diagnostic getter 未拒绝被覆写的 Binding。')
+        [void](Assert-Throws {
             Close-TL1C1bPrivateAdbServerGuard $guard -ShutdownTimeoutSec 2 | Out-Null
         } '被覆写的 Binding 在 Close 未 fail closed。')
         Assert-True $guard.Disposed '被覆写 Binding 失败路径未将已回收 guard 标记为 disposed。'
@@ -1239,6 +1394,9 @@ try {
         [void](Assert-Throws {
             Assert-TL1C1bPrivateAdbServerGuardUnchanged $guard | Out-Null
         } '被覆写的 Guard field 未被拒绝。')
+        [void](Assert-Throws {
+            Get-TL1C1bPrivateAdbServerDiagnostic $guard | Out-Null
+        } 'server diagnostic getter 未拒绝被覆写的 Guard。')
         [void](Assert-Throws {
             Close-TL1C1bPrivateAdbServerGuard $guard -ShutdownTimeoutSec 2 | Out-Null
         } '被覆写的 Guard field 在 Close 未 fail closed。')

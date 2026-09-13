@@ -50,6 +50,16 @@ public sealed class TL1C1bBoundedWriteStream : Stream {
     public long ObservedBytes { get { lock (gate) { return observedBytes; } } }
     public byte[] Snapshot() { lock (gate) { return stream.ToArray(); } }
 
+    public TL1C1bPrivateAdbServerStreamSnapshot DiagnosticSnapshot(Task drainTask) {
+        lock (gate) {
+            if (disposed) throw new ObjectDisposedException(nameof(TL1C1bBoundedWriteStream));
+            return new TL1C1bPrivateAdbServerStreamSnapshot(
+                DateTime.UtcNow.ToString("o"), stream.ToArray(), observedBytes, maximumBytes,
+                observedBytes > maximumBytes,
+                drainTask == null ? (bool?)null : drainTask.IsCompletedSuccessfully);
+        }
+    }
+
     public override void Write(byte[] buffer, int offset, int count) {
         if (buffer == null) throw new ArgumentNullException(nameof(buffer));
         if (offset < 0 || count < 0 || offset + count > buffer.Length) {
@@ -187,6 +197,81 @@ public sealed class TL1C1bPrivateAdbGuardHandle {
     }
 
     internal void MarkDisposed() { Disposed = true; }
+}
+
+public sealed class TL1C1bPrivateAdbServerStatusSnapshot {
+    private readonly string statusText;
+    public string availability { get; }
+    public string captured_utc { get; }
+    public string encoding { get; }
+    public string representation { get; }
+    public byte[] bytes { get { return statusText == null ? null :
+        new UTF8Encoding(false, true).GetBytes(statusText); } }
+
+    public TL1C1bPrivateAdbServerStatusSnapshot(string text, string capturedUtc) {
+        statusText = String.IsNullOrEmpty(text) ? null : text;
+        availability = statusText == null ? "unknown" : "observed";
+        captured_utc = statusText == null ? null : capturedUtc;
+        encoding = statusText == null ? null : "strict_utf8";
+        representation = statusText == null ? null : "lossless_utf8_reencoding_of_validated_client_stdout";
+    }
+}
+
+public sealed class TL1C1bPrivateAdbServerStreamSnapshot {
+    private readonly byte[] snapshotBytes;
+    public string availability { get; }
+    public string captured_utc { get; }
+    public string scope { get; }
+    public byte[] snapshot_bytes { get { return snapshotBytes == null ? null :
+        (byte[])snapshotBytes.Clone(); } }
+    public int? captured_bytes { get; }
+    public long? observed_bytes { get; }
+    public long? maximum_bytes { get; }
+    public bool? overflowed { get; }
+    public bool? eof_observed { get; }
+
+    public TL1C1bPrivateAdbServerStreamSnapshot(string capturedUtc, byte[] bytes,
+        long? observedBytes, long? maximumBytes, bool? overflowed, bool? eofObserved) {
+        availability = bytes == null ? "unknown" : "observed";
+        captured_utc = bytes == null ? null : capturedUtc;
+        scope = "bounded_inflight_snapshot_not_final_stream_readback";
+        snapshotBytes = bytes == null ? null : (byte[])bytes.Clone();
+        captured_bytes = bytes == null ? (int?)null : bytes.Length;
+        observed_bytes = observedBytes;
+        maximum_bytes = maximumBytes;
+        this.overflowed = overflowed;
+        eof_observed = eofObserved;
+    }
+}
+
+public sealed class TL1C1bPrivateAdbServerDiagnostic {
+    public string schema { get; }
+    public string captured_utc { get; }
+    public bool guard_verified { get; }
+    public bool server_running_verified { get; }
+    public int server_pid { get; }
+    public string server_socket { get; }
+    public string server_executable_sha256 { get; }
+    public TL1C1bPrivateAdbServerStatusSnapshot startup_server_status { get; }
+    public TL1C1bPrivateAdbServerStreamSnapshot stdout { get; }
+    public TL1C1bPrivateAdbServerStreamSnapshot stderr { get; }
+
+    public TL1C1bPrivateAdbServerDiagnostic(string capturedUtc, int serverPid,
+        string serverSocket, string executableSha256,
+        TL1C1bPrivateAdbServerStatusSnapshot startupStatus,
+        TL1C1bPrivateAdbServerStreamSnapshot stdout,
+        TL1C1bPrivateAdbServerStreamSnapshot stderr) {
+        schema = "tablet-layout-c1b-private-adb-server-diagnostic/v1";
+        captured_utc = capturedUtc;
+        guard_verified = true;
+        server_running_verified = true;
+        server_pid = serverPid;
+        server_socket = serverSocket;
+        server_executable_sha256 = executableSha256;
+        startup_server_status = startupStatus;
+        this.stdout = stdout;
+        this.stderr = stderr;
+    }
 }
 
 public sealed class TL1C1bPrivateAdbBinding {
@@ -1673,6 +1758,7 @@ function Open-TL1C1bPrivateAdbServerGuard {
                         $status = Invoke-TL1C1bPrivateAdbClientCommand `
                             $canonicalAdb $environment $port $attempt.ProcessId 'server-status' `
                             $ClientTimeoutSec $MaximumOutputBytes
+                        $statusCapturedUtc = [DateTime]::UtcNow.ToString('o')
                     } catch {
                         $clientDiagnostic = $_.Exception.Data[
                             $script:TL1C1bPrivateAdbClientDiagnosticDataKey]
@@ -1720,6 +1806,8 @@ function Open-TL1C1bPrivateAdbServerGuard {
                         Stderr = $attempt.Stderr
                         StdoutTask = $attempt.StdoutTask
                         StderrTask = $attempt.StderrTask
+                        StartupServerStatusText = [string]$status
+                        StartupServerStatusCapturedUtc = $statusCapturedUtc
                         IssuedBindings = [Collections.Generic.List[object]]::new()
                         IssuedCleanupBindings = [Collections.Generic.List[object]]::new()
                         Disposed = $false
@@ -1830,6 +1918,36 @@ function Assert-TL1C1bPrivateAdbServerGuardUnchanged {
     Assert-TL1C1bPrivateAdbIssuedBindingsUnchanged $state
     [void](Assert-TL1C1bPrivateAdbServerStateUnchanged $state)
     return New-TL1C1bPrivateAdbBindingCopy $state
+}
+
+function Get-TL1C1bPrivateAdbServerStreamSnapshot {
+    param([AllowNull()]$Stream, [AllowNull()]$DrainTask)
+
+    try {
+        if ($Stream -is [TL1C1bBoundedWriteStream]) {
+            return $Stream.DiagnosticSnapshot($DrainTask)
+        }
+    } catch { }
+    return [TL1C1bPrivateAdbServerStreamSnapshot]::new(
+        $null, $null, $null, $null, $null, $null)
+}
+
+function Get-TL1C1bPrivateAdbServerDiagnostic {
+    param([Parameter(Mandatory)]$Guard)
+
+    # No client command, process launch, stream wait, or binding change: the status is
+    # the already validated startup response. Active server streams are snapshots,
+    # not a claim that final stdout/stderr have reached EOF or cleanup has completed.
+    $state = Get-TL1C1bPrivateAdbGuardState $Guard
+    Assert-TL1C1bPrivateAdbIssuedBindingsUnchanged $state
+    [void](Assert-TL1C1bPrivateAdbServerStateUnchanged $state)
+    $capturedUtc = [DateTime]::UtcNow.ToString('o')
+    $status = [TL1C1bPrivateAdbServerStatusSnapshot]::new(
+        $state.StartupServerStatusText, $state.StartupServerStatusCapturedUtc)
+    return [TL1C1bPrivateAdbServerDiagnostic]::new(
+        $capturedUtc, $state.ProcessId, $state.ServerSocket, $state.AdbExecutableSha256,
+        $status, (Get-TL1C1bPrivateAdbServerStreamSnapshot $state.Stdout $state.StdoutTask),
+        (Get-TL1C1bPrivateAdbServerStreamSnapshot $state.Stderr $state.StderrTask))
 }
 
 function Get-TL1C1bPrivateAdbClientEnvironment {

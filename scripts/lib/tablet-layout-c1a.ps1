@@ -521,50 +521,152 @@ function Get-TL1C1aSingleDevice {
         [Parameter(Mandatory)][string]$AdbPath,
         [hashtable]$ProcessEnvironment,
         [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [AllowNull()]$PrivateAdbServerGuard,
+        [ref]$DiscoveryDiagnostic
     )
-    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
-    if (@($clientArguments).Count -ne 0) {
-        if ($null -eq $PrivateAdbServerGuard) {
-            throw 'private ADB endpoint 必须提供 server Guard。'
-        }
-        $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
-            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
-            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-            -TimeoutSec 30 -ClientKind Adb
-    } else {
-        if ($null -ne $PrivateAdbServerGuard) {
-            throw 'server Guard 不得绑定非 private ADB endpoint。'
-        }
-        $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
-            -Environment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
+    $diagnostic = [pscustomobject][ordered]@{
+        schema = 'tablet-layout-device-discovery-diagnostic/v1'
+        started_utc = [DateTimeOffset]::UtcNow.ToString('o')
+        completed_utc = $null
+        stdout_bytes = $null
+        stdout_capture_status = 'unavailable'
+        stdout_observed_byte_count = $null
+        stderr_bytes = $null
+        stderr_capture_status = 'unavailable'
+        stderr_observed_byte_count = $null
+        stderr_capture_basis = $null
+        actual_exit = $null
+        device_count = $null
+        device_states = $null
+        outcome = 'failed'
+        failure_stage = 'endpoint'
+        client_failure_substage = $null
     }
-    $rows = [Collections.Generic.List[object]]::new()
-    $headerSeen = $false
-    foreach ($line in ($result.Text -split "`r?`n")) {
-        $trimmed = $line.Trim()
-        if ($trimmed -eq '') { continue }
-        if ($trimmed -ceq 'List of devices attached') {
-            if ($headerSeen -or $rows.Count -gt 0) { throw 'adb devices header 重复或位置错误。' }
-            $headerSeen = $true
-            continue
+    try {
+        $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
+        if (@($clientArguments).Count -ne 0) {
+            if ($null -eq $PrivateAdbServerGuard) {
+                throw 'private ADB endpoint 必须提供 server Guard。'
+            }
+            $diagnostic.failure_stage = 'client'
+            $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
+                -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
+                -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
+                -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
+                -TimeoutSec 30 -ClientKind Adb
+        } else {
+            if ($null -ne $PrivateAdbServerGuard) {
+                throw 'server Guard 不得绑定非 private ADB endpoint。'
+            }
+            $diagnostic.failure_stage = 'client'
+            $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
+                -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
+                -Environment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
         }
-        if (-not $headerSeen) { throw 'adb devices 输出含未知前导行。' }
-        $match = [regex]::Match($trimmed, '^(\S+)\s+(.+)$')
-        if (-not $match.Success) { throw 'adb devices 输出含不可解析设备行。' }
-        $state = $match.Groups[2].Value.Trim()
-        if ($state -cnotmatch '^(device|unauthorized|offline|no permissions(?:\s.*)?)$') {
-            throw 'adb devices 输出含未知 transport/state。'
+        if ($null -ne $DiscoveryDiagnostic) {
+            $diagnostic.actual_exit = [int]$result.ExitCode
+            $diagnostic.stdout_observed_byte_count = [long]$result.Bytes.Length
+            if ($result.Bytes.Length -le 65536) {
+                $diagnostic.stdout_bytes = [byte[]]$result.Bytes.Clone()
+                $diagnostic.stdout_capture_status = 'complete'
+            } else {
+                $diagnostic.stdout_capture_status = 'over_limit'
+            }
+            # Invoke 的 stderr 接口仅保留已验证的 strict UTF-8 文本；不冒充原始流。
+            # 诊断复制单流上限为 64 KiB；超限不截断，不改变原有过程及 parser 的行为。
+            try {
+                $encoding = [Text.UTF8Encoding]::new($false, $true)
+                $diagnostic.stderr_observed_byte_count = [long]$encoding.GetByteCount($result.Stderr)
+                $diagnostic.stderr_capture_basis = 'strict_utf8_reencoded_from_process_result'
+                if ($diagnostic.stderr_observed_byte_count -le 65536) {
+                    $diagnostic.stderr_bytes = $encoding.GetBytes($result.Stderr)
+                    $diagnostic.stderr_capture_status = 'complete'
+                } else {
+                    $diagnostic.stderr_capture_status = 'over_limit'
+                }
+            } catch {
+                $diagnostic.stderr_capture_status = 'encoding_failed'
+            }
         }
-        $rows.Add([pscustomobject]@{ Serial=$match.Groups[1].Value; State=$state })
+        $diagnostic.failure_stage = 'parser'
+        $rows = [Collections.Generic.List[object]]::new()
+        $headerSeen = $false
+        foreach ($line in ($result.Text -split "`r?`n")) {
+            $trimmed = $line.Trim()
+            if ($trimmed -eq '') { continue }
+            if ($trimmed -ceq 'List of devices attached') {
+                if ($headerSeen -or $rows.Count -gt 0) { throw 'adb devices header 重复或位置错误。' }
+                $headerSeen = $true
+                continue
+            }
+            if (-not $headerSeen) { throw 'adb devices 输出含未知前导行。' }
+            $match = [regex]::Match($trimmed, '^(\S+)\s+(.+)$')
+            if (-not $match.Success) { throw 'adb devices 输出含不可解析设备行。' }
+            $state = $match.Groups[2].Value.Trim()
+            if ($state -cnotmatch '^(device|unauthorized|offline|no permissions(?:\s.*)?)$') {
+                throw 'adb devices 输出含未知 transport/state。'
+            }
+            $rows.Add([pscustomobject]@{ Serial=$match.Groups[1].Value; State=$state })
+        }
+        if (-not $headerSeen) { throw 'adb devices 缺少固定 header。' }
+        if ($null -ne $DiscoveryDiagnostic) {
+            # 只在完整语法解析完成后提供数量；未知尾部不产生伪造的部分计数。
+            $diagnostic.device_count = $rows.Count
+            $diagnostic.device_states = [string[]]@($rows | ForEach-Object {
+                if ($_.State.StartsWith('no permissions', [StringComparison]::Ordinal)) {
+                    'no permissions'
+                } else { [string]$_.State }
+            })
+        }
+        $diagnostic.failure_stage = 'device_count'
+        if ($rows.Count -ne 1) { throw "C1a 要求恰好一台设备，当前识别到 $($rows.Count) 台。" }
+        $diagnostic.failure_stage = 'device_state'
+        if ($rows[0].State -cne 'device') { throw "唯一设备不可用（state=$($rows[0].State)）。" }
+        $diagnostic.failure_stage = 'serial'
+        if ([string]$rows[0].Serial -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$') { throw '设备 serial 格式不安全。' }
+        $diagnostic.outcome = 'succeeded'
+        $diagnostic.failure_stage = $null
+        return [string]$rows[0].Serial
     }
-    if (-not $headerSeen) { throw 'adb devices 缺少固定 header。' }
-    if ($rows.Count -ne 1) { throw "C1a 要求恰好一台设备，当前识别到 $($rows.Count) 台。" }
-    if ($rows[0].State -cne 'device') { throw "唯一设备不可用（state=$($rows[0].State)）。" }
-    if ([string]$rows[0].Serial -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$') { throw '设备 serial 格式不安全。' }
-    return [string]$rows[0].Serial
+    catch {
+        if ($null -ne $DiscoveryDiagnostic -and $diagnostic.failure_stage -ceq 'client') {
+            # Guarded client 失败时不返回 raw result；仅采纳既有闭合诊断中可验证的退出事实。
+            # 诊断提取不得替换原异常，也不复制异常文本、serial 或任意扩展字段。
+            try {
+                $client = $_.Exception.Data['TL1C1bPrivateAdbClientDiagnostic']
+                if ($null -ne $client -and
+                    $client.schema -ceq 'tablet-layout-c1b-private-adb-guarded-client-diagnostic/v1' -and
+                    $client.client_kind -ceq 'Adb' -and $client.operation_class -ceq 'device_discovery') {
+                    if ($client.failure_substage -cin @(
+                            'create-job','start','job_membership','stream_start','stdin',
+                            'process_wait','output_overflow','timeout','stream_drain','stderr_utf8',
+                            'stdout_utf8','process_exit','postcondition','diagnostic','cleanup')) {
+                        $diagnostic.client_failure_substage = [string]$client.failure_substage
+                    }
+                    if ($null -ne $client.process -and
+                        $client.process.exit_observed -is [bool] -and $client.process.exit_observed -and
+                        $client.process.exit_code -is [int]) {
+                        $diagnostic.actual_exit = [int]$client.process.exit_code
+                    }
+                    foreach ($streamName in @('stdout','stderr')) {
+                        $stream = $client.process.$streamName
+                        if ($null -ne $stream -and
+                            ($stream.observed_bytes -is [int] -or $stream.observed_bytes -is [long]) -and
+                            $stream.observed_bytes -ge 0) {
+                            $diagnostic.($streamName + '_observed_byte_count') = [long]$stream.observed_bytes
+                        }
+                    }
+                }
+            } catch { }
+        }
+        throw
+    }
+    finally {
+        if ($null -ne $DiscoveryDiagnostic) {
+            $diagnostic.completed_utc = [DateTimeOffset]::UtcNow.ToString('o')
+            $DiscoveryDiagnostic.Value = $diagnostic
+        }
+    }
 }
 
 function ConvertTo-TL1C1aContentUriArgument {
