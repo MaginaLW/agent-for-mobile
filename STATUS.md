@@ -2,10 +2,12 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A5 主机工作已完成，Ready 状态为 `host_ready_waiting_for_device_assistance`；独立终审通过，设备验收尚未成立。** 本轮八个主机阶段实际退出均为 0；支撑审计 15,833 项、313 份原始文件通过，绑定发布及 59 项主机预检通过，最终独审 7,708 项、82 份原始文件通过。Ready 和读回记录已只读保存。复用同 SHA 的 A1—A4 证据：完整门 13/13、JVM 1156 项，唯一 BuildOnly、789 项读回及封存均通过；本轮未在冻结候选运行普通 Git、Gradle/check 或重跑 BuildOnly，ADB/设备操作 0。见 [A5 主机准备](docs/runs/2026-09-13-C1b-a878d12-A5主机准备.md)、[BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+**当前任务：** 用户已对固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的新现场条件及单次复验回复“确认”。执行前独审 1,068 项通过，唯一设备 capture 已启动，正在等待实际终态；尚无设备通过结论。见[本轮设备执行](docs/runs/2026-09-13-C1b-a878d12-设备执行.md)。下段 A5 的零设备调用是该主机阶段停止点。
+
+**已完成的主机阶段：** 固定候选的 A1—A5 已通过，Ready 原始记录为 `host_ready_waiting_for_device_assistance`。八个 A5 主机阶段实际退出均为 0；支撑审计 15,833 项、313 份原始文件通过，绑定发布及 59 项主机预检通过，最终独审 7,708 项、82 份原始文件通过。Ready 和读回记录已只读保存。同 SHA 的 A1—A4 证据包括完整门 13/13、JVM 1156 项，以及唯一 BuildOnly、789 项读回和封存通过；A5 没有在冻结候选运行普通 Git、Gradle/check 或重跑 BuildOnly，ADB/设备操作 0。见 [A5 主机准备](docs/runs/2026-09-13-C1b-a878d12-A5主机准备.md)、[BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 旧 `c43652a/r1` 已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
-- 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。用户在 A4 完成后“继续下一步”，本轮授权范围为 A5 到 Ready；下一步仍需当前 SHA 的新现场确认和单次设备授权。原冻结候选不重跑，原项目继续负责协调文档。
+- 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。A5 的“继续下一步”授权已完成；本轮设备授权来自 Ready 发布后新的“确认”，单次执行且不自动重试。原冻结轮不重跑，原项目继续负责协调文档。
 - 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有实现合入 main。
 
 ## 09-08 历史快照
