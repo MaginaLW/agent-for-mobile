@@ -2,10 +2,10 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：新固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A4 已通过，主机合同为 `host_accepted_no_device`；下一项是 A5 正式主机准备，Ready 和设备验收尚未成立。** 完整门 13/13 PASS、JVM 1156 项、Gradle 219 个任务均通过。获本轮明确授权后，唯一 BuildOnly 自然结束，实际退出 0；一次独立读回 789 项通过，终态封存实际退出 0。17 份内部结果和 7 份外部捕获分别封存；最终独审实际退出 0，11186 项检查、245 份原始文件一致，原 A3 的 165 项及最终 8 项 metadata/index v2/400 均未漂移，cleanup 0、ADB/设备操作 0、重试 0。见[本轮 BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+**当前任务：固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A5 主机工作已完成，Ready 状态为 `host_ready_waiting_for_device_assistance`；独立终审通过，设备验收尚未成立。** 本轮八个主机阶段实际退出均为 0；支撑审计 15,833 项、313 份原始文件通过，绑定发布及 59 项主机预检通过，最终独审 7,708 项、82 份原始文件通过。Ready 和读回记录已只读保存。复用同 SHA 的 A1—A4 证据：完整门 13/13、JVM 1156 项，唯一 BuildOnly、789 项读回及封存均通过；本轮未在冻结候选运行普通 Git、Gradle/check 或重跑 BuildOnly，ADB/设备操作 0。见 [A5 主机准备](docs/runs/2026-09-13-C1b-a878d12-A5主机准备.md)、[BuildOnly](docs/runs/2026-09-13-C1b-a878d12-BuildOnly.md)与[候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 旧 `c43652a/r1` 已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
-- 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。新 SHA 仅获本次 BuildOnly 范围授权，A5 / Ready 与设备执行不在本轮范围内；原冻结候选不重跑，原项目继续负责协调文档。
+- 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。用户在 A4 完成后“继续下一步”，本轮授权范围为 A5 到 Ready；下一步仍需当前 SHA 的新现场确认和单次设备授权。原冻结候选不重跑，原项目继续负责协调文档。
 - 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有实现合入 main。
 
 ## 09-08 历史快照
