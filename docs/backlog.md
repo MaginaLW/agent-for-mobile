@@ -52,11 +52,11 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 **09-13 当前协调增量：** 根目录的实现尚停留在旧开发线；最新队列和实现已核定为
 `codex/c1b-device-build-diagnostics` 的 `c43652a9b16d9fa743e48332dea967d0c6d80ccb`。
 本轮直接以该 SHA 建立新的普通独占 clone，按 A1—A5 准备，不将尚未验收的实现合入 main。
-候选 A1—A5 主机准备已完成，但 `c43652a/r1` 的唯一设备流程已在 `capture_c1_display_unsupported` 失败并封存。实际 wrapper/runner 退出 1，reader 250 项核验失败记录；本轮越过安装与 T0 前置，c2 未请求。新分支 `codex/c1b-display-context-fallback` 正开展最小离线修复，不能复用当前候选通过记录或设备授权。见[主机记录](runs/2026-09-13-C1b-c43652a-BuildOnly.md)及[设备执行](runs/2026-09-13-C1b-c43652a-设备执行.md)。
+候选 A1—A5 主机准备已完成，但 `c43652a/r1` 的唯一设备流程已在 `capture_c1_display_unsupported` 失败并封存。实际 wrapper/runner 退出 1，reader 250 项核验失败记录；本轮越过安装与 T0 前置，c2 未请求。新分支 `codex/c1b-display-context-fallback` 的最小离线修复已提交 `a878d1216e6f04341c82377c64eb0eb162f048ed`，独立探针 174 项测试、双变体 Lint 和产物门通过；尚待新固定候选完整验收，不能复用旧通过记录或设备授权。见[主机记录](runs/2026-09-13-C1b-c43652a-BuildOnly.md)及[设备执行](runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b display context 回退修复** | c43652a/r1 已在 c1 display/unsupported 失败并封存；service.display 抛异常时原 null 回退不可达 | 新开发分支验证最小修复及回归；新候选另验，不重跑旧轮，不把 API 合同缺口说成已证明的设备根因 |
+| **C1b display context 回退修复** | a878d12 已修复 context display 的 UOE 回退，新增 7 个回归；174 测试/双 Lint/只读产物门通过 | 为新 SHA 建立独占固定候选、完整门及 A1—A5 前置；设备另授权，不重跑 c43652a/r1，不把合同缺口说成已证明的设备根因 |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 C1b 历史候选 6fbb157 已通过全量 13/13、exact pair、r14 发布及唯一只读 preflight；

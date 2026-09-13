@@ -2,10 +2,10 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：C1b `c43652a/r1` 已在 c1 display 采集失败并封存，正在新开发分支修复 display context 回退。** 完整候选为 `c43652a9b16d9fa743e48332dea967d0c6d80ccb`；实际 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，独立 reader 250 项确认失败记录。此前 A1—A5 主机准备完成，完整门 **13 PASS / 0 FAIL / 0 SKIP**、JVM 1,128 项通过；主机准备不替代设备通过。见[主机记录](docs/runs/2026-09-13-C1b-c43652a-BuildOnly.md)和[设备执行](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+**当前任务：C1b `c43652a/r1` 采集失败已封存；display context 回退的离线修复已提交 `a878d1216e6f04341c82377c64eb0eb162f048ed`，待新固定候选完整验收。** 修复分支为 `codex/c1b-display-context-fallback`，新增 7 个回归，独立探针 Debug/Release 合计 174 项测试、两个变体 Lint 和只读产物证明门通过。旧候选实际 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，reader 250 项确认失败、终态独审 1297 项通过；此前 A1—A5 主机通过不替代设备通过。见[主机记录](docs/runs/2026-09-13-C1b-c43652a-BuildOnly.md)和[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 本轮已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
-- 本轮只执行一次、未重试；新分支 `codex/c1b-display-context-fallback` 从原候选开展离线修复。冻结候选不再运行普通 Git/Gradle/check 或设备尝试；新候选需重新验证及授权。原项目分支尚未包含最新实现，继续负责协调文档。
+- 本轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明本轮具体异常调用点或真机修复成功。新提交未做完整候选门/主机闭合/设备复验；原冻结候选不重跑，原项目继续负责协调文档。
 - 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有实现合入 main。
 
 ## 09-08 历史快照
