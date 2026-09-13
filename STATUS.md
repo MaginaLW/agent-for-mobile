@@ -1,8 +1,10 @@
 # 项目状态
 
-> 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
+> 2026-09-13 收尾：本目录 `codex/agent-workflow` 维护当前协调状态；下列 09-08 记录仅为历史快照。
 
-**当前任务：** 设备发现证据的离线修复已提交 `1be3e4badde8c5d1c8b9ec3bc9beb56a92c5ee2f`，位于普通开发分支 `codex/c1b-display-context-fallback`。安装前和采集后分别保存发现记录，首次失败也能留证；原单设备判据与命令数不变。C1b 主机聚合门实际退出 0、32/32 coverage，C1a 回归 15/15、50/50 coverage；提交后 14 份输入与验证字节一致、工作树 clean。下一项是以新完整 SHA 建立独占候选并执行完整主机准备，同时让新 collector/reader/freezer 纳入两份 checkpoint JSON。当前没有新 Ready 或设备 r2，未合入 main。见[离线修复与交接](docs/runs/2026-09-13-C1b-设备发现证据离线修复.md)。
+**本阶段已收尾：** 设备发现证据的离线修复已提交 `1be3e4badde8c5d1c8b9ec3bc9beb56a92c5ee2f`，位于普通开发分支 `codex/c1b-display-context-fallback`。安装前和采集后分别留证，首次失败也能保存记录。C1b 主机聚合门实际退出 0、32/32 coverage，C1a 回归 15/15、50/50 coverage；收尾复核 16 份验证材料、14 份输入与提交绑定一致，实现工作树 clean。获授权的 485 份临时副本已清理，536 份归档完整保留。详见[收尾与待完成项](docs/runs/2026-09-13-C1b-收尾与待完成项.md)及[离线修复证据](docs/runs/2026-09-13-C1b-设备发现证据离线修复.md)。
+
+**下次从新候选准备开始：** 以完整 SHA 建立独占普通 clone，在冻结前完成项目全量门，随后完成 exact pair/r14/preflight、BuildOnly 及设备入口准备；新 collector/reader/freezer 必须纳入两个 checkpoint JSON 和尚无 run ID 的失败。本次仅整理状态，没有启动这些阶段；当前没有新 Ready 或设备 r2，显示回退尚未获真机验收、实现未合入 main。当前无待回答的设计问题。
 
 旧 `a878d12/r1` 因“当前识别到 0 台”失败并封存，wrapper/runner 均退出 1；reader 242 项和终审 1,795 项仅核定失败记录。后续独立三次查询均为 1 台 `device`，未复现原失败。原具体调用点、安装/T0/c1/c2 次数、宿主整体清理及根因仍未知，显示回退未获真机验收。见[设备发现诊断](docs/runs/2026-09-13-C1b-a878d12-设备发现诊断.md)和[设备执行](docs/runs/2026-09-13-C1b-a878d12-设备执行.md)。
 
