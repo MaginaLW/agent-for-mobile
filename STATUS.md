@@ -2,7 +2,7 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：新固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A3 已通过；下一步为本 SHA 单次 BuildOnly 提案与明确授权。** 完整门 13/13 PASS、JVM 1156 项、Gradle 219 个任务均通过，独立结果读回 733 项通过。最终 400 项 tracked/8 项 metadata、三个唯一主机 Stage 及独立读回均闭合；165 份主机证据已冻结，最终独审 1172 项通过。见[本轮候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
+**当前任务：新固定候选 `a878d1216e6f04341c82377c64eb0eb162f048ed` 的 A1—A3 已通过；本 SHA 单次 BuildOnly 具体提案已准备并通过数据独审，等待明确授权。** 完整门 13/13 PASS、JVM 1156 项、Gradle 219 个任务均通过，独立结果读回 733 项通过。最终 400 项 tracked/8 项 metadata、三个唯一主机 Stage 及独立读回均闭合；165 份主机证据已冻结，最终独审 1172 项通过。提案数据独审实际退出 0，9345 项核对、215 份原始文件一致；尚未执行 BuildOnly。见[本轮候选准备](docs/runs/2026-09-13-C1b-a878d12-候选准备.md)。旧 `c43652a/r1` 的 wrapper/runner 退出 1，错误 `capture_c1_display_unsupported`，失败已封存；见[设备执行及离线修复](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 旧 `c43652a/r1` 已越过安装与 fresh T0 前置，c1 accepted 1、c2 accepted 0、committed tokens 空；provider abort cleanup 完成，宿主整体清理独立验收仍 unknown。旧 `501761f/r1` 安装失败及其根因未知结论不变。
 - 旧设备轮只执行一次、未重试；新修复只处理 context display getter 的 UnsupportedOperationException 回退，Security/其他异常及原有门继续生效。尚未证明旧轮具体异常调用点或真机修复成功。新 SHA 的 BuildOnly 和设备复验均尚未授权；原冻结候选不重跑，原项目继续负责协调文档。
