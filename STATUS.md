@@ -2,11 +2,11 @@
 
 > 2026-09-13 核对：本目录保留开发分支，当前协调来源已更新；下列 09-08 记录仅为历史快照。
 
-**当前任务：C1b 固定候选 `c43652a9b16d9fa743e48332dea967d0c6d80ccb` 的 A1—A5 主机准备已完成，Ready 状态 `host_ready_waiting_for_device_assistance`，等待新的现场确认和单次设备授权。** 最新实现与队列来自 `codex/c1b-device-build-diagnostics`，原项目分支尚未包含其实现。完整门 **13 PASS / 0 FAIL / 0 SKIP**，JVM 1,128 项零失败/零跳过；唯一 BuildOnly 实际退出 0、独立读回 789 项、终态独审 1398 项通过。A5 support 实际验证 15705 项、prefix 59 项通过，binding/Ready 捕获实际退出 0，清理完成，ADB/设备 0。见[准备记录](docs/runs/2026-09-13-C1b-c43652a-候选准备.md)和[本轮执行](docs/runs/2026-09-13-C1b-c43652a-BuildOnly.md)。
+**当前任务：C1b 固定候选 `c43652a9b16d9fa743e48332dea967d0c6d80ccb` 已收到新的现场确认和单次设备授权，r1 唯一设备流程已实际启动，正在等待终态。** 最新实现与队列来自 `codex/c1b-device-build-diagnostics`，原项目分支尚未包含其实现。此前 A1—A5 主机准备完成：完整门 **13 PASS / 0 FAIL / 0 SKIP**，JVM 1,128 项零失败/零跳过；唯一 BuildOnly、support、binding、prefix 和 Ready 均通过，主机阶段 ADB/设备 0。当前 C 阶段的设备计数及结果尚待实际终态，不能沿用主机阶段零调用。见[主机记录](docs/runs/2026-09-13-C1b-c43652a-BuildOnly.md)和[设备执行](docs/runs/2026-09-13-C1b-c43652a-设备执行.md)。
 
 - 最新设备结果为 **`501761f/r1` 安装失败并已封存**，未进入 T0/c1/c2，安装根因仍未知。新诊断提交 `7a3ef68` 的专项 41/41、离线整合 29/29 已核对，不能覆盖新候选完整门。
-- 用户本轮回答“确认”授权的 A4 已完成，start 1/retry 0。A5 正式审查、九源发布、support、binding、prefix 与 Ready 均通过；设备 attempt 目录仅有只读 binding，现场确认及设备调用仍为零。最终绑定后不再对候选运行普通 Git/Gradle/check，旧轮不重跑。
-- 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有设备调用或实现合入 main。
+- 本轮新的“确认”已单独绑定 Ready 和不变的 binding；启动前 59 文件/1312 项检查通过，C 于 09:33:18（UTC+08）启动一次，未授权自动重试。此前 BuildOnly 确认未复用。最终绑定后不再对候选运行普通 Git/Gradle/check，旧轮不重跑。
+- 手机批次 4 仍暂停、0/4；语义意图生产接线、布局/P0/T-L2 及其他待真机项保持原边界。本轮没有实现合入 main。
 
 ## 09-08 历史快照
 
