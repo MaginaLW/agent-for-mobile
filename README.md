@@ -5,7 +5,7 @@
 - **架构一句话**：手机 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI（官方订阅通道，零 API key 成本起步）。
 - **设备范围**：Android 手机与平板复用同一执行器和 MCP 架构。手机保留为历史开发基线；自 2026-08-24 起，后续真机任务以 vivo PA2553 / Android 16 / 日常横屏为当前验收基线。vivo“应用多窗”保持日常开启，同一微信双 OS window 是主线适配对象，不是待关闭的异常形态；先做 T0-L 画像与 T-L1 只读 window/root/pane 证据，再做 pane-aware P0。其它 App 分屏/自由窗、浮动键盘与平板竖屏兼容后置，未验形态一律 fail-closed。
 - **设计说明**：[docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
-- **当前状态**：见 [STATUS.md](STATUS.md)（每次工作会话收尾更新）
+- **当前状态**：见 [STATUS.md](STATUS.md)（有实质状态变化时更新）
 - **文档结构**：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（跑测归档）；开发指南见 [CLAUDE.md](CLAUDE.md)
 
 ## 里程碑
@@ -14,7 +14,7 @@
 |---|---|---|
 | M0 | mobile-mcp 真机跑通 5 个验收任务，拿到成功率/token 数据 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)·[runbook](docs/runbooks/M0-runbook.md)） |
 | M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 进行中——网关已在真机跑通（a11y + IME + OCR 融合 + 内嵌 MCP server），P0 安全硬门见下 |
-| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 T0-L v5 已完成；C1a 已建立可信来源/只读取证，diagnostic 仍 blocked。C1b 七次 one-shot 均已失败冻结，正推进主机侧离线预检；布局、P0、执行与设备采集仍未放行。当前候选及前置见 [STATUS](STATUS.md)，架构见[适配设计](docs/specs/2026-08-23-Android平板适配-design.md) |
+| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中；当前候选、验收结论与前置条件统一见 [STATUS](STATUS.md)，架构见[适配设计](docs/specs/2026-08-23-Android平板适配-design.md) |
 | M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ |
 
