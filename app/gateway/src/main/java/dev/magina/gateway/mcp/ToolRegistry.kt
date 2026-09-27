@@ -149,7 +149,7 @@ object ToolRegistry {
             Level.W, schema(listOf("uri"), "uri" to prop("string", "深链或 https URL，参数自行 urlencode")),
         ) { IntentTools.openUri(it.getString("uri")) },
         ToolSpec(
-            "intent_send", "发送白名单 Intent（VIEW/SEND/SENDTO/MAIN/android.settings.*）。组件只接受技能包注册项。",
+            "intent_send", "发送白名单 Intent（VIEW/SEND/SENDTO/MAIN/android.settings.*）。指定 package/component 后验证前台落地，验不上报 E_VERIFY_FAIL；无目标仅报告已分派、未验证。组件只接受技能包注册项。",
             Level.W,
             schema(
                 listOf("action"),

@@ -59,7 +59,9 @@ object IntentTools {
         val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         uri?.let { intent.data = Uri.parse(it) }
         extras?.keys()?.forEach { k -> intent.putExtra(k, extras.getString(k)) }
-        pkg?.let { intent.setPackage(Gateway.skills.resolvePackage(it)) }
+        val resolvedPackage = pkg?.let(Gateway.skills::resolvePackage)
+        resolvedPackage?.let(intent::setPackage)
+        var componentPackage: String? = null
         component?.let { comp ->
             // 显式组件只接受技能包注册项（防大脑幻觉组件名乱撞）
             if (comp !in Gateway.skills.shareComponents.values) throw GatewayError(
@@ -67,14 +69,32 @@ object IntentTools {
                 fallback = "改用 package 定向 + 系统解析，或先在 apps.json 注册组件",
             )
             val p = Gateway.skills.shareComponents.entries.first { it.value == comp }.key
+            if (resolvedPackage != null && resolvedPackage != p) throw GatewayError(
+                ErrorCode.E_INVALID_ARG,
+                "package「$resolvedPackage」与组件「$comp」所属包「$p」不一致",
+                channel = "intent",
+            )
             intent.component = ComponentName(p, comp)
+            componentPackage = p
         }
         try {
             ctx.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             throw GatewayError(ErrorCode.E_NOT_FOUND, "Intent 无接收方：$action", channel = "intent")
         }
-        return JSONObject().put("sent", true)
+        // 显式组件的包名是最终目标；不能拿可同时传入的 package 参数验证另一个 app。
+        val targetPackage = componentPackage ?: resolvedPackage
+        val acceptableActivities = expectedIntentLandingActivities(
+            isShareAction = action == Intent.ACTION_SEND,
+            component = component,
+            registeredShareLandingActivities = targetPackage?.let {
+                Gateway.skills.shareLandingActivities[it]
+            }.orEmpty(),
+        )
+        val verified = targetPackage?.let { target ->
+            SystemTools.waitForegroundLanding(target, acceptableActivities, VERIFY_TIMEOUT_MS)
+        }
+        return finishIntentSend(targetPackage, verified, acceptableActivities)
     }
 
     fun shareText(text: String, target: String?): JSONObject = share(
@@ -196,3 +216,63 @@ internal fun resolveShareOutcome(
     foregroundVerified = foregroundVerified,
     verifyFailed = channel != ShareChannel.CHOOSER && foregroundVerified == false,
 )
+
+/** intent_send 分派成功后的终态：有目标但没取得正向前台证据时必须 E_VERIFY_FAIL。 */
+internal data class IntentSendOutcome(
+    val targetPackage: String?,
+    val foregroundVerified: Boolean?,
+    val verifyFailed: Boolean,
+)
+
+internal fun resolveIntentSendOutcome(
+    targetPackage: String?,
+    foregroundVerified: Boolean?,
+): IntentSendOutcome {
+    val target = targetPackage?.takeIf(String::isNotBlank)
+    return IntentSendOutcome(
+        targetPackage = target,
+        foregroundVerified = if (target == null) null else foregroundVerified,
+        verifyFailed = target != null && foregroundVerified != true,
+    )
+}
+
+/**
+ * 组件名只证明启动目标，不自动证明最终页面：已登记的分享落地页优先；否则要求组件本身
+ * 成为前台 Activity。不能把同包的 splash 或其他页面当作组件落地。
+ */
+internal fun expectedIntentLandingActivities(
+    isShareAction: Boolean,
+    component: String?,
+    registeredShareLandingActivities: List<String>,
+): List<String> = when {
+    isShareAction && registeredShareLandingActivities.isNotEmpty() -> registeredShareLandingActivities
+    component != null -> listOf(component)
+    else -> emptyList()
+}
+
+/** 已分派不等于已落地；仅有正向前台证据时才允许报告已验证。 */
+internal fun finishIntentSend(
+    targetPackage: String?,
+    foregroundVerified: Boolean?,
+    acceptableActivities: List<String> = emptyList(),
+): JSONObject {
+    val outcome = resolveIntentSendOutcome(targetPackage, foregroundVerified)
+    val expected = if (acceptableActivities.isEmpty()) outcome.targetPackage
+        else "${outcome.targetPackage}/${acceptableActivities.joinToString("|")}"
+    if (outcome.verifyFailed) throw GatewayError(
+        ErrorCode.E_VERIFY_FAIL,
+        "Intent 已分派但未能确认前台落在 $expected",
+        channel = "intent", retryable = false,
+        fallback = "只读核对当前前台与目标页面；未确认前不要重发同一 Intent",
+    )
+    return JSONObject()
+        .put("sent", true)
+        .put("target_package", outcome.targetPackage ?: JSONObject.NULL)
+        .put("foreground_verified", outcome.foregroundVerified ?: JSONObject.NULL)
+        .put("verification_scope", when {
+            outcome.targetPackage == null -> JSONObject.NULL
+            acceptableActivities.isEmpty() -> "package"
+            else -> "activity"
+        })
+        .put("verification_status", if (outcome.foregroundVerified == true) "verified" else "dispatched_unverified")
+}
