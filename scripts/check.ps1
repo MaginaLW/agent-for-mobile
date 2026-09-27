@@ -2,6 +2,9 @@
 <#
 提交前一键校验。
 
+这是人工运行入口；仓库未安装提交 hook，未运行本脚本的提交不会被它拦截。
+空白检查覆盖已跟踪文件的工作树差异与 index，凭据形态扫描覆盖工作树的已跟踪/未跟踪文件与 index。
+
 此前"跑了哪些验证"只存在于人的记忆和提交说明里：JVM 单测、两套 PowerShell 离线测试、
 diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚本把它们收成一条命令、一张汇总表，
 任一项失败即非零退出。
@@ -105,6 +108,47 @@ function Get-LastMeaningfulLine {
     return $line.Trim()
 }
 
+function Get-GitDiffCheckIssues {
+    param([Parameter(Mandatory)][string]$RepoRoot, [switch]$Cached)
+    $scope = if ($Cached) { 'index' } else { '工作树' }
+    $arguments = @('-C', $RepoRoot, 'diff')
+    if ($Cached) { $arguments += '--cached' }
+    $arguments += @('--check', '--')
+    $output = @(& git @arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) { return }
+
+    # git diff --check 的下一行会带出原文；只保留诊断行里的路径与规则。
+    # 原文也可能伪装成诊断行，因此路径还必须来自 Git 的变更路径清单。
+    $nameArguments = @('-C', $RepoRoot, 'diff')
+    if ($Cached) { $nameArguments += '--cached' }
+    $nameArguments += @('--name-only', '--')
+    $changedPaths = @(& git @nameArguments 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "${scope}：git diff --name-only 执行失败（原始输出已隐藏）。"
+    }
+    $pathSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($changedPath in $changedPaths) { [void]$pathSet.Add([string]$changedPath) }
+    $issues = [Collections.Generic.List[string]]::new()
+    foreach ($line in $output) {
+        if ($line -notmatch '^(.+):[0-9]+: (.+)$') { continue }
+        $path = $matches[1]
+        if (-not $pathSet.Contains($path)) { continue }
+        $rule = switch -Regex ($matches[2]) {
+            '^trailing whitespace\.$' { 'trailing whitespace'; break }
+            '^new blank line at EOF\.$' { 'new blank line at EOF'; break }
+            '^space before tab in indent\.$' { 'space before tab in indent'; break }
+            '^leftover conflict marker\.?$' { 'leftover conflict marker'; break }
+            default { 'git diff --check violation' }
+        }
+        $issues.Add("${scope}：${path}：$rule")
+    }
+    if ($issues.Count -eq 0) {
+        throw "${scope}：git diff --check 执行失败（退出码 $exitCode；原始输出已隐藏）。"
+    }
+    return $issues.ToArray()
+}
+
 Write-Host "仓库：$RepoRoot" -ForegroundColor DarkGray
 Write-Host "日志：$LogDir" -ForegroundColor DarkGray
 $startSnapshot = Get-DevEnvSnapshot
@@ -117,11 +161,19 @@ if (-not $startSnapshot.Healthy) {
 
 # —— 秒级检查放最前：改错了要在等 10 分钟之前就知道 ——
 
-Invoke-Check '空白字符与冲突标记（git diff --check）' {
-    $output = & git -C $RepoRoot diff --check 2>&1
-    # autocrlf 的换行提醒不是错误，只有真正的空白问题才让 git 非零退出。
-    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
+Invoke-Check '空白字符与冲突标记（工作树 + index）' {
+    $issues = @()
+    $issues += @(Get-GitDiffCheckIssues -RepoRoot $RepoRoot)
+    $issues += @(Get-GitDiffCheckIssues -RepoRoot $RepoRoot -Cached)
+    if ($issues.Count -gt 0) { throw ($issues -join "`n  ") }
     'clean'
+}
+
+Invoke-Check '提交内容双视图离线测试' {
+    Invoke-Logged -LogName 'check-git-content-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\check-git-content-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'check-git-content-offline.log')
 }
 
 Invoke-Check '离线检查结果契约' {
@@ -317,13 +369,17 @@ Invoke-Check '凭据扫描' {
     # 2026-07-27 实锤：BearerAuthGuardTest 里的假 token 恰好是 32 位十六进制，批次 D 跑 check
     # 时它还没入库、报了全绿，提交完才被抓出来。
     #
+    # 工作树搜已跟踪和未跟踪文件，index 另搜下一次提交会带走的版本。
     # 注意这仍然只是**提交前跑一下**的人工闸门，不是强制拦截——仓库没有装 git hook，
     # 谁不跑 check.ps1 就绕过了。真要拦住提交得配 pre-commit hook（未做）。
-    $hits = @(& git -C $RepoRoot grep -nIE --untracked '\b[0-9a-f]{32}\b' -- . 2>$null)
-    if ($LASTEXITCODE -notin @(0, 1)) { throw 'git grep 执行失败。' }
-    if ($hits.Count -gt 0) {
-        $issues.Add("疑似 token 形态（32 位裸 hex）命中 $($hits.Count) 处：`n    " +
-            (($hits | Select-Object -First 5) -join "`n    "))
+    foreach ($view in @(
+        @{ Scope = '工作树'; Mode = '--untracked' },
+        @{ Scope = 'index'; Mode = '--cached' }
+    )) {
+        # -l 只返回路径，避免原先 -n 把疑似凭据所在整行写进控制台和日志。
+        $paths = @(& git -C $RepoRoot grep -lIE $view.Mode '\b[0-9a-f]{32}\b' -- . 2>$null)
+        if ($LASTEXITCODE -notin @(0, 1)) { throw "$($view.Scope)：git grep 执行失败。" }
+        foreach ($path in $paths) { $issues.Add("$($view.Scope)：${path}：32 位裸 hex") }
     }
 
     if ($issues.Count -gt 0) { throw ($issues -join "`n  ") }
