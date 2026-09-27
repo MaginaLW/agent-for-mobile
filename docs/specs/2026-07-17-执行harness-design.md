@@ -1,7 +1,7 @@
 # 设计说明：手机执行 harness（派单通道 v0.5）
 
 - 日期：2026-07-17
-- 状态：已批准并实施（2026-07-17）；2026-07-19 增补 `mobile|gateway` 双 profile 与安全终态规则；2026-07-23 增补 P0 Agent 主控监督式 runner，见 §4–§6
+- 状态：已批准并实施（2026-07-17）；2026-07-19 增补 `mobile|gateway` 双 profile 与安全终态规则；2026-07-23 增补 P0 Agent 主控监督式 runner；2026-09-27 修正 PC 恢复输入的权限边界，见 §5
 - 决策人：Magina（用户）
 - 素材来源：[knowledge/brain/harness.md](../knowledge/brain/harness.md)（已验证链路与已定原则，本设计全部继承）
 
@@ -16,7 +16,7 @@
 ## 2. 目标（验收标准）
 
 1. **一条命令一次派单**：trace 自动落盘、台账自动追加、摘要自动打印，零手工抄录。
-2. **两段式硬门**：mobile 的带外确认必须有人在键盘上打字；gateway 的带内确认必须由现场人在手机卡片上操作。任何代理（包括派单方 Claude 会话）都无法代答。
+2. **两段式硬门**：PC 终端输入可被代理经管道或 PTY 提供，只能用于恢复交互，不能证明真人批准。mobile 缺少与执行模型隔离、绑定具体危险动作的人控批准通道时，确认腿阻断；gateway 的危险动作仍须现场人在完成绘制与取证门的可见 `ConfirmOverlay` 上逐次批准。
 3. **计量闭环**：每次派单一行台账（token/成本/轮次/结果），cost.md 有数可校。
 4. **失控有界**：轮数上限 + 墙钟超时 + 脚本化预检（预检零 token）。
 
@@ -35,7 +35,7 @@ scripts/dispatch.ps1 -Task "<内联任务>" | -TaskFile scripts/tasks/xxx.md
                      [-Slug 台账短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15]
                      [-Model sonnet] [-Brain claude|codex]
                      [-Executor mobile|gateway] [-DryRun]
-                     [-Confirm <暂停件路径>]   # 确认腿专用，见 §5.2
+                     [-Confirm <暂停件路径>]   # 仅 gateway 纯前置恢复，见 §5.2
 ```
 
 中文任务文本一律建议走 `-TaskFile`（规避 PowerShell 参数编码坑，且任务卡进 git 可复用）；M0 五个验收任务各建一张任务卡。
@@ -88,18 +88,19 @@ gateway profile 改注入 `scripts/prompts/gateway-executor-preamble.md`：结�
 
 ### 5.1 暂停（第一腿）
 
-mobile 执行器停在临界动作前，终态输出以 `[AWAIT_CONFIRM]` 开头的**自包含**报告：屏幕现状 / 待执行动作（一句话）/ 确认后剩余步骤。wrapper 检测到标记 → 报告落盘为暂停件（trace 同名 `.pause.md`）→ 台账 result=paused → 打印醒目提示与确认命令。手机屏幕停在原地，本身就是保存的状态。
+mobile 执行器停在临界动作前，终态输出以 `[AWAIT_CONFIRM]` 开头的**自包含**报告：屏幕现状 / 待执行动作（一句话）/ 剩余步骤。wrapper 检测到标记 → 报告落盘为暂停件（trace 同名 `.pause.md`）→ 台账 result=paused。该暂停件只记录现场，不提示或授权 `-Confirm` 恢复危险动作；手机屏幕停在原地也不是批准凭据。
 
 gateway 的危险动作通常在一次工具调用内等待手机确认卡，不走暂停件。gateway 仅可在**尚未调用危险工具**时发现纯人工前置条件，才输出 `[AWAIT_CONFIRM]`；一旦危险工具已经返回拒绝、超时、stale、blocked、缺权限/通道或其他 safety 结果，本腿必须常规失败，不得包装为暂停。
 
 ### 5.2 确认（第二腿）
 
 ```powershell
-scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md
+scripts/dispatch.ps1 -Executor gateway -Confirm docs/runs/traces/xxx.pause.md
 ```
 
-- **交互硬门**【决策点 3】：脚本 `Read-Host` 要求人工键入 `CONFIRM` 才继续。Claude 会话经 Bash 调用时无法喂交互输入——机械上排除代理自我确认，这正是目标 2 的实现。
-- **默认二次派单，不 --resume**：暂停件自包含，确认腿用「屏幕已停在 X，动作已获人工确认，执行并收尾」的短提示词全新派单——比 --resume 重放全部历史便宜（提示缓存 5 分钟 TTL 早已过期）。--resume 保留为暂停件信息不足时的兜底。
+- **PC 恢复交互**：`Read-Host` 接受 `RESUME` 只表示继续 gateway 尚未调用危险工具的纯人工前置条件。终端输入可编程，不是危险动作批准；`CONFIRM` 不再是批准口令。gateway 后续危险调用仍须新的可见 `ConfirmOverlay` 逐次确认。
+- **mobile 硬拒**：`-Confirm` 对 mobile 暂停件、旧无 `executor` 暂停件及 DryRun 均在副作用和报告输出前拒绝；不能靠改 `-Executor` 把旧件迁到 gateway。只有建立独立人控批准通道并绑定实际动作后，才能另行设计 mobile 恢复。
+- **默认二次派单，不 --resume**：gateway 暂停件自包含，恢复腿用「纯前置条件已处理，继续当前任务；危险动作仍须手机确认卡」的短提示词全新派单。`--resume` 只作为暂停件信息不足时的兜底，不能扩大批准范围。
 - 两腿在台账共享 slug、腿号递增，任务总成本 = 各腿之和。
 - 暂停件持久化 `executor`；确认腿默认继承，显式指定不同 executor 时 fail-fast。旧暂停件没有该字段时按 `mobile` 兼容，禁止在两腿之间跨 profile。
 - gateway safety 终态不可用 `-Confirm` 恢复；wrapper 会机械拒绝包含已知 safety code 的 gateway 暂停件，第二腿提示词也明确不得重发危险动作。
@@ -108,7 +109,7 @@ scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md
 
 M1 gateway 已把确认下沉为所有 handler 之前的统一安全门，不再暴露自由文本 `confirm(action_desc)` MCP 工具。危险工具按实际工具名、冻结参数及 App/Activity/目标或焦点证据生成悬浮卡，现场人在手机上批准后，gateway 复核上下文再执行。
 
-`[AWAIT_CONFIRM]` 只保留为“危险工具尚未调用、需要人工恢复纯前置条件”的带外载体。确认 timeout、权限错误或上下文失效已经是本次危险调用的安全终态，必须常规失败；PC 键盘的 `CONFIRM` 不能替代或补签手机确认卡。
+`[AWAIT_CONFIRM]` 在 gateway 只保留为“危险工具尚未调用、需要人工恢复纯前置条件”的带外载体。确认 timeout、权限错误或上下文失效已经是本次危险调用的安全终态，必须常规失败；PC 键盘的 `RESUME` 不能替代或补签手机确认卡。
 
 ## 6. 计量与落盘
 
@@ -190,11 +191,14 @@ runner 在放行 dispatch 入口前先把 gate host 加入自己的 `KILL_ON_JOB
 |---|---|
 | stream-json flag 各版本差异 | 落地实测；兜底 `--output-format json`（M0 已验证） |
 | PowerShell 中文参数编码坑 | 任务文本走 -TaskFile；脚本内强制 UTF-8 |
+| 终端输入可由代理经管道或 PTY 注入 | PC `RESUME` 仅恢复纯前置交互；mobile `-Confirm` 缺独立人控批准时 fail closed；gateway 危险工具由可见 `ConfirmOverlay` 逐次确认 |
 | 站规软约束失守（乱截图/不停车） | 台账见异常成本即察觉；升级路径 = 大脑侧 PreToolUse hook 机械拦截（方案 B 组件） |
 | --resume 缓存过期反而更贵 | 默认二次派单，--resume 只做兜底 |
 | Termux 移植（M2） | wrapper 逻辑控制在 ~200 行纯文本处理，重写成本一下午 |
 
-## 10. 实施清单（批准后执行）
+## 10. 2026-07-17 历史实施清单（非现行操作指令）
+
+以下记录保留当时的实施与验收计划；涉及 `CONFIRM` 的步骤已被 §5 的 2026-09-27 边界取代。
 
 1. `.gitignore` 增 `docs/runs/traces/`；建目录 `docs/runs/traces/`、`scripts/prompts/`、`scripts/tasks/`。
 2. 写 `executor-preamble.md`（§4.3 七条）与 M0 五任务卡。
@@ -206,7 +210,9 @@ runner 在放行 dispatch 入口前先把 gate host 加入自己的 `KILL_ON_JOB
    ④ 复测 M0 任务 4（截图发微信）走 harness 全流程，对比 $1.26 基准。
 5. 收尾：校准 cost.md；brain-harness.md「待设计」节改指本 spec；更新 CLAUDE.md 文档地图与 STATUS.md。
 
-## 11. 开放决策点（请逐条批准或改）
+## 11. 2026-07-17 历史决策点（非现行待答项）
+
+第 3 项“终端输入可证明真人批准”已失效；现行恢复和危险动作批准来源见 §5.2–§5.3。
 
 | # | 决策 | 推荐 | 备选 |
 |---|---|---|---|
