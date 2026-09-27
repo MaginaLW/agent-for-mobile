@@ -1,5 +1,12 @@
 # 手机 Agent（代号待定）
 
+> **本地协调入口（2026-09-27）**：当前待办与验收边界维护在本地 `codex/agent-workflow` 分支的
+> `docs/backlog.md` 和 `STATUS.md`，C1b 新实现维护在 `codex/c1b-display-context-fallback`。
+> 本 `main` 分支的同名状态文件是旧快照；有上述本地分支时分别用
+> `git show codex/agent-workflow:docs/backlog.md` 和
+> `git show codex/agent-workflow:STATUS.md` 读取。分支不存在时先取得当前协调来源，
+> 不用本页或旧状态推断新候选、Ready、设备授权及验收结果。
+
 把已付费的 AI 订阅（Claude Pro / ChatGPT Plus）变成一个能替你操作手机各应用的托管助手。
 
 - **架构一句话**：手机 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI（官方订阅通道，零 API key 成本起步）。
