@@ -14,6 +14,11 @@
 - 手机批次 1/2/3 后续已验收；手机批次 4 暂停、仍 0/4。旧失败记录不代表当前队列。
 - C1b `6fbb157` 的 r14/exact pair/preflight 已完成，随后唯一 build-only 失败冻结；后续源码修复待新候选验收，见 [现行 §4/§5](backlog.md)。
 
+2026-09-27 规程整理索引：旧 C1b 规程中的六个日期化授权、preflight 和 smoke 章节，
+以及当时的 42-input 离线门快照，已在本页 §4 与 [日期化历史附录](#c1b-dated-history) 留存，逐轮原件见冻结记录。
+现行 [C1b 规程](runbooks/T-L1-tablet-layout-c1b-v1.md) 只保留当前步骤、安全门和短索引；
+旧 SHA、门数值及已消费授权不作为新候选的通过或运行许可。
+
 ---
 
 # 工序分流与验收批次
@@ -1225,3 +1230,174 @@ A 道报「网关内部只有校验器、读取器在宏那边」。主会话查
 **批次 4 必须写进验收单的一句**：`-Provision` 装的是 **debug APK**，所以**这一批在真机上通过，
 并不能区分"功能成立"与"功能只在 debug 构建里成立"**。这是本轮"判据与物理通道相不相称"
 那一族的又一个变体——**这次不相称的是判据与它将来要运行的构建类型**。
+
+---
+
+<a id="c1b-dated-history"></a>
+
+# C1b 旧规程日期化过程归档
+
+> 本附录从修订前的 C1b 规程（commit a253c8ff064b90462b36da400145c4ea1a8c8190）按原行号提取。
+> 六个日期化章节和两段旧快照保留原文；仅将 runs 链接改为相对本归档的路径。
+> 其中“下一候选”等措辞只描述当时状态，不构成现行步骤、通过结论或运行授权。
+> 当前条件见 [C1b 规程](runbooks/T-L1-tablet-layout-c1b-v1.md) 与 [backlog](backlog.md)。
+
+## 原规程 A 道历史验证快照（原 24–37 行）
+
+42-input 离线链的历史验证快照为：build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB
+22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、attempt-failure schema/cross-binding 51/51；observation 公共门仍为
+49/49、coverage 89/89。七场景 synthetic host E2E 已通过：fake ADB total 222 = valid 214 + rejected 8；valid
+为 private server start/status/kill 8/7/4 + device calls 195，T0 calls 4 是 device 子集，另观测 server exit 7。
+runner process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic E2E 内 real ADB/JDK/Gradle
+executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4；
+official-style auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无残留。另行 real isolated
+host build smoke 的旧 41-input SHA 历史基线曾完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool 1 次、
+real ADB 0、inputs 41；该历史 smoke 不构成当前 42-input fixed-SHA 的 smoke，更不构成 C1b build/install/runner、
+真实 APK 安装或平板采集。`77473af5223d76b00bf4dbbf33cf44090fde635c` 因 helper 漏载 validator 失败；
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 已令 helper/build core 通过，但 launcher strict verifier 失败；
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 又在 helper 前因 launcher 空集合参数绑定失败；
+`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 则在 Gradle 前因既有 module build output 被 fresh-output guard 拒绝。
+所以 A 道固定条件第 2 项仍不满足，不能以 core summary、旧 smoke、离线 gate 或已生成过临时 APK 替代。
+
+## 2026-08-30 `83121df` real build-only smoke 结果
+
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 one-shot 已消费。exact launcher start `1`、exit `1`、
+automatic retry `0`；helper/verifier/build/ADB/设备/install/采集均为 `0`，三个正式输出不存在。失败发生在第一次
+`Add-LauncherHeldDirectoryChain` 调用的 PowerShell 参数绑定：新建的 `$directoryOrder` 是空
+`List[object]`，而 Mandatory `$Order` 未声明 `[AllowEmptyCollection()]`，所以函数体及首个目录 handle 都未进入。
+详细记录见
+[`2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md`](runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)。
+
+历史 guard-only r2 只增加 `[AllowEmptyCollection()]` 后，repo/output 完整目录链、launcher/helper/verifier/pwsh held
+file、runtime pwsh reopen、路径重绑与三输出缺席检查全部通过，并在 verifier load 前主动停止。该修复不得移除目录
+stable ID、no-reparse、最终路径或 held-handle 门禁；目录时间戳等值继续不作为门禁，文件 identity/hash/size/mtime
+门禁保持。诊断 receipt 必须与进程 exit、terminal 状态及 primary/cleanup/recording failure count 联合消费，不能单独
+升级为 pass authority。
+
+下一 exact launcher 还必须固定 repo root，并为任何最终失败提供 exact launcher 同目录的独立 failure-only
+CreateNew `.failure.json` sidecar：保存原始 ErrorRecord、phase 与 exception chain；正式 result 已发布后的 cleanup
+failure 也不得被 `$resultPublished` 抑制，sidecar publication 失败只能作为 secondary failure，不能
+遮蔽 primary failure。该 sidecar 必须固定 `status=failed`、`success_eligible=false`、`pass_closure=false`，不得被
+preflight 或后续消费者当作成功证据；异常链若有界必须显式记录 observed/stored/truncated，陈旧 sidecar 必须在
+output gate 与 `Process.Start` 紧前分别 no-follow 阻断。`83121df` 不得重跑；形成新 clean SHA、完成静态复核和一次只读
+`prepared_not_authorized` preflight 后，必须重新取得 build-only 授权。
+
+## 2026-08-30 `21d2986` read-only preflight 与 build-only smoke
+
+历史 r2/r6 原样保留。为适配恢复 exact clean worktree 后的新 raw index，r7 只重绑 receipt leaf 与 index pin；相对 r6
+仅两个 string literal 改变。冻结 r7 leaf SHA-256 为
+`2f9fba1598e5b912787f4e9f4b7699b7cf64243f3a273f2eacbf999aee7c6c31`，201,438 bytes、ReadOnly、
+Parser 0；template/renderer/leaf 静态复核 P0/P1/P2=`0/0/0`。目录 mtime equality 继续为 `0`，volume serial +
+128-bit file ID、no-reparse、final path、完整 held chain/leaf handle 及文件 identity/hash/size/mtime 均保留。
+
+r7 read-only preflight 恰运行一次：外部 exit `0`、stderr empty、terminal `closed`、receipt published，
+primary/cleanup/recording failure count=`0/0/0`；receipt SHA-256 为
+`1cea8a95f608a6ed5c4150d8b09755d3999712f568dceb368bea74c88c80800d`。公开 `overall_passed=false` 仅表示脚本本身
+不能预知外层 exit；与外部 exit `0` 联合后成立 `prepared_not_authorized`。该 preflight 没有运行 launcher/helper/
+Gradle/ADB 或访问设备。
+
+获授权的 `21d2986` build-only one-shot 随后只启动一次 launcher/helper，exit `1/1`、automatic retry `0`。
+helper 在 direct GradleMain 前发现 `app/tablet-c1b-probe/build` 已存在；fresh-output 合同拒绝清理未知既有内容，故
+fail-closed。该树最新写入早于本轮约 13.5 小时，来自较早 `c4e42667` 普通全量 Gradle 门，不是本轮产物；现已同卷
+可恢复隔离，原路径 absent。GradleMain、ApkSigner、aapt2、held Git、verifier invoke、ADB、设备发现、install、T0、
+采集均为 `0`。完整证据见
+[`2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md`](runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md)。
+
+launcher 还暴露两个 failure-truth 缺口：active-process count 的跨行 `[long]` cast 被 AST 拆成类型对象赋值与独立
+native call，validation-time 因而误报 closure；finally 重查后 result 又写成 job zero/child true。即使修正 cast，
+当前顺序仍先因 helper exit `1`/stderr nonempty 抛 generic error，后才准备 held-bind failed summary，所以 failure-only
+sidecar 遮蔽 helper primary。该轮没有 false-pass，但“失败信息不再被遮蔽”尚未闭合。
+
+下一候选按以下顺序准备：
+
+1. 把 active count 改为单一 cast 表达式并加 AST canary，分别保留 validation/cleanup snapshots；
+2. 对 exit `1` 的 helper 仍先 held-bind stdout summary、验证 closed failed schema，并把 helper primary/reasons 写入
+   result 与 sidecar；stderr 只作为并列诊断，不覆盖结构化 primary；
+3. read-only preflight 在授权前显式要求 module build output absent，并继续要求三个正式输出/failure sidecar absent；
+4. 形成新的 clean SHA 与 repo-external helper/launcher/preflight，完成静态复核和一次 read-only preflight；
+5. 再由用户针对该新 SHA 明确授权一次 build-only smoke。`21d2986` 与此前所有授权均不可复用；install、ADB、设备、
+   C1b 采集、T-L1/P0/execution 继续未放行。
+
+逐项闭合判据见
+[`2026-08-30-T-L1-C1b-下一候选待完成项.md`](runs/2026-08-30-T-L1-C1b-下一候选待完成项.md)。
+
+## 2026-08-31 `690693a` read-only preflight 与 build-only smoke
+
+r11 read-only preflight 恰运行一次：leaf SHA-256
+`371b32bec50166c537e299607f927e483ba4d49d7f6a3e91636e6edd528aa1f6`，外部 exit `0`、terminal closed、
+primary/cleanup/recording failure=`0/0/0`；receipt SHA-256 为
+`be20bd9a3f15eb1708050e0ada53ff8f789dca943751717818ffb86388cea2d0`。它没有启动 launcher/helper/build/ADB
+或访问设备。
+
+获授权的 `690693ae4113a91f7590457a888b56e93b6e200b` one-shot 随后 launcher/helper start=`1/1`、exit=`1/1`、
+retry `0`。helper 在 build 前观察到宿主已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener，按 ADB-zero boundary
+fail-closed；本轮 process-start/direct-adb/device/install/T0/capture 均为 `0`，GradleMain/ApkSigner/aapt2/held Git
+也均为 `0`。这些宿主对象来自 smoke 前的手机套件，本轮未终止或修改。
+
+helper 已发布合法 closed failed summary，stdout 精确等于 summary bytes + CRLF；但 launcher 的
+`[AllowNull()][string]$ExpectedSha256` 把 `$null` 绑定为空串，并以 `$null -ne` 误判为“已有 pin”，在 held-open
+summary 时必然触发 canonical-hash 错误。verifier 已加载但 parse/invoke=`0`，helper primary 再次被遮蔽。
+下一 leaf 必须让 canonical check 与 final compare 共用 nonempty expected-hash 判定；无 pin 仍须实际 hash 并保留
+全部 identity/no-reparse/final-path/held-handle 门。完整证据见
+[`2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md`](runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。
+
+下一 preflight 还必须以被动 process/listener snapshot 要求 default ADB 与 TCP/5037 均为零；不得运行 adb、枚举设备或
+自动终止未知进程。`690693a` 与此前授权均不可复用，逐项闭合要求继续见上方待完成项文档。
+
+## 2026-08-29 `8882add` real build-only smoke 结果
+
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 的唯一 one-shot 已消费，结果为
+**helper-pass / launcher-verifier-fail（整体未闭合）**。helper summary 为 `status=passed`、`failure_count=0`：
+GradleMain `1`、ApkSignerTool `1`、held aapt2 `4`、held Git `32`，repository inputs `42`；artifact、依赖、
+packaged AXML、post-lock seal 与 pre/post provenance 均通过。direct/observed/real ADB、设备枚举、安装、T0、
+采集均为 `0`；三项 cleanup 全部 `completed`，workspace/journal/module/local.properties/Java residue 全部为 `0/false`。
+
+外层 launcher 使用固定 PowerShell `7.6.4` 的默认 `ConvertFrom-Json` 读取合法 summary；三个 quoted ISO
+时间值被自动提升成 `System.DateTime`，而 verifier 随后要求它们仍为 nonempty `string`，首先在
+`started_at_utc` fail-closed。launcher exit `1`，helper start `1`、exit `0`、automatic retry `0`。该失败是
+evidence consumer 的确定性类型检查假阴性，不是 build/helper 失败；但 helper passed 只是必要条件，outer
+launcher/verifier 未接受时整体仍必须判失败。详细记录见
+[`2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md`](runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
+
+后续所有 strict JSON summary reader 必须显式使用 `ConvertFrom-Json -DateKind String` 或等价的 lexical-type
+保形解析；quoted ISO timestamp 解析后仍必须是 `[string]`，不得修改 schema/verifier 去接受 `DateTime`。
+`14e33c7/c4e4266` 已把该规则、同一 held stream 与唯一 outer verifier 接入离线闭环；这不追溯修绿 `8882add`，
+也不代表后续 launcher guard 已通过 smoke。
+
+## 原规程旧轮结论（原 184–188 行）
+
+`8882add6116ebd3cca547d865f9d142bbbcac1a4` 的历史结论仍是
+**helper-pass / launcher-verifier-fail（整体未闭合）**；上述规则不追溯修绿该 one-shot，也不把其临时 APK/proof
+升级为可安装产物。`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 同样保持 pre-helper launcher failure，不能因已定位
+空集合绑定根因而追溯改判或重跑。`690693ae4113a91f7590457a888b56e93b6e200b` 也保持 pre-build environment
+failure 与 launcher summary-open 二次失败，不能因宿主 ADB 后来退出或修正 null/empty 判定而重跑。
+
+## 2026-08-29 `77473af` 42-input real build smoke 结果
+
+`77473af5223d76b00bf4dbbf33cf44090fde635c` 的 one-shot build-only smoke 已消费。受控 GradleMain 执行
+`1` 次并到达 artifact proof reader；一次性 helper 漏载 observation validator，closed-JSON walker 不存在，
+因此 proof reader fail-closed。ApkSignerTool、held AAPT2、real ADB、设备发现、安装、T0 与采集均为 `0`；
+helper start `1`、automatic retry `0`，退出后进程、listener、受控 build workspace 与 journal 无残留；用于审计的
+exact one-shot staging scripts 刻意保留，不属于 build residue。
+
+后续 helper 必须把 `tablet-layout-observation-c1b-v1-validator.ps1` 作为 held/pinned input，按
+`C1a -> validator -> C1b` 加载，并在 Gradle 前断言两个 strict-JSON walker 均存在；该要求已在
+`8882add...` one-shot 满足并由 helper core 通过，不得因后续 launcher 问题而回写为未完成。本轮临时 APK/proof 不得用于安装。
+详细证据与边界见
+[`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
+
+## 2026-08-28 唯一授权结果
+
+fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的一次授权已消费。runner exit 1，失败原因为
+private ADB server 未在有界时间内 ready。控制流停在设备发现之前：没有执行 `install -r -t`、T0、
+`c1`、`c2` 或 result，也没有 run_id、evidence 目录或 success/failure sidecar。build/seal/artifact
+checks 位于失败 guard 之前，只能推断已返回；cleanup 未保留 APK，不能将该推断升级成持久 artifact 证据。
+Windows Application/WER 同期记录同轮 isolated ADB 在 15 秒内以六个不同 PID 同签名崩溃；该轮原始材料没有
+argv/dump/逐 attempt stderr，因此单凭历史证据不能区分 `server nodaemon` 与 `server-status` client 崩溃。后续只读
+源码与实现核对定位到旧 runner 用 numeric `-L tcp:127.0.0.1:<port>` 启动 server，而该 listen 形态不被此 ADB 的
+local-listen 判定接受，server 的 retry/fatal 路径与同签名快速退出一致。当前候选改为只对 server argv 使用
+`-L tcp:localhost:<port>`，并新增有界、无原始输出的逐 attempt 诊断；这是后续离线归因与修复，不是对旧 run
+补造的新 evidence。
+退出后的进程、listener、build/temp、ACL journal 与 device lease 残留均为 0。不得自动重试该 SHA，
+也不得复用旧 C1a 授权；详细冻结记录见
+[`2026-08-28-T-L1-C1b私有ADB启动失败.md`](runs/2026-08-28-T-L1-C1b私有ADB启动失败.md)。
