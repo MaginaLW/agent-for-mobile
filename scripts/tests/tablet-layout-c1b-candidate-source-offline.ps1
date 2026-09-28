@@ -38,9 +38,9 @@ Test-Case 'ambiguous absent or multiline authority edits fail closed' {
     Assert-Rejected { Set-C1bCandidateLiteralAssignments '$x=1' @{x="bad`nvalue"} } 'control'
     Assert-Rejected { Get-C1bCandidateLiteralAssignment '$x=[IO.File]::ReadAllText(''unknown'')' 'x' } 'dynamic'
 }
-Test-Case 'exact replacement and frozen r13 source authority reject drift' {
+Test-Case 'exact replacement and maintained preflight source reject drift' {
     Assert-Rejected { Replace-C1bCandidateExactText 'same same' 'same' 'next' } 'cardinality'
-    Assert-Rejected { New-C1bPreflightR14CandidateSource -BaselineLeafSource '$x=1' -ChecksSource 'function x {}' -Constants @{} } 'Frozen r13'
+    Assert-Rejected { New-C1bPreflightR14CandidateSource -BaselineLeafSource '$x=1' -ChecksSource 'function x {}' -Constants @{} } 'Maintained preflight'
 
     $bootstrap = @'
 #Requires -Version 7.5
@@ -137,11 +137,11 @@ foreach ($buffer in @(
 }
 
 $constants = [ordered]@{}
-foreach ($name in @('repoRoot','stagingRoot','expectedCommitSha','expectedCommitShort',
+foreach ($name in @('repoRoot','stagingRoot','expectedBranch','expectedCommitSha','expectedCommitShort',
     'helperPath','expectedHelperSha256','expectedHelperByteLength',
     'launcherPath','expectedLauncherSha256','expectedLauncherByteLength',
     'expectedLauncherTemplateSha256','failureSidecarPath','pwshPath','expectedPwshSha256',
-    'expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
+    'gitPath','expectedGitSha256','expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
     'expectedGitAttributesSha256','expectedGitIgnoreSha256','expectedGitInfoExcludeSha256',
     'expectedVerifierSha256','summaryLeaf','logLeaf','launcherResultLeaf','receiptLeaf')) {
     $constants[$name] = 'fixture'
@@ -149,10 +149,10 @@ foreach ($name in @('repoRoot','stagingRoot','expectedCommitSha','expectedCommit
 $constants.expectedCommitSha = 'a'*40
 $constants.expectedCommitShort = 'a'*7
 $constants.expectedPwshSha256 = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
+$constants.gitPath = 'C:\Fixture\Git\mingw64\bin\git.exe'
 $declarations = [string]::Join("`n", @($constants.Keys | ForEach-Object { '$' + $_ + " = 'old'" }))
 $body = @'
 $failures = [Collections.Generic.List[string]]::new()
-$gitPath = 'C:\Fixture\Git\mingw64\bin\git.exe'
 $gitInvocationCount = 0L
 $helperName = ('helper-' + $expectedCommitShort + '-r10.ps1')
 $launcherName = ('launcher-' + $expectedCommitShort + '-r10.ps1')
@@ -233,5 +233,42 @@ Test-Case 'successful pre/post evidence disclaims transient continuity' {
 Test-Case 'missing or duplicate injection anchors cannot silently produce a candidate' {
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource ($fixture.Replace('function Invoke-ReadOnlyGit {','function Other {')) $checks $constants } 'cardinality'
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture ($checks + '; Write-Output bad') $constants } 'functions only'
+}
+Test-Case 'tracked maintenance sources deterministically derive a candidate without historical inputs' {
+    $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+    $sourceRoot = Join-Path $repoRoot 'scripts/lib/c1b-candidate-source'
+    $rendererTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'renderer-template.ps1'))
+    $helperTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'helper-template.ps1'))
+    $launcherTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'launcher-template.ps1'))
+    $preflightTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'preflight-template.ps1'))
+    $checksSource = [IO.File]::ReadAllText((Join-Path $repoRoot 'scripts/lib/tablet-layout-c1b-preflight-r14-checks.ps1'))
+    $pairArgs = @{
+        BaselineRendererSource=$rendererTemplate; HelperTemplateSource=$helperTemplate
+        LauncherTemplateSource=$launcherTemplate; CommitSha=('a'*40)
+        RepoRoot=$repoRoot; StagingRoot='C:\Fixture\CandidateStage'
+        PwshPath='C:\Fixture\PowerShell\pwsh.exe'; VerifierSha256=('b'*64)
+        UtilityAssemblySha256='2f6201bb3caf4c08158be733e786dd85b11537694f7e6ab40356fc0727a3596f'
+        UtilityAssemblyLength=1652504L
+    }
+    $pair = New-C1bExactPairCandidateSource @pairArgs
+    $repeat = New-C1bExactPairCandidateSource @pairArgs
+    Assert-Test ($pair.RendererSource -ceq $repeat.RendererSource -and
+        $pair.HelperSource -ceq $repeat.HelperSource -and
+        $pair.LauncherSource -ceq $repeat.LauncherSource) 'Maintained pair derivation was not deterministic.'
+    Assert-Test (-not $pair.RendererSource.Contains('historical_') -and
+        -not $pair.RendererSource.Contains('__BINDING__') -and
+        -not $pair.LauncherSource.Contains('__PWSH_SHA256__')) 'Candidate retained historical input or unresolved binding.'
+    $driftArgs = $pairArgs.Clone()
+    $driftArgs.LauncherTemplateSource = $launcherTemplate.Replace('7.6.5','7.6.4')
+    Assert-Rejected { New-C1bExactPairCandidateSource @driftArgs } 'Maintained launcher source drifted'
+    $leaf = New-C1bPreflightR14CandidateSource -BaselineLeafSource $preflightTemplate -ChecksSource $checksSource -Constants $constants
+    Assert-Test (-not $leaf.Contains('__BINDING__') -and -not $leaf.Contains("'-r10.ps1'")) 'Preflight retained historical binding.'
+    $r14 = New-C1bPreflightR14RendererSource -PairRendererSource $pair.RendererSource `
+        -PreflightSource $leaf -BaselineLeafPath (Join-Path $sourceRoot 'preflight-template.ps1') `
+        -BaselineLeafSha256 (Get-C1bCandidateSourceHash $preflightTemplate) `
+        -BaselineLeafByteLength ([Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate)) `
+        -IndexSha256 ('c'*64) -IndexByteLength 128L
+    Assert-Test ($r14.Contains((Get-C1bCandidateSourceHash $preflightTemplate)) -and
+        -not $r14.Contains('preflight-a661f36-r13.ps1')) 'R14 renderer did not bind the maintained preflight source.'
 }
 Write-Output "candidate source offline: $passed passed, 0 skipped"

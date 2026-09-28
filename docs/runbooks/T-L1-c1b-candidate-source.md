@@ -1,23 +1,26 @@
 # C1b exact pair / r14 源码准备
 
-`scripts/prepare-tablet-layout-c1b-candidate-source.ps1` 将冻结的 r12 renderer、helper/launcher
-模板和 r13 leaf 转换为可审查的新候选源码。它不执行 renderer、preflight、helper、launcher、Git、构建或 ADB。
+`scripts/prepare-tablet-layout-c1b-candidate-source.ps1` 从
+[`scripts/lib/c1b-candidate-source/`](../../scripts/lib/c1b-candidate-source/SOURCE.md)
+中的受版本控制维护源确定性生成可审查的新候选源码。该目录记录四份源的迁移对照和当前绑定。
+旧 r10/r11/r12/r13 冻结文件仅作为只读回归对照，不是新候选输入。入口不执行 renderer、
+preflight、helper、launcher、Git、构建或 ADB。
 入口输出是 `.checks/c1b-candidate-source/<short>/` 中的 **review drafts**，不是已冻结工件、clean SHA 证明或运行授权。
 
 ## 输入与步骤
 
 1. 完成所有代码修改、常驻离线门和最终 clean SHA 固定，再提供完整 40 位 SHA。
-2. `C1B_FROZEN_SOURCE_ROOT` 指向已有 repo-external staging，须保留
-   `render-final-r12-015835c.ps1`、`helper-template.ps1`、`launcher-template-r11.ps1`、
-   `preflight-a661f36-r13.ps1`。实际发布 pair 时还需要 renderer 既有的历史 r10 pair、template 与 failure sidecar。
-   不复制冻结生成物入库，不修改它们；源缺失时先恢复精确冻结输入，不接受当前内容的新 hash。
-3. 使用钉定的 PowerShell 7.6.5 执行下面的源码准备命令。入口检查 exe hash；Utility DLL 的 hash 和长度也固定，
-   不能使用自更新缓存中的同名运行时。
+2. `C1B_STAGING_ROOT` 指向已准备的 repo-external 候选输出目录，`C1B_GIT_PATH` 指向本轮核定的
+   `mingw64/bin/git.exe`；helper 另核验同一 Git 安装树的 `cmd/git.exe`。四份维护源、r14 检查源、
+   verifier、PowerShell 及 Utility DLL 是受控输入；
+   维护源 hash 在转换函数中固定，准备记录列出本轮输入 hash。旧冻结工件不参与新 pair 的发布门。
+3. 使用钉定的 PowerShell 7.6.5 执行下面的源码准备命令。入口检查 exe hash，Utility DLL
+   的 hash 和长度也固定；不能使用自更新缓存中的同名运行时。
 
 ```powershell
 $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 & $pwshPath -NoProfile -File scripts/prepare-tablet-layout-c1b-candidate-source.ps1 `
-    -FrozenSourceRoot ${env:C1B_FROZEN_SOURCE_ROOT} `
+    -StagingRoot ${env:C1B_STAGING_ROOT} -GitPath ${env:C1B_GIT_PATH} `
     -CommitSha ${env:C1B_FINAL_COMMIT_SHA} -PwshPath $pwshPath
 ```
 
@@ -25,12 +28,13 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 同名目录已经存在时拒绝覆盖。输入 raw index 在派生前后复核；入口不启动 Git，故 **不声称工作树干净**。
 新 SHA 或任何影响输入的改动都必须重新定版，不能把占位 SHA 的适配测试当作最终候选。
 
-4. 静态审查这五份源码及输入绑定。pair 的历史对照先逐字节重现上一对冻结 hash；常量只按唯一顶层变量名改写，
-   相同值的历史常量保持不动。launcher 原模板仍按旧 hash 读取；转换包含三处精确 `7.6.4 → 7.6.5`、
-   bootstrap 最早抑制进度输出、stderr 有界原始前缀诊断，以及两处捕获数组按真实引用清零。
-   内存派生和实际 renderer 复用同一份转换清单，各转换核验精确出现次数；r14 逆向模板 hash 对应转换后的模板。
+4. 静态审查这五份源码及输入绑定。所有候选常量按唯一顶层变量名改写；维护模板不含历史候选、本机
+   路径或旧 SHA。launcher 维护源已包含 7.6.5、最早抑制 progress、stderr 有界原始前缀诊断及
+   两处捕获数组按真实引用清零。pair renderer 仅读取本仓库的 helper/launcher 模板及当前 verifier、
+   钉定运行时，逐份检查准备时嵌入的 hash；r14 renderer 另核验本仓库 preflight 维护源的 hash/长度。
+   若维护源发生有意变更，必须更新源码 hash 绑定、完成离线回归并重新固定候选。
 5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
-   renderer。二者复用原 r12 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
+   renderer。二者沿用已审查的 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
    发布原语，最终 helper/launcher/preflight 必须与 `.expected.ps1` 的 hash/length 一致。本入口不会自动执行这一步。
 6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
    不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
@@ -56,9 +60,10 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 & $pwshPath -NoProfile -File scripts/tests/tablet-layout-c1b-preflight-r14-checks-offline.ps1
 ```
 
-两个常驻回归使用最小 synthetic fixture；不依赖历史 staging、本机账户路径、Git 安装树或真实设备。
-源码回归为 9 个用例，包含 4 个无害 bootstrap 子进程，验证进度噪声抑制且真实错误仍被拒绝；
+两个常驻回归使用 synthetic fixture，并对版本控制的维护源做确定性派生；不依赖历史 staging、
+本机账户路径、Git 安装树或真实设备。源码回归包含 4 个无害 bootstrap 子进程，
+验证进度噪声抑制且真实错误仍被拒绝；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
 测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
-空文件、reparse、catalog/identity 漂移与字节 canary。真实冻结输入的派生适配测试另行执行，只能证明源码能够生成和通过 Parser，
+空文件、reparse、catalog/identity 漂移与字节 canary。维护源的派生测试只能证明源码能够生成和通过 Parser，
 不能升级为真实 preflight 或 smoke 通过。

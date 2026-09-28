@@ -188,7 +188,7 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-layout-c1b-candidate-source-offline.ps1')
     ) | Out-Null
     $sourceSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-source-offline.log')
-    if ($sourceSummary -cne 'candidate source offline: 9 passed, 0 skipped') {
+    if ($sourceSummary -cne 'candidate source offline: 10 passed, 0 skipped') {
         throw "候选生成测试汇总不符：$sourceSummary"
     }
     Invoke-Logged -LogName 'c1b-preflight-r14-checks-offline.log' -FilePath $PwshPath -Arguments @(
