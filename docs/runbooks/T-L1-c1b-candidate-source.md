@@ -40,6 +40,17 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
    不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
 
+**BuildOnly 启动参数门：** 获得绑定本轮完整 SHA 的单次授权后，先逐字节读回 launcher 的 64 位小写 SHA-256，
+并在启动命令中显式传入其唯一 mandatory 参数：
+
+```powershell
+& $pwshPath -NoProfile -File $exactLauncherPath -ExpectedLauncherSha256 $readBackLauncherSha256
+```
+
+命令审阅时必须同时核对 `-File` 的本轮 exact 路径和该参数的值；参数绑定失败也记录为本轮失败尝试，
+不在同一固定候选补参重跑。此前 `7c55116` 的唯一调用正因漏传该参数在脚本主体前失败，见协调来源的
+`docs/runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md`；它不构成构建通过或新授权。
+
 固定候选须使用独占工作目录。现有 r14 host 模板要求普通 `.git` 目录及本地
 `codex/security-hardening` 的 HEAD/loose ref；普通 worktree 的 gitfile 不满足这一层合同。
 需要隔离时可使用完整 local clone（`--no-hardlinks`，不使用 shallow/filter/shared/alternates），
