@@ -40,15 +40,28 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
    不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
 
-**BuildOnly 启动参数门：** 获得绑定本轮完整 SHA 的单次授权后，先逐字节读回 launcher 的 64 位小写 SHA-256，
-并在启动命令中显式传入其唯一 mandatory 参数：
+**BuildOnly 启动令牌门：** 申请绑定本轮完整 SHA 的单次授权前，先用钉定 PowerShell 做一次不调用
+launcher、Git、构建或 ADB 的 UAC 探针，并保存提升后进程内的管理员令牌检查结果。正式 one-shot 的
+launcher 也必须由已提升的 PowerShell 进程启动（例如由 `Start-Process -Verb RunAs` 启动的子进程）；
+只检查未提升的外层调用方或只出现 UAC 提示均不足以证明这一条件。正式子进程在调用 launcher 前再次执行：
+
+```powershell
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'BuildOnly launcher requires an elevated token.'
+}
+```
+
+获得单次授权后，先逐字节读回 launcher 的 64 位小写 SHA-256，并在**该提升后的子进程**启动命令中
+显式传入其唯一 mandatory 参数：
 
 ```powershell
 & $pwshPath -NoProfile -File $exactLauncherPath -ExpectedLauncherSha256 $readBackLauncherSha256
 ```
 
-命令审阅时必须同时核对 `-File` 的本轮 exact 路径和该参数的值；参数绑定失败也记录为本轮失败尝试，
-不在同一固定候选补参重跑。此前 `7c55116` 的唯一调用正因漏传该参数在脚本主体前失败，见协调来源的
+命令审阅时必须同时核对提升后的令牌、`-File` 的本轮 exact 路径和该参数的值；启动失败也记录为
+本轮失败尝试，不在同一固定候选补参或提权重跑。此前 `7c55116` 的唯一调用正因漏传该参数在脚本主体前失败，见协调来源的
 `docs/runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md`；它不构成构建通过或新授权。
 
 固定候选须使用独占工作目录。现有 r14 host 模板要求普通 `.git` 目录及本地
