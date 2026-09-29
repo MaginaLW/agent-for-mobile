@@ -80,11 +80,19 @@ R3 消费链另有 9/9、26 项断言通过，真实 ADB/设备调用 0。首轮
 helper、Gradle、ADB/设备调用均未进入，该轮已封存、不补参重跑。详见[本轮失败记录](runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md)。
 目前没有成功 BuildOnly、Ready 或设备放行；下一轮须新 clean SHA、新主机准备和新单次授权。
 
-**09-29 新候选：** `14edb4a477ddd71c82f029008c0772e485d682bf` 的 42/42 输入绑定、
-全量门 13/13、R3 专项 9/9、exact pair/r14 发布及唯一只读 preflight 外层 exit `0` 均已完成；
-本 SHA 还没有 BuildOnly 授权或结果。PC Suite 曾自动重启默认 ADB，经用户授权退出应用并清理其 ADB 后，
-preflight 的被动宿主检查通过；退出行为设置须在主机阶段结束后恢复。详见
-[A1—A3 记录](runs/2026-09-29-C1b-14edb4a-A1-A3主机准备.md)。
+**09-29 `14edb4a` 结论：** 42/42 输入绑定、全量门 13/13、R3 专项 9/9、exact pair/r14
+及唯一只读 preflight 均已完成；唯一 BuildOnly 因 launcher 继承未提升令牌，在 `elevation_check`
+exit `1`，helper/构建/ADB 均未进入。该 SHA 已封存，不因提权重跑。PC Suite 的退出行为设置须在
+主机阶段结束后恢复。见[A1—A3](runs/2026-09-29-C1b-14edb4a-A1-A3主机准备.md)与
+[失败记录](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)。
+
+**09-29 下一候选：** 用户同意 UAC 后，独立探针在钉定 PowerShell 7.6.5 内确认
+`elevated_token=true`，未执行 Git、构建或 ADB；原始记录在协调工作区
+`.checks/c1b-elevation-probe/result.json`，SHA-256 为
+`88914fddc91f2cf01f3dac0e1c780897042f7f87f7f28cd192e47eaea5c4fb03`。
+实现分支 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 写明正式启动令牌门，新普通 clone
+A1 已将 42/42 输入绑定 HEAD；A2 全量门进行中。后续 A3、只读 preflight、单次 BuildOnly
+仍须依序完成；本 SHA 尚无 BuildOnly 授权。
 
 **09-13 收尾状态：** 根目录继续负责协调，设备发现证据修复已提交，临时副本清理已完成、归档保留；清理不再是待办。
 提交、验证数值及完整交接见[收尾与待完成项](runs/2026-09-13-C1b-收尾与待完成项.md)，实现与原始证据见
@@ -107,7 +115,7 @@ preflight 的被动宿主检查通过；退出行为设置须在主机阶段结�
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b display context 回退及设备发现证据（含 P1 · R3）** | 7c55116 补齐消费、读回与封存，唯一 BuildOnly 参数绑定失败并封存；新候选 14edb4a 已完成 A1/A2、R3 专项、exact pair/r14 和唯一只读 preflight | R3 离线入口已闭合；14edb4a 的 BuildOnly 须新单次授权，随后仍需独立读回与 Ready。原零设备根因仍未知，r2 未建立、显示回退未获真机验收。见[新候选 A1—A3](runs/2026-09-29-C1b-14edb4a-A1-A3主机准备.md)及[旧轮失败](runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md)；新消费规程位于实现分支的 `docs/runbooks/T-L1-c1b-discovery-consumer.md` |
+| **C1b display context 回退及设备发现证据（含 P1 · R3）** | R3 离线消费链已闭合；`7c55116` 的唯一 BuildOnly 参数绑定失败，`14edb4a` 的唯一 BuildOnly 管理员令牌失败，均已封存；`4b37f34` 的 UAC 探针与 A1 已完成，A2 进行中 | 新 SHA 仍须完成 A2/A3、只读 preflight，再单独申请一次 BuildOnly 授权；成功后还需独立读回与 Ready。原零设备根因仍未知，r2 未建立、显示回退未获真机验收。见[14edb4a 失败](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)；消费与启动规程位于实现分支 `docs/runbooks/` |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 **R3 离线闭合范围：** collector/reader/freezer 纳入两个 checkpoint 及无 run ID 的失败，覆盖未到达、
