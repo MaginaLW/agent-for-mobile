@@ -255,7 +255,7 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
     ) | Out-Null
     $acceptanceSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-acceptance-offline.log') | ConvertFrom-Json -DateKind String
     if ($acceptanceSummary.status -cne 'passed' -or $acceptanceSummary.failed_count -ne 0 -or
-        $acceptanceSummary.case_count -ne 50 -or $acceptanceSummary.assertion_count -ne 131) { throw '主机合同测试汇总不符。' }
+        $acceptanceSummary.case_count -ne 51 -or $acceptanceSummary.assertion_count -ne 133) { throw '主机合同测试汇总不符。' }
     Invoke-Logged -LogName 'c1b-host-raw-archive-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-raw-archive-offline.ps1')
     ) | Out-Null
