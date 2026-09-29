@@ -11,13 +11,14 @@ $BuildEnvironmentTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-build-en
 $AdbServerTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-adb-server-offline.ps1'
 $AttemptFailureTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-attempt-failure-offline.ps1'
 $CaptureFailureTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-capture-failure-offline.ps1'
+$FailureReferenceTests=Join-Path $PSScriptRoot 'tests\c1b-runner-failure-reference-offline.ps1'
 $DeviceDiscoveryTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-device-discovery-offline.ps1'
 $DiscoveryEvidenceTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-discovery-evidence-offline.ps1'
 $HostProcessTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-host-process-offline.ps1'
 $RealBuildSmokeVerifierTests=Join-Path $PSScriptRoot 'tests\tablet-layout-c1b-real-build-smoke-verifier-offline.ps1'
 . $C1aLibrary;. $Validator;. $Library
-function Invoke-C1bAuxiliaryOfflineTest([string]$Path,[string]$Operation,[string]$SuccessPattern){
-    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $Operation -TimeoutSec 180 -FailureDiagnostics
+function Invoke-C1bAuxiliaryOfflineTest([string]$Path,[string]$Operation,[string]$SuccessPattern,[ValidateRange(1,300)][int]$TimeoutSec=180){
+    $test=Invoke-TL1C1aProcess -FilePath $Pwsh -Arguments @('-NoProfile','-File',$Path) -Operation $Operation -TimeoutSec $TimeoutSec -FailureDiagnostics
     $last=@($test.Text-split'\r?\n'|Where-Object{$_-cne''})|Select-Object -Last 1
     if($last-cnotmatch$SuccessPattern){throw "$Operation summary 欺骗：$last"}
 }
@@ -29,12 +30,13 @@ function Invoke-C1bRealBuildSmokeVerifierOfflineTest([string]$Path){
 }
 Invoke-C1bAuxiliaryOfflineTest $AdbProvenanceTests 'C1b adb provenance offline tests' '^tablet-layout-c1b adb provenance offline: 6 passed, 0 failed$'
 Invoke-C1bAuxiliaryOfflineTest $Aapt2ProvenanceTests 'C1b aapt2 provenance offline tests' '^tablet-layout-c1b aapt2 provenance offline: 15 passed, 0 failed, 7 aapt2 executions$'
-Invoke-C1bAuxiliaryOfflineTest $ReadOnlyTests 'C1b host mechanical read-only offline tests' '^RESULT passed=87 failed=0$'
+Invoke-C1bAuxiliaryOfflineTest $ReadOnlyTests 'C1b host mechanical read-only offline tests' '^RESULT passed=87 failed=0$' 300
 Invoke-C1bAuxiliaryOfflineTest $ArtifactProofTests 'C1b artifact proof offline tests' '^tablet-layout-c1b artifact proof offline: 32 passed, 0 failed$'
 Invoke-C1bAuxiliaryOfflineTest $BuildEnvironmentTests 'C1b build environment offline tests' '^tablet-layout-c1b build environment offline: 28 passed, 0 failed, 0 JDK/Gradle executions$'
 Invoke-C1bAuxiliaryOfflineTest $AdbServerTests 'C1b private adb server offline tests' '^\{"schema":"tablet-layout-c1b-adb-server-offline/v1","passed":44,"failed":0,"real_adb_executed":false,"real_jdk_or_gradle_executed":false\}$'
 Invoke-C1bAuxiliaryOfflineTest $AttemptFailureTests 'C1b attempt failure schema offline tests' '^tablet-layout-c1b attempt failure schema offline: 51 passed, 0 failed$'
 Invoke-C1bAuxiliaryOfflineTest $CaptureFailureTests 'C1b capture failure diagnostics offline tests' '^\{"schema":"tablet-layout-c1b-capture-failure-offline/v1","passed":13,"failed":0,"assertions":138,"real_adb_call_count":0,"runner_entrypoint_executed":false\}$'
+Invoke-C1bAuxiliaryOfflineTest $FailureReferenceTests 'C1b runner failure reference offline tests' '^\{"schema":"c1b-runner-failure-reference-offline/v1","passed":12,"failed":0,"assertions":41,"runner_entrypoint_executed":false,"real_adb_call_count":0,"real_device_operation_count":0\}$'
 Invoke-C1bAuxiliaryOfflineTest $DeviceDiscoveryTests 'C1b device discovery offline tests' '^device-discovery offline: 38 passed; 0 failed; real ADB/child processes/files=0$'
 Invoke-C1bAuxiliaryOfflineTest $DiscoveryEvidenceTests 'C1b discovery evidence offline tests' '^\{"schema":"tablet-layout-c1b-discovery-evidence-offline/v1","passed":17,"failed":0,"assertions":44,"real_adb_call_count":0,"runner_entrypoint_executed":false\}$'
 Invoke-C1bAuxiliaryOfflineTest $HostProcessTests 'C1b host process budget offline tests' '^\{"schema":"tablet-layout-c1b-host-process-offline/v1","passed":14,"failed":0,"assertions":66,"real_adb_call_count":0,"host_e2e_executed":false\}$'

@@ -11,7 +11,7 @@ $parseTokens=$null;$parseErrors=$null
 $runnerAst=[Management.Automation.Language.Parser]::ParseFile($runner,[ref]$parseTokens,[ref]$parseErrors)
 if($parseErrors.Count-ne0){throw 'runner parse failed'}
 # Execute the actual runner's read/copy/write functions, never its device entrypoint.
-foreach($name in @('Read-C1bControl','Set-C1bAbortExpectedSnapshot','Write-C1bFailureEvidence')){
+foreach($name in @('Read-C1bControl','Set-C1bAbortExpectedSnapshot','Write-C1bFailureReference','Write-C1bFailureEvidence')){
     $matches=@($runnerAst.FindAll({param($node) $node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-ceq$name},$true))
     if($matches.Count-ne1){throw 'runner function extraction is not unique'}
     . ([scriptblock]::Create($matches[0].Extent.Text))
@@ -33,7 +33,7 @@ function New-Control([string]$Phase='c1',[string]$Reason='capture_c1_probe_illeg
 }
 function Parse-Control($Value){return ConvertFrom-TL1C1bControl ($Value|ConvertTo-Json -Depth 8 -Compress) 'tl1-c1b-diagnostic-test' ('a'*40) ('sha256:'+'b'*64) ('c1b-'+'c'*32)}
 function Reset-Runner([string]$Name,[string]$Phase='c1'){
-    $script:runId='tl1-c1b-diagnostic-test';$script:ExpectedCommitSha='a'*40;$script:expectedArtifactSha='sha256:'+'b'*64;$script:buildChallenge='c1b-'+'c'*32
+    $script:attemptId='tl1-c1b-diagnostic-test';$script:runId=$script:attemptId;$script:ExpectedCommitSha='a'*40;$script:expectedArtifactSha='sha256:'+'b'*64;$script:buildChallenge='c1b-'+'c'*32
     $script:capturePhase=$Phase;$script:providerFailure=$null;$script:generation=[long]7
     $script:AdbPath='fake-offline';$script:serial='FAKE123';$script:adbEnvironment=@{};$script:adbServerGuard=$null
     $script:controlRaw=[Collections.Generic.List[string]]::new();$script:statusReadCount=0

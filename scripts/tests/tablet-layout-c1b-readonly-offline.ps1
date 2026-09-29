@@ -166,7 +166,7 @@ try{
     Pass capture_failure_validator_required {
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner 'Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)' '' 'failure-validator-removed.ps1')} `
             'failure evidence validator removal accepted' `
-            -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移。')
+            -SemanticReason (ExactReason 'C1b runner command name/count closure 漂移：Assert-TL1C1bFailureEvidence。')
     }
     Pass capture_failure_no_extra_device_read {
         Throws {Assert-TL1C1bRunnerReadOnlyAst (Mutate $runner '$verifiedFailure=ConvertTo-TL1C1bCaptureFailure' `

@@ -253,6 +253,69 @@ function Write-C1bDiscoveryEvidence([string]$Checkpoint,$Diagnostic,[bool]$Disco
         }}
     }
 }
+function Write-C1bFailureReference([string]$Path,[string]$Kind,$Value) {
+    if($attemptId-cnotmatch'^tl1-c1b-[a-z0-9._-]{1,72}$'-or
+       $ExpectedCommitSha-cnotmatch'^[0-9a-f]{40}$'-or$Kind-cnotin@('run_failure','attempt_failure')-or
+       ($null-ne$runId-and($runId-isnot[string]-or$runId-cne$attemptId))){
+        throw 'C1b failure reference identity 无效。'
+    }
+    $full=Assert-TL1C1aOrdinaryPath $RepoRoot $Path
+    $relative=[IO.Path]::GetRelativePath($RepoRoot,$full).Replace('\','/')
+    if([IO.Path]::IsPathRooted($relative)-or$relative-cmatch'(^|/)\.\.?(/|$)' -or
+       $relative.Contains([char]10)-or$relative.Contains([char]13)){
+        throw 'C1b failure reference path 无效。'
+    }
+    $expected=[Text.UTF8Encoding]::new($false).GetBytes(($Value|ConvertTo-Json -Depth 30 -Compress))
+    $bytes=$null;$stream=$null;$referenceRaw=$null
+    try{
+        $stream=[IO.File]::Open($full,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        $issues=[Collections.Generic.List[object]]::new()
+        if(-not(Test-TL1V2OpenedFileIdentity $stream.SafeFileHandle $full $issues)-or$issues.Count-ne0){
+            throw 'C1b failure reference final path/hardlink 复核失败。'
+        }
+        if($stream.Length-notin 1..65536-or$stream.Length-ne$expected.Length){
+            throw 'C1b failure reference byte count 越界或漂移。'
+        }
+        $bytes=[byte[]]::new([int]$stream.Length);$offset=0
+        while($offset-lt$bytes.Length){
+            $read=$stream.Read($bytes,$offset,$bytes.Length-$offset)
+            if($read-eq0){throw 'C1b failure reference readback 提前 EOF。'}
+            $offset+=$read
+        }
+        if($stream.ReadByte()-ne-1-or$stream.Length-ne$bytes.Length){throw 'C1b failure reference readback 长度漂移。'}
+        $hash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        if($hash-cne[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expected)).ToLowerInvariant()){
+            throw 'C1b failure reference readback 原始 hash 漂移。'
+        }
+        $raw=ConvertFrom-TL1C1aStrictUtf8 $bytes 'C1b failure reference'
+        $valueRead=ConvertFrom-TL1C1bClosedJson $raw
+        if($Kind-ceq'run_failure'){
+            Assert-TL1C1bFailureEvidence $valueRead
+            if($null-eq$runId-or$valueRead.run_id-cne$runId){throw 'C1b failure reference run identity 漂移。'}
+        }else{
+            Assert-TL1C1bAttemptFailureCrossBindings $valueRead
+            if($null-ne$runId-or$valueRead.attempt_id-cne$attemptId-or
+               $null-ne$valueRead.run_id-or$valueRead.expected_commit_sha-cne$ExpectedCommitSha){
+                throw 'C1b failure reference attempt identity 漂移。'
+            }
+        }
+        [void](Assert-TL1C1aOrdinaryPath $RepoRoot $full)
+        $issues.Clear()
+        if(-not(Test-TL1V2OpenedFileIdentity $stream.SafeFileHandle $full $issues)-or$issues.Count-ne0){
+            throw 'C1b failure reference final identity 漂移。'
+        }
+        $referenceRaw=[ordered]@{
+            schema='tablet-layout-c1b-failure-reference/v1';attempt_id=$attemptId;run_id=$runId
+            expected_commit_sha=$ExpectedCommitSha;kind=$Kind;path=$relative;bytes=[long]$bytes.Length;sha256=$hash
+        }|ConvertTo-Json -Depth 4 -Compress
+    }finally{
+        try{if($null-ne$stream){$stream.Dispose()}}finally{
+            if($null-ne$bytes-and$bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}
+            if($expected.Length){[Array]::Clear($expected,0,$expected.Length)}
+        }
+    }
+    Write-Host ('C1b failure evidence reference: '+$referenceRaw)
+}
 function Write-C1bFailureEvidence([string]$ReasonCode) {
     if(-not[string]::IsNullOrWhiteSpace($c1bDirectory)-and(Test-Path -LiteralPath $c1bDirectory -PathType Container)){
         $path=Join-Path $c1bDirectory 'tablet-layout-c1b-failure.json';if(Test-Path -LiteralPath $path){return}
@@ -262,7 +325,8 @@ function Write-C1bFailureEvidence([string]$ReasonCode) {
             runtime_origin_verified=$false;runtime_evidence=$false;layout_accepted=$false;wechat_layout_verified=$false
             editor_action_ready=$false;p0_capability='unsupported';execution_grant=$false}
         Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)
-        [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload);return
+        [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)
+        Write-C1bFailureReference $path 'run_failure' $payload;return
     }
     if(-not[string]::IsNullOrWhiteSpace($runId)-or[string]::IsNullOrWhiteSpace($attemptId)-or
        $null-eq$privateAdbStartupDiagnostic){return}
@@ -318,6 +382,7 @@ function Write-C1bFailureEvidence([string]$ReasonCode) {
         $path=Join-Path $EvidenceRoot ("tablet-layout-c1b-attempt-$attemptId.json")
         if(Test-Path -LiteralPath $path){throw 'C1b early failure evidence 拒绝覆盖既有 attempt id。'}
         [void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)
+        Write-C1bFailureReference $path 'attempt_failure' $payload
     }finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}
 }
 function Read-C1bControl([string]$Name,[string]$Uri) {

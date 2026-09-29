@@ -4,7 +4,7 @@
 Set-StrictMode -Version 3.0
 
 $script:TL1C1bReadonlyRunnerTokenSha256 =
-    'sha256:11a15c51cb6be49b70def369cc5b0b19bf3489f73053683b86bbae78f8d8719d'
+    'sha256:15a340508e0e3f792977b5ba91223b2e13d479b90681e09e44dabb41cb4680fa'
 $script:TL1C1bReadonlyC1aCounts = [ordered]@{
     fingerprint = 2L; boot_id = 2L; install = 1L; package_path = 2L; package_dump = 2L
 }
@@ -474,7 +474,7 @@ function Assert-TL1C1bRunnerReadOnlyAst {
             'ConvertFrom-C1bSignerDigest','Assert-C1bFrozenState',
             'Assert-C1bPrivateAdbServerFrozenState','Assert-C1bArtifactFrozenState',
             'Assert-C1bArchivedArtifactEvidence','Assert-C1bHostReadOnlyFrozenState',
-            'Write-C1bFailureEvidence','Write-C1bDiscoveryEvidence','Read-C1bControl',
+            'Write-C1bFailureEvidence','Write-C1bFailureReference','Write-C1bDiscoveryEvidence','Read-C1bControl',
             'Set-C1bAbortExpectedSnapshot'
         ),[StringComparer]::Ordinal)
     $runnerFunctions=@($parsed.Ast.FindAll({param($node)
@@ -498,19 +498,19 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Assert-C1bFrozenState=4','Assert-C1bHostReadOnlyFrozenState=3',
         'Assert-C1bImplementationSnapshot=2','Assert-C1bPrivateAdbServerFrozenState=2',
         'Assert-TL1C1aGitProvenance=2','Assert-TL1C1aNoRawSecret=4',
-        'Assert-TL1C1aOrdinaryPath=3','Assert-TL1C1aT0DeviceBinding=1',
+        'Assert-TL1C1aOrdinaryPath=5','Assert-TL1C1aT0DeviceBinding=1',
         'Assert-TL1C1bAapt2TrustGuardUnchanged=1','Assert-TL1C1bAbortTerminalControl=1',
         'Assert-TL1C1bBuildEnvironmentFrozen=2','Assert-TL1C1bControlTuple=5',
-        'Assert-TL1C1bFailureEvidence=1',
+        'Assert-TL1C1bFailureEvidence=2',
         'Assert-TL1C1bPrivateAdbServerGuardUnchanged=2',
         'Assert-TL1C1bPublishedEvidenceBinding=2','Assert-TL1C1bReadOnlyArtifactProof=2',
         'Assert-TL1C1bRunnerReadOnlyAst=2','Assert-TL1C1bSidecarCrossBindings=2',
-        'Assert-TL1C1bT0ReadOnlySurface=2','Assert-TL1C1bAttemptFailureCrossBindings=1',
+        'Assert-TL1C1bT0ReadOnlySurface=2','Assert-TL1C1bAttemptFailureCrossBindings=2',
         'Close-DispatchLockLease=1',
         'Close-TL1C1bBuildEnvironmentTrustGuard=1','Close-TL1C1bPrivateAdbServerGuard=2',
-        'ConvertFrom-C1bSignerDigest=2','ConvertFrom-TL1C1aStrictUtf8=3',
-        'ConvertFrom-TL1C1bClosedJson=1','ConvertFrom-TL1C1bControl=1',
-        'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=9',
+        'ConvertFrom-C1bSignerDigest=2','ConvertFrom-TL1C1aStrictUtf8=4',
+        'ConvertFrom-TL1C1bClosedJson=2','ConvertFrom-TL1C1bControl=1',
+        'ConvertFrom-TL1C1BV1StrictJson=2','ConvertTo-Json=11',
         'ConvertTo-TL1C1bCaptureFailure=1',
         'ConvertTo-TL1C1bReadOnlyCounts=1','Copy-TL1C1bGuardedArtifactAtomic=5',
         'Find-C1bTrustedGitPath=1','Get-C1bImplementationHashes=1',
@@ -538,8 +538,8 @@ function Assert-TL1C1bRunnerReadOnlyAst {
         'Set-C1bAbortExpectedSnapshot=6','Set-StrictMode=1','Sort-Object=1',
         'Split-Path=1','Start-Sleep=1','Test-Json=3','Test-Path=7',
         'Test-TabletLayoutObservationC1BV1TrustedRuntimeFile=1',
-        'Test-TL1C1aDeviceBinding=2','Wait-TL1C1aA11yReady=1',
-        'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-Host=3',
+        'Test-TL1C1aDeviceBinding=2','Test-TL1V2OpenedFileIdentity=2','Wait-TL1C1aA11yReady=1',
+        'Wait-TL1C1bTerminalState=2','Write-C1bFailureEvidence=1','Write-C1bFailureReference=2','Write-Host=4',
         'Write-C1bDiscoveryEvidence=2','Write-TL1C1bDeviceDiscoveryEvidence=1',
         'Write-TL1C1aBytesAtomic=4','Write-TL1C1aJsonAtomic=2'
     )){
@@ -571,13 +571,13 @@ function Assert-TL1C1bRunnerReadOnlyAst {
     $expectedRunnerMemberCounts=
         [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
     foreach($spec in [string[]]@(
-        'Add=8','AddSeconds=1','Clear=6','Clone=1','Contains=1','Dispose=1',
-        'Equals=2','Format=1','GetBytes=5','GetEnumerator=3','GetFolderPath=2',
-        'GetFullPath=9','GetRelativePath=3','GetTempPath=1',
-        'IsNullOrWhiteSpace=9','IsPathFullyQualified=4','Matches=1','Min=1',
-        'new=9','ReadAllBytes=2','ReferenceEquals=1','Replace=3','StartNew=2',
-        'StartsWith=1','Stop=2','ToArray=2','ToHexString=2',
-        'ToLowerInvariant=3','ToString=1','TrimEnd=2','WriteLine=2'
+        'Add=8','AddSeconds=1','Clear=9','Clone=1','Contains=3','Dispose=2',
+        'Equals=2','Format=1','GetBytes=6','GetEnumerator=3','GetFolderPath=2',
+        'GetFullPath=9','GetRelativePath=4','GetTempPath=1','HashData=2',
+        'IsNullOrWhiteSpace=9','IsPathFullyQualified=4','IsPathRooted=1','Matches=1','Min=1',
+        'new=12','Open=1','Read=1','ReadAllBytes=2','ReadByte=1','ReferenceEquals=1','Replace=4','StartNew=2',
+        'StartsWith=1','Stop=2','ToArray=2','ToHexString=4',
+        'ToLowerInvariant=5','ToString=1','TrimEnd=2','WriteLine=2'
     )){
         $separator=$spec.LastIndexOf('=')
         $expectedRunnerMemberCounts.Add(
@@ -1130,16 +1130,17 @@ if($Name-cin@('content_c1','content_c2','content_status')-and$null-ne$capturePha
     $expectedFailureTail = @(
         'Assert-TL1C1bFailureEvidence ([pscustomobject]$payload)',
         '[void](Write-TL1C1aJsonAtomic $RepoRoot $path $payload)',
+        "Write-C1bFailureReference `$path 'run_failure' `$payload",
         'return'
     )
-    if ($failureStatements.Count -lt 4) { throw 'C1b runner failure evidence validator/write binding 漂移。' }
-    for ($index=0; $index -lt 3; $index++) {
-        if (($failureStatements[$failureStatements.Count-3+$index].Extent.Text -replace '[\s`]+','') -cne
+    if ($failureStatements.Count -lt 5) { throw 'C1b runner failure evidence validator/write binding 漂移。' }
+    for ($index=0; $index -lt 4; $index++) {
+        if (($failureStatements[$failureStatements.Count-4+$index].Extent.Text -replace '[\s`]+','') -cne
             ($expectedFailureTail[$index] -replace '[\s`]+','')) {
             throw 'C1b runner failure evidence validator/write binding 漂移。'
         }
     }
-    $providerFields = @($failureStatements[$failureStatements.Count-4].FindAll({param($node)
+    $providerFields = @($failureStatements[$failureStatements.Count-5].FindAll({param($node)
         $node -is [Management.Automation.Language.HashtableAst]
     }, $true) | ForEach-Object { $_.KeyValuePairs } | Where-Object {
         $_.Item1 -is [Management.Automation.Language.StringConstantExpressionAst] -and
@@ -1150,6 +1151,103 @@ if($Name-cin@('content_c1','content_c2','content_status')-and$null-ne$capturePha
         throw 'C1b runner failure evidence validator/write binding 漂移。'
     }
 
+    $earlyFailureTry=$failureWriter.Body.EndBlock.Statements[-1]
+    if($earlyFailureTry-isnot[Management.Automation.Language.TryStatementAst]-or
+       $earlyFailureTry.Body.Statements.Count-lt2-or
+       ($earlyFailureTry.Body.Statements[-2].Extent.Text-replace'[\s`]+','')-cne
+       '[void](Write-TL1C1aJsonAtomic$RepoRoot$path$payload)'-or
+       ($earlyFailureTry.Body.Statements[-1].Extent.Text-replace'[\s`]+','')-cne
+       "Write-C1bFailureReference`$path'attempt_failure'`$payload"){
+        throw 'C1b runner early failure reference publication binding 漂移。'
+    }
+    $failureReferenceWriter=Get-TL1C1bReadonlyFunction $parsed.Ast 'Write-C1bFailureReference' 'C1b runner'
+    $expectedFailureReferenceWriter=@'
+function Write-C1bFailureReference([string]$Path,[string]$Kind,$Value) {
+    if($attemptId-cnotmatch'^tl1-c1b-[a-z0-9._-]{1,72}$'-or
+       $ExpectedCommitSha-cnotmatch'^[0-9a-f]{40}$'-or$Kind-cnotin@('run_failure','attempt_failure')-or
+       ($null-ne$runId-and($runId-isnot[string]-or$runId-cne$attemptId))){
+        throw 'C1b failure reference identity 无效。'
+    }
+    $full=Assert-TL1C1aOrdinaryPath $RepoRoot $Path
+    $relative=[IO.Path]::GetRelativePath($RepoRoot,$full).Replace('\','/')
+    if([IO.Path]::IsPathRooted($relative)-or$relative-cmatch'(^|/)\.\.?(/|$)' -or
+       $relative.Contains([char]10)-or$relative.Contains([char]13)){
+        throw 'C1b failure reference path 无效。'
+    }
+    $expected=[Text.UTF8Encoding]::new($false).GetBytes(($Value|ConvertTo-Json -Depth 30 -Compress))
+    $bytes=$null;$stream=$null;$referenceRaw=$null
+    try{
+        $stream=[IO.File]::Open($full,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        $issues=[Collections.Generic.List[object]]::new()
+        if(-not(Test-TL1V2OpenedFileIdentity $stream.SafeFileHandle $full $issues)-or$issues.Count-ne0){
+            throw 'C1b failure reference final path/hardlink 复核失败。'
+        }
+        if($stream.Length-notin 1..65536-or$stream.Length-ne$expected.Length){
+            throw 'C1b failure reference byte count 越界或漂移。'
+        }
+        $bytes=[byte[]]::new([int]$stream.Length);$offset=0
+        while($offset-lt$bytes.Length){
+            $read=$stream.Read($bytes,$offset,$bytes.Length-$offset)
+            if($read-eq0){throw 'C1b failure reference readback 提前 EOF。'}
+            $offset+=$read
+        }
+        if($stream.ReadByte()-ne-1-or$stream.Length-ne$bytes.Length){throw 'C1b failure reference readback 长度漂移。'}
+        $hash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        if($hash-cne[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expected)).ToLowerInvariant()){
+            throw 'C1b failure reference readback 原始 hash 漂移。'
+        }
+        $raw=ConvertFrom-TL1C1aStrictUtf8 $bytes 'C1b failure reference'
+        $valueRead=ConvertFrom-TL1C1bClosedJson $raw
+        if($Kind-ceq'run_failure'){
+            Assert-TL1C1bFailureEvidence $valueRead
+            if($null-eq$runId-or$valueRead.run_id-cne$runId){throw 'C1b failure reference run identity 漂移。'}
+        }else{
+            Assert-TL1C1bAttemptFailureCrossBindings $valueRead
+            if($null-ne$runId-or$valueRead.attempt_id-cne$attemptId-or
+               $null-ne$valueRead.run_id-or$valueRead.expected_commit_sha-cne$ExpectedCommitSha){
+                throw 'C1b failure reference attempt identity 漂移。'
+            }
+        }
+        [void](Assert-TL1C1aOrdinaryPath $RepoRoot $full)
+        $issues.Clear()
+        if(-not(Test-TL1V2OpenedFileIdentity $stream.SafeFileHandle $full $issues)-or$issues.Count-ne0){
+            throw 'C1b failure reference final identity 漂移。'
+        }
+        $referenceRaw=[ordered]@{
+            schema='tablet-layout-c1b-failure-reference/v1';attempt_id=$attemptId;run_id=$runId
+            expected_commit_sha=$ExpectedCommitSha;kind=$Kind;path=$relative;bytes=[long]$bytes.Length;sha256=$hash
+        }|ConvertTo-Json -Depth 4 -Compress
+    }finally{
+        try{if($null-ne$stream){$stream.Dispose()}}finally{
+            if($null-ne$bytes-and$bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}
+            if($expected.Length){[Array]::Clear($expected,0,$expected.Length)}
+        }
+    }
+    Write-Host ('C1b failure evidence reference: '+$referenceRaw)
+}
+'@
+    $referenceTokens=$null;$referenceErrors=$null
+    $expectedReferenceAst=[Management.Automation.Language.Parser]::ParseInput(
+        $expectedFailureReferenceWriter,[ref]$referenceTokens,[ref]$referenceErrors)
+    $actualReferenceLiterals=@($failureReferenceWriter.FindAll({param($node)
+        $node-is[Management.Automation.Language.StringConstantExpressionAst]
+    },$true))
+    $expectedReferenceLiterals=@($expectedReferenceAst.FindAll({param($node)
+        $node-is[Management.Automation.Language.StringConstantExpressionAst]
+    },$true))
+    if($referenceErrors.Count-ne0-or$actualReferenceLiterals.Count-ne$expectedReferenceLiterals.Count){
+        throw 'C1b runner failure reference literal/publication binding 漂移。'
+    }
+    for($literalIndex=0;$literalIndex-lt$expectedReferenceLiterals.Count;$literalIndex++){
+        if(-not[StringComparer]::Ordinal.Equals(
+            $actualReferenceLiterals[$literalIndex].Value,$expectedReferenceLiterals[$literalIndex].Value)){
+            throw 'C1b runner failure reference literal/publication binding 漂移。'
+        }
+    }
+    if(($failureReferenceWriter.Extent.Text-replace'[\s`]+','')-cne
+       ($expectedFailureReferenceWriter-replace'[\s`]+','')){
+        throw 'C1b runner failure reference raw-readback/identity/publication binding 漂移。'
+    }
     foreach ($call in @($parsed.Ast.FindAll({param($node)
         $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-TL1C1aAdb'
     }, $true))) {
