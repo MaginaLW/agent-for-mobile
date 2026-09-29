@@ -13,7 +13,9 @@ preflight、helper、launcher、Git、构建或 ADB。
 2. `C1B_STAGING_ROOT` 指向已准备的 repo-external 候选输出目录，`C1B_GIT_PATH` 指向本轮核定的
    `mingw64/bin/git.exe`；helper 另核验同一 Git 安装树的 `cmd/git.exe`。四份维护源、r14 检查源、
    verifier、PowerShell 及 Utility DLL 是受控输入；
-   维护源 hash 在转换函数中固定，准备记录列出本轮输入 hash。旧冻结工件不参与新 pair 的发布门。
+   维护源 hash 在转换函数中固定，准备记录列出本轮输入 hash。helper 的七份库（c1a、validator、c1b、artifact、
+   aapt2、build、runner）按最终仓库实际 raw bytes 重算，保持唯一顶层 ordered map 的键序、数量和小写 hash，
+   派生前后复核并纳入 source_inputs。旧冻结工件不参与新 pair 的发布门。
 3. 使用钉定的 PowerShell 7.6.5 执行下面的源码准备命令。入口检查 exe hash，Utility DLL
    的 hash 和长度也固定；不能使用自更新缓存中的同名运行时。
 
@@ -30,7 +32,8 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 
 4. 静态审查这五份源码及输入绑定。所有候选常量按唯一顶层变量名改写；维护模板不含历史候选、本机
    路径或旧 SHA。launcher 维护源已包含 7.6.5、最早抑制 progress、stderr 有界原始前缀诊断及
-   两处捕获数组按真实引用清零。pair renderer 仅读取本仓库的 helper/launcher 模板及当前 verifier、
+   两处捕获数组按真实引用清零。helper wrapper 将 FailureDiagnostics 透传至唯一 Gradle 调用；实际 pair renderer
+   执行同一七库绑定与诊断转换，发布 bytes 必须与 expected helper 一致。pair renderer 仅读取本仓库的 helper/launcher 模板及当前 verifier、
    钉定运行时，逐份检查准备时嵌入的 hash；r14 renderer 另核验本仓库 preflight 维护源的精确路径及 hash/长度，
    并持有其父目录链。维护源不要求位于 staging；发布产物和已冻结 pair 仍必须是 staging 的直接子项。
    若维护源发生有意变更，必须更新源码 hash 绑定、完成离线回归并重新固定候选。
@@ -117,7 +120,8 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 本机账户路径、Git 安装树或真实设备。源码回归包含 4 个无害 bootstrap 子进程，
 验证进度噪声抑制且真实错误仍被拒绝；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
-源码回归还执行生成 r14 的路径检查和目录链清理控制流，覆盖仓库维护模板、错误模板路径、staging 子项逃逸及
+源码回归共 16 项，还核验 helper 七库 raw hash、FailureDiagnostics 透传、renderer/expected bytes 一致和 LF/CRLF；
+动态、嵌套、重复、错序或不完整库绑定均拒绝。回归执行生成 r14 的路径检查和目录链清理控制流，覆盖仓库维护模板、错误模板路径、staging 子项逃逸及
 源父目录获取失败；该夹具用内存句柄替身，不发布工件。测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。维护源的派生测试只能证明源码能够生成和通过 Parser，
 不能升级为真实 preflight 或 smoke 通过。

@@ -21,6 +21,41 @@ function Assert-Rejected {
     try { & $Body } catch { $caught = $_ }
     Assert-Test ($null -ne $caught -and $caught.Exception.Message -match $Pattern) "Expected rejection: $Pattern"
 }
+function Assert-FixtureNewline {
+    param([string]$Source,[ValidateSet('LF','CRLF')][string]$Style)
+    $lf = $Source.Replace("`r`n", "`n")
+    Assert-Test ($lf.Contains("`n") -and -not $lf.Contains("`r")) 'Fixture must contain lines without standalone CR.'
+    $expected = if ($Style -ceq 'CRLF') { $lf.Replace("`n", "`r`n") } else { $lf }
+    Assert-Test ($Source -ceq $expected) "Fixture does not use only $Style newlines."
+}
+function New-FixtureLibraryHashes {
+    param([string]$Digit='a')
+    return [ordered]@{
+        c1a=('sha256:'+$Digit*64); validator=('sha256:'+$Digit*64)
+        c1b=('sha256:'+$Digit*64); artifact=('sha256:'+$Digit*64)
+        aapt2=('sha256:'+$Digit*64); build=('sha256:'+$Digit*64)
+        runner=('sha256:'+$Digit*64)
+    }
+}
+function New-FixtureLibraryMapSource {
+    param([Collections.IDictionary]$Hashes)
+    $entries=@($Hashes.GetEnumerator() | ForEach-Object { "    $($_.Key) = '$($_.Value)'" })
+    return '$expectedLibraryHashes = [ordered]@{' + "`n" + ($entries -join "`n") + "`n}"
+}
+function Read-FixtureLibraryMap {
+    param([string]$Source)
+    $ast=Get-C1bCandidateSourceAst $Source
+    $assignment=@($ast.EndBlock.Statements | Where-Object {
+        $_-is[Management.Automation.Language.AssignmentStatementAst]-and
+        $_.Left.Extent.Text-ceq'$expectedLibraryHashes'
+    })
+    Assert-Test ($assignment.Count-eq1) 'Generated helper map must appear once.'
+    $result=[ordered]@{}
+    foreach($pair in $assignment[0].Right.Expression.Child.KeyValuePairs){
+        $result[$pair.Item1.Value]=$pair.Item2.PipelineElements[0].Expression.SafeGetValue()
+    }
+    return $result
+}
 Test-Case 'variable-name edits preserve equal historical hashes and nested assignments' {
     $source = '$current = ''same''; $historical = ''same''; function f { $current = ''same'' }'
     $actual = Set-C1bCandidateLiteralAssignments $source @{current='next'}
@@ -71,6 +106,7 @@ foreach ($buffer in @(
 '@
     $template = '$versions = @(''7.6.4'', ''7.6.4'', ''7.6.4'')' + "`n" +
         '    $childBootstrapSource = @' + "'`n" + $bootstrap + "`n'@`n" + $tail
+    $template = $template.Replace("`r`n", "`n")
     $updated = Update-C1bLauncherCandidateTemplate $template
     $launcherText = $template
     function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
@@ -230,6 +266,186 @@ Test-Case 'successful pre/post evidence disclaims transient continuity' {
     Assert-Test ($r.Failures.Count -eq 0 -and $r.Receipt.git_trust_root_continuity_verified) 'Stable tree was rejected.'
     Assert-Test (-not $r.Receipt.git_trust_root_transient_change_excluded) 'Discrete checks overclaimed continuity.'
 }
+Test-Case 'new helper diagnostics reach underlying process and renderer matches candidate bytes' {
+    # wrapper 签名与唯一 Gradle 调用取自维护模板；仅底层进程使用内存 stub，不启动构建。
+    $template = @'
+function Invoke-TL1C1aProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Operation,
+        [byte[]]$InputBytes,
+        [hashtable]$Environment,
+        [switch]$ClearEnvironment,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 30,
+        [switch]$AllowFailure
+    )
+    return Invoke-TL1C1aProcessSmokeUnderlying @PSBoundParameters
+}
+    [void](Invoke-TL1C1aProcess -FilePath ([string]$gradleInvocation.FilePath) `
+        -Arguments $gradleArguments `
+        -Operation 'C1b 42-input real isolated direct GradleMain smoke' `
+        -Environment $environment -ClearEnvironment -TimeoutSec 300)
+'@
+    $hashes=New-FixtureLibraryHashes 'b'
+    $template=((New-FixtureLibraryMapSource (New-FixtureLibraryHashes)) + "`n" + $template).Replace("`r`n", "`n")
+    function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
+    $updated = $null
+    foreach ($style in @('LF','CRLF')) {
+        $inputTemplate = if ($style -ceq 'CRLF') { $template.Replace("`n", "`r`n") } else { $template }
+        Assert-FixtureNewline $inputTemplate $style
+        $transformed = Update-C1bHelperCandidateTemplate $inputTemplate $hashes
+        Assert-FixtureNewline $transformed $style
+        $helperText = $inputTemplate
+        . ([scriptblock]::Create((New-C1bHelperRendererTransformSource $inputTemplate $hashes)))
+        Assert-Test ($helperText -ceq $transformed) "Helper renderer differs from candidate transformation for $style."
+        Assert-Rejected { Update-C1bHelperCandidateTemplate $transformed $hashes } 'cardinality'
+        Assert-Rejected { Update-C1bHelperCandidateTemplate ($inputTemplate.Replace('-TimeoutSec 300)', '-TimeoutSec 299)')) $hashes } 'cardinality'
+        $separator = if ($style -ceq 'CRLF') { "`r`n" } else { "`n" }
+        Assert-Rejected { Update-C1bHelperCandidateTemplate ($inputTemplate + $separator + $inputTemplate) $hashes } 'one top-level'
+        if ($style -ceq 'LF') { $updated = $transformed }
+        else { Assert-Test ($transformed.Replace("`r`n", "`n") -ceq $updated) 'Helper LF/CRLF transformations differ.' }
+    }
+    $actualHashes=Read-FixtureLibraryMap $updated
+    Assert-Test ($actualHashes.Count-eq7-and
+        ($actualHashes.Keys-join',')-ceq($hashes.Keys-join',')-and
+        @($actualHashes.Values | Where-Object {$_-cne('sha256:'+'b'*64)}).Count-eq0) 'New helper retained a frozen loader hash.'
+    $script:helperForwarded = $null
+    function Invoke-TL1C1aProcessSmokeUnderlying {
+        param($FilePath,$Arguments,$Operation,$InputBytes,$Environment,[switch]$ClearEnvironment,
+            [int]$TimeoutSec,[switch]$AllowFailure,[switch]$FailureDiagnostics)
+        $script:helperForwarded = @{} + $PSBoundParameters
+    }
+    $gradleInvocation = @{FilePath='fixture-java.exe'}
+    $gradleArguments = [string[]]@('fixture-gradle-main')
+    $environment = @{FIXTURE='value'}
+    . ([scriptblock]::Create($updated))
+    Assert-Test ($null -ne $script:helperForwarded -and $script:helperForwarded.FailureDiagnostics.IsPresent -and
+        $script:helperForwarded.ClearEnvironment.IsPresent -and $script:helperForwarded.TimeoutSec -eq 300 -and
+        $script:helperForwarded.FilePath -ceq 'fixture-java.exe') 'Helper wrapper did not forward diagnostics unchanged.'
+}
+Test-Case 'library map replacement leaves equal historical hashes and other maps intact' {
+    $oldMap=New-FixtureLibraryMapSource (New-FixtureLibraryHashes)
+    $historical='$historicalHash = ''sha256:' + 'a'*64 + "'"
+    $otherMap=$oldMap.Replace('expectedLibraryHashes','unrelatedHashes')
+    $source=$historical+"`n"+$oldMap+"`n"+$otherMap
+    $hashes=New-FixtureLibraryHashes 'c'
+    $hashes.runner='sha256:'+'d'*64
+    $change=Get-C1bHelperLibraryHashTransformation $source $hashes
+    $actual=Replace-C1bCandidateExactText $source $change.Old $change.New $change.Count
+    Assert-Test ($actual-ceq($historical+"`n"+(New-FixtureLibraryMapSource $hashes)+"`n"+$otherMap)) 'Library map replacement changed unrelated history.'
+    Assert-Test ((Read-FixtureLibraryMap $actual).runner-ceq$hashes.runner) 'Per-file loader hash was lost.'
+}
+Test-Case 'missing ambiguous dynamic and malformed helper library maps are rejected' {
+    $map=New-FixtureLibraryMapSource (New-FixtureLibraryHashes)
+    $hashes=New-FixtureLibraryHashes 'b'
+    $line="    c1a = 'sha256:"+'a'*64+"'`n"
+    foreach($source in @(
+        '$other = 1',
+        ($map+"`n"+$map),
+        ($map+"`n"+'$EXPECTEDLIBRARYHASHES = @{}'),
+        ($map+"`n"+'$script:expectedLibraryHashes = @{}'),
+        ('function nested {'+"`n"+$map+"`n}"),
+        $map.Replace('$expectedLibraryHashes','$script:expectedLibraryHashes'),
+        $map.Replace('[ordered]@{','@{'),
+        $map.Replace($line,''),
+        $map.Replace($line,$line+$line.Replace('c1a','extra')),
+        $map.Replace($line,$line+$line),
+        $map.Replace($line,$line.Replace('c1a','temporary')).Replace('validator','c1a').Replace('temporary','validator'),
+        $map.Replace("'sha256:"+'a'*64+"'",'$env:UNTRUSTED_HASH'),
+        $map.Replace('sha256:','SHA256:'),
+        $map.Replace('a'*64,'a'*63),
+        $map.Replace("'sha256:"+'a'*64+"'",'(''sha256:'' + ''a'' * 64)')
+    )) {
+        Assert-Rejected { Get-C1bHelperLibraryHashTransformation $source $hashes } 'top-level|ordered literal|keys/order|literal|parser errors'
+    }
+}
+Test-Case 'new repository hash authority rejects missing extra reordered and nonliteral values' {
+    $map=New-FixtureLibraryMapSource (New-FixtureLibraryHashes)
+    $missing=New-FixtureLibraryHashes;$missing.Remove('runner')
+    $extra=New-FixtureLibraryHashes;$extra.extra='sha256:'+'a'*64
+    $reordered=[ordered]@{runner=('sha256:'+'a'*64)}
+    foreach($key in @('c1a','validator','c1b','artifact','aapt2','build')){$reordered[$key]='sha256:'+'a'*64}
+    $uppercase=New-FixtureLibraryHashes;$uppercase.c1a='sha256:'+'A'*64
+    $short=New-FixtureLibraryHashes;$short.c1a='sha256:'+'a'*63
+    $nullHash=New-FixtureLibraryHashes;$nullHash.c1a=$null
+    $scriptHash=New-FixtureLibraryHashes;$scriptHash.c1a={'sha256:'+'a'*64}
+    $newline=New-FixtureLibraryHashes;$newline.c1a=('sha256:'+'a'*64+"`n")
+    foreach($hashes in @($missing,$extra,$reordered,$uppercase,$short,$nullHash,$scriptHash,$newline)){
+        Assert-Rejected { Get-C1bHelperLibraryHashTransformation $map $hashes } 'keys/order|lowercase SHA-256 literal'
+    }
+}
+Test-Case 'preparation binds all seven final repository file bytes without newline normalization' {
+    # 只载入三个生产读取函数；prepare 入口、冻结工件和外部进程均不执行。
+    $prepare=Get-C1bCandidateSourceAst ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../prepare-tablet-layout-c1b-candidate-source.ps1')))
+    foreach($name in @('Read-CandidateInput','Get-CandidateFileHash','Get-CandidateRepositoryLibraryHashes')){
+        $functions=@($prepare.EndBlock.Statements | Where-Object {
+            $_-is[Management.Automation.Language.FunctionDefinitionAst]-and$_.Name-ceq$name
+        })
+        Assert-Test ($functions.Count-eq1) 'Preparation byte reader is not uniquely defined.'
+        . ([scriptblock]::Create($functions[0].Extent.Text))
+    }
+    $parent=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../.checks'))
+    $null=[IO.Directory]::CreateDirectory($parent)
+    $root=Join-Path $parent ('c1b-source-byte-fixture-'+[guid]::NewGuid().ToString('N'))
+    $null=[IO.Directory]::CreateDirectory($root)
+    try {
+        $paths=[ordered]@{
+            c1a='scripts/lib/tablet-layout-c1a.ps1';validator='scripts/lib/tablet-layout-observation-c1b-v1-validator.ps1'
+            c1b='scripts/lib/tablet-layout-c1b.ps1';artifact='scripts/lib/tablet-layout-c1b-artifact-proof.ps1'
+            aapt2='scripts/lib/tablet-layout-c1b-aapt2.ps1';build='scripts/lib/tablet-layout-c1b-build-env.ps1'
+            runner='scripts/run-tablet-layout-c1b.ps1'
+        }
+        $expected=[ordered]@{}
+        foreach($entry in $paths.GetEnumerator()){
+            $path=Join-Path $root $entry.Value
+            $null=[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
+            $bytes=[Text.UTF8Encoding]::new($false).GetBytes("# $($entry.Key)`n# 原始字节`n")
+            [IO.File]::WriteAllBytes($path,$bytes)
+            $expected[$entry.Key]='sha256:'+ [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        }
+        $actual=Get-CandidateRepositoryLibraryHashes $root
+        Assert-Test (($actual.Keys-join',')-ceq($paths.Keys-join',')) 'Preparation changed loader key order.'
+        foreach($key in $paths.Keys){Assert-Test ($actual[$key]-ceq$expected[$key]) "Preparation did not bind raw bytes: $key"}
+        # 执行实际入口的 raw-input 记录及输出前 revalidation AST，不运行 prepare 入口。
+        $inputBuilders=@($prepare.EndBlock.Statements | Where-Object {
+            $_-is[Management.Automation.Language.ForEachStatementAst]-and
+            $_.Body.Extent.Text.Contains('$sourceInputs += [pscustomobject]@{')
+        })
+        $inputRechecks=@($prepare.EndBlock.Statements | Where-Object {
+            $_-is[Management.Automation.Language.ForEachStatementAst]-and
+            $_.Body.Extent.Text.Contains('Maintained source changed during preparation:')
+        })
+        Assert-Test ($inputBuilders.Count-eq1-and$inputRechecks.Count-eq1) 'Preparation input/revalidation blocks are not unique.'
+        $RepoRoot=$root;$repositoryLibraryHashes=$actual;$sourceInputs=@()
+        . ([scriptblock]::Create($inputBuilders[0].Extent.Text))
+        Assert-Test ($sourceInputs.Count-eq7-and
+            ($sourceInputs.path-join',')-ceq($paths.Values-join',')) 'Preparation review omitted a final repository loader input.'
+        foreach($inputRecord in $sourceInputs){
+            Assert-Test ($inputRecord.full-ceq(Join-Path $root $inputRecord.path)-and
+                $inputRecord.sha256-cmatch'\A[0-9a-f]{64}\z') 'Preparation review recorded the wrong root or nonraw SHA-256.'
+        }
+        . ([scriptblock]::Create($inputRechecks[0].Extent.Text))
+        $runnerPath=Join-Path $root $paths.runner
+        [IO.File]::WriteAllBytes($runnerPath,[Text.UTF8Encoding]::new($false).GetBytes("# runner`r`n# 原始字节`r`n"))
+        Assert-Rejected { . ([scriptblock]::Create($inputRechecks[0].Extent.Text)) } 'Maintained source changed during preparation'
+        $crlf=Get-CandidateRepositoryLibraryHashes $root
+        Assert-Test ($crlf.runner-cne$actual.runner) 'Preparation normalized LF/CRLF before hashing.'
+        foreach($key in @('c1a','validator','c1b','artifact','aapt2','build')){
+            Assert-Test ($crlf[$key]-ceq$actual[$key]) 'One changed file rewrote another loader binding.'
+        }
+        [IO.File]::Delete($runnerPath)
+        Assert-Rejected { Get-CandidateRepositoryLibraryHashes $root } 'Could not find|cannot find|not find'
+    }
+    finally {
+        $full=[IO.Path]::GetFullPath($root)
+        if([IO.Path]::GetDirectoryName($full)-cne$parent-or
+            [IO.Path]::GetFileName($full)-cnotmatch'^c1b-source-byte-fixture-[0-9a-f]{32}$'){
+            throw 'Fixture cleanup escaped its exact generated root.'
+        }
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
+}
 Test-Case 'missing or duplicate injection anchors cannot silently produce a candidate' {
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource ($fixture.Replace('function Invoke-ReadOnlyGit {','function Other {')) $checks $constants } 'cardinality'
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture ($checks + '; Write-Output bad') $constants } 'functions only'
@@ -249,6 +465,7 @@ Test-Case 'tracked maintenance sources deterministically derive a candidate with
         PwshPath='C:\Fixture\PowerShell\pwsh.exe'; VerifierSha256=('b'*64)
         UtilityAssemblySha256='2f6201bb3caf4c08158be733e786dd85b11537694f7e6ab40356fc0727a3596f'
         UtilityAssemblyLength=1652504L
+        RepositoryLibraryHashes=(New-FixtureLibraryHashes 'b')
     }
     $pair = New-C1bExactPairCandidateSource @pairArgs
     $repeat = New-C1bExactPairCandidateSource @pairArgs
@@ -392,5 +609,99 @@ Test-Case 'tracked maintenance sources deterministically derive a candidate with
         $null -eq $rejected.Specs -and $rejected.Opened.Count -eq 5 -and
         ($rejected.Closed -join "`n") -ceq ($partialClosedReverse -join "`n") -and
         $rejected.CleanupFailures -eq 0) 'R14 source-parent failure continued or leaked earlier held parents.'
+}
+Test-Case 'actual pair renderer derives the final repository helper and rejects drift before publication' {
+    $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+    $sources = Join-Path $repository 'scripts/lib/c1b-candidate-source'
+    $libraryHashes = [ordered]@{}
+    foreach ($entry in (Get-C1bHelperLibraryPaths).GetEnumerator()) {
+        $libraryHashes[$entry.Key] = 'sha256:' + [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData(
+                [IO.File]::ReadAllBytes((Join-Path $repository $entry.Value)))).ToLowerInvariant()
+    }
+    $helperTemplate = [IO.File]::ReadAllText((Join-Path $sources 'helper-template.ps1'))
+    $arguments = @{
+        BaselineRendererSource=[IO.File]::ReadAllText((Join-Path $sources 'renderer-template.ps1'))
+        HelperTemplateSource=$helperTemplate
+        LauncherTemplateSource=[IO.File]::ReadAllText((Join-Path $sources 'launcher-template.ps1'))
+        CommitSha=('a'*40); RepoRoot='C:\Fixture\CandidateRepo'
+        StagingRoot='C:\Fixture\CandidateStage'; PwshPath='C:\Fixture\PowerShell\pwsh.exe'
+        RepositoryLibraryHashes=$libraryHashes; VerifierSha256=('b'*64)
+        UtilityAssemblySha256='2f6201bb3caf4c08158be733e786dd85b11537694f7e6ab40356fc0727a3596f'
+        UtilityAssemblyLength=1652504L
+    }
+    $pair = New-C1bExactPairCandidateSource @arguments
+    $pairAst = Get-C1bCandidateSourceAst $pair.RendererSource
+    foreach ($name in @('Assert-Renderer','Replace-RendererExact')) {
+        $definitions = @($pairAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name
+        })
+        Assert-Test ($definitions.Count -eq 1) 'Actual pair renderer assertion/replacement function drifted.'
+        . ([scriptblock]::Create($definitions[0].Extent.Text))
+    }
+    $publication = @($pairAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.TryStatementAst] -and
+        $_.Body.Extent.Text.Contains('$helperText = [string]$inputByLabel[''helper_template''].Text')
+    })
+    Assert-Test ($publication.Count -eq 1) 'Actual pair renderer publication body is not unique.'
+    $statements = @($publication[0].Body.Statements)
+    $first = @($statements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Extent.Text -ceq '$helperText = [string]$inputByLabel[''helper_template''].Text'
+    })
+    $last = @($statements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Extent.Text -ceq '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
+    })
+    Assert-Test ($first.Count -eq 1 -and $last.Count -eq 1 -and
+        $first[0].Extent.StartOffset -lt $last[0].Extent.StartOffset) 'Actual helper derivation boundaries drifted.'
+    $helperStatements = @($statements | Where-Object {
+        $_.Extent.StartOffset -ge $first[0].Extent.StartOffset -and
+        $_.Extent.StartOffset -lt $last[0].Extent.StartOffset
+    })
+    $helperCode = [string]::Join("`n", @($helperStatements | ForEach-Object { $_.Extent.Text }))
+    function New-RendererCandidate {
+        param($TemporaryPath,$FinalPath,[string]$Text,[string]$ExpectedSha256,
+            [long]$ExpectedLength,$ParentDirectoryEntry,$Label)
+        Assert-Test ((Get-C1bCandidateSourceHash $Text) -ceq $ExpectedSha256 -and
+            [Text.UTF8Encoding]::new($false,$true).GetByteCount($Text) -eq $ExpectedLength) 'Fixture final helper binding failed.'
+        [void](Get-C1bCandidateSourceAst $Text)
+        $script:actualHelperCandidateCount++
+        return [pscustomobject]@{Sha256=$ExpectedSha256;Length=$ExpectedLength;Text=$Text}
+    }
+    function Invoke-ActualHelperFixture {
+        param([string]$InputSource,[switch]$WrongExpectedHash)
+        $inputByLabel = @{helper_template=[pscustomobject]@{Text=$InputSource}}
+        $commitSha = $arguments.CommitSha; $commitShort = $commitSha.Substring(0,7)
+        $helperTemporaryPath = Join-Path $arguments.StagingRoot 'helper-aaaaaaa-r11.rendering.tmp'
+        $helperPath = Join-Path $arguments.StagingRoot 'helper-aaaaaaa-r11.ps1'
+        $expectedHelperSha256 = if ($WrongExpectedHash) {'c'*64} else {$pair.HelperSha256}
+        $expectedHelperLength = $pair.HelperByteLength
+        $stagingDirectoryEntry = [pscustomobject]@{Path=$arguments.StagingRoot}
+        $candidates = [Collections.Generic.List[object]]::new()
+        $script:actualHelperCandidateCount = 0
+        . ([scriptblock]::Create($helperCode))
+        return [pscustomobject]@{Text=$helperText;Count=$candidates.Count;Candidate=$candidates[0]}
+    }
+    $result = Invoke-ActualHelperFixture $helperTemplate
+    Assert-Test ($result.Text -ceq $pair.HelperSource -and $result.Count -eq 1 -and
+        $script:actualHelperCandidateCount -eq 1 -and
+        $result.Candidate.Sha256 -ceq $pair.HelperSha256 -and
+        $result.Candidate.Length -eq $pair.HelperByteLength) 'Actual renderer bytes differ from in-memory helper derivation.'
+    $renderedHashes = Read-FixtureLibraryMap $result.Text
+    foreach ($key in $libraryHashes.Keys) {
+        Assert-Test ($renderedHashes[$key] -ceq $libraryHashes[$key]) "Actual helper did not bind final repository bytes: $key"
+    }
+    Assert-Test ($result.Text.Contains('[switch]$FailureDiagnostics') -and
+        $result.Text.Contains('-TimeoutSec 300 -FailureDiagnostics)')) 'Actual renderer lost Gradle failure diagnostics.'
+    foreach ($source in @(
+        $helperTemplate.Replace('[switch]$AllowFailure','[switch]$DifferentFailure'),
+        $helperTemplate.Replace('-TimeoutSec 300)','-TimeoutSec 299)'),
+        $helperTemplate.Replace('$expectedLibraryHashes = [ordered]@{','$otherLibraryHashes = [ordered]@{'))) {
+        Assert-Rejected { Invoke-ActualHelperFixture $source } 'Helper source transform cardinality'
+        Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Drifted helper reached the publication boundary.'
+    }
+    Assert-Rejected { Invoke-ActualHelperFixture $helperTemplate -WrongExpectedHash } 'final helper binding'
+    Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Wrong expected hash reached the publication boundary.'
 }
 Write-Output "candidate source offline: $passed passed, 0 skipped"

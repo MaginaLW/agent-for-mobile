@@ -40,6 +40,17 @@ function Get-CandidateFileHash {
         (Read-CandidateInput $Path -Bytes -MaximumLength $MaximumLength))).ToLowerInvariant()
 }
 
+function Get-CandidateRepositoryLibraryHashes {
+    param([Parameter(Mandatory)][string]$Root)
+    $hashes=[ordered]@{}
+    foreach($entry in (Get-C1bHelperLibraryPaths).GetEnumerator()){
+        # 绑定最终候选 checkout 的原始字节，不通过文本读取/换行归一计算。
+        $hashes[$entry.Key]='sha256:'+(Get-CandidateFileHash (Join-Path $Root $entry.Value))
+    }
+    Assert-C1bHelperLibraryHashes $hashes
+    return $hashes
+}
+
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 $StagingRoot = [IO.Path]::GetFullPath($StagingRoot)
 $PwshPath = [IO.Path]::GetFullPath($PwshPath)
@@ -74,11 +85,19 @@ $sourceInputs = @(
     [pscustomobject]@{path='scripts/lib/c1b-candidate-source/preflight-template.ps1';full=$preflightTemplatePath;sha256=(Get-C1bCandidateSourceHash $preflightTemplate)}
     [pscustomobject]@{path='scripts/lib/tablet-layout-c1b-preflight-r14-checks.ps1';full=$checksPath;sha256=(Get-C1bCandidateSourceHash $checksSource)}
 )
+$repositoryLibraryHashes = Get-CandidateRepositoryLibraryHashes $RepoRoot
+foreach ($entry in (Get-C1bHelperLibraryPaths).GetEnumerator()) {
+    $sourceInputs += [pscustomobject]@{
+        path=$entry.Value; full=(Join-Path $RepoRoot $entry.Value)
+        sha256=([string]$repositoryLibraryHashes[$entry.Key]).Substring(7)
+    }
+}
 $pair = New-C1bExactPairCandidateSource `
     -BaselineRendererSource $rendererTemplate `
     -HelperTemplateSource $helperTemplate `
     -LauncherTemplateSource $launcherTemplate `
     -CommitSha $CommitSha -RepoRoot $RepoRoot -StagingRoot $StagingRoot -PwshPath $PwshPath `
+    -RepositoryLibraryHashes $repositoryLibraryHashes `
     -VerifierSha256 (Get-CandidateFileHash $verifierPath) `
     -UtilityAssemblySha256 (Get-CandidateFileHash $utility) -UtilityAssemblyLength $utilityBytes.Length
 $indexPath = Join-Path $RepoRoot '.git/index'
@@ -170,6 +189,7 @@ foreach ($name in $outputs.Keys) {
     source_inputs=@($sourceInputs | ForEach-Object {
         [pscustomobject]@{path=$_.path;sha256=$_.sha256}
     })
+    repository_library_hashes=$repositoryLibraryHashes
     clean_sha_verified=$false; artifacts_published=$false; preflight_executed=$false
     helper_or_launcher_executed=$false; git_or_build_or_adb_executed=$false
 } | ConvertTo-Json -Depth 5
