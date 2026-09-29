@@ -201,7 +201,15 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         $snapshotSummary.assertion_count -ne 1300 -or $snapshotSummary.mutation_rejection_cases -ne 28 -or
         $snapshotSummary.stream_contract_mutation_rejection_cases -ne 18 -or
         $snapshotSummary.cleanup_failure_count -ne 0) { throw 'r14 预检反例汇总不符。' }
-    'candidate source 10/10（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；无冻结候选、构建或设备调用'
+    Invoke-Logged -LogName 'c1b-host-process-capture-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-process-capture-offline.ps1'),
+        '-EvidenceRoot', (Join-Path $LogDir 'c1b-host-process-capture-offline')
+    ) | Out-Null
+    $captureSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-process-capture-offline.log')
+    if ($captureSummary -cnotmatch '^host-process-capture: 10 passed / 0 failed; 78 assertions; evidence=.+$') {
+        throw "主机双流捕获测试汇总不符：$captureSummary"
+    }
+    'candidate source 10/10（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；host capture 10/10、78 assertions；无冻结候选、构建或设备调用'
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {

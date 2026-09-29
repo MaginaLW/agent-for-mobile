@@ -63,6 +63,35 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 启动失败也封存为该候选的失败尝试，不在同 SHA 补参或提权重跑。
 
+### 后续候选的外层双流证据
+
+`scripts/lib/c1b-host-process-capture.ps1` 提供纯主机一次性采集函数
+`Invoke-TL1C1bHostProcessCapture`。调用方先绑定 exact executable、参数、工作目录、输入及授权，
+并在需要时取得已提升令牌；该函数不会选取候选、提升权限或授予设备许可。
+证据目录必须不存在，以 `CreateNew` reservation 拒绝重复启动。Windows 子进程先挂起，
+限制继承句柄并加入 kill-on-close Job 后才恢复；分别读取 stdout/stderr 原始字节，记录真实 EOF、
+观察总量、完整 hash 及有界前缀。默认运行限时 45 分钟，每路前缀上限 1 MiB，
+drain 与 cleanup 各有 30 秒期限。溢出、非零退出、超时、drain 或清理失败均拒绝通过。
+
+调用方必须检查返回的 `status`；函数返回不代表子进程原生退出码为零。
+`exit_code`、自然退出、两路 EOF 及 Job/句柄清理各自记录，未观察到完整流时总量/hash 为 null。
+采集通过只证明本次传输与清理合同，正式主机合同仍须独立读回与审查。
+该工具尚未接入固定候选发布/UAC 启动链；不能用它补写历史合并输出的 EOF 或重跑已消费的 one-shot。
+
+```powershell
+. scripts/lib/c1b-host-process-capture.ps1
+$capture = Invoke-TL1C1bHostProcessCapture -ExecutablePath $pwshPath `
+    -ArgumentList $reviewedArguments -WorkingDirectory $boundWorkingDirectory `
+    -EvidenceDirectory $freshEvidenceDirectory
+if ($capture.status -cne 'passed') { throw '主机外层捕获未通过。' }
+```
+
+常驻回归 `scripts/tests/c1b-host-process-capture-offline.ps1` 包含 10 个场景、78 项断言：
+二进制双流、空流、非零退出、溢出全量 hash 与有界前缀、stdout EOF 后继续写 stderr、
+运行超时、root 先退出而 descendant 留存、重复证据拒绝、Windows 参数及 stdin EOF、启动失败。
+测试只运行合成主机进程，不调用 Git、JDK/Gradle、BuildOnly 或 ADB/设备。
+此回归已纳入 `scripts/check.ps1` 的 C1b 候选生成与预检门。
+
 ## r14 新增门与离线回归
 
 `scripts/lib/tablet-layout-c1b-preflight-r14-checks.ps1` 是可跟踪注入源，只定义函数。
