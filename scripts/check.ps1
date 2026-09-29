@@ -2,6 +2,9 @@
 <#
 提交前一键校验。
 
+这是人工运行入口；仓库未安装提交 hook，未运行本脚本的提交不会被它拦截。
+空白检查覆盖已跟踪文件的工作树差异与 index，凭据形态扫描覆盖工作树的已跟踪/未跟踪文件与 index。
+
 此前"跑了哪些验证"只存在于人的记忆和提交说明里：JVM 单测、两套 PowerShell 离线测试、
 diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚本把它们收成一条命令、一张汇总表，
 任一项失败即非零退出。
@@ -105,6 +108,47 @@ function Get-LastMeaningfulLine {
     return $line.Trim()
 }
 
+function Get-GitDiffCheckIssues {
+    param([Parameter(Mandatory)][string]$RepoRoot, [switch]$Cached)
+    $scope = if ($Cached) { 'index' } else { '工作树' }
+    $arguments = @('-C', $RepoRoot, 'diff')
+    if ($Cached) { $arguments += '--cached' }
+    $arguments += @('--check', '--')
+    $output = @(& git @arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) { return }
+
+    # git diff --check 的下一行会带出原文；只保留诊断行里的路径与规则。
+    # 原文也可能伪装成诊断行，因此路径还必须来自 Git 的变更路径清单。
+    $nameArguments = @('-C', $RepoRoot, 'diff')
+    if ($Cached) { $nameArguments += '--cached' }
+    $nameArguments += @('--name-only', '--')
+    $changedPaths = @(& git @nameArguments 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "${scope}：git diff --name-only 执行失败（原始输出已隐藏）。"
+    }
+    $pathSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($changedPath in $changedPaths) { [void]$pathSet.Add([string]$changedPath) }
+    $issues = [Collections.Generic.List[string]]::new()
+    foreach ($line in $output) {
+        if ($line -notmatch '^(.+):[0-9]+: (.+)$') { continue }
+        $path = $matches[1]
+        if (-not $pathSet.Contains($path)) { continue }
+        $rule = switch -Regex ($matches[2]) {
+            '^trailing whitespace\.$' { 'trailing whitespace'; break }
+            '^new blank line at EOF\.$' { 'new blank line at EOF'; break }
+            '^space before tab in indent\.$' { 'space before tab in indent'; break }
+            '^leftover conflict marker\.?$' { 'leftover conflict marker'; break }
+            default { 'git diff --check violation' }
+        }
+        $issues.Add("${scope}：${path}：$rule")
+    }
+    if ($issues.Count -eq 0) {
+        throw "${scope}：git diff --check 执行失败（退出码 $exitCode；原始输出已隐藏）。"
+    }
+    return $issues.ToArray()
+}
+
 Write-Host "仓库：$RepoRoot" -ForegroundColor DarkGray
 Write-Host "日志：$LogDir" -ForegroundColor DarkGray
 $startSnapshot = Get-DevEnvSnapshot
@@ -117,11 +161,19 @@ if (-not $startSnapshot.Healthy) {
 
 # —— 秒级检查放最前：改错了要在等 10 分钟之前就知道 ——
 
-Invoke-Check '空白字符与冲突标记（git diff --check）' {
-    $output = & git -C $RepoRoot diff --check 2>&1
-    # autocrlf 的换行提醒不是错误，只有真正的空白问题才让 git 非零退出。
-    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
+Invoke-Check '空白字符与冲突标记（工作树 + index）' {
+    $issues = @()
+    $issues += @(Get-GitDiffCheckIssues -RepoRoot $RepoRoot)
+    $issues += @(Get-GitDiffCheckIssues -RepoRoot $RepoRoot -Cached)
+    if ($issues.Count -gt 0) { throw ($issues -join "`n  ") }
     'clean'
+}
+
+Invoke-Check '提交内容双视图离线测试' {
+    Invoke-Logged -LogName 'check-git-content-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\check-git-content-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'check-git-content-offline.log')
 }
 
 Invoke-Check '离线检查结果契约' {
@@ -136,7 +188,7 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-layout-c1b-candidate-source-offline.ps1')
     ) | Out-Null
     $sourceSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-source-offline.log')
-    if ($sourceSummary -cne 'candidate source offline: 14 passed, 0 skipped') {
+    if ($sourceSummary -cne 'candidate source offline: 16 passed, 0 skipped') {
         throw "候选生成测试汇总不符：$sourceSummary"
     }
     Invoke-Logged -LogName 'c1b-preflight-r14-checks-offline.log' -FilePath $PwshPath -Arguments @(
@@ -149,7 +201,76 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         $snapshotSummary.assertion_count -ne 1300 -or $snapshotSummary.mutation_rejection_cases -ne 28 -or
         $snapshotSummary.stream_contract_mutation_rejection_cases -ne 18 -or
         $snapshotSummary.cleanup_failure_count -ne 0) { throw 'r14 预检反例汇总不符。' }
-    'candidate source 14/14（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；无冻结候选、构建或设备调用'
+    Invoke-Logged -LogName 'c1b-host-process-capture-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-process-capture-offline.ps1'),
+        '-EvidenceRoot', (Join-Path $LogDir 'c1b-host-process-capture-offline')
+    ) | Out-Null
+    $captureSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-process-capture-offline.log')
+    if ($captureSummary -cnotmatch '^host-process-capture: 13 passed / 0 failed; 104 assertions; evidence=.+$') {
+        throw "主机双流捕获测试汇总不符：$captureSummary"
+    }
+    Invoke-Logged -LogName 'c1b-candidate-host-stages-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-candidate-host-stages-offline.ps1'),
+        '-EvidenceRoot', (Join-Path $LogDir 'c1b-candidate-host-stages-offline')
+    ) | Out-Null
+    $stageSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-host-stages-offline.log')
+    if ($stageSummary -cnotmatch '^candidate-host-stages: 10 passed / 0 failed; 81 assertions; evidence=.+$') {
+        throw "主机阶段测试汇总不符：$stageSummary"
+    }
+    Invoke-Logged -LogName 'c1b-terminal-discovery-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-terminal-discovery-offline.ps1')
+    ) | Out-Null
+    $discoverySummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-terminal-discovery-offline.log')
+    if ($discoverySummary -cne 'c1b terminal discovery offline: 14 passed, 0 failed, 70 assertions; real candidate executions=0; device/ADB/provider invocations=0; native held file guards executed on synthetic files') {
+        throw "终态发现测试汇总不符：$discoverySummary"
+    }
+    Invoke-Logged -LogName 'c1b-candidate-authority-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-candidate-authority-offline.ps1')
+    ) | Out-Null
+    $authoritySummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-authority-offline.log') | ConvertFrom-Json -DateKind String
+    if ($authoritySummary.schema -cne 'c1b-candidate-authority-offline/v1' -or $authoritySummary.status -cne 'passed' -or
+        $authoritySummary.synthetic -ne $true -or $authoritySummary.case_count -ne 15 -or $authoritySummary.assertions -ne 67 -or
+        $authoritySummary.production_candidate_a1_claim -ne $false -or $authoritySummary.adb_execution_count -ne 0 -or
+        $authoritySummary.build_execution_count -ne 0) { throw 'A1 原始输入审计测试汇总不符。' }
+    Invoke-Logged -LogName 'c1b-build-only-elevation-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-build-only-elevation-offline.ps1')
+    ) | Out-Null
+    $elevationSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-build-only-elevation-offline.log') | ConvertFrom-Json -DateKind String
+    if ($elevationSummary.schema -cne 'c1b-build-only-elevation-offline/v1' -or $elevationSummary.passed -ne 13 -or
+        $elevationSummary.failed -ne 0 -or $elevationSummary.assertions -ne 129 -or $elevationSummary.runas_invocation_count -ne 0 -or
+        $elevationSummary.real_buildonly_invocation_count -ne 0 -or $elevationSummary.real_adb_call_count -ne 0 -or
+        $elevationSummary.real_device_operation_count -ne 0 -or $elevationSummary.uac_elevation_verified -ne $false) {
+        throw '提升启动离线测试汇总不符。'
+    }
+    Invoke-Logged -LogName 'c1b-build-only-host-readback-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-build-only-host-readback-offline.ps1')
+    ) | Out-Null
+    $readbackSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-build-only-host-readback-offline.log')
+    if ($readbackSummary -cne 'BuildOnly host readback offline: 15 passed, 0 skipped; 46 assertions; synthetic only; external candidate/device calls 0') {
+        throw "BuildOnly 读回测试汇总不符：$readbackSummary"
+    }
+    Invoke-Logged -LogName 'c1b-host-acceptance-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-acceptance-offline.ps1'),
+        '-AuthorityFixtureOuterDirectory', ([IO.Path]::GetDirectoryName([string]$authoritySummary.valid_a1_outer_capture_path))
+    ) | Out-Null
+    $acceptanceSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-acceptance-offline.log') | ConvertFrom-Json -DateKind String
+    if ($acceptanceSummary.status -cne 'passed' -or $acceptanceSummary.failed_count -ne 0 -or
+        $acceptanceSummary.case_count -ne 50 -or $acceptanceSummary.assertion_count -ne 131) { throw '主机合同测试汇总不符。' }
+    Invoke-Logged -LogName 'c1b-host-raw-archive-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-raw-archive-offline.ps1')
+    ) | Out-Null
+    $archiveSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-raw-archive-offline.log')
+    if ($archiveSummary -cnotmatch '^host-raw-archive: 8 passed / 0 failed; 39 assertions; evidence=.+$') {
+        throw "原始材料封存测试汇总不符：$archiveSummary"
+    }
+    Invoke-Logged -LogName 'c1b-device-entry-source-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-device-entry-source-offline.ps1')
+    ) | Out-Null
+    $entrySummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-device-entry-source-offline.log')
+    if ($entrySummary -cne 'cases=32 passed=32 failed=0 source_execution_count=1 helper_launcher_build_adb_provider_invocations=0') {
+        throw "设备入口维护源测试汇总不符：$entrySummary"
+    }
+    'candidate source 16/16；r14 1300 assertions / 28 mutations；capture 13/13；stages 10/10；terminal discovery 14/14；A1、提升启动、读回、合同、封存与设备维护源离线检查通过；无冻结候选、真实构建或设备调用'
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {
@@ -317,13 +438,17 @@ Invoke-Check '凭据扫描' {
     # 2026-07-27 实锤：BearerAuthGuardTest 里的假 token 恰好是 32 位十六进制，批次 D 跑 check
     # 时它还没入库、报了全绿，提交完才被抓出来。
     #
+    # 工作树搜已跟踪和未跟踪文件，index 另搜下一次提交会带走的版本。
     # 注意这仍然只是**提交前跑一下**的人工闸门，不是强制拦截——仓库没有装 git hook，
     # 谁不跑 check.ps1 就绕过了。真要拦住提交得配 pre-commit hook（未做）。
-    $hits = @(& git -C $RepoRoot grep -nIE --untracked '\b[0-9a-f]{32}\b' -- . 2>$null)
-    if ($LASTEXITCODE -notin @(0, 1)) { throw 'git grep 执行失败。' }
-    if ($hits.Count -gt 0) {
-        $issues.Add("疑似 token 形态（32 位裸 hex）命中 $($hits.Count) 处：`n    " +
-            (($hits | Select-Object -First 5) -join "`n    "))
+    foreach ($view in @(
+        @{ Scope = '工作树'; Mode = '--untracked' },
+        @{ Scope = 'index'; Mode = '--cached' }
+    )) {
+        # -l 只返回路径，避免原先 -n 把疑似凭据所在整行写进控制台和日志。
+        $paths = @(& git -C $RepoRoot grep -lIE $view.Mode '\b[0-9a-f]{32}\b' -- . 2>$null)
+        if ($LASTEXITCODE -notin @(0, 1)) { throw "$($view.Scope)：git grep 执行失败。" }
+        foreach ($path in $paths) { $issues.Add("$($view.Scope)：${path}：32 位裸 hex") }
     }
 
     if ($issues.Count -gt 0) { throw ($issues -join "`n  ") }

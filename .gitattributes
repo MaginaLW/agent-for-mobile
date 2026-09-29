@@ -1,2 +1,4 @@
 docs/runs/evidence/tl1-c1a-20260826t114535z-63667b68ce4f/** -text whitespace=cr-at-eol
 docs/runs/evidence/tl1-c1a-20260826t125127z-354a7b4b0ed5/** -text whitespace=cr-at-eol
+scripts/lib/c1b-candidate-source/*.ps1 text eol=lf
+scripts/lib/c1b-device-entry-source/*.ps1 text eol=lf

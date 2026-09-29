@@ -1,6 +1,6 @@
 #Requires -Version 7.5
 # 纯源代码转换；不读写文件、不运行候选、Git、构建或设备命令。
-# 冻结工件只能作为输入。返回值是待审查源代码，发布仍须使用 held/no-follow renderer。
+# 输入为版本控制下的维护源。返回值仅是待审查源码；发布仍须使用 held/no-follow renderer。
 
 function Get-C1bCandidateSourceAst {
     param([Parameter(Mandatory)][string]$Source)
@@ -299,60 +299,27 @@ function New-C1bExactPairCandidateSource {
         $UtilityAssemblyLength -ne 1652504L) {
         throw 'Pinned PowerShell 7.6.5 Utility assembly binding drifted.'
     }
-    if ((Get-C1bCandidateSourceHash $BaselineRendererSource) -cne
-        '3086b43031b4e7fa6dc50c5227da44729d9675bf1757bf896fa25ece8203958a') {
-        throw 'Frozen r12 renderer source drifted.'
-    }
-    foreach ($binding in @(
-        @($HelperTemplateSource, 'expectedHelperTemplateSha256'),
-        @($LauncherTemplateSource, 'expectedLauncherTemplateSha256'))) {
-        if ((Get-C1bCandidateSourceHash $binding[0]) -cne
-            (Get-C1bCandidateLiteralAssignment $BaselineRendererSource $binding[1])) {
-            throw "Frozen template source drifted: $($binding[1])"
+    foreach ($sourceBinding in @(
+        [pscustomobject]@{Source=$BaselineRendererSource;Hash='4d3b031cecabcb09e471d0ac5b60daeeb6ef7aeb7e83290b13ee77a39094443a';Label='renderer'},
+        [pscustomobject]@{Source=$HelperTemplateSource;Hash='54771ba5a9dc5b32ab964f2f191490c2d73cbc3da3eb34b4c3d1346fa8d593df';Label='helper'},
+        [pscustomobject]@{Source=$LauncherTemplateSource;Hash='dafecc5e0c0313ed0fa4070a0c9ed718230261942358c39394a343a3ccc64e2a';Label='launcher'}
+    )) {
+        if ((Get-C1bCandidateSourceHash ([string]$sourceBinding.Source)) -cne $sourceBinding.Hash) {
+            throw "Maintained $($sourceBinding.Label) source drifted."
         }
     }
-    # 先复算上一对冻结字节。旧 hash 只从其变量名读，避免与历史常量串值。
-    $previousHelper = Replace-C1bCandidateExactText $HelperTemplateSource '__FINAL_COMMIT_SHA__' (
-        Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'commitSha')
-    $previousHelper = Replace-C1bCandidateExactText $previousHelper '__FINAL_COMMIT_SHORT__' (
-        Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'commitShort')
-    $previousLauncher = $LauncherTemplateSource
-    foreach ($slot in ([ordered]@{
-        '__FINAL_COMMIT_SHA__'='commitSha'; '__FINAL_COMMIT_SHORT__'='commitShort'
-        '__REPO_ROOT__'='repoRoot'; '__FAILURE_SIDECAR_ABSOLUTE_PATH__'='failureSidecarPath'
-        '__HELPER_ABSOLUTE_PATH__'='helperPath'; '__HELPER_SHA256__'='expectedHelperSha256'
-        '__VERIFIER_SHA256__'='expectedVerifierSha256'; '__PWSH_ABSOLUTE_PATH__'='pwshPath'
-        '__PWSH_SHA256__'='expectedPwshSha256'
-    }).GetEnumerator()) {
-        # path RHS 可为 Combine 表达式；旧 renderer 直接 path常量与组合需要安全求值，不能执行旧代码。
-        $value = switch ($slot.Value) {
-            'failureSidecarPath' { [IO.Path]::Combine(
-                (Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'stagingRoot'),
-                'launcher-015835c-r11.failure.json'); break }
-            'helperPath' { [IO.Path]::Combine(
-                (Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'stagingRoot'),
-                'helper-015835c-r11.ps1'); break }
-            default { Get-C1bCandidateLiteralAssignment $BaselineRendererSource $slot.Value }
-        }
-        $previousLauncher = Replace-C1bCandidateExactText $previousLauncher $slot.Key $value
-    }
-    if ((Get-C1bCandidateSourceHash $previousHelper) -cne
-        (Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'expectedHelperSha256') -or
-        (Get-C1bCandidateSourceHash $previousLauncher) -cne
-        (Get-C1bCandidateLiteralAssignment $BaselineRendererSource 'expectedLauncherSha256')) {
-        throw 'Previous frozen pair cannot be reproduced exactly.'
-    }
+    [void](Get-C1bCandidateSourceAst $BaselineRendererSource)
+    [void](Get-C1bCandidateSourceAst $HelperTemplateSource)
+    [void](Get-C1bCandidateSourceAst $LauncherTemplateSource)
     $short = $CommitSha.Substring(0, 7)
     $helperPath = [IO.Path]::Combine($StagingRoot, "helper-$short-r11.ps1")
     $launcherPath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.ps1")
     $failurePath = [IO.Path]::Combine($StagingRoot, "launcher-$short-r11.failure.json")
     $pwshHash = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
-    # 旧 pair 已复现；仅新 helper 绑定当前仓库原始 hash，并启用有界脱敏构建诊断。
     $helper = Update-C1bHelperCandidateTemplate $HelperTemplateSource $RepositoryLibraryHashes
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHA__' $CommitSha
     $helper = Replace-C1bCandidateExactText $helper '__FINAL_COMMIT_SHORT__' $short
-    # 原冻结 template 保持原 hash；只转换新 candidate 的运行时/progress/诊断/缓冲引用。
-    $template = Update-C1bLauncherCandidateTemplate $LauncherTemplateSource
+    $template = $LauncherTemplateSource
     $slots = [ordered]@{
         '__FINAL_COMMIT_SHA__'=$CommitSha; '__FINAL_COMMIT_SHORT__'=$short
         '__REPO_ROOT__'=$RepoRoot; '__FAILURE_SIDECAR_ABSOLUTE_PATH__'=$failurePath
@@ -375,6 +342,8 @@ function New-C1bExactPairCandidateSource {
         pwshPath=$PwshPath
         utilityAssemblyPath=[IO.Path]::Combine([IO.Path]::GetDirectoryName($PwshPath), 'Microsoft.PowerShell.Commands.Utility.dll')
         expectedPwshSha256=$pwshHash; expectedPwshVersion='7.6.5'
+        expectedHelperTemplateSha256=(Get-C1bCandidateSourceHash $HelperTemplateSource)
+        expectedLauncherTemplateSha256=(Get-C1bCandidateSourceHash $LauncherTemplateSource)
         expectedVerifierSha256=$VerifierSha256
         expectedUtilityAssemblySha256=$UtilityAssemblySha256; expectedUtilityAssemblyLength=$UtilityAssemblyLength
         expectedHelperSha256=(Get-C1bCandidateSourceHash $helper)
@@ -386,9 +355,6 @@ function New-C1bExactPairCandidateSource {
     $helperAnchor = '$helperText = [string]$inputByLabel[''helper_template''].Text'
     $renderer = Replace-C1bCandidateExactText $renderer $helperAnchor (
         $helperAnchor + "`r`n" + (New-C1bHelperRendererTransformSource $HelperTemplateSource $RepositoryLibraryHashes))
-    $anchor = '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
-    $renderer = Replace-C1bCandidateExactText $renderer $anchor (
-        $anchor + "`r`n" + (New-C1bLauncherRendererTransformSource $LauncherTemplateSource))
     [void](Get-C1bCandidateSourceAst $renderer)
     [void](Get-C1bCandidateSourceAst $launcher)
     [void](Get-C1bCandidateSourceAst $helper)
@@ -407,8 +373,8 @@ function New-C1bPreflightR14CandidateSource {
         [Parameter(Mandatory)][Collections.IDictionary]$Constants
     )
     if ((Get-C1bCandidateSourceHash $BaselineLeafSource) -cne
-        'bf15d0097fa02c9c99f69f8b08b5415390728bfb3d054b84bbd7895abafcd57c') {
-        throw 'Frozen r13 preflight source drifted.'
+        '4825d118a1f1a99db189567bb4cdc8ce0f8270f6326275df37edd58916f18052') {
+        throw 'Maintained preflight source drifted.'
     }
     $BaselineLeafSource = Update-C1bPreflightLauncherBootstrapAssertion $BaselineLeafSource
     return Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $BaselineLeafSource `
@@ -450,7 +416,7 @@ function Update-C1bPreflightLauncherBootstrapAssertion {
 }
 
 function Add-C1bPreflightR14ChecksToSource {
-    # 仅供转换器/离线 fixture；生产入口必须先验证冻结源 hash。
+    # 仅做确定性源码转换；调用方负责读取维护源并固定输入 hash。
     param([Parameter(Mandatory)][string]$BaselineLeafSource,
         [Parameter(Mandatory)][string]$ChecksSource,
         [Parameter(Mandatory)][Collections.IDictionary]$Constants)
@@ -459,11 +425,11 @@ function Add-C1bPreflightR14ChecksToSource {
         @($checksAst.EndBlock.Statements | Where-Object {
             $_ -isnot [Management.Automation.Language.FunctionDefinitionAst]
         }).Count -ne 0) { throw 'R14 checks must contain functions only.' }
-    foreach ($name in @('repoRoot','stagingRoot','expectedCommitSha','expectedCommitShort',
+    foreach ($name in @('repoRoot','stagingRoot','expectedBranch','expectedCommitSha','expectedCommitShort',
         'helperPath','expectedHelperSha256','expectedHelperByteLength',
         'launcherPath','expectedLauncherSha256','expectedLauncherByteLength',
         'expectedLauncherTemplateSha256','failureSidecarPath','pwshPath','expectedPwshSha256',
-        'expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
+        'gitPath','expectedGitSha256','expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
         'expectedGitAttributesSha256','expectedGitIgnoreSha256','expectedGitInfoExcludeSha256',
         'expectedVerifierSha256','summaryLeaf','logLeaf','launcherResultLeaf','receiptLeaf')) {
         if (-not $Constants.Contains($name)) { throw "Missing exact r14 constant: $name" }
@@ -566,6 +532,8 @@ function New-C1bPreflightR14RendererSource {
     param([Parameter(Mandatory)][string]$PairRendererSource,
         [Parameter(Mandatory)][string]$PreflightSource,
         [Parameter(Mandatory)][string]$BaselineLeafPath,
+        [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$BaselineLeafSha256,
+        [Parameter(Mandatory)][ValidateRange(1,4194304)][long]$BaselineLeafByteLength,
         [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$IndexSha256,
         [Parameter(Mandatory)][ValidateRange(12,4194304)][long]$IndexByteLength)
     # 复用上一 renderer 的 bootstrap、no-follow held inputs 与同句柄发布函数。
@@ -604,19 +572,24 @@ try {
         $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($path))
         Assert-Renderer ($drive.IsReady -and $drive.DriveFormat -ceq 'NTFS') 'R14 renderer requires ready NTFS.'
     }
-    foreach ($path in @($r14BaselineLeafPath,$r14LeafPath,$r14TemporaryPath,$r14ReceiptPath,$helperPath,$launcherPath)) {
+    $r14ExpectedBaselineLeafPath = [IO.Path]::Combine(
+        $repoRoot,'scripts','lib','c1b-candidate-source','preflight-template.ps1')
+    Assert-Renderer ([StringComparer]::OrdinalIgnoreCase.Equals(
+        $r14BaselineLeafPath,$r14ExpectedBaselineLeafPath)) 'R14 baseline source escaped repository maintenance path.'
+    foreach ($path in @($r14LeafPath,$r14TemporaryPath,$r14ReceiptPath,$helperPath,$launcherPath)) {
         Assert-Renderer ([StringComparer]::OrdinalIgnoreCase.Equals(
             [IO.Path]::GetDirectoryName($path),$stagingRoot)) 'R14 staging child escaped parent.'
     }
     foreach ($path in @($stagingRoot,$outputRoot,[IO.Path]::GetDirectoryName($r14IndexPath),
-        [IO.Path]::GetDirectoryName($pwshPath),[IO.Path]::GetDirectoryName($verifierPath))) {
+        [IO.Path]::GetDirectoryName($pwshPath),[IO.Path]::GetDirectoryName($verifierPath),
+        [IO.Path]::GetDirectoryName($r14BaselineLeafPath))) {
         $directoryChains.Add((Open-RendererDirectoryChain -Path $path -Label 'r14 authority parent'))
     }
     $stagingDirectoryEntry = $directoryChains[0].Entries[$directoryChains[0].Entries.Count - 1]
     Assert-RendererEntriesAbsent ([string[]]@($r14LeafPath,$r14TemporaryPath,$r14ReceiptPath,
         $failureSidecarPath,$summaryPath,$logPath,$launcherResultPath)) 'r14 unused output'
     $specs = @(
-        @{Path=$r14BaselineLeafPath;Hash='bf15d0097fa02c9c99f69f8b08b5415390728bfb3d054b84bbd7895abafcd57c';Length=300938L;Frozen=$true;Parse=$true},
+        @{Path=$r14BaselineLeafPath;Hash='__BASELINE_HASH__';Length=__BASELINE_LENGTH__L;Frozen=$false;Parse=$true},
         @{Path=$r14IndexPath;Hash=$r14IndexSha256;Length=$r14IndexLength;Frozen=$false;Parse=$false},
         @{Path=$helperPath;Hash=$expectedHelperSha256;Length=$expectedHelperLength;Frozen=$true;Parse=$true},
         @{Path=$launcherPath;Hash=$expectedLauncherSha256;Length=$expectedLauncherLength;Frozen=$true;Parse=$true},
@@ -685,6 +658,8 @@ Assert-Renderer (-not [string]::IsNullOrWhiteSpace($successJson)) 'R14 renderer 
 '@
     foreach ($slot in ([ordered]@{
         '__BASELINE_LEAF__'=$BaselineLeafPath.Replace("'", "''")
+        '__BASELINE_HASH__'=$BaselineLeafSha256
+        '__BASELINE_LENGTH__'=$BaselineLeafByteLength.ToString([Globalization.CultureInfo]::InvariantCulture)
         '__SOURCE_BASE64__'=[Convert]::ToBase64String($bytes)
         '__SOURCE_HASH__'=(Get-C1bCandidateSourceHash $PreflightSource)
         '__SOURCE_LENGTH__'=$bytes.Length.ToString([Globalization.CultureInfo]::InvariantCulture)

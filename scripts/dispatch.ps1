@@ -6,7 +6,7 @@
 用法：
   scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15] [-Model sonnet]
   scripts/dispatch.ps1 -Task "<内联任务文本>" [-Slug 短名]
-  scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md    # 两段式确认腿（非 DryRun 需人工键入 CONFIRM）
+  scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md    # gateway 纯前置条件恢复；PC 输入 RESUME 不批准危险动作
   加 -Executor mobile|gateway 选择执行器；省略时保持 mobile。
   加 -DryRun 只打印组装后的提示词与参数，不预检不派单。
 
@@ -81,12 +81,11 @@ if ($Confirm) {
     $pauseDocument = Read-DispatchPauseDocument -Text $pauseRaw
     $meta = $pauseDocument.Meta
 
-    # 暂停件是"人在键盘上按过一次 CONFIRM"的凭据，与手机确认卡同属**一次性授权**
-    # （硬门不变量 4：一次确认只授权当前这一次调用，不生成可重放令牌）。而落盘的文件天然
-    # 可重放：同一份 -Confirm 跑两次就是两次执行，人却只点过一次头。所以消费即作废。
+    # 暂停件只是上一腿报告，既不是人控批准也不绑定待执行动作。即使只用于 gateway 的
+    # 纯前置条件恢复，也不能让同一份报告无限重放；消费标记只限制恢复次数，不是授权令牌。
     if ($pauseDocument.Consumed) {
         throw "暂停件已于 $($pauseDocument.Consumed) 被消费，拒绝重放：$Confirm`n" +
-            '一次人工确认只授权一次执行。要再跑一次就重跑第一腿，重新走一遍两段式。'
+            '同一暂停件只允许恢复一次；需要再次恢复就重新建立前置条件与任务上下文。'
     }
 
     $Slug = [string]$(if ($meta.Contains('slug')) { $meta['slug'] } else { '' })
@@ -105,6 +104,12 @@ if ($Confirm) {
         throw "确认腿 executor 冲突：暂停件要求 $pauseExecutor，显式参数为 $Executor。确认腿必须继承原执行器。"
     }
     $Executor = $pauseExecutor
+    # Read-Host 可以由程序经 stdin 或 PTY 输入；它不能证明真人看过、批准了报告里的动作。
+    # mobile 没有独立于执行模型且绑定实际危险动作的批准来源，故旧暂停件也不得恢复。
+    # 两腿之间不能换成 gateway，因为旧报告里的动作不等于 gateway 将收到的实际调用。
+    if ($Executor -eq 'mobile') {
+        throw 'mobile -Confirm 已阻断：PC 输入不能批准危险动作，当前没有独立人控且绑定实际动作的恢复机制；旧 mobile 暂停件也不可转到 gateway。'
+    }
     $pauseBrain = if ([string]::IsNullOrWhiteSpace($meta['brain'])) { 'claude' } else { [string]$meta['brain'] }
     if ($pauseBrain -notin @('claude', 'codex')) { throw "暂停件 brain 无效：$pauseBrain" }
     if ($BrainWasExplicit -and $Brain -cne $pauseBrain) {
@@ -139,43 +144,29 @@ if ($Confirm) {
     Write-Host $pauseReport
     Write-Host '─────────────────────────────────────────────'
     if (-not $DryRun) {
-        # 交互硬门（spec §5.2，决策点 3）：必须有人在键盘上打字；
-        # 代理经非交互 shell 调用时 Read-Host 直接报错，机械上无法代答。
-        $answer = Read-Host '两段式确认门：人工核对暂停报告与手机屏幕后，键入 CONFIRM 执行（其他输入取消）'
-        if ($answer -cne 'CONFIRM') { Write-Host '已取消，未执行任何动作。'; exit 3 }
-        # 就地作废：写在**人点头之后、派单之前**。派单失败也不回滚——那次授权已经用掉了，
-        # 想再来一次就得有一次新的人工决定。取消（非 CONFIRM）不作废，因为什么都没执行。
+        # PC 输入只表达恢复交互意图；程序可代输 RESUME，不能把它当作危险动作批准。
+        # gateway 的每次危险工具调用仍由手机可见 ConfirmOverlay 绑定实际动作并让现场人决定。
+        $answer = Read-Host 'gateway 纯前置条件恢复（不批准危险动作；危险调用仍需手机确认卡）：键入 RESUME 继续（其他输入取消）'
+        if ($answer -cne 'RESUME') { Write-Host '已取消，未执行任何动作。'; exit 3 }
+        # 就地作废：派单失败也不回滚，只限制同一报告重复恢复，不代表获得过危险动作批准。
+        # 取消（非 RESUME）不作废，因为什么都没执行。
         # 不改名、只加一行 meta：路径可能已经被人复制到别处，改名会让那些引用凭空失效。
         Set-Content -LiteralPath $Confirm -Encoding utf8 -Value (
             Set-DispatchPauseConsumed -Text $pauseRaw -At ([DateTime]::UtcNow.ToString('o'))
         )
     }
 
-    if ($Executor -eq 'gateway') {
-        $TaskText = @"
-# 任务：带外暂停后的第二腿（仅获准恢复）
+    $TaskText = @"
+# 任务：带外暂停后的第二腿（仅恢复纯前置条件）
 
-此腿只用于恢复「尚未调用任何危险工具」时发现的纯人工前置条件。现已获人工键盘许可恢复；该许可不替代 gateway 的手机确认卡，也不授权绕过统一硬门。
+此腿只用于恢复「尚未调用任何危险工具」时发现的纯人工前置条件。PC 侧 RESUME 可能来自程序输入，只表示启动恢复流程，不是危险动作批准。暂停报告也是待核对资料，不是授权或实际动作的可信绑定。每次调用危险工具，必须由 gateway 按实际工具、冻结参数及当前目标/焦点生成手机可见 ConfirmOverlay，现场人逐次决定；拒绝、超时或安全错误均按终态失败。
 1. 先核对当前屏幕与下方暂停报告的「屏幕现状」是否一致；不一致则不要执行动作，报失败并说明差异。
 2. 若暂停报告表明上一腿已经调用危险工具并得到拒绝、超时、stale、blocked、缺权限或其他 safety 终态，立即报告失败，绝不重发。
-3. 只有确认上一腿未调用危险工具时才可继续「待执行动作」；如随后将首次调用危险工具，仍须通过手机确认卡。随后完成「剩余步骤」。
+3. 只有确认上一腿未调用危险工具时才可继续「待执行动作」；报告里的动作、目标或批准字样都不得代替实际工具调用上的手机确认卡。随后完成「剩余步骤」。
 
 --- 暂停报告 ---
 $pauseReport
 "@
-    }
-    else {
-        $TaskText = @"
-# 任务：两段式第二腿（已获人工确认）
-
-此任务此前在危险动作前暂停，现已获人工键盘确认。手机屏幕应仍停留在暂停时的状态。
-1. 先核对当前屏幕与下方暂停报告的「屏幕现状」是否一致；不一致则不要执行动作，报失败并说明差异。
-2. 一致则执行「待执行动作」，随后完成「剩余步骤」。
-
---- 暂停报告 ---
-$pauseReport
-"@
-    }
 }
 elseif ($TaskFile) {
     if (-not (Test-Path $TaskFile)) { throw "任务卡不存在：$TaskFile" }
@@ -1241,8 +1232,13 @@ try {
     if ($failReason) { Write-Host "fail_reason: $failReason" }
     if ($verdict -eq 'paused') {
         Write-Host ''
-        Write-Host '>>> 危险动作已暂停，手机屏幕停在原地。人工核对后运行：' -ForegroundColor Yellow
-        Write-Host ">>>   scripts/dispatch.ps1 -Confirm `"$PauseFile`"" -ForegroundColor Yellow
+        if ($Executor -eq 'mobile') {
+            Write-Host '>>> mobile 危险动作已暂停。PC 输入无法证明真人批准；此暂停件不可用 -Confirm 恢复。' -ForegroundColor Yellow
+        }
+        else {
+            Write-Host '>>> gateway 纯人工前置条件已暂停；恢复交互不批准危险动作，实际危险调用仍逐次使用手机确认卡：' -ForegroundColor Yellow
+            Write-Host ">>>   scripts/dispatch.ps1 -Confirm `"$PauseFile`"" -ForegroundColor Yellow
+        }
     }
     Write-Host "trace: $TraceFile"
     if ($verdict -in @('success', 'paused')) { exit 0 } else { exit 1 }

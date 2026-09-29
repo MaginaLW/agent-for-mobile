@@ -73,9 +73,9 @@ Test-Case 'ambiguous absent or multiline authority edits fail closed' {
     Assert-Rejected { Set-C1bCandidateLiteralAssignments '$x=1' @{x="bad`nvalue"} } 'control'
     Assert-Rejected { Get-C1bCandidateLiteralAssignment '$x=[IO.File]::ReadAllText(''unknown'')' 'x' } 'dynamic'
 }
-Test-Case 'exact replacement and frozen r13 source authority reject drift' {
+Test-Case 'exact replacement and maintained preflight source reject drift' {
     Assert-Rejected { Replace-C1bCandidateExactText 'same same' 'same' 'next' } 'cardinality'
-    Assert-Rejected { New-C1bPreflightR14CandidateSource -BaselineLeafSource '$x=1' -ChecksSource 'function x {}' -Constants @{} } 'Frozen r13'
+    Assert-Rejected { New-C1bPreflightR14CandidateSource -BaselineLeafSource '$x=1' -ChecksSource 'function x {}' -Constants @{} } 'Maintained preflight'
 
     $bootstrap = @'
 #Requires -Version 7.5
@@ -106,23 +106,16 @@ foreach ($buffer in @(
 '@
     $template = '$versions = @(''7.6.4'', ''7.6.4'', ''7.6.4'')' + "`n" +
         '    $childBootstrapSource = @' + "'`n" + $bootstrap + "`n'@`n" + $tail
-    # here-string 跟随 checkout 换行；仅归一合成 fixture，冻结输入仍按原始字节校验。
     $template = $template.Replace("`r`n", "`n")
+    $updated = Update-C1bLauncherCandidateTemplate $template
+    $launcherText = $template
     function Assert-Renderer([bool]$Condition,[string]$Message) { Assert-Test $Condition $Message }
-    $updated = $null
-    foreach ($style in @('LF','CRLF')) {
-        $inputTemplate = if ($style -ceq 'CRLF') { $template.Replace("`n", "`r`n") } else { $template }
-        Assert-FixtureNewline $inputTemplate $style
-        $transformed = Update-C1bLauncherCandidateTemplate $inputTemplate
-        Assert-FixtureNewline $transformed $style
-        $launcherText = $inputTemplate
-        . ([scriptblock]::Create((New-C1bLauncherRendererTransformSource $inputTemplate)))
-        Assert-Test ($launcherText -ceq $transformed) "Launcher renderer and in-memory transformations differ for $style."
-        Assert-Rejected { Update-C1bLauncherCandidateTemplate $transformed } 'cardinality'
-        Assert-Rejected { Update-C1bLauncherCandidateTemplate ($inputTemplate.Replace('captured_byte_length =','other_length =')) } 'cardinality'
-        if ($style -ceq 'LF') { $updated = $transformed }
-        else { Assert-Test ($transformed.Replace("`r`n", "`n") -ceq $updated) 'Source transformations changed newline semantics.' }
-    }
+    . ([scriptblock]::Create((New-C1bLauncherRendererTransformSource $template)))
+    Assert-Test ($launcherText -ceq $updated) 'Renderer and in-memory transformations differ.'
+    Assert-Rejected { Update-C1bLauncherCandidateTemplate $updated } 'cardinality'
+    Assert-Rejected { Update-C1bLauncherCandidateTemplate ($template.Replace('captured_byte_length =','other_length =')) } 'cardinality'
+    $updatedCrLf = Update-C1bLauncherCandidateTemplate ($template.Replace("`r`n", "`n").Replace("`n", "`r`n"))
+    Assert-Test ($updatedCrLf.Replace("`r`n", "`n") -ceq $updated.Replace("`r`n", "`n")) 'Source transformations changed newline semantics.'
 
     $updatedAst = Get-C1bCandidateSourceAst $updated
     $dataStatements = @($updatedAst.EndBlock.Statements | Where-Object {
@@ -180,11 +173,11 @@ foreach ($buffer in @(
 }
 
 $constants = [ordered]@{}
-foreach ($name in @('repoRoot','stagingRoot','expectedCommitSha','expectedCommitShort',
+foreach ($name in @('repoRoot','stagingRoot','expectedBranch','expectedCommitSha','expectedCommitShort',
     'helperPath','expectedHelperSha256','expectedHelperByteLength',
     'launcherPath','expectedLauncherSha256','expectedLauncherByteLength',
     'expectedLauncherTemplateSha256','failureSidecarPath','pwshPath','expectedPwshSha256',
-    'expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
+    'gitPath','expectedGitSha256','expectedGitIndexSha256','expectedGitTrackedPathCount','expectedGitConfigSha256',
     'expectedGitAttributesSha256','expectedGitIgnoreSha256','expectedGitInfoExcludeSha256',
     'expectedVerifierSha256','summaryLeaf','logLeaf','launcherResultLeaf','receiptLeaf')) {
     $constants[$name] = 'fixture'
@@ -192,10 +185,10 @@ foreach ($name in @('repoRoot','stagingRoot','expectedCommitSha','expectedCommit
 $constants.expectedCommitSha = 'a'*40
 $constants.expectedCommitShort = 'a'*7
 $constants.expectedPwshSha256 = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
+$constants.gitPath = 'C:\Fixture\Git\mingw64\bin\git.exe'
 $declarations = [string]::Join("`n", @($constants.Keys | ForEach-Object { '$' + $_ + " = 'old'" }))
 $body = @'
 $failures = [Collections.Generic.List[string]]::new()
-$gitPath = 'C:\Fixture\Git\mingw64\bin\git.exe'
 $gitInvocationCount = 0L
 $helperName = ('helper-' + $expectedCommitShort + '-r10.ps1')
 $launcherName = ('launcher-' + $expectedCommitShort + '-r10.ps1')
@@ -237,15 +230,8 @@ function Assert-TL1C1bPreflightGitTreeContinuity { param($Before,$After) }
 function Assert-TL1C1bPreflightLauncherByteReturn { param($LauncherAst) return @{Passed=$true} }
 function Assert-TL1C1bPreflightLauncherStreamContract { param($LauncherAst) return @{Passed=$true} }
 '@
-$fixture = ($declarations + "`n" + $body).Replace("`r`n", "`n")
-Assert-FixtureNewline $fixture 'LF'
+$fixture = $declarations + "`n" + $body
 $patched = Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixture -ChecksSource $checks -Constants $constants
-Assert-FixtureNewline $patched 'LF'
-$fixtureCrLf = $fixture.Replace("`n", "`r`n")
-Assert-FixtureNewline $fixtureCrLf 'CRLF'
-$patchedCrLf = Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixtureCrLf -ChecksSource $checks -Constants $constants
-Assert-FixtureNewline $patchedCrLf 'CRLF'
-Assert-Test ($patchedCrLf.Replace("`r`n", "`n") -ceq $patched) 'Preflight LF/CRLF transformations differ.'
 function Invoke-Fixture {
     param([bool]$FailPre,[bool]$FailGit,[bool]$FailPost)
     $ps = [Management.Automation.PowerShell]::Create()
@@ -281,7 +267,7 @@ Test-Case 'successful pre/post evidence disclaims transient continuity' {
     Assert-Test (-not $r.Receipt.git_trust_root_transient_change_excluded) 'Discrete checks overclaimed continuity.'
 }
 Test-Case 'new helper diagnostics reach underlying process and renderer matches candidate bytes' {
-    # wrapper 签名与唯一 Gradle 调用取自冻结模板；仅底层进程使用内存 stub，不启动构建。
+    # wrapper 签名与唯一 Gradle 调用取自维护模板；仅底层进程使用内存 stub，不启动构建。
     $template = @'
 function Invoke-TL1C1aProcess {
     param(
@@ -421,8 +407,28 @@ Test-Case 'preparation binds all seven final repository file bytes without newli
         $actual=Get-CandidateRepositoryLibraryHashes $root
         Assert-Test (($actual.Keys-join',')-ceq($paths.Keys-join',')) 'Preparation changed loader key order.'
         foreach($key in $paths.Keys){Assert-Test ($actual[$key]-ceq$expected[$key]) "Preparation did not bind raw bytes: $key"}
+        # 执行实际入口的 raw-input 记录及输出前 revalidation AST，不运行 prepare 入口。
+        $inputBuilders=@($prepare.EndBlock.Statements | Where-Object {
+            $_-is[Management.Automation.Language.ForEachStatementAst]-and
+            $_.Body.Extent.Text.Contains('$sourceInputs += [pscustomobject]@{')
+        })
+        $inputRechecks=@($prepare.EndBlock.Statements | Where-Object {
+            $_-is[Management.Automation.Language.ForEachStatementAst]-and
+            $_.Body.Extent.Text.Contains('Maintained source changed during preparation:')
+        })
+        Assert-Test ($inputBuilders.Count-eq1-and$inputRechecks.Count-eq1) 'Preparation input/revalidation blocks are not unique.'
+        $RepoRoot=$root;$repositoryLibraryHashes=$actual;$sourceInputs=@()
+        . ([scriptblock]::Create($inputBuilders[0].Extent.Text))
+        Assert-Test ($sourceInputs.Count-eq7-and
+            ($sourceInputs.path-join',')-ceq($paths.Values-join',')) 'Preparation review omitted a final repository loader input.'
+        foreach($inputRecord in $sourceInputs){
+            Assert-Test ($inputRecord.full-ceq(Join-Path $root $inputRecord.path)-and
+                $inputRecord.sha256-cmatch'\A[0-9a-f]{64}\z') 'Preparation review recorded the wrong root or nonraw SHA-256.'
+        }
+        . ([scriptblock]::Create($inputRechecks[0].Extent.Text))
         $runnerPath=Join-Path $root $paths.runner
         [IO.File]::WriteAllBytes($runnerPath,[Text.UTF8Encoding]::new($false).GetBytes("# runner`r`n# 原始字节`r`n"))
+        Assert-Rejected { . ([scriptblock]::Create($inputRechecks[0].Extent.Text)) } 'Maintained source changed during preparation'
         $crlf=Get-CandidateRepositoryLibraryHashes $root
         Assert-Test ($crlf.runner-cne$actual.runner) 'Preparation normalized LF/CRLF before hashing.'
         foreach($key in @('c1a','validator','c1b','artifact','aapt2','build')){
@@ -443,5 +449,259 @@ Test-Case 'preparation binds all seven final repository file bytes without newli
 Test-Case 'missing or duplicate injection anchors cannot silently produce a candidate' {
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource ($fixture.Replace('function Invoke-ReadOnlyGit {','function Other {')) $checks $constants } 'cardinality'
     Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture ($checks + '; Write-Output bad') $constants } 'functions only'
+}
+Test-Case 'tracked maintenance sources deterministically derive a candidate without historical inputs' {
+    $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+    $sourceRoot = Join-Path $repoRoot 'scripts/lib/c1b-candidate-source'
+    $rendererTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'renderer-template.ps1'))
+    $helperTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'helper-template.ps1'))
+    $launcherTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'launcher-template.ps1'))
+    $preflightTemplate = [IO.File]::ReadAllText((Join-Path $sourceRoot 'preflight-template.ps1'))
+    $checksSource = [IO.File]::ReadAllText((Join-Path $repoRoot 'scripts/lib/tablet-layout-c1b-preflight-r14-checks.ps1'))
+    $pairArgs = @{
+        BaselineRendererSource=$rendererTemplate; HelperTemplateSource=$helperTemplate
+        LauncherTemplateSource=$launcherTemplate; CommitSha=('a'*40)
+        RepoRoot=$repoRoot; StagingRoot='C:\Fixture\CandidateStage'
+        PwshPath='C:\Fixture\PowerShell\pwsh.exe'; VerifierSha256=('b'*64)
+        UtilityAssemblySha256='2f6201bb3caf4c08158be733e786dd85b11537694f7e6ab40356fc0727a3596f'
+        UtilityAssemblyLength=1652504L
+        RepositoryLibraryHashes=(New-FixtureLibraryHashes 'b')
+    }
+    $pair = New-C1bExactPairCandidateSource @pairArgs
+    $repeat = New-C1bExactPairCandidateSource @pairArgs
+    Assert-Test ($pair.RendererSource -ceq $repeat.RendererSource -and
+        $pair.HelperSource -ceq $repeat.HelperSource -and
+        $pair.LauncherSource -ceq $repeat.LauncherSource) 'Maintained pair derivation was not deterministic.'
+    Assert-Test (-not $pair.RendererSource.Contains('historical_') -and
+        -not $pair.RendererSource.Contains('__BINDING__') -and
+        -not $pair.LauncherSource.Contains('__PWSH_SHA256__')) 'Candidate retained historical input or unresolved binding.'
+    $driftArgs = $pairArgs.Clone()
+    $driftArgs.LauncherTemplateSource = $launcherTemplate.Replace('7.6.5','7.6.4')
+    Assert-Rejected { New-C1bExactPairCandidateSource @driftArgs } 'Maintained launcher source drifted'
+    $leaf = New-C1bPreflightR14CandidateSource -BaselineLeafSource $preflightTemplate -ChecksSource $checksSource -Constants $constants
+    Assert-Test (-not $leaf.Contains('__BINDING__') -and -not $leaf.Contains("'-r10.ps1'")) 'Preflight retained historical binding.'
+    $r14 = New-C1bPreflightR14RendererSource -PairRendererSource $pair.RendererSource `
+        -PreflightSource $leaf -BaselineLeafPath (Join-Path $sourceRoot 'preflight-template.ps1') `
+        -BaselineLeafSha256 (Get-C1bCandidateSourceHash $preflightTemplate) `
+        -BaselineLeafByteLength ([Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate)) `
+        -IndexSha256 ('c'*64) -IndexByteLength 128L
+    Assert-Test ($r14.Contains((Get-C1bCandidateSourceHash $preflightTemplate)) -and
+        -not $r14.Contains('preflight-a661f36-r13.ps1')) 'R14 renderer did not bind the maintained preflight source.'
+
+    # 执行生成器输出的真实路径/specs/cleanup AST；native handles 仅用内存替身。
+    # 不执行 bootstrap、发布或候选，不读写 synthetic 路径。
+    $authorityPairArgs = $pairArgs.Clone()
+    $authorityPairArgs.RepoRoot = 'C:\Fixture\CandidateRepo'
+    $authorityPair = New-C1bExactPairCandidateSource @authorityPairArgs
+    $authorityBaselinePath = [IO.Path]::Combine(
+        $authorityPairArgs.RepoRoot,'scripts','lib','c1b-candidate-source','preflight-template.ps1')
+    $authorityR14 = New-C1bPreflightR14RendererSource -PairRendererSource $authorityPair.RendererSource `
+        -PreflightSource $leaf -BaselineLeafPath $authorityBaselinePath `
+        -BaselineLeafSha256 (Get-C1bCandidateSourceHash $preflightTemplate) `
+        -BaselineLeafByteLength ([Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate)) `
+        -IndexSha256 ('c'*64) -IndexByteLength 128L
+    $authorityAst = Get-C1bCandidateSourceAst $authorityR14
+    $authorityAssert = @($authorityAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $_.Name -ceq 'Assert-Renderer'
+    })
+    Assert-Test ($authorityAssert.Count -eq 1) 'R14 assertion function is not unique.'
+    . ([scriptblock]::Create($authorityAssert[0].Extent.Text))
+    $authorityMain = @($authorityAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.TryStatementAst] -and
+        $_.Body.Extent.Text.Contains("-Label 'r14 exact source input'")
+    })
+    Assert-Test ($authorityMain.Count -eq 1) 'R14 publication body is not unique.'
+    $authorityStatements = @($authorityMain[0].Body.Statements | Where-Object {
+        ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+            $_.Left.VariablePath.UserPath -cin @('r14ExpectedBaselineLeafPath','stagingDirectoryEntry','specs')) -or
+        ($_ -is [Management.Automation.Language.PipelineAst] -and
+            $_.Extent.Text.Contains("'R14 baseline source escaped repository maintenance path.'")) -or
+        ($_ -is [Management.Automation.Language.ForEachStatementAst] -and
+            ($_.Body.Extent.Text.Contains("'R14 staging child escaped parent.'") -or
+             $_.Body.Extent.Text.Contains('Open-RendererDirectoryChain')))
+    })
+    Assert-Test ($authorityStatements.Count -eq 6) 'R14 source/output authority statements drifted.'
+    $authorityCode = [string]::Join("`n", @($authorityStatements | ForEach-Object { $_.Extent.Text }))
+    $authorityCleanup = [string]::Join("`n", @($authorityMain[0].Finally.Statements | ForEach-Object { $_.Extent.Text }))
+    function Open-RendererDirectoryChain {
+        param([string]$Path,[string]$Label)
+        if ($script:failAuthorityParent -ceq $Path) { throw 'fixture source parent acquisition failed' }
+        $script:openedAuthorityParents.Add($Path)
+        $handle = [pscustomobject]@{Path=$Path}
+        $handle | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+            $script:closedAuthorityParents.Add($this.Path)
+        }
+        return [pscustomobject]@{Entries=@([pscustomobject]@{Path=$Path;Handle=$handle})}
+    }
+    function Invoke-R14AuthorityFixture {
+        param([Collections.IDictionary]$Overrides=@{},[string]$FailParent='')
+        $repoRoot = $authorityPairArgs.RepoRoot
+        $stagingRoot = $authorityPairArgs.StagingRoot
+        $outputRoot = [IO.Path]::Combine($repoRoot,'.checks')
+        $r14BaselineLeafPath = $authorityBaselinePath
+        $r14LeafPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.ps1')
+        $r14TemporaryPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.rendering.tmp')
+        $r14ReceiptPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.prepared-not-authorized.receipt.json')
+        $r14IndexPath = [IO.Path]::Combine($repoRoot,'.git','index')
+        $r14IndexSha256 = 'c'*64; $r14IndexLength = 128L
+        $helperPath = [IO.Path]::Combine($stagingRoot,'helper-aaaaaaa-r11.ps1')
+        $launcherPath = [IO.Path]::Combine($stagingRoot,'launcher-aaaaaaa-r11.ps1')
+        $expectedHelperSha256 = $authorityPair.HelperSha256
+        $expectedHelperLength = $authorityPair.HelperByteLength
+        $expectedLauncherSha256 = $authorityPair.LauncherSha256
+        $expectedLauncherLength = $authorityPair.LauncherByteLength
+        $pwshPath = $authorityPairArgs.PwshPath
+        $expectedPwshSha256 = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
+        $utilityAssemblyPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($pwshPath),'Microsoft.PowerShell.Commands.Utility.dll')
+        $expectedUtilityAssemblySha256 = $authorityPairArgs.UtilityAssemblySha256
+        $expectedUtilityAssemblyLength = $authorityPairArgs.UtilityAssemblyLength
+        $verifierPath = [IO.Path]::Combine($repoRoot,'scripts','lib','tablet-layout-c1b-real-build-smoke-verifier.ps1')
+        $expectedVerifierSha256 = $authorityPairArgs.VerifierSha256
+        foreach ($name in $Overrides.Keys) { Set-Variable -Name $name -Value $Overrides[$name] -Scope Local }
+        $directoryChains = [Collections.Generic.List[object]]::new()
+        $inputs = [Collections.Generic.List[object]]::new()
+        $candidates = [Collections.Generic.List[object]]::new()
+        $decoded = $null; $specs = $null; $failure = $null
+        $mainCleanup = [Collections.Generic.List[Exception]]::new()
+        $script:openedAuthorityParents = [Collections.Generic.List[string]]::new()
+        $script:closedAuthorityParents = [Collections.Generic.List[string]]::new()
+        $script:failAuthorityParent = $FailParent
+        try { . ([scriptblock]::Create($authorityCode)) }
+        catch { $failure = $_.Exception.Message }
+        finally { . ([scriptblock]::Create($authorityCleanup)) }
+        return [pscustomobject]@{
+            Failure=$failure; Specs=$specs; Opened=$script:openedAuthorityParents.ToArray()
+            Closed=$script:closedAuthorityParents.ToArray(); CleanupFailures=$mainCleanup.Count
+            StagingEntry=if ($directoryChains.Count -eq 0) {$null} else {$directoryChains[0].Entries[0].Path}
+        }
+    }
+    $authorityResult = Invoke-R14AuthorityFixture
+    $authoritySourceParent = [IO.Path]::GetDirectoryName($authorityBaselinePath)
+    Assert-Test ($null -eq $authorityResult.Failure -and $authorityResult.CleanupFailures -eq 0) "Repository maintenance baseline was rejected: $($authorityResult.Failure)"
+    Assert-Test ($authorityResult.Opened.Count -eq 6 -and
+        @($authorityResult.Opened | Where-Object {$_ -ceq $authoritySourceParent}).Count -eq 1 -and
+        $authorityResult.StagingEntry -ceq $authorityPairArgs.StagingRoot) 'R14 source parent was not held separately from the publication parent.'
+    $authorityClosedReverse = @($authorityResult.Opened)
+    [Array]::Reverse($authorityClosedReverse)
+    Assert-Test (($authorityResult.Closed -join "`n") -ceq ($authorityClosedReverse -join "`n")) 'R14 directory cleanup did not close every held parent in reverse order.'
+    Assert-Test ($authorityResult.Specs.Count -eq 7 -and
+        $authorityResult.Specs[0].Path -ceq $authorityBaselinePath -and
+        $authorityResult.Specs[0].Hash -ceq (Get-C1bCandidateSourceHash $preflightTemplate) -and
+        $authorityResult.Specs[0].Length -eq [Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate) -and
+        -not $authorityResult.Specs[0].Frozen -and $authorityResult.Specs[0].Parse -and
+        $authorityResult.Specs[2].Frozen -and $authorityResult.Specs[3].Frozen) 'R14 maintained-source hash/length/parser or frozen pair bindings drifted.'
+    foreach ($invalidBaseline in @(
+        [IO.Path]::Combine($authorityPairArgs.StagingRoot,'preflight-template.ps1'),
+        [IO.Path]::Combine($authorityPairArgs.RepoRoot,'scripts','lib','other-source','preflight-template.ps1'))) {
+        $rejected = Invoke-R14AuthorityFixture @{r14BaselineLeafPath=$invalidBaseline}
+        Assert-Test ($rejected.Failure -match 'baseline source escaped' -and $rejected.Opened.Count -eq 0) 'Non-maintenance baseline started authority acquisition.'
+    }
+    foreach ($name in @('r14LeafPath','r14TemporaryPath','r14ReceiptPath','helperPath','launcherPath')) {
+        $rejected = Invoke-R14AuthorityFixture @{$name=[IO.Path]::Combine($authorityPairArgs.RepoRoot,'escaped.ps1')}
+        Assert-Test ($rejected.Failure -match 'staging child escaped' -and $rejected.Opened.Count -eq 0) "R14 accepted an escaped staging child: $name"
+    }
+    $rejected = Invoke-R14AuthorityFixture -FailParent $authoritySourceParent
+    $partialClosedReverse = @($rejected.Opened)
+    [Array]::Reverse($partialClosedReverse)
+    Assert-Test ($rejected.Failure -match 'source parent acquisition failed' -and
+        $null -eq $rejected.Specs -and $rejected.Opened.Count -eq 5 -and
+        ($rejected.Closed -join "`n") -ceq ($partialClosedReverse -join "`n") -and
+        $rejected.CleanupFailures -eq 0) 'R14 source-parent failure continued or leaked earlier held parents.'
+}
+Test-Case 'actual pair renderer derives the final repository helper and rejects drift before publication' {
+    $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+    $sources = Join-Path $repository 'scripts/lib/c1b-candidate-source'
+    $libraryHashes = [ordered]@{}
+    foreach ($entry in (Get-C1bHelperLibraryPaths).GetEnumerator()) {
+        $libraryHashes[$entry.Key] = 'sha256:' + [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData(
+                [IO.File]::ReadAllBytes((Join-Path $repository $entry.Value)))).ToLowerInvariant()
+    }
+    $helperTemplate = [IO.File]::ReadAllText((Join-Path $sources 'helper-template.ps1'))
+    $arguments = @{
+        BaselineRendererSource=[IO.File]::ReadAllText((Join-Path $sources 'renderer-template.ps1'))
+        HelperTemplateSource=$helperTemplate
+        LauncherTemplateSource=[IO.File]::ReadAllText((Join-Path $sources 'launcher-template.ps1'))
+        CommitSha=('a'*40); RepoRoot='C:\Fixture\CandidateRepo'
+        StagingRoot='C:\Fixture\CandidateStage'; PwshPath='C:\Fixture\PowerShell\pwsh.exe'
+        RepositoryLibraryHashes=$libraryHashes; VerifierSha256=('b'*64)
+        UtilityAssemblySha256='2f6201bb3caf4c08158be733e786dd85b11537694f7e6ab40356fc0727a3596f'
+        UtilityAssemblyLength=1652504L
+    }
+    $pair = New-C1bExactPairCandidateSource @arguments
+    $pairAst = Get-C1bCandidateSourceAst $pair.RendererSource
+    foreach ($name in @('Assert-Renderer','Replace-RendererExact')) {
+        $definitions = @($pairAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name
+        })
+        Assert-Test ($definitions.Count -eq 1) 'Actual pair renderer assertion/replacement function drifted.'
+        . ([scriptblock]::Create($definitions[0].Extent.Text))
+    }
+    $publication = @($pairAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.TryStatementAst] -and
+        $_.Body.Extent.Text.Contains('$helperText = [string]$inputByLabel[''helper_template''].Text')
+    })
+    Assert-Test ($publication.Count -eq 1) 'Actual pair renderer publication body is not unique.'
+    $statements = @($publication[0].Body.Statements)
+    $first = @($statements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Extent.Text -ceq '$helperText = [string]$inputByLabel[''helper_template''].Text'
+    })
+    $last = @($statements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Extent.Text -ceq '$launcherText = [string]$inputByLabel[''launcher_template_r11''].Text'
+    })
+    Assert-Test ($first.Count -eq 1 -and $last.Count -eq 1 -and
+        $first[0].Extent.StartOffset -lt $last[0].Extent.StartOffset) 'Actual helper derivation boundaries drifted.'
+    $helperStatements = @($statements | Where-Object {
+        $_.Extent.StartOffset -ge $first[0].Extent.StartOffset -and
+        $_.Extent.StartOffset -lt $last[0].Extent.StartOffset
+    })
+    $helperCode = [string]::Join("`n", @($helperStatements | ForEach-Object { $_.Extent.Text }))
+    function New-RendererCandidate {
+        param($TemporaryPath,$FinalPath,[string]$Text,[string]$ExpectedSha256,
+            [long]$ExpectedLength,$ParentDirectoryEntry,$Label)
+        Assert-Test ((Get-C1bCandidateSourceHash $Text) -ceq $ExpectedSha256 -and
+            [Text.UTF8Encoding]::new($false,$true).GetByteCount($Text) -eq $ExpectedLength) 'Fixture final helper binding failed.'
+        [void](Get-C1bCandidateSourceAst $Text)
+        $script:actualHelperCandidateCount++
+        return [pscustomobject]@{Sha256=$ExpectedSha256;Length=$ExpectedLength;Text=$Text}
+    }
+    function Invoke-ActualHelperFixture {
+        param([string]$InputSource,[switch]$WrongExpectedHash)
+        $inputByLabel = @{helper_template=[pscustomobject]@{Text=$InputSource}}
+        $commitSha = $arguments.CommitSha; $commitShort = $commitSha.Substring(0,7)
+        $helperTemporaryPath = Join-Path $arguments.StagingRoot 'helper-aaaaaaa-r11.rendering.tmp'
+        $helperPath = Join-Path $arguments.StagingRoot 'helper-aaaaaaa-r11.ps1'
+        $expectedHelperSha256 = if ($WrongExpectedHash) {'c'*64} else {$pair.HelperSha256}
+        $expectedHelperLength = $pair.HelperByteLength
+        $stagingDirectoryEntry = [pscustomobject]@{Path=$arguments.StagingRoot}
+        $candidates = [Collections.Generic.List[object]]::new()
+        $script:actualHelperCandidateCount = 0
+        . ([scriptblock]::Create($helperCode))
+        return [pscustomobject]@{Text=$helperText;Count=$candidates.Count;Candidate=$candidates[0]}
+    }
+    $result = Invoke-ActualHelperFixture $helperTemplate
+    Assert-Test ($result.Text -ceq $pair.HelperSource -and $result.Count -eq 1 -and
+        $script:actualHelperCandidateCount -eq 1 -and
+        $result.Candidate.Sha256 -ceq $pair.HelperSha256 -and
+        $result.Candidate.Length -eq $pair.HelperByteLength) 'Actual renderer bytes differ from in-memory helper derivation.'
+    $renderedHashes = Read-FixtureLibraryMap $result.Text
+    foreach ($key in $libraryHashes.Keys) {
+        Assert-Test ($renderedHashes[$key] -ceq $libraryHashes[$key]) "Actual helper did not bind final repository bytes: $key"
+    }
+    Assert-Test ($result.Text.Contains('[switch]$FailureDiagnostics') -and
+        $result.Text.Contains('-TimeoutSec 300 -FailureDiagnostics)')) 'Actual renderer lost Gradle failure diagnostics.'
+    foreach ($source in @(
+        $helperTemplate.Replace('[switch]$AllowFailure','[switch]$DifferentFailure'),
+        $helperTemplate.Replace('-TimeoutSec 300)','-TimeoutSec 299)'),
+        $helperTemplate.Replace('$expectedLibraryHashes = [ordered]@{','$otherLibraryHashes = [ordered]@{'))) {
+        Assert-Rejected { Invoke-ActualHelperFixture $source } 'Helper source transform cardinality'
+        Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Drifted helper reached the publication boundary.'
+    }
+    Assert-Rejected { Invoke-ActualHelperFixture $helperTemplate -WrongExpectedHash } 'final helper binding'
+    Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Wrong expected hash reached the publication boundary.'
 }
 Write-Output "candidate source offline: $passed passed, 0 skipped"

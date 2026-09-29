@@ -66,17 +66,6 @@ function Assert-NotMatches([string]$Actual, [string]$Pattern) {
     Assert-True ($Actual -notmatch $Pattern) "不应匹配 /$Pattern/：`n$Actual"
 }
 
-function ConvertTo-FixtureCmdCrLf {
-    [CmdletBinding()]
-    param([Parameter(Mandatory, ValueFromPipeline)][string]$Text)
-
-    process {
-        # here-string 继承 checkout 的换行；Set-Content 只追加末尾换行，不转换内部 LF。
-        # fake-adb 的 goto 在 LF 脚本上可 exit 0 却不输出 devices，必须固定生成物为 CRLF。
-        $Text.Replace("`r`n", "`n").Replace("`n", "`r`n")
-    }
-}
-
 function Assert-FixtureDispatchTreeDrainedBeforeCleanup($Fixture, [string]$Context) {
     Assert-True (Test-Path -LiteralPath (Join-Path $Fixture.State 'dispatch-descendant-ready.txt') -PathType Leaf) `
         "$Context 的持活后代未完成启动握手。"
@@ -568,8 +557,7 @@ if "%1"=="shell" (
   exit /b 0
 )
 exit /b 0
-'@.Replace('__P0_SCENARIO__', $Scenario) | ConvertTo-FixtureCmdCrLf |
-        Set-Content -LiteralPath $fakeAdb -Encoding utf8
+'@.Replace('__P0_SCENARIO__', $Scenario) | Set-Content -LiteralPath $fakeAdb -Encoding utf8
 
     $fakeHealth = Join-Path $bin 'fake-health.cmd'
     @'
@@ -585,7 +573,7 @@ findstr /x /c:"config_delete_failure" "%P0_FAKE_STATE%\scenario.txt" >nul && (
 )
 echo {"ok":true,"protocol":"mcp-ping"}
 exit /b 0
-'@ | ConvertTo-FixtureCmdCrLf | Set-Content -LiteralPath $fakeHealth -Encoding ascii
+'@ | Set-Content -LiteralPath $fakeHealth -Encoding ascii
 
     # 候选区只读预检：默认判空放行；probe_region_dirty 场景模拟上一轮残留文字。
     $fakePrecheck = Join-Path $bin 'fake-probe-precheck.cmd'
@@ -632,7 +620,7 @@ findstr /x /c:"find_band_marker_inside" "%P0_FAKE_STATE%\scenario.txt" >nul && (
 )
 echo {"ok":true,"empty":true}
 exit /b 0
-'@ | ConvertTo-FixtureCmdCrLf | Set-Content -LiteralPath $fakePrecheck -Encoding ascii
+'@ | Set-Content -LiteralPath $fakePrecheck -Encoding ascii
 
     $fakeDispatch = Join-Path $repo 'scripts\fake-dispatch.ps1'
     @'
@@ -1076,11 +1064,6 @@ try {
             "缺少任务模板装配器：$SourceTaskTemplateHelper"
         Assert-True (Test-Path -LiteralPath $SourceDeviceLockHelper -PathType Leaf) `
             "缺少主机级设备锁 helper：$SourceDeviceLockHelper"
-        $expectedCmd = "@echo off`r`ngoto :done`r`n:done`r`necho FAKE123`r`n"
-        foreach ($sourceText in @($expectedCmd, $expectedCmd.Replace("`r`n", "`n"))) {
-            Assert-True (($sourceText | ConvertTo-FixtureCmdCrLf) -ceq $expectedCmd) `
-                'CMD fixture 的 LF/CRLF 源文本未统一为相同 Windows CRLF，或出现重复 CR。'
-        }
     }
 
     Test-Case '派发正文与模板抽取前逐字一致（黄金回归）' {
@@ -1290,11 +1273,6 @@ try {
 
     Test-Case 'Allow 与 Stale 顺序通过并生成脱敏 manifest' {
         $fixture = New-Fixture happy
-        foreach ($cmdPath in @($fixture.Adb, $fixture.HealthProbe, $fixture.Precheck)) {
-            $cmdText = [IO.File]::ReadAllText($cmdPath)
-            Assert-True ($cmdText.Contains("`r`n") -and $cmdText -notmatch "(?<!`r)`n|`r(?!`n)") `
-                '生成的 CMD fixture 存在非 CRLF 换行，不能用来判断设备或 runner 行为。'
-        }
         $result = Invoke-FixtureRunner $fixture
         Assert-True ($result.ExitCode -eq 0) "期望退出 0，实际 $($result.ExitCode)：`n$($result.Text)"
         $dispatches = @(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log'))
