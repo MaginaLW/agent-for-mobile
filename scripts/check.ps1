@@ -206,10 +206,18 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         '-EvidenceRoot', (Join-Path $LogDir 'c1b-host-process-capture-offline')
     ) | Out-Null
     $captureSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-process-capture-offline.log')
-    if ($captureSummary -cnotmatch '^host-process-capture: 10 passed / 0 failed; 78 assertions; evidence=.+$') {
+    if ($captureSummary -cnotmatch '^host-process-capture: 13 passed / 0 failed; 104 assertions; evidence=.+$') {
         throw "主机双流捕获测试汇总不符：$captureSummary"
     }
-    'candidate source 16/16（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；host capture 10/10、78 assertions；无冻结候选、构建或设备调用'
+    Invoke-Logged -LogName 'c1b-candidate-host-stages-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-candidate-host-stages-offline.ps1'),
+        '-EvidenceRoot', (Join-Path $LogDir 'c1b-candidate-host-stages-offline')
+    ) | Out-Null
+    $stageSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-host-stages-offline.log')
+    if ($stageSummary -cnotmatch '^candidate-host-stages: 10 passed / 0 failed; 81 assertions; evidence=.+$') {
+        throw "主机阶段测试汇总不符：$stageSummary"
+    }
+    'candidate source 16/16（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；host capture 13/13、104 assertions；host stages 10/10、81 assertions；无冻结候选、构建或设备调用'
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {

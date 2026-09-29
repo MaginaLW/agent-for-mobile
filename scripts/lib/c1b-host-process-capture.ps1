@@ -179,11 +179,11 @@ public static class NativeV1 {
         try { handle.Dispose(); } catch(Exception error) { result.CleanupErrors.Add(Bounded(error)); }
         handle=null;
     }
-    public static ResultV1 Run(string executable,string[] arguments,string directory,int cap,int deadlineMs,int drainMs,int cleanupMs) {
+    public static ResultV1 Run(string executable,string[] arguments,string directory,int cap,int deadlineMs,int drainMs,int cleanupMs,string environmentBlock,bool useEnvironmentBlock) {
         if(!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows Job Object required");
         ResultV1 result=new ResultV1(); Stopwatch watch=Stopwatch.StartNew();
         SafeFileHandle job=null,outRead=null,outWrite=null,errRead=null,errWrite=null,inRead=null,inWrite=null;
-        IntPtr attributes=IntPtr.Zero,handles=IntPtr.Zero; bool attributesInitialized=false;
+        IntPtr attributes=IntPtr.Zero,handles=IntPtr.Zero,environment=IntPtr.Zero; bool attributesInitialized=false;
         ProcessInformation process=new ProcessInformation(); bool created=false,assigned=false;
         Task<StreamResultV1> stdout=null,stderr=null;
         CancellationTokenSource cancellation=new CancellationTokenSource();
@@ -214,8 +214,9 @@ public static class NativeV1 {
             startup.Startup.Stdout=outWrite.DangerousGetHandle(); startup.Startup.Stderr=errWrite.DangerousGetHandle(); startup.Attributes=attributes;
             StringBuilder command=new StringBuilder(Quote(executable));
             foreach(string argument in arguments) command.Append(' ').Append(Quote(argument));
+            if(useEnvironmentBlock) environment=Marshal.StringToHGlobalUni(environmentBlock);
             result.StartAttemptCount=1;
-            if(!CreateProcessW(executable,command,IntPtr.Zero,IntPtr.Zero,true,0x08080004,IntPtr.Zero,directory,ref startup,out process)) throw NativeError("process_create");
+            if(!CreateProcessW(executable,command,IntPtr.Zero,IntPtr.Zero,true,0x08080004u|(useEnvironmentBlock ? 0x400u : 0u),environment,directory,ref startup,out process)) throw NativeError("process_create");
             created=true; result.StartCount=1; result.ProcessId=checked((int)process.ProcessId);
             Close(ref outWrite,result); Close(ref errWrite,result); Close(ref inRead,result);
             if(!AssignProcessToJobObject(job,process.Process)) throw NativeError("job_assign");
@@ -275,6 +276,7 @@ public static class NativeV1 {
             if(attributesInitialized) DeleteProcThreadAttributeList(attributes);
             if(attributes!=IntPtr.Zero) Marshal.FreeHGlobal(attributes);
             if(handles!=IntPtr.Zero) Marshal.FreeHGlobal(handles);
+            if(environment!=IntPtr.Zero) Marshal.FreeHGlobal(environment);
             cancellation.Dispose(); result.HandlesClosed=result.CleanupErrors.Count==0;
             result.ElapsedMilliseconds=watch.ElapsedMilliseconds;
         }
@@ -290,6 +292,30 @@ public static class NativeV1 {
 '@
 }
 
+function Get-TL1C1bHostCaptureEnvironment {
+    [CmdletBinding()]
+    param([AllowNull()][Collections.IDictionary]$Environment,[switch]$ClearEnvironment)
+    $effective=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if(-not$ClearEnvironment){foreach($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()){$effective[[string]$entry.Key]=[string]$entry.Value}}
+    $declared=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if($null-ne$Environment){
+        foreach($entry in $Environment.GetEnumerator()){
+            if($entry.Key-isnot[string]-or[string]::IsNullOrEmpty($entry.Key)-or$entry.Key.Contains([char]0)-or$entry.Key.Contains('=')-or$entry.Value-isnot[string]-or$entry.Value.Contains([char]0)-or-not$declared.Add($entry.Key)){throw 'Environment keys/values invalid or duplicated ignoring case.'}
+            $effective[$entry.Key]=$entry.Value
+        }
+    }
+    $keys=[string[]]@($effective.Keys|ForEach-Object{$_.ToUpperInvariant()})
+    [Array]::Sort($keys,[StringComparer]::Ordinal)
+    $builder=[Text.StringBuilder]::new()
+    foreach($key in $keys){[void]$builder.Append($key).Append('=').Append($effective[$key]).Append([char]0)}
+    [void]$builder.Append([char]0)
+    if($keys.Count-eq0){[void]$builder.Append([char]0)}
+    $block=$builder.ToString();$bytes=[Text.Encoding]::Unicode.GetBytes($block)
+    try{$hash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()}finally{if($bytes.Length){[Array]::Clear($bytes,0,$bytes.Length)}}
+    $mode=if($ClearEnvironment){'replace'}elseif($null-ne$Environment){'overlay'}else{'inherit'}
+    return [pscustomobject]@{Block=$(if($mode-ceq'inherit'){$null}else{$block});Record=[pscustomobject][ordered]@{mode=$mode;keys=$keys;sha256=$hash}}
+}
+
 function Invoke-TL1C1bHostProcessCapture {
     <#
     .SYNOPSIS
@@ -301,8 +327,11 @@ function Invoke-TL1C1bHostProcessCapture {
     Capture success is transport evidence only; it is not host acceptance or Ready.
     Full stream total/hash is authoritative only with EOF and a null stream error.
     Cleanup covers the contained Job processes, pipe workers and owned handles.
-    The executable inherits the caller environment; runtime/environment pins remain
-    caller responsibilities. Captured stream files are prefixes when overflowed.
+    Environment defaults to inheritance. Explicit replacement/overlay is passed to
+    CreateProcessW without mutating the parent; only names and a canonical UTF-16LE
+    environment-block hash are recorded. Inherit hash is the observed parent snapshot.
+    Runtime/environment pins remain caller responsibilities. Captured stream files
+    are prefixes when overflowed.
     The returned status must be checked by the caller: a function return does not
     translate the child's native exit code into the caller's native exit code.
     .EXAMPLE
@@ -318,7 +347,9 @@ function Invoke-TL1C1bHostProcessCapture {
         [ValidateRange(0,16777216)][int]$CaptureLimitBytes = 1048576,
         [ValidateRange(1,86400000)][int]$TimeoutMilliseconds = 2700000,
         [ValidateRange(1,60000)][int]$DrainTimeoutMilliseconds = 30000,
-        [ValidateRange(1,60000)][int]$CleanupTimeoutMilliseconds = 30000
+        [ValidateRange(1,60000)][int]$CleanupTimeoutMilliseconds = 30000,
+        [AllowNull()][Collections.IDictionary]$Environment,
+        [switch]$ClearEnvironment
     )
     if (-not $IsWindows) { throw 'Windows Job Object required.' }
     foreach ($path in @($ExecutablePath,$WorkingDirectory,$EvidenceDirectory)) {
@@ -328,6 +359,7 @@ function Invoke-TL1C1bHostProcessCapture {
     foreach ($argument in $ArgumentList) {
         if ($null -eq $argument -or $argument.Contains([char]0)) { throw 'Capture argument invalid.' }
     }
+    $environmentBinding=Get-TL1C1bHostCaptureEnvironment -Environment $Environment -ClearEnvironment:$ClearEnvironment
     if ([IO.Directory]::Exists($EvidenceDirectory) -or [IO.File]::Exists($EvidenceDirectory)) { throw 'Capture evidence is already reserved; retry forbidden.' }
     [void][IO.Directory]::CreateDirectory($EvidenceDirectory)
     $utf8 = [Text.UTF8Encoding]::new($false)
@@ -338,7 +370,7 @@ function Invoke-TL1C1bHostProcessCapture {
     $startedUtc = [DateTimeOffset]::UtcNow.ToString('o')
     # CreateNew is the concurrent reservation boundary, before native process creation.
     Save-CaptureNewBytes 'reservation.json' ($utf8.GetBytes((@{schema='tl1-c1b-host-process-capture-reservation/v1';started_at_utc=$startedUtc;parent_pid=$PID;automatic_retry_count=0}|ConvertTo-Json -Compress)+"`n"))
-    $native = [TL1C1bHostCapture.NativeV1]::Run($ExecutablePath,$ArgumentList,$WorkingDirectory,$CaptureLimitBytes,$TimeoutMilliseconds,$DrainTimeoutMilliseconds,$CleanupTimeoutMilliseconds)
+    $native = [TL1C1bHostCapture.NativeV1]::Run($ExecutablePath,$ArgumentList,$WorkingDirectory,$CaptureLimitBytes,$TimeoutMilliseconds,$DrainTimeoutMilliseconds,$CleanupTimeoutMilliseconds,$environmentBinding.Block,($environmentBinding.Record.mode-cne'inherit'))
     $record = [ordered]@{
         schema='tl1-c1b-host-process-capture/v1';status=$(if ($native.Passed) {'passed'} else {'failed'})
         started_at_utc=$startedUtc;completed_at_utc=[DateTimeOffset]::UtcNow.ToString('o');elapsed_milliseconds=$native.ElapsedMilliseconds
@@ -347,6 +379,7 @@ function Invoke-TL1C1bHostProcessCapture {
         timed_out=$native.TimedOut;drain_timed_out=$native.DrainTimedOut;termination_requested=$native.TerminationRequested
         capture_limit_bytes_per_stream=$CaptureLimitBytes;timeout_milliseconds=$TimeoutMilliseconds;drain_timeout_milliseconds=$DrainTimeoutMilliseconds;cleanup_timeout_milliseconds=$CleanupTimeoutMilliseconds
         drains_completed=$native.DrainsCompleted;errors=@($native.Errors.ToArray());publication_errors=@()
+        environment=$environmentBinding.Record
         cleanup=[ordered]@{scope='contained_job_processes_pipe_workers_owned_handles';job_assigned_before_resume=$native.JobAssignedBeforeResume;active_process_count=$native.CleanupActiveProcessCount;handles_closed=$native.HandlesClosed;failure_count=$native.CleanupErrors.Count;errors=@($native.CleanupErrors.ToArray());completed=($native.HandlesClosed -and $native.DrainsCompleted -and $native.RootExitConfirmed -and $native.CleanupActiveProcessCount -eq 0 -and $native.CleanupErrors.Count -eq 0)}
     }
     foreach ($name in @('stdout','stderr')) {

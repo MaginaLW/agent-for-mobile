@@ -40,6 +40,10 @@ switch ($Mode) {
     }
     'argument' {$stdout.Write([Text.UTF8Encoding]::new($false).GetBytes($Value));break}
     'stdin-eof' {if([Console]::OpenStandardInput().ReadByte()-ne-1){exit 88};break}
+    'environment' {
+        $environmentProbe=[ordered]@{explicit=[Environment]::GetEnvironmentVariable('TL1_CAPTURE_EXPLICIT');parent_leak_present=($null-ne[Environment]::GetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY'));empty_value=[Environment]::GetEnvironmentVariable('TL1_CAPTURE_EMPTY')}
+        $stdout.Write([Text.UTF8Encoding]::new($false).GetBytes(($environmentProbe|ConvertTo-Json -Compress)));break
+    }
     default {exit 89}
 }
 if($Mode-cne'stderr-after-stdout-eof'){$stdout.Flush()};$stderr.Flush()
@@ -154,6 +158,51 @@ Case 'native_start_failure_stays_failed' {
     $record=Invoke-TL1C1bHostProcessCapture -ExecutablePath $invalid -ArgumentList @() -WorkingDirectory $runRoot -EvidenceDirectory (Join-Path $runRoot 'start-failure') -TimeoutMilliseconds 1000 -DrainTimeoutMilliseconds 100 -CleanupTimeoutMilliseconds 1000
     Assert-Capture ($record.status -ceq 'failed' -and $record.start_attempt_count -eq 1 -and $record.start_count -eq 0 -and $null -eq $record.exit_code -and -not $record.stdout.eof -and -not $record.stderr.eof) 'start failure fabricated exit or EOF'
     Assert-Capture ($null -eq $record.stdout.total_byte_length -and $null -eq $record.stdout.sha256 -and -not $record.cleanup.completed) 'unknown stream/cleanup promoted to pass'
+}
+Case 'explicit_environment_replacement_no_parent_mutation' {
+    $prior=[Environment]::GetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY');$priorExplicit=[Environment]::GetEnvironmentVariable('TL1_CAPTURE_EXPLICIT')
+    try{
+        [Environment]::SetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY','synthetic-parent-marker')
+        $counter=Join-Path $runRoot 'environment-entries.txt';$output=Join-Path $runRoot 'environment-replace'
+        $argv=@('-NoProfile','-File',$workerPath,'-Mode','environment','-Counter',$counter)
+        $map=@{TL1_CAPTURE_EXPLICIT="synthetic unicode 漢字 = newline`n";TL1_CAPTURE_EMPTY=''}
+        $r=Invoke-TL1C1bHostProcessCapture -ExecutablePath $pwsh -ArgumentList $argv -WorkingDirectory $runRoot -EvidenceDirectory $output -Environment $map -ClearEnvironment
+        Assert-TransportCleanup $r
+        $child=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $output 'stdout.bin'),$utf8))
+        Assert-Capture ($r.status-ceq'passed'-and$r.environment.mode-ceq'replace'-and$r.environment.keys.Count-eq2-and-not$child.parent_leak_present-and$child.explicit-ceq$map.TL1_CAPTURE_EXPLICIT) 'explicit environment leaked inherited values or lost Unicode'
+        Assert-Capture ([Environment]::GetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY')-ceq'synthetic-parent-marker'-and[Environment]::GetEnvironmentVariable('TL1_CAPTURE_EXPLICIT')-ceq$priorExplicit) 'capture mutated parent environment'
+        $serialized=[IO.File]::ReadAllText((Join-Path $output 'execution.json'))
+        Assert-Capture (-not$serialized.Contains('synthetic unicode')-and-not$serialized.Contains('synthetic-parent-marker')) 'environment values appeared in capture receipt'
+        $equivalent=[ordered]@{tl1_capture_empty='';tl1_capture_explicit=$map.TL1_CAPTURE_EXPLICIT}
+        $equivalentBinding=Get-TL1C1bHostCaptureEnvironment -Environment $equivalent -ClearEnvironment
+        Assert-Capture ($r.environment.sha256-ceq$equivalentBinding.Record.sha256) 'canonical environment hash depends on key case/order'
+    }finally{[Environment]::SetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY',$prior)}
+}
+Case 'empty_environment_and_overlay' {
+    $prior=[Environment]::GetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY')
+    try{
+        [Environment]::SetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY','synthetic-parent-marker')
+        foreach($clear in @($true,$false)){
+            $case=if($clear){'environment-empty'}else{'environment-overlay'};$output=Join-Path $runRoot $case
+            $argv=@('-NoProfile','-File',$workerPath,'-Mode','environment','-Counter',(Join-Path $runRoot ($case+'-entries.txt')))
+            $map=if($clear){@{}}else{@{TL1_CAPTURE_EXPLICIT='synthetic-overlay'}}
+            $r=Invoke-TL1C1bHostProcessCapture -ExecutablePath $pwsh -ArgumentList $argv -WorkingDirectory $runRoot -EvidenceDirectory $output -Environment $map -ClearEnvironment:$clear
+            Assert-TransportCleanup $r
+            $child=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $output 'stdout.bin'),$utf8))
+            if($clear){Assert-Capture ($r.status-ceq'passed'-and$r.environment.keys.Count-eq0-and$r.environment.mode-ceq'replace'-and-not$child.parent_leak_present-and$null-eq$child.explicit) 'empty replacement inherited a parent variable'}
+            else{Assert-Capture ($r.status-ceq'passed'-and$r.environment.mode-ceq'overlay'-and$child.parent_leak_present-and$child.explicit-ceq'synthetic-overlay') 'overlay lost parent variables or explicit override'}
+        }
+    }finally{[Environment]::SetEnvironmentVariable('TL1_CAPTURE_PARENT_ONLY',$prior)}
+}
+Case 'environment_invalid_keys_values_rejected_before_start' {
+    $counter=Join-Path $runRoot 'environment-invalid-entries.txt';$argv=@('-NoProfile','-File',$workerPath,'-Mode','empty','-Counter',$counter)
+    $duplicate=[Collections.Hashtable]::new([StringComparer]::Ordinal);$duplicate.Add('NAME','a');$duplicate.Add('name','b')
+    $invalid=@($duplicate,@{'bad=name'='a'},@{("bad"+[char]0)='a'},@{good=("bad"+[char]0)},@{good=1})
+    for($i=0;$i-lt$invalid.Count;$i++){
+        $output=Join-Path $runRoot ('invalid-environment-'+$i);$rejected=$false
+        try{$null=Invoke-TL1C1bHostProcessCapture -ExecutablePath $pwsh -ArgumentList $argv -WorkingDirectory $runRoot -EvidenceDirectory $output -Environment $invalid[$i] -ClearEnvironment}catch{$rejected=$_.Exception.Message-like'*Environment keys/values invalid*'}
+        Assert-Capture ($rejected-and-not[IO.Directory]::Exists($output)-and(Count-Entries $counter)-eq0) 'invalid environment reached reservation/process launch'
+    }
 }
 $passed=@($cases|Where-Object status -CEQ 'passed').Count
 $failed=$cases.Count-$passed

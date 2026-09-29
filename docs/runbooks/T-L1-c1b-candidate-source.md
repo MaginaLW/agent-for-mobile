@@ -89,11 +89,20 @@ $capture = Invoke-TL1C1bHostProcessCapture -ExecutablePath $pwshPath `
 if ($capture.status -cne 'passed') { throw '主机外层捕获未通过。' }
 ```
 
-常驻回归 `scripts/tests/c1b-host-process-capture-offline.ps1` 包含 10 个场景、78 项断言：
+常驻回归 `scripts/tests/c1b-host-process-capture-offline.ps1` 包含 13 个场景、104 项断言：
 二进制双流、空流、非零退出、溢出全量 hash 与有界前缀、stdout EOF 后继续写 stderr、
-运行超时、root 先退出而 descendant 留存、重复证据拒绝、Windows 参数及 stdin EOF、启动失败。
+运行超时、root 先退出而 descendant 留存、重复证据拒绝、Windows 参数及 stdin EOF、启动失败，
+以及显式空/替换/叠加环境、Unicode、父环境不变和非法环境键值的启动前拒绝。
 测试只运行合成主机进程，不调用 Git、JDK/Gradle、BuildOnly 或 ADB/设备。
 此回归已纳入 `scripts/check.ps1` 的 C1b 候选生成与预检门。
+
+`scripts/invoke-c1b-candidate-host-stage.ps1` 是新候选的主机阶段入口。Run 消费 caller-pinned bindings 与状态材料，
+核对 runtime、源码、精确 argv、cwd、环境和工件 inventory，再启动一个被 Job 包含的主机进程。
+Read 从 native no-follow held bytes 独立复核 observation、两路流、reservation、输入与输出，
+明确不声称观察到自身最终退出。调用方必须另捕获 Run 与 Read 进程并记录真实 native exit/PID。
+状态材料是调用方审定证据，不替代 clone/freeze 的实物验证；已消费候选禁止进入该入口。
+专项实际 10 个场景、81 项断言，包括六阶段合成执行、独立 Read、重复/漂移/错误类型和 native guard 反例。
+这些合成结果不构成新固定候选验收。
 
 ## r14 新增门与离线回归
 
