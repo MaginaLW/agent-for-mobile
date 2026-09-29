@@ -73,7 +73,7 @@ T-L2、语义意图生产接线、分享落地及其他真机项继续使用本�
 
 协调源码 `e0fcbb2` 已补齐 P3 维护源回退、显式 child environment/双流传输及 R3 真实终态身份派生与一次 Freeze 的离线实现。源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过；失败原日志保留，未观察的历史 EOF 不补造。
 
-新增 A1 producer、提升 wrapper、独立 BuildOnly reader、raw sealer 和设备入口维护源已有实现与独立离线证据；部分专项绑定受测依赖快照，设备入口专项 stub 主机合同。这些结果不代表正式新候选或 UAC 已测，正式主机合同与最终依赖整合仍待中央复验。可变实现基线 `bdbbece` 已选择性整合协调修复并逐字节读回，尚未最终提交、固定普通 clone 或完成该版本全量门；旧冻结 `4b37f34` 保持只读，不重跑。
+新增 A1 producer、提升 wrapper、独立 BuildOnly reader、raw sealer 和设备入口维护源已有实现与独立离线证据；部分专项绑定受测依赖快照，设备入口专项 stub 主机合同。实现已提交为新候选 `058faaa3a837fc69b0067c8faf165615d548b614`，建立独立对象库的普通 clone，42 项实际 raw/canonical 输入独审通过。该版本 FullCheck 正在运行，最终 native exit、完整 14 项结果及后续真实主机链仍待取得；旧冻结 `4b37f34` 保持只读，不重跑。
 
 **09-28 进度：** R3 设备发现证据 consumer/reader/freezer 已在实现分支提交
 `7c5511621f9972f2bf2877591e6d19e3b69e7593`，无设备离线测试 9/9、26 项断言通过，真实 ADB/设备调用 0。
