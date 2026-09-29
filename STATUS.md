@@ -4,7 +4,7 @@
 >
 > 协调源码 `e0fcbb2` 已闭合 P3 候选维护源回退、主机双流与显式子进程环境、R3 真实终态身份派生及一次封存的离线实现；源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过。新增 A1、提升启动、独立 BuildOnly reader、raw 封存和设备入口维护源已有实现与离线证据；正式主机合同及最终依赖整合复验仍待完成。这些记录不代表新候选通过。
 >
-> 可变实现已完成选择性整合，并提交为新候选 `058faaa3a837fc69b0067c8faf165615d548b614`。新建对象库独立、无 alternates 的普通 clone，独审已核对 42 项实际文件与 canonical Git 字节；该 SHA 的 FullCheck 正在双层捕获下运行，尚无最终退出结果。检查完成后依次核定真实 A1、pair/r14/preflight、唯一 BuildOnly、独立读回、raw 封存、正式主机合同和设备入口；当前没有新 Ready 或设备 r2。
+> 可变实现已完成选择性整合，并提交为新候选 `058faaa3a837fc69b0067c8faf165615d548b614`。新建对象库独立、无 alternates 的普通 clone，42 项实际 raw/canonical 字节独审通过；首次 FullCheck 实际 exit `1`，11 PASS / 3 FAIL。派单组 4 项超时、lint 内部 FIR 异常及监督 runner 1 项确认超时正在串行诊断；启动时可用内存 2305 MB，不能仅据此确定根因。原双流、EOF、Job 清理与失败日志保留；没有启动真实 A1、preflight、BuildOnly 或新 Ready。
 >
 > 旧冻结候选 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 的唯一 UAC BuildOnly 已实际退出 `0`，提升令牌成立，launcher/helper 各一次、重试 `0`。独立读回 `accepted_no_device`，57 项输入 pins 再读一致，69 份原始材料封存；ADB/安装/T0/采集均为 `0`，授权已消费，同 SHA 不重跑。PC Suite `closeMode` 已精确恢复，应用 UI 未动态验证；见[旧候选主机结果](docs/runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)。
 >
