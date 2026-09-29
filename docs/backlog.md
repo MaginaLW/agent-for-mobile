@@ -67,7 +67,7 @@ R1/R2/R4、规则精简与 R3 可按文件归属并行；候选固定、冻结�
 C1b 继续条件为现行规程及 R3 消费链闭合；其他审查项不新增开跑门，改变本轮候选输入时才纳入该候选验证。
 T-L2、语义意图生产接线、分享落地及其他真机项继续使用本节后续条目和 §5；手机批次 4 保持暂停，避免重复建项。
 
-### A · 已收尾，下一候选准备待续
+### A · 新候选 A1—A3 已闭合，BuildOnly 待授权
 
 **09-28 进度：** R3 设备发现证据 consumer/reader/freezer 已在实现分支提交
 `7c5511621f9972f2bf2877591e6d19e3b69e7593`，无设备离线测试 9/9、26 项断言通过，真实 ADB/设备调用 0。
@@ -86,25 +86,25 @@ exit `1`，helper/构建/ADB 均未进入。该 SHA 已封存，不因提权重�
 主机阶段结束后恢复。见[A1—A3](runs/2026-09-29-C1b-14edb4a-A1-A3主机准备.md)与
 [失败记录](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)。
 
-**09-29 下一候选：** 用户同意 UAC 后，独立探针在钉定 PowerShell 7.6.5 内确认
+**09-29 当前候选：** 用户同意 UAC 后，独立探针在钉定 PowerShell 7.6.5 内确认
 `elevated_token=true`，未执行 Git、构建或 ADB；原始记录在协调工作区
 `.checks/c1b-elevation-probe/result.json`，SHA-256 为
 `88914fddc91f2cf01f3dac0e1c780897042f7f87f7f28cd192e47eaea5c4fb03`。
-实现分支 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 写明正式启动令牌门，新普通 clone
-A1 已将 42/42 输入绑定 HEAD；A2 全量门进行中。后续 A3、只读 preflight、单次 BuildOnly
-仍须依序完成；本 SHA 尚无 BuildOnly 授权。
+实现分支 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 写明正式启动令牌门；新普通 clone
+A1 42/42、A2 全量门 exit `0`/13/13、R3 专项 9/9、A3 exact pair/r14 均通过。唯一只读
+preflight 外层 exit `0`、`prepared_not_authorized=true`；提升启动脚本已静态核验但未执行。
+本 SHA 的单次 BuildOnly 仍须另行授权，见[主机准备](runs/2026-09-29-C1b-4b37f34-A1-A3主机准备.md)。
 
 **09-13 收尾状态：** 根目录继续负责协调，设备发现证据修复已提交，临时副本清理已完成、归档保留；清理不再是待办。
 提交、验证数值及完整交接见[收尾与待完成项](runs/2026-09-13-C1b-收尾与待完成项.md)，实现与原始证据见
 [离线修复记录](runs/2026-09-13-C1b-设备发现证据离线修复.md)。
 
-下次按以下顺序续做，本次收尾未启动新阶段：
+后续按以下顺序续做；当前 `4b37f34` 已完成首项：
 
-1. 建立绑定完整 SHA 的新独占普通 clone，核对 clean、42 项原始输入与 Git 对象独立性。
-2. 冻结前完成项目全量门、相关回归及独立审查，保存本轮输入和实际结果。
-3. 完成新 exact pair/r14、只读 preflight、单次 BuildOnly 及独立读回，按各阶段条件固定新证据。
-4. 新 collector/reader/freezer 纳入两个发现检查点及尚无 run ID 的失败，补齐离线反例后完成设备入口和 Ready。
-5. 主机条件闭合后形成具体的单次设备提案，再按本轮就位和授权执行、读回与封存。
+1. 固定 clean SHA、A1/A2、R3 消费链、exact pair/r14 和一次只读 preflight，保存各阶段原始证据。
+2. 获本 SHA 单次授权后，以已提升令牌运行一次 BuildOnly，独立读回并封存；失败不在同 SHA 重跑。
+3. 主机构建成功后，结合已闭合的 R3 离线消费链完成设备入口与 Ready。
+4. 主机条件闭合后形成具体的单次设备提案，再按本轮就位和授权执行、读回与封存。
 
 当前未建立新 Ready 或设备 r2；旧 Ready、已消费 attempt 和旧设备确认不复用。
 
@@ -115,7 +115,7 @@ A1 已将 42/42 输入绑定 HEAD；A2 全量门进行中。后续 A3、只读 p
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b display context 回退及设备发现证据（含 P1 · R3）** | R3 离线消费链已闭合；`7c55116` 的唯一 BuildOnly 参数绑定失败，`14edb4a` 的唯一 BuildOnly 管理员令牌失败，均已封存；`4b37f34` 的 UAC 探针与 A1 已完成，A2 进行中 | 新 SHA 仍须完成 A2/A3、只读 preflight，再单独申请一次 BuildOnly 授权；成功后还需独立读回与 Ready。原零设备根因仍未知，r2 未建立、显示回退未获真机验收。见[14edb4a 失败](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)；消费与启动规程位于实现分支 `docs/runbooks/` |
+| **C1b display context 回退及设备发现证据（含 P1 · R3）** | R3 离线消费链已闭合；`7c55116` 参数绑定失败、`14edb4a` 管理员令牌失败均已封存；`4b37f34` 的 UAC 探针、A1/A2、R3、exact pair/r14 和唯一只读 preflight 已通过 | `4b37f34` 仍须单独申请一次 BuildOnly 授权，成功后独立读回与 Ready。原零设备根因未知，r2 未建立、显示回退未获真机验收。见[当前主机准备](runs/2026-09-29-C1b-4b37f34-A1-A3主机准备.md)及[14edb4a 失败](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 **R3 离线闭合范围：** collector/reader/freezer 纳入两个 checkpoint 及无 run ID 的失败，覆盖未到达、

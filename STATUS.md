@@ -4,7 +4,7 @@
 >
 > 同一 SHA 的新 C1b 独占普通 clone 已完成 A1：clean、42 项原始输入逐项匹配 HEAD Git blob，独立对象库无 alternates。第一次 A2 全量门因单分支克隆缺少两枚受信 baseline commit object 在 fake-ADB E2E 项失败；补取精确对象且 HEAD 不变后，第二次完整门实际退出 0、13/13 项通过，R3 消费链另有 9/9、26 项断言通过。A3 exact pair/r14 和一次只读 preflight 已通过；获单次授权的 BuildOnly 因调用方漏传 mandatory launcher 参数在脚本主体前 exit 1，未进入 helper/构建/ADB，已封存且不补参重跑。见[本轮失败记录](docs/runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md)。没有成功 BuildOnly、Ready 或新设备 r2，原零设备根因与显示回退真机结果仍未知。
 
-> 2026-09-29：独占候选 `14edb4a477ddd71c82f029008c0772e485d682bf` 已完成 A1—A3 与唯一只读 preflight；其唯一 BuildOnly 在 `elevation_check` 因未提升令牌 exit `1`，helper/构建/ADB 均未进入，已封存不重跑。见[A1—A3](docs/runs/2026-09-29-C1b-14edb4a-A1-A3主机准备.md)及[失败记录](docs/runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)。获用户同意后，钉定 PowerShell 的独立 UAC 探针取得管理员令牌；实现分支 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 补充启动门槛，新独占 clone 已完成 A1 42/42，A2 全量门进行中。PC Suite 原关闭设置仍待主机阶段结束后恢复。没有新 BuildOnly、Ready 或设备 r2。
+> 2026-09-29：独占候选 `14edb4a477ddd71c82f029008c0772e485d682bf` 的唯一 BuildOnly 在 `elevation_check` 因未提升令牌 exit `1`，helper/构建/ADB 均未进入，已封存不重跑。见[失败记录](docs/runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md)。获用户同意后的独立 UAC 探针取得管理员令牌；新独占候选 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 完成 A1 42/42、A2 全量门 exit `0`/13/13、R3 专项 9/9、exact pair/r14 及唯一只读 preflight exit `0`，`prepared_not_authorized=true`。提升启动脚本已静态核验、尚未运行；新 SHA 的单次 BuildOnly 授权仍待取得。见[本轮主机准备](docs/runs/2026-09-29-C1b-4b37f34-A1-A3主机准备.md)。PC Suite 原关闭设置待主机阶段结束后恢复；没有新 BuildOnly、Ready 或设备 r2。
 
 > 2026-09-27：项目审查待办已纳入 [backlog §4](docs/backlog.md#09-27-审查待办)，优先级、依赖与完成标准在该处维护；[审查记录](docs/runs/2026-09-27-项目审查与待办.md)保留证据。本次仅登记待办，修复、新候选与设备流程均未启动，以下验收状态不变。
 
