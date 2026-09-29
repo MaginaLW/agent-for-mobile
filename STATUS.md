@@ -1,5 +1,9 @@
 # 项目状态
 
+> 2026-09-30：续办修复候选维护源链的 r14 路径门，提交 `64c6e81`；仓库内 preflight 模板单独绑定并持有父目录链，staging 产物限制保留。源码专项 10/10、r14 专项 1300 条断言与 28 个反例均 exit `0`，新增夹具的原失败日志保留；见[路径修复](docs/runs/2026-09-30-C1b-维护源路径修复.md)。这些是离线证据，新链固定发布/preflight 尚未完成。
+>
+> 当前冻结候选仍为 `4b37f344d5af988ce9b2f7610df98387a49cd2d0`，使用旧固定入口；启动前被动复核 42/42 输入、启动材料和输出缺席。已修正主机记录的日志 hash 笔误，并同步管理员令牌启动门与两处队列表漂移；见[主机准备及续办读回](docs/runs/2026-09-29-C1b-4b37f34-A1-A3主机准备.md#09-30-续办被动复核)。用户随后针对完整 SHA 与 launcher hash 授权一次 UAC BuildOnly，已启动、尚待实际退出及独立读回；自动重试为 0，没有 Ready 或设备 r2。
+
 > 2026-09-28：09-27 审查项的离线进展见 [backlog §4](docs/backlog.md#09-27-审查待办)。R1、R2、R4、规则精简与 M1b 能力标注已有独立提交；R3 设备发现证据消费链在实现分支 `7c5511621f9972f2bf2877591e6d19e3b69e7593` 提交，9/9 离线用例通过。R5 的 `intent_send` 离线修复 `7814fac` 已通过 Debug/Release 各 7 个 JVM 用例，仍未经真机验收；P3 候选维护源迁移 `68776e4` 已通过 10/10 离线用例和一次 prepare smoke，尚未经固定候选发布验证。
 >
 > 同一 SHA 的新 C1b 独占普通 clone 已完成 A1：clean、42 项原始输入逐项匹配 HEAD Git blob，独立对象库无 alternates。第一次 A2 全量门因单分支克隆缺少两枚受信 baseline commit object 在 fake-ADB E2E 项失败；补取精确对象且 HEAD 不变后，第二次完整门实际退出 0、13/13 项通过，R3 消费链另有 9/9、26 项断言通过。A3 exact pair/r14 和一次只读 preflight 已通过；获单次授权的 BuildOnly 因调用方漏传 mandatory launcher 参数在脚本主体前 exit 1，未进入 helper/构建/ADB，已封存且不补参重跑。见[本轮失败记录](docs/runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md)。没有成功 BuildOnly、Ready 或新设备 r2，原零设备根因与显示回退真机结果仍未知。

@@ -61,8 +61,10 @@ exact pair、只读 preflight 与 BuildOnly 的通用核对项，均须绑定该
    sidecar 缺席、module build output no-follow absent 外，还必须被动确认宿主 `adb.exe` 与 TCP/5037 listener 都为零，
    才可发布 `prepared_not_authorized`；snapshot unavailable 也 fail closed；
 9. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备、不自动终止宿主进程，也不是 smoke 或
-   授权。冻结后到 one-shot 之间不得运行会重建 module `build` 或重启 default ADB 的工具；只有用户针对该完整 SHA
-   明确授权，才可运行一次 launcher，automatic retry 固定为 `0`。
+   授权。冻结后到 one-shot 之间不得运行会重建 module `build` 或重启 default ADB 的工具；授权前须先用不调用
+   launcher/Git/构建/ADB 的探针证明 UAC 提升后的进程持有管理员令牌。只有用户针对该完整 SHA 明确授权，才可由
+   同样提升的进程运行一次 launcher，automatic retry 固定为 `0`；启动令牌和 mandatory 参数门见
+   [候选源码准备](T-L1-c1b-candidate-source.md)。
 
 ## 受控构建与宿主边界
 

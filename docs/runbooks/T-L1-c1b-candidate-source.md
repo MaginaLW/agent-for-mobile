@@ -31,13 +31,37 @@ $pwshPath = Join-Path ${env:REPOS_ROOT} '_toolchain/powershell-7.6.5/pwsh.exe'
 4. 静态审查这五份源码及输入绑定。所有候选常量按唯一顶层变量名改写；维护模板不含历史候选、本机
    路径或旧 SHA。launcher 维护源已包含 7.6.5、最早抑制 progress、stderr 有界原始前缀诊断及
    两处捕获数组按真实引用清零。pair renderer 仅读取本仓库的 helper/launcher 模板及当前 verifier、
-   钉定运行时，逐份检查准备时嵌入的 hash；r14 renderer 另核验本仓库 preflight 维护源的 hash/长度。
+   钉定运行时，逐份检查准备时嵌入的 hash；r14 renderer 另核验本仓库 preflight 维护源的精确路径及 hash/长度，
+   并持有其父目录链。维护源不要求位于 staging；发布产物和已冻结 pair 仍必须是 staging 的直接子项。
    若维护源发生有意变更，必须更新源码 hash 绑定、完成离线回归并重新固定候选。
 5. 将通过审查的 renderer 作为新的独立 exact artifact 冻结，再运行 **仅生成工件** 的 pair renderer，之后才是 r14
    renderer。二者沿用已审查的 bootstrap/no-follow held input/stable-ID/final-path/same-handle rename/no-replace
    发布原语，最终 helper/launcher/preflight 必须与 `.expected.ps1` 的 hash/length 一致。本入口不会自动执行这一步。
 6. 新工件独审闭合之后，read-only preflight 和 build-only one-shot 仍依原有顺序各自处理；本次源码准备不替代这些门，
    不授权设备操作。见 [C1b runbook](T-L1-tablet-layout-c1b-v1.md)。
+
+## BuildOnly 启动门
+
+申请绑定本轮完整 SHA 的单次授权前，先用钉定 PowerShell 做不调用 launcher、Git、构建或 ADB 的
+UAC 探针，保存提升后进程内的管理员令牌检查结果。正式 one-shot 的 launcher 也必须由已提升的
+PowerShell 进程启动；仅出现 UAC 提示或仅检查外层调用方均不足以证明该条件。正式子进程在调用前再次核验：
+
+```powershell
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'BuildOnly launcher requires an elevated token.'
+}
+```
+
+获得本 SHA 单次授权后，逐字节读回 launcher 的 64 字符小写 SHA-256，在该提升后的子进程中显式传入
+唯一 mandatory 参数；审阅时同时核对本轮 exact `-File` 路径、参数值和令牌：
+
+```powershell
+& $pwshPath -NoProfile -File $exactLauncherPath -ExpectedLauncherSha256 $readBackLauncherSha256
+```
+
+启动失败也封存为该候选的失败尝试，不在同 SHA 补参或提权重跑。
 
 ## r14 新增门与离线回归
 
@@ -64,6 +88,7 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 本机账户路径、Git 安装树或真实设备。源码回归包含 4 个无害 bootstrap 子进程，
 验证进度噪声抑制且真实错误仍被拒绝；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
-测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
+源码回归还执行生成 r14 的路径检查和目录链清理控制流，覆盖仓库维护模板、错误模板路径、staging 子项逃逸及
+源父目录获取失败；该夹具用内存句柄替身，不发布工件。测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。维护源的派生测试只能证明源码能够生成和通过 Parser，
 不能升级为真实 preflight 或 smoke 通过。
