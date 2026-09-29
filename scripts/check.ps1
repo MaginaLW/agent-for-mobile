@@ -224,7 +224,53 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
     if ($discoverySummary -cne 'c1b terminal discovery offline: 14 passed, 0 failed, 70 assertions; real candidate executions=0; device/ADB/provider invocations=0; native held file guards executed on synthetic files') {
         throw "终态发现测试汇总不符：$discoverySummary"
     }
-    'candidate source 16/16（4 个无害 bootstrap 子进程）；r14 synthetic 1300 assertions / 28 mutations；host capture 13/13、104 assertions；host stages 10/10、81 assertions；terminal discovery 14/14、70 assertions；无冻结候选、构建或设备调用'
+    Invoke-Logged -LogName 'c1b-candidate-authority-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-candidate-authority-offline.ps1')
+    ) | Out-Null
+    $authoritySummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-candidate-authority-offline.log') | ConvertFrom-Json -DateKind String
+    if ($authoritySummary.schema -cne 'c1b-candidate-authority-offline/v1' -or $authoritySummary.status -cne 'passed' -or
+        $authoritySummary.synthetic -ne $true -or $authoritySummary.case_count -ne 15 -or $authoritySummary.assertions -ne 67 -or
+        $authoritySummary.production_candidate_a1_claim -ne $false -or $authoritySummary.adb_execution_count -ne 0 -or
+        $authoritySummary.build_execution_count -ne 0) { throw 'A1 原始输入审计测试汇总不符。' }
+    Invoke-Logged -LogName 'c1b-build-only-elevation-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-build-only-elevation-offline.ps1')
+    ) | Out-Null
+    $elevationSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-build-only-elevation-offline.log') | ConvertFrom-Json -DateKind String
+    if ($elevationSummary.schema -cne 'c1b-build-only-elevation-offline/v1' -or $elevationSummary.passed -ne 13 -or
+        $elevationSummary.failed -ne 0 -or $elevationSummary.assertions -ne 129 -or $elevationSummary.runas_invocation_count -ne 0 -or
+        $elevationSummary.real_buildonly_invocation_count -ne 0 -or $elevationSummary.real_adb_call_count -ne 0 -or
+        $elevationSummary.real_device_operation_count -ne 0 -or $elevationSummary.uac_elevation_verified -ne $false) {
+        throw '提升启动离线测试汇总不符。'
+    }
+    Invoke-Logged -LogName 'c1b-build-only-host-readback-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-build-only-host-readback-offline.ps1')
+    ) | Out-Null
+    $readbackSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-build-only-host-readback-offline.log')
+    if ($readbackSummary -cne 'BuildOnly host readback offline: 15 passed, 0 skipped; 46 assertions; synthetic only; external candidate/device calls 0') {
+        throw "BuildOnly 读回测试汇总不符：$readbackSummary"
+    }
+    Invoke-Logged -LogName 'c1b-host-acceptance-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-acceptance-offline.ps1'),
+        '-AuthorityFixtureOuterDirectory', ([IO.Path]::GetDirectoryName([string]$authoritySummary.valid_a1_outer_capture_path))
+    ) | Out-Null
+    $acceptanceSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-acceptance-offline.log') | ConvertFrom-Json -DateKind String
+    if ($acceptanceSummary.status -cne 'passed' -or $acceptanceSummary.failed_count -ne 0 -or
+        $acceptanceSummary.case_count -ne 50 -or $acceptanceSummary.assertion_count -ne 131) { throw '主机合同测试汇总不符。' }
+    Invoke-Logged -LogName 'c1b-host-raw-archive-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-host-raw-archive-offline.ps1')
+    ) | Out-Null
+    $archiveSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-host-raw-archive-offline.log')
+    if ($archiveSummary -cnotmatch '^host-raw-archive: 8 passed / 0 failed; 39 assertions; evidence=.+$') {
+        throw "原始材料封存测试汇总不符：$archiveSummary"
+    }
+    Invoke-Logged -LogName 'c1b-device-entry-source-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-device-entry-source-offline.ps1')
+    ) | Out-Null
+    $entrySummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-device-entry-source-offline.log')
+    if ($entrySummary -cne 'cases=32 passed=32 failed=0 source_execution_count=1 helper_launcher_build_adb_provider_invocations=0') {
+        throw "设备入口维护源测试汇总不符：$entrySummary"
+    }
+    'candidate source 16/16；r14 1300 assertions / 28 mutations；capture 13/13；stages 10/10；terminal discovery 14/14；A1、提升启动、读回、合同、封存与设备维护源离线检查通过；无冻结候选、真实构建或设备调用'
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {
