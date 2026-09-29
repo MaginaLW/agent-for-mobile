@@ -270,5 +270,127 @@ Test-Case 'tracked maintenance sources deterministically derive a candidate with
         -IndexSha256 ('c'*64) -IndexByteLength 128L
     Assert-Test ($r14.Contains((Get-C1bCandidateSourceHash $preflightTemplate)) -and
         -not $r14.Contains('preflight-a661f36-r13.ps1')) 'R14 renderer did not bind the maintained preflight source.'
+
+    # 执行生成器输出的真实路径/specs/cleanup AST；native handles 仅用内存替身。
+    # 不执行 bootstrap、发布或候选，不读写 synthetic 路径。
+    $authorityPairArgs = $pairArgs.Clone()
+    $authorityPairArgs.RepoRoot = 'C:\Fixture\CandidateRepo'
+    $authorityPair = New-C1bExactPairCandidateSource @authorityPairArgs
+    $authorityBaselinePath = [IO.Path]::Combine(
+        $authorityPairArgs.RepoRoot,'scripts','lib','c1b-candidate-source','preflight-template.ps1')
+    $authorityR14 = New-C1bPreflightR14RendererSource -PairRendererSource $authorityPair.RendererSource `
+        -PreflightSource $leaf -BaselineLeafPath $authorityBaselinePath `
+        -BaselineLeafSha256 (Get-C1bCandidateSourceHash $preflightTemplate) `
+        -BaselineLeafByteLength ([Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate)) `
+        -IndexSha256 ('c'*64) -IndexByteLength 128L
+    $authorityAst = Get-C1bCandidateSourceAst $authorityR14
+    $authorityAssert = @($authorityAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $_.Name -ceq 'Assert-Renderer'
+    })
+    Assert-Test ($authorityAssert.Count -eq 1) 'R14 assertion function is not unique.'
+    . ([scriptblock]::Create($authorityAssert[0].Extent.Text))
+    $authorityMain = @($authorityAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.TryStatementAst] -and
+        $_.Body.Extent.Text.Contains("-Label 'r14 exact source input'")
+    })
+    Assert-Test ($authorityMain.Count -eq 1) 'R14 publication body is not unique.'
+    $authorityStatements = @($authorityMain[0].Body.Statements | Where-Object {
+        ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+            $_.Left.VariablePath.UserPath -cin @('r14ExpectedBaselineLeafPath','stagingDirectoryEntry','specs')) -or
+        ($_ -is [Management.Automation.Language.PipelineAst] -and
+            $_.Extent.Text.Contains("'R14 baseline source escaped repository maintenance path.'")) -or
+        ($_ -is [Management.Automation.Language.ForEachStatementAst] -and
+            ($_.Body.Extent.Text.Contains("'R14 staging child escaped parent.'") -or
+             $_.Body.Extent.Text.Contains('Open-RendererDirectoryChain')))
+    })
+    Assert-Test ($authorityStatements.Count -eq 6) 'R14 source/output authority statements drifted.'
+    $authorityCode = [string]::Join("`n", @($authorityStatements | ForEach-Object { $_.Extent.Text }))
+    $authorityCleanup = [string]::Join("`n", @($authorityMain[0].Finally.Statements | ForEach-Object { $_.Extent.Text }))
+    function Open-RendererDirectoryChain {
+        param([string]$Path,[string]$Label)
+        if ($script:failAuthorityParent -ceq $Path) { throw 'fixture source parent acquisition failed' }
+        $script:openedAuthorityParents.Add($Path)
+        $handle = [pscustomobject]@{Path=$Path}
+        $handle | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+            $script:closedAuthorityParents.Add($this.Path)
+        }
+        return [pscustomobject]@{Entries=@([pscustomobject]@{Path=$Path;Handle=$handle})}
+    }
+    function Invoke-R14AuthorityFixture {
+        param([Collections.IDictionary]$Overrides=@{},[string]$FailParent='')
+        $repoRoot = $authorityPairArgs.RepoRoot
+        $stagingRoot = $authorityPairArgs.StagingRoot
+        $outputRoot = [IO.Path]::Combine($repoRoot,'.checks')
+        $r14BaselineLeafPath = $authorityBaselinePath
+        $r14LeafPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.ps1')
+        $r14TemporaryPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.rendering.tmp')
+        $r14ReceiptPath = [IO.Path]::Combine($stagingRoot,'preflight-aaaaaaa-r14.prepared-not-authorized.receipt.json')
+        $r14IndexPath = [IO.Path]::Combine($repoRoot,'.git','index')
+        $r14IndexSha256 = 'c'*64; $r14IndexLength = 128L
+        $helperPath = [IO.Path]::Combine($stagingRoot,'helper-aaaaaaa-r11.ps1')
+        $launcherPath = [IO.Path]::Combine($stagingRoot,'launcher-aaaaaaa-r11.ps1')
+        $expectedHelperSha256 = $authorityPair.HelperSha256
+        $expectedHelperLength = $authorityPair.HelperByteLength
+        $expectedLauncherSha256 = $authorityPair.LauncherSha256
+        $expectedLauncherLength = $authorityPair.LauncherByteLength
+        $pwshPath = $authorityPairArgs.PwshPath
+        $expectedPwshSha256 = '362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139'
+        $utilityAssemblyPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($pwshPath),'Microsoft.PowerShell.Commands.Utility.dll')
+        $expectedUtilityAssemblySha256 = $authorityPairArgs.UtilityAssemblySha256
+        $expectedUtilityAssemblyLength = $authorityPairArgs.UtilityAssemblyLength
+        $verifierPath = [IO.Path]::Combine($repoRoot,'scripts','lib','tablet-layout-c1b-real-build-smoke-verifier.ps1')
+        $expectedVerifierSha256 = $authorityPairArgs.VerifierSha256
+        foreach ($name in $Overrides.Keys) { Set-Variable -Name $name -Value $Overrides[$name] -Scope Local }
+        $directoryChains = [Collections.Generic.List[object]]::new()
+        $inputs = [Collections.Generic.List[object]]::new()
+        $candidates = [Collections.Generic.List[object]]::new()
+        $decoded = $null; $specs = $null; $failure = $null
+        $mainCleanup = [Collections.Generic.List[Exception]]::new()
+        $script:openedAuthorityParents = [Collections.Generic.List[string]]::new()
+        $script:closedAuthorityParents = [Collections.Generic.List[string]]::new()
+        $script:failAuthorityParent = $FailParent
+        try { . ([scriptblock]::Create($authorityCode)) }
+        catch { $failure = $_.Exception.Message }
+        finally { . ([scriptblock]::Create($authorityCleanup)) }
+        return [pscustomobject]@{
+            Failure=$failure; Specs=$specs; Opened=$script:openedAuthorityParents.ToArray()
+            Closed=$script:closedAuthorityParents.ToArray(); CleanupFailures=$mainCleanup.Count
+            StagingEntry=if ($directoryChains.Count -eq 0) {$null} else {$directoryChains[0].Entries[0].Path}
+        }
+    }
+    $authorityResult = Invoke-R14AuthorityFixture
+    $authoritySourceParent = [IO.Path]::GetDirectoryName($authorityBaselinePath)
+    Assert-Test ($null -eq $authorityResult.Failure -and $authorityResult.CleanupFailures -eq 0) "Repository maintenance baseline was rejected: $($authorityResult.Failure)"
+    Assert-Test ($authorityResult.Opened.Count -eq 6 -and
+        @($authorityResult.Opened | Where-Object {$_ -ceq $authoritySourceParent}).Count -eq 1 -and
+        $authorityResult.StagingEntry -ceq $authorityPairArgs.StagingRoot) 'R14 source parent was not held separately from the publication parent.'
+    $authorityClosedReverse = @($authorityResult.Opened)
+    [Array]::Reverse($authorityClosedReverse)
+    Assert-Test (($authorityResult.Closed -join "`n") -ceq ($authorityClosedReverse -join "`n")) 'R14 directory cleanup did not close every held parent in reverse order.'
+    Assert-Test ($authorityResult.Specs.Count -eq 7 -and
+        $authorityResult.Specs[0].Path -ceq $authorityBaselinePath -and
+        $authorityResult.Specs[0].Hash -ceq (Get-C1bCandidateSourceHash $preflightTemplate) -and
+        $authorityResult.Specs[0].Length -eq [Text.UTF8Encoding]::new($false,$true).GetByteCount($preflightTemplate) -and
+        -not $authorityResult.Specs[0].Frozen -and $authorityResult.Specs[0].Parse -and
+        $authorityResult.Specs[2].Frozen -and $authorityResult.Specs[3].Frozen) 'R14 maintained-source hash/length/parser or frozen pair bindings drifted.'
+    foreach ($invalidBaseline in @(
+        [IO.Path]::Combine($authorityPairArgs.StagingRoot,'preflight-template.ps1'),
+        [IO.Path]::Combine($authorityPairArgs.RepoRoot,'scripts','lib','other-source','preflight-template.ps1'))) {
+        $rejected = Invoke-R14AuthorityFixture @{r14BaselineLeafPath=$invalidBaseline}
+        Assert-Test ($rejected.Failure -match 'baseline source escaped' -and $rejected.Opened.Count -eq 0) 'Non-maintenance baseline started authority acquisition.'
+    }
+    foreach ($name in @('r14LeafPath','r14TemporaryPath','r14ReceiptPath','helperPath','launcherPath')) {
+        $rejected = Invoke-R14AuthorityFixture @{$name=[IO.Path]::Combine($authorityPairArgs.RepoRoot,'escaped.ps1')}
+        Assert-Test ($rejected.Failure -match 'staging child escaped' -and $rejected.Opened.Count -eq 0) "R14 accepted an escaped staging child: $name"
+    }
+    $rejected = Invoke-R14AuthorityFixture -FailParent $authoritySourceParent
+    $partialClosedReverse = @($rejected.Opened)
+    [Array]::Reverse($partialClosedReverse)
+    Assert-Test ($rejected.Failure -match 'source parent acquisition failed' -and
+        $null -eq $rejected.Specs -and $rejected.Opened.Count -eq 5 -and
+        ($rejected.Closed -join "`n") -ceq ($partialClosedReverse -join "`n") -and
+        $rejected.CleanupFailures -eq 0) 'R14 source-parent failure continued or leaked earlier held parents.'
 }
 Write-Output "candidate source offline: $passed passed, 0 skipped"

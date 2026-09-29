@@ -14,3 +14,8 @@
 这些旧文件仅供只读回归对照，不再参与新候选生成或发布。当前源码和依赖的哈希在每次准备时
 写入 review 记录；同一固定输入必须逐字节生成相同候选。源码改动需要重新固定 clean SHA、
 重新准备与审查，不能沿用旧冻结输出或旧批准。
+
+r14 renderer 的 preflight 基准输入固定为本轮仓库中的
+`scripts/lib/c1b-candidate-source/preflight-template.ps1`；其父目录纳入 no-follow held chain，
+原始 hash、长度与 PowerShell Parser 门保持有效。生成的 preflight、临时文件、回执以及已冻结的
+helper/launcher 则必须是 staging 目录的直接子项，不能将维护源误套入输出路径约束。

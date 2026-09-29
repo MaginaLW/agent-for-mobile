@@ -428,12 +428,17 @@ try {
         $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($path))
         Assert-Renderer ($drive.IsReady -and $drive.DriveFormat -ceq 'NTFS') 'R14 renderer requires ready NTFS.'
     }
-    foreach ($path in @($r14BaselineLeafPath,$r14LeafPath,$r14TemporaryPath,$r14ReceiptPath,$helperPath,$launcherPath)) {
+    $r14ExpectedBaselineLeafPath = [IO.Path]::Combine(
+        $repoRoot,'scripts','lib','c1b-candidate-source','preflight-template.ps1')
+    Assert-Renderer ([StringComparer]::OrdinalIgnoreCase.Equals(
+        $r14BaselineLeafPath,$r14ExpectedBaselineLeafPath)) 'R14 baseline source escaped repository maintenance path.'
+    foreach ($path in @($r14LeafPath,$r14TemporaryPath,$r14ReceiptPath,$helperPath,$launcherPath)) {
         Assert-Renderer ([StringComparer]::OrdinalIgnoreCase.Equals(
             [IO.Path]::GetDirectoryName($path),$stagingRoot)) 'R14 staging child escaped parent.'
     }
     foreach ($path in @($stagingRoot,$outputRoot,[IO.Path]::GetDirectoryName($r14IndexPath),
-        [IO.Path]::GetDirectoryName($pwshPath),[IO.Path]::GetDirectoryName($verifierPath))) {
+        [IO.Path]::GetDirectoryName($pwshPath),[IO.Path]::GetDirectoryName($verifierPath),
+        [IO.Path]::GetDirectoryName($r14BaselineLeafPath))) {
         $directoryChains.Add((Open-RendererDirectoryChain -Path $path -Label 'r14 authority parent'))
     }
     $stagingDirectoryEntry = $directoryChains[0].Entries[$directoryChains[0].Entries.Count - 1]
