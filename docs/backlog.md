@@ -67,7 +67,7 @@ R1/R2/R4、规则精简与 R3 可按文件归属并行；候选固定、冻结�
 C1b 继续条件为现行规程及 R3 消费链闭合；其他审查项不新增开跑门，改变本轮候选输入时才纳入该候选验证。
 T-L2、语义意图生产接线、分享落地及其他真机项继续使用本节后续条目和 §5；手机批次 4 保持暂停，避免重复建项。
 
-### A · 新候选 A1—A3 已闭合，单次 BuildOnly 已启动
+### A · 单次 BuildOnly 已通过封存，正式 Ready 尚未闭合
 
 **09-28 进度：** R3 设备发现证据 consumer/reader/freezer 已在实现分支提交
 `7c5511621f9972f2bf2877591e6d19e3b69e7593`，无设备离线测试 9/9、26 项断言通过，真实 ADB/设备调用 0。
@@ -78,7 +78,7 @@ R3 消费链另有 9/9、26 项断言通过，真实 ADB/设备调用 0。首轮
 随后 exact pair/r14 工件发布与唯一只读 preflight 完成，外层 exit `0`、`prepared_not_authorized=true`。
 用户授权的唯一 BuildOnly 调用因调用方漏传 launcher mandatory `-ExpectedLauncherSha256`，在参数绑定阶段 exit `1`；
 helper、Gradle、ADB/设备调用均未进入，该轮已封存、不补参重跑。详见[本轮失败记录](runs/2026-09-28-C1b-7c55116-BuildOnly参数绑定失败.md)。
-目前没有成功 BuildOnly、Ready 或设备放行；下一轮须新 clean SHA、新主机准备和新单次授权。
+09-28 该轮结束时没有成功 BuildOnly、Ready 或设备放行；随后新候选结果见下文，不复用该轮授权。
 
 **09-29 `14edb4a` 结论：** 42/42 输入绑定、全量门 13/13、R3 专项 9/9、exact pair/r14
 及唯一只读 preflight 均已完成；唯一 BuildOnly 因 launcher 继承未提升令牌，在 `elevation_check`
@@ -98,18 +98,27 @@ preflight 外层 exit `0`、`prepared_not_authorized=true`；提升启动脚本�
 **09-30 续办：** 启动前 42/42 输入及启动材料被动读回一致。用户已针对完整
 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 和 launcher hash
 `a073552a67efcf5d6c1ba030a05fbb0686b9059ec09580df15ee7adf7b1554a4`
-授权一次 UAC BuildOnly，随后已启动；自动重试为 0，等待实际退出、独立读回与封存。
-授权不含设备操作，当前没有 Ready 或设备 r2。
+授权一次 UAC BuildOnly，现已实际退出 `0`；管理员令牌成立，launcher/helper 各启动一次、自动重试为 0。
+独立读回 `accepted_no_device`，57 个 present 输入 pins 核对一致，69 个 raw 成员只读副本封存与独审通过，
+ADB/安装/T0/采集均为 0。见[BuildOnly 与续办](runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)。
+授权已消费且不含设备操作，同 SHA 不重跑；PC Suite 临时关闭设置已精确恢复并读回，UI 行为未动态验证。
+
+A5 三组审查草稿已完成：20 份 review-only 源静态审计、R3 终态 Read/一次 Freeze 桥接的 10 个合成场景、
+host evidence r2 实物消费。正式 host contract/Ready 仍有 7 类缺口：BuildOnly/reader 的分流 EOF、
+current final binding、A2/A3 capture 拓扑、legacy formal terminal-freeze 与当前 A5 source 独审。
+raw 保全已完成，不能冒充正式终态封存门；R3 仍须可信 `discovery_identity` 生产接线。
+主机双流模块 `e014bab` 已接入常驻离线门并通过实际 C1b 检查组，见[采集修复](runs/2026-09-30-C1b-主机双流采集离线修复.md)；
+尚未接入正式候选/UAC 链，未改变 frozen `4b37f34`，没有 Ready 或设备 r2。
 
 **09-13 收尾状态：** 根目录继续负责协调，设备发现证据修复已提交，临时副本清理已完成、归档保留；清理不再是待办。
 提交、验证数值及完整交接见[收尾与待完成项](runs/2026-09-13-C1b-收尾与待完成项.md)，实现与原始证据见
 [离线修复记录](runs/2026-09-13-C1b-设备发现证据离线修复.md)。
 
-后续按以下顺序续做；当前 `4b37f34` 已完成首项：
+后续按以下顺序续做；当前 `4b37f34` 已完成 A1—A4，正式 A5 未闭合：
 
 1. 固定 clean SHA、A1/A2、R3 消费链、exact pair/r14 和一次只读 preflight，保存各阶段原始证据。
 2. 获本 SHA 单次授权后，以已提升令牌运行一次 BuildOnly，独立读回并封存；失败不在同 SHA 重跑。
-3. 主机构建成功后，结合已闭合的 R3 离线消费链完成设备入口与 Ready。
+3. 完成当前 formal reviewer/合同、外层 capture 与 R3 terminal identity 接线；未观察的历史 EOF 不补造，受影响输入按新 clean SHA 重新完成主机准备及单次授权，再完成设备入口与 Ready。
 4. 主机条件闭合后形成具体的单次设备提案，再按本轮就位和授权执行、读回与封存。
 
 当前未建立新 Ready 或设备 r2；旧 Ready、已消费 attempt 和旧设备确认不复用。
@@ -121,7 +130,7 @@ preflight 外层 exit `0`、`prepared_not_authorized=true`；提升启动脚本�
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b display context 回退及设备发现证据（含 P1 · R3）** | R3 离线消费链已闭合；`7c55116` 参数绑定失败、`14edb4a` 管理员令牌失败均已封存；`4b37f34` 的 UAC 探针、A1/A2、R3、exact pair/r14 和唯一只读 preflight 已通过 | 09-30 已获该 SHA 一次 UAC BuildOnly 授权并启动，待实际退出、独立读回与封存；成功后才能推进 Ready。原零设备根因未知，r2 未建立、显示回退未获真机验收。见[当前主机准备](runs/2026-09-29-C1b-4b37f34-A1-A3主机准备.md)及[14edb4a 失败](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md) |
+| **C1b display context 回退及设备发现证据（含 P1 · R3）** | R3 离线消费链已闭合；`7c55116` 参数绑定失败、`14edb4a` 管理员令牌失败均已封存；`4b37f34` A1—A4 与唯一 BuildOnly/独立读回/raw 封存已通过 | A5 草稿已完成，正式 Ready 仍有外层 EOF、binding/capture、终态合同与 source 独审缺口；新工具及 R3 identity 待正式接线。原零设备根因未知，r2 未建立、显示回退未获真机验收。见[本轮结果](runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)及[14edb4a 失败](runs/2026-09-29-C1b-14edb4a-BuildOnly权限失败.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 **R3 离线闭合范围：** collector/reader/freezer 纳入两个 checkpoint 及无 run ID 的失败，覆盖未到达、
@@ -175,7 +184,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 旧 c43652a/r1 display/unsupported、a878d12/r1 零设备均失败封存；R3 离线消费链已闭合，当前 `4b37f34` A1—A3 已完成 | 该 SHA 已获一次 UAC BuildOnly 授权并启动，待独立退出、读回和封存；未建立 Ready/r2。原调用点、操作次数及零设备根因仍未知，显示回退和采集未验收，失败轮不重跑 |
+| **T-L1 / C1b** | 旧 c43652a/r1 display/unsupported、a878d12/r1 零设备均失败封存；R3 离线消费链已闭合，当前 `4b37f34` A1—A4 与唯一 BuildOnly/raw 封存已通过 | A5 review-only 草稿已完成，正式合同/Ready 的 7 类缺口仍待闭合；没有 Ready/r2。原调用点、操作次数及零设备根因仍未知，显示回退和采集未验收，同 SHA 不重跑 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
