@@ -4,9 +4,11 @@
 >
 > 协调源码 `e0fcbb2` 已闭合 P3 候选维护源回退、主机双流与显式子进程环境、R3 真实终态身份派生及一次封存的离线实现；源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过。新增 A1、提升启动、独立 BuildOnly reader、raw 封存和设备入口维护源已有实现与离线证据；正式主机合同及最终依赖整合复验仍待完成。这些记录不代表新候选通过。
 >
-> 原候选 058 完整门 11 PASS / 3 FAIL、812 完整门 13 PASS / 1 FAIL 均保留。派单 native 延迟初始化及确认轮询竞态已分别修复，专项验证通过；新候选 `16d66c9f64ae593d6c87c46a800c6bfd66f62bf8` 串行完整门实际 exit `1`，8 PASS / 6 FAIL。Android 1170 项 JVM、全部 lint/build 组通过；派单 52/55、监督 runner 83/87，capture 反例缺双 EOF，intake 超时、C1a 失败，C1b verifier 明确报 Win32“系统资源不足”。原始日志与失败现场已保留；一次私有排空诊断 9/9、exit `0` 未复现 EOF 失败，不替代完整门，各失败具体根因尚未全部核定。待资源条件改善后串行复验完整门；058、812、16d 均未进入新冻结主机链，实际 A1、preflight、BuildOnly 和 Ready 尚未启动。
+> 原候选 058 完整门 11 PASS / 3 FAIL、812 完整门 13 PASS / 1 FAIL 均保留。派单 native 延迟初始化及确认轮询竞态已分别修复，专项验证通过；`16d66c9f64ae593d6c87c46a800c6bfd66f62bf8` 首次完整门实际 exit `1`，8 PASS / 6 FAIL。Android 1170 项 JVM、全部 lint/build 组通过；派单 52/55、监督 runner 83/87，capture 反例缺双 EOF，intake 超时、C1a 失败，C1b verifier 明确报 Win32“系统资源不足”。首次日志与现场读取元信息保留；私有排空诊断 9/9、exit `0` 不替代完整门，各失败根因尚未全部核定。以下复验结果和新候选为当前续办来源，均未建立新冻结主机链、BuildOnly 或 Ready。
 >
-> 四组首次失败现场已由 4 名 sub-agent 只读核对，尚未证明新的生产缺陷；私有诊断原始读回一致，原 EOF 原因仍未知。同一 `16d66c9` 的新命名空间串行完整复验已启动，实际会话 20007，最终退出码与独立 Read 尚未返回。已结束的 capture 13/13、C1a 15/15；raw archive 7/8、intake 矩阵未全过，另派 2 名 sub-agent 只读核对新失败。启动前资源读数 829 MB，随后低至 165 MB；此前一次 7120 MB 读数不足以证明资源持续恢复，其他计算保留，不据资源读数推定失败原因。
+> 同 16d 完整复验会话 20007 已自然退出 `1`，9 PASS / 5 FAIL；capture 13/13、C1a 15/15、Android 构建通过，raw archive、intake、C1b host、派单及 runner 未全过。派单 54/55、runner 85/87；双流 EOF、Job active `0`、cleanup failure `0`，未执行独立 Read。5 组失败已由 sub-agent 只读审查，未证明新的生产漏杀或隔离失效，具体子进程终态和原因仍有 unknown。启动前资源 829 MB、后续低至 165 MB，不据资源读数推定因果，其他计算保留。
+>
+> 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色和发布定义正按新 SHA 重绑，完整门尚未启动，不代表候选通过。
 >
 > R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`；PR、Git 远端、父提交、完整 tree 和三份 blob 已独立读回一致。仓库无配置 CI，未声明 CI 通过；功能候选、完整 R6 文档依赖包及新主机链仍待闭合。
 >
