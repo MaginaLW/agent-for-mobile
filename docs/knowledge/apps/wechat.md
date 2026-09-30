@@ -6,6 +6,7 @@
 
 - **uiautomator 通道下无障碍树恒空**：`mobile_list_elements_on_screen` 在微信内始终返回空，只能截图+视觉定位 → 微信类任务在 M0 是纯视觉任务，成本高一个数量级（见 [../brain/cost.md](../brain/cost.md)）。
 - ⭐ **S1 已定论（2026-07-17，自研 a11y flags 拉满仍不可读）**：探针（`flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows` + `canRetrieveWindowContent=true`）在**聊天列表页 / 会话页 / 键盘弹出**三态下，微信主窗口（`window type=1 pkg=com.tencent.mm`）都出现在 windows 列表，但 `window.root` **恒为 null**（bounds 全 0），微信自身贡献 **0 个可读节点**（读到的全是 vivo 系统 UI）。→ **微信维持纯视觉任务，OCR 融合层提前进 M1a**（原绑定 uiautomator 的结论被自研通道复现并强化；乐观「a11y 能读微信」分支否定）。原始记录：[../../runs/2026-07-17-M1-spike.md](../../runs/2026-07-17-M1-spike.md)。
+- ⭐ **PA2553 / Android 16 横屏应用多窗补充（2026-08-26）**：可信 C1a 在两帧都枚举到两个稳定的微信 application window，但每窗只暴露一个零几何、不可见、不可交互且无 child 的 root 占位。它与旧手机的 `root=null` 形态不同，却同样没有 toolbar、会话行、消息区或输入框语义；`root handle 存在` 只能写成结构诊断，不能写成“a11y 树可用”。下一版 C1b 必须把 root handle、root→window binding、subtree completeness 与 semantic usability 分开；即使其中一窗 `window focused=true`，没有合法 focused editor 时也只能记 `window_only`，不得拿来选 conversation/target。
 - ✅ **键盘态可感知（即便内容不可读）**：键盘弹出时 windows 列表新增 `type=2（TYPE_INPUT_METHOD）pkg=com.baidu.input_vivo`——`type_text` 后可据此判断键盘弹/收，M0 两次误触的感知面成立。
 - ✅ **OCR 通道达标（S3 实测）**：会话页 ML Kit bundled 中文 OCR 稳定态 ~450ms、关键控件（文件名/大小/消息文本/时间戳）命中且 bbox 准确（conf 0.6–0.9）——微信不可读下的主通道可用。噪声来自气泡内嵌长截图，conf 阈值过滤。
 - ⭐ **M1b 融合层真机闭环（2026-07-19）**：聊天列表页 31 个 OCR 元素、ShareImgUI 选择页 17 个，全量可读可寻址；OCR ref 点击（裁剪重识校验 + dispatchGesture）→ 发送确认弹窗 → OCR 读出「发送给/取消/发送」→ 取消，链路全通。`wait_for(text_appears/text_gone)` 走 OCR 感知面在微信内可用。**dispatchGesture 点击/滑动在微信内真实生效**（行点击、选择页滚动实测）。

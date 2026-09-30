@@ -1,0 +1,247 @@
+# Tablet T-L1 C1b v1：受控只读运行合同
+
+## 边界
+
+C1b v1 只运行 `tablet-layout-observation/c1b-v1` 的 pure-a11y producer。它不调用 ToolRegistry/MCP，
+不执行 action/gesture/input，不改 settings，不启动目标 App，不截图、不 OCR、不写 raw UI 内容。
+
+运行前必须完成 A 道离线门、专用 probe 的 Debug/Release artifact proof、gateway 生产面 release absence 与独立
+审查，随后固定完整、clean 的 `HEAD`。C 道需要用户针对该 SHA 的新授权；C1a 的授权不可复用。runner 只接受
+绝对 ordinary `adb` 路径和显式 `-Provision`，恰好执行一次
+fresh controlled build、一次 `install -r -t`，不卸载也不自动重试。runner 恰好请求 `c1`、`c2` 两帧，宿主间隔
+至少 900ms，总 capture span 不超过 15 秒，不补拍。
+
+A 道公共入口 `scripts/run-tablet-layout-observation-c1b-v1-offline-gate.ps1` 必须将本次 fresh gate run id、
+exact case/coverage、Kotlin direct-focus 跨层 requirement 与永久 false/unsupported 安全结论原子写入固定
+`.checks/tablet-tl1-c1b-v1-offline-gate.summary.json`；consumer 只接受本次 run id 且两分钟内完成的摘要。
+
+宿主 runner 的 full offline gate 入口是 `scripts/run-tablet-layout-c1b-offline-gate.ps1`，必须固定输出
+`.checks/tablet-tl1-c1b-host-v1-offline-gate.summary.json`。其 summary 是 closed、单行 strict JSON，绑定 fresh
+gate run id、两分钟 freshness/span、29 个 exact coverage、`fake_adb=true`、`real_adb_call_count=0`，并固定所有
+runtime/layout/action 结论为 false/unsupported；不能把旧摘要、删减 coverage 或自报成功当作门通过。
+当前离线修复候选的完整 synthetic runner E2E 共 7 个场景：fake ADB total 222 = valid 214 + rejected 8；
+valid 由 private server start/status/kill 8/7/4 与 device calls 195 构成，T0 calls 4 是 device 子集，另观测
+server exit 7。runner process 9、fake Gradle 8、fake signer 12、repository inputs 42，synthetic E2E 内 real ADB/JDK/Gradle
+executions 全为 0。direct client Job active limit 固定为 1，T0 四层 Job 链 limit 固定为 4；两次
+official-style auto-start attempts 均未逃逸，escaped child/listener/side-effect 为 0，正常 cleanup 无锁、
+listener、server、build-root 等残留。这些计数只证明 host orchestration。旧 41-input SHA 的 real isolated host
+build smoke 历史基线曾完整退出 0，并按当时实际运行证据记录受控 JDK/GradleMain 1 次、held-Java
+ApkSignerTool 1 次、real ADB 0、repository inputs 41；它既不构成 fixed-SHA C1b build/install/runner 或真机取证，
+也不能替代当前 42-input 候选的 real isolated host build smoke。当前候选专项门为 build-env 27/27、artifact
+32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、aapt2 15/15、readonly 74/74、
+attempt-failure schema/cross-binding 51/51；observation 公共门仍为 49/49、coverage 89/89。
+
+## Real build-only 外层证据消费者
+
+`scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1` 是 one-shot helper 之外的独立 evidence
+consumer。它不由 runner/helper 加载，也不属于下节 42 个 implementation/build input；仅新增或修改该 verifier
+不得把 `repository_inputs.file_count` 改成 43。它的 exact bytes、路径与执行次数由 SHA-specific 外层 launcher
+单独绑定，helper summary 只有经此外层 consumer 接受后，才可能构成 build-only smoke 的必要证据。
+
+helper summary 必须是 1..65,536 bytes、strict UTF-8 且无 BOM 的单个 JSON object。reader 必须先按 lexical
+JSON 递归拒绝 duplicate property；名称按 ordinal、case-sensitive 比较，顶层 key set 必须与 v1 required-properties
+表 exact 相等，缺失、额外、大小写变体或转义后同名一律拒绝。所有 JSON number 必须是 Int64 范围内的 canonical
+integer token `0|-?[1-9][0-9]*`；`-0`、前导零、小数、指数与越界数均不得进入 typed reader。integer、boolean、
+nonempty string 与 `failure_reasons` array 必须保持 schema 的 exact CLR type，不能依赖 PowerShell 的宽松转换。
+
+`started_at_utc`、`completed_at_utc` 与 `process_start_observation_ended_at_utc` 在 typed parse 后仍必须是
+`[string]`，lexical 格式 exact 为 ASCII 数字的 `yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'`，并通过 invariant UTC
+`ParseExact`。reader 必须使用 `ConvertFrom-Json -DateKind String` 或等价保形解析；不得接受默认日期提升产生的
+`DateTime`/`DateTimeOffset`。launcher 在成功 `Process.Start` 紧前记录 lower bound，在确认 helper 退出紧后记录
+upper bound；验证必须满足
+`lower <= started_at_utc < process_start_observation_ended_at_utc <= completed_at_utc <= upper`，且
+`completed_at_utc - process_start_observation_ended_at_utc <= 5s`。observer scope 必须 exact 为
+`host_wide_best_effort_wmi`，limitation 必须 exact 为
+`Win32_ProcessStartTrace is operational observation, not a persistent kernel or syscall audit.`；过期、未来或
+observer 提前结束的 summary 均不得 replay 成本轮结果。
+
+summary path 只能位于 launcher 固定的 expected parent；该 parent、完整祖先链与 summary 本身都必须 ordinary、
+非 reparse。launcher/verifier 必须持有 expected parent guard，并以禁止 write/delete sharing 的同一个
+`FileStream` 完成长度检查、读取、SHA-256、strict UTF-8 decode 与 JSON parse；长度必须在分配 buffer 前检查。
+opened handle 的 stable identity 必须与最终路径重新解析的 identity exact 相等，link count 必须为 1，guard 要保持到
+verifier 返回。禁止先 `Get-Item` 再以 `ReadAllBytes` 打开另一个对象，也禁止 caller 选择任意 summary parent。
+
+exact repo-external launcher 必须固定并持有自身、one-shot helper、tracked verifier 与固定 pwsh 的 ordinary path、
+stable identity 和 SHA-256，且这些 guard 要覆盖 verifier 返回并在 `finally` 中关闭。verifier path 不得由 caller
+传入；launcher 只能 dot-source exact verifier 一次，捕获其 `FunctionInfo`，确认 `ScriptBlock.File` exact 指向该
+held file，再恰好 invoke 一次。不得保留 inline verifier、fallback、同名函数重绑定或第二条调用路径。helper
+必须 start `1`、automatic retry `0`；既有 summary/result 会在 start 前阻断，新输出只能 CreateNew/原子发布。
+
+完整目录链的首个调用会传入新建的空 accumulator；`$Order` 必须同时声明 `[Parameter(Mandatory)]` 与
+`[AllowEmptyCollection()]`。不得注入 dummy entry、移除 Mandatory 或移除目录 guard 来规避参数绑定：目录 stable identity、no-reparse、
+最终路径与 held-handle 必须保留，目录时间戳不作为 identity 等值条件；文件 identity/hash/size/mtime 门禁不变。
+launcher 必须把 repo root 渲染为固定 absolute path，并同时验证 PowerShell provider cwd 与 OS process cwd exact 指向该
+root；不得从 ambient cwd 推导 repo/output/verifier 路径。
+
+launcher 的顶层 trap、主 catch 与最终失败出口必须共享一个 failure-only publisher；任何最终 `$failure`，包括正式
+result 已发布后才发现的 held-guard cleanup failure，都不得因 `$resultPublished` 而跳过该 publisher。
+该 publisher 只能对固定 sidecar path 使用 CreateNew，并以 write-through、flush-to-disk 完成；内容必须是 closed failed
+record，至少绑定 candidate/launcher identity、phase、原始 ErrorRecord（message、fully-qualified id、category、
+script stack/position）与去重 exception chain；任何有界截断必须显式记录 stored/observed count、limit 与 truncated，
+不得静默丢弃尾部异常。record 固定 `status=failed`、`success_eligible=false`、`pass_closure=false`、
+`evidence_role=diagnostic_failure_only`。publication/serialization/cleanup 错误只能追加为 secondary failure，绝不能
+替换 primary failure；若 sidecar 本身无法写入，launcher 仍必须 exit nonzero。sidecar 必须位于 exact launcher 同目录
+的固定 `.failure.json` sibling，helper start 前至少两次 no-follow 缺席检查中任一发现陈旧 leaf 都必须阻断，且它不进入
+`$passClosure`。该 sidecar 不是 success result，不能
+与退出码或任何 receipt 分离消费后升级为 pass authority。
+
+helper hard deadline 固定为 45 分钟，任何正常或异常路径都不得先执行无界 `WaitForExit()`。deadline 到期后
+launcher 必须终止完整 process tree，kill completion 与 stdout/stderr drain 各自最多 30 秒；超时、无法确认退出、
+drain overflow/失败或任一 guard/cleanup 失败都令整体失败。launcher result 必须闭合记录 self/helper/verifier/pwsh
+expected/actual hash、verifier load/invoke count、helper start/exit/termination/retry、summary byte length/hash 与 cleanup，
+不能只采信 helper 的 `status=passed`。
+
+请求 build-only 授权前，必须在最终 clean HEAD 上对 exact staging 执行只读 preflight：绑定完整 candidate SHA、
+launcher/helper/verifier/pwsh hash 与 ordinary identity，机械证明无 inline fallback、load `1`/invoke `1`、45 分钟
+deadline、两段 30 秒 kill/drain、预存 success/failure 输出阻断、failure-only publisher 的 failed-only/primary-preserving
+语义及正式结果字段接线。preflight 只能发布 closed
+`prepared_not_authorized`，不得执行 launcher、helper、Gradle/JDK/ADB 或访问设备；它不是 smoke、不会消费 one-shot，
+也不构成 build、设备或后续采集授权。preflight receipt 只能与其进程 exit `0`、terminal `passed` 和
+primary/cleanup/recording failure count 全为 `0` 联合判定，不能单独作为成功权威。
+
+## 构建与宿主信任闭包
+
+runner 从 fixed HEAD 的实现表导出 exact 42 个 repository input（含 private ADB server module 与 attempt-failure
+schema），按 ordinal
+`relative/path=sha256:<lowerhex>`、UTF-8 无 BOM、LF join 且无尾 LF 形成 catalog；sidecar 必须保存
+`repository_inputs.file_count=42` 与针对该 HEAD 重算的 `catalog_sha256`。catalog hash 是 HEAD 绑定值，
+不得从 fixture 或旧 run 复制。该计数只覆盖 runner/helper 的 implementation/build inputs；上一节 outer
+verifier 是 separately pinned consumer，不进入该 catalog。
+
+build-environment guard 固定以下 filesystem-and-environment 输入：
+
+- Oracle JDK 21.0.5 完整 418-file tree；
+- Gradle 8.9 `distributionSha256Sum` 与完整 299-file tree，wrapper 不执行，由 held Java 直接进入
+  `org.gradle.launcher.GradleMain`；同一 held Java 直接进入 `ApkSignerTool`；
+- Windows Program Files KnownFolder 下的 canonical 完整 `Git` 安装树，且 `cmd/git.exe` 签名有效：9,576 paths、9,489 file
+  identities、85 个内部 hardlink groups，full-tree catalog 固定为
+  `sha256:4c5e585b10f371f181b42b60948a883409c0efda910b869ff98c2e5604267458`；另绑定
+  `cmd/git.exe`、两处 `mingw64` Git、`libcurl`、`libssl`、`libcrypto` 共 6 个关键文件 hash。只冻结入口
+  executable 不足以通过；
+- Android SDK `build-tools/35.0.0`、`platforms/android-35` 与 `platform-tools` 三棵 source package tree，
+  再复制为仅含这三包的 11,348-file isolated SDK，catalog SHA-256 固定为
+  `sha256:09a7cb46fef3c2b505330e4dfa09abbe4ba739412e8450e97b3458ddbaf473d8`；
+- fresh Gradle user home、`user.home`、project/Kotlin cache、process temp、module build output 与固定 debug
+  keystore copy；受控 build child environment 显式把 `ANDROID_USER_HOME` 指向 fresh
+  `user.home/.android`，不设置 `ANDROID_PREFS_ROOT`；仓库 `local.properties` 必须为空，隐式
+  `buildSrc/build-logic` 必须不存在；
+- fresh `user.home/.android/debug.keystore.lock` 必须在 Gradle 前以空 ordinary file 预创建；只有 Gradle 阶段允许
+  该既有 identity 受控可写，进程返回后立即封印为不可写 held handle。pre/post binding 除
+  `post_gradle_lock_sealed_achieved=false -> true` 外必须 byte-for-byte 相同；TrustGuard、creation-time
+  DebugKeystoreGuard anchor、workspace `user.home` 与 pre-seal binding 必须全部按原引用/原值绑定；
+- source/input tree 的 file deny-write/delete、directory ACL/identity guards、recovery journal，以及同一 Windows
+  logon session 内覆盖全部 C1b build 的全局互斥。
+
+构建允许联网，不得传 `--offline`；依赖仍必须由 `--dependency-verification=strict`、固定 verification
+metadata、artifact allowlist/hash、fresh caches、no build/configuration cache、rerun 与 no-daemon 共同约束。
+专用 `:tablet-c1b-probe` 必须同时产生 Debug APK、Release unsigned APK 与
+`tablet-c1b-read-only-artifact-proof/v1`。宿主独立复核 proof 的 exact 12-file source allowlist、11-file build-input
+allowlist、dependency catalog、Debug/Release merged manifest、packaged manifest/a11y XML exact tree、连续编号 DEX
+entries/catalog，以及受信 aapt2 binding；不能用 gateway legacy APK 代替。证据 catalog 的相对路径仍拒绝未转义
+`=` 分隔符；只有删除 fresh module build output 的 cleanup inventory 可接受 Gradle zip-cache 的合法 `=` 文件名。
+
+Git child process 必须传 exact 15-key controlled environment 与 `ClearEnvironment`，禁用 system/global config
+并使用 minimal `PATH`；Gradle/apksigner、ADB、aapt2 与 T0 的所有 child process 也必须传各自显式受控
+environment 与 `ClearEnvironment`。Windows host paths 来自系统 API；全局 device lease path 只来自 Windows KnownFolder API，
+不能信任 `LOCALAPPDATA`。T0 sidecar 必须用 lease token 加入 runner 已持有的同一锁。
+
+runner 在任何语义 AST 检查前必须先匹配冻结的 canonical PowerShell token-topology SHA-256，并机械要求真实
+GradleMain 调用后紧邻且恰好一次三参数 keystore-lock seal。函数/alias/变量动态重绑定、同名调用点交换、
+guard 或 nested guard 的等值替换都必须 fail closed；cleanup 要按引用去重并同时关闭 creation-time anchor 与当前引用。
+
+sidecar 的 `threat_boundary` 必须 exact 为：
+
+```text
+filesystem-and-environment integrity after guard establishment; excludes same-user process-memory injection, pre-existing writable handles/mappings, ACL/ownership takeover, and same-user concurrent mutation of all intentionally writable fresh build working state (including dependency/project/Kotlin caches, process temp, Gradle daemon/native/transform state, and module outputs) during Gradle execution and the post-exit-to-final-guard window
+```
+
+`host_launcher_cmd_not_executed` 与 direct-Java 主张只适用于 runner 直接启动的
+`GradleMain`/`ApkSignerTool`，不外推到 T0、ADB、aapt2 或 descendant process。
+
+## 宿主—provider 协议
+
+CLI 输入的 source `ANDROID_SDK_ROOT=ANDROID_HOME` 必须 ordinary、非 reparse，`-AdbPath` 必须 exact 指向其
+`platform-tools/adb.exe`；任意 SDK 外 executable 即使可模拟 ADB 也必须在 build/install 前拒绝。guard 建立后，
+runner 将 Android child roots 与实际 adb/aapt2 重绑到 isolated SDK，并在 `49152..65535` 随机选择 loopback
+port。server 唯一允许的启动 argv 为 `-L tcp:localhost:<private-port> server nodaemon`；`-L` 的 listen host
+不得改为 numeric `127.0.0.1`。全部设备命令必须显式传 `-H 127.0.0.1` 与
+`-P <private-port>`，且 controlled environment exact 设置 `ADB_SERVER_SOCKET=tcp:127.0.0.1:<private-port>`；default
+5037 不得监听、连接或作为 fallback。listener proof 同样只接受 numeric `127.0.0.1`。`server-status` 必须按
+37.0.1 闭合解析 USB enum `UNKNOWN_USB|NATIVE|LIBUSB|USB_DISABLED|LIBADBUSB`、mDNS enum
+`UNKNOWN_MDNS|BONJOUR|OPENSCREEN|LIBADBMDNS|MDNS_DISABLED` 及可选 string `keystore_path`、
+`known_hosts_path`；ready 必须拒绝 `UNKNOWN_USB` 与 `USB_DISABLED`。runner 必须闭合 private listener owner
+PID、`server-status` executable、Windows job membership、server process identity，以及 cleanup 后 listener absent
+以及同 port rebind 成功。runner 在
+采集前后及 sidecar 发布前校验 `adb version` identity、Installed-as isolated canonical path、executable hash 与
+exact version-output hash，并把这些闭合字段写入 sidecar。authority 固定为 `dev.magina.gateway.tablet.c1b`，端点仅允许 `t0/status/capture/c1/capture/c2/result/abort` 的
+canonical URI。`t0` 必须通过 `adb exec-in content write` 原样转发 fresh T0 v5 的 exact bytes；宿主同时绑定原始
+受控路径、SHA-256、byte count、CRLF count，并要求 provider 回显 expected title hash、producer full SHA、
+producer artifact SHA、embedded HEAD、build challenge 与 generation。其余端点只用 `content read`。
+
+第一次 status 必须是 `ready_c1`。`c1` 与 `c2` 各只请求一次；异步状态只允许
+`capturing_c1 -> ready_c2` 与 `capturing_c2 -> complete`，使用 bounded poll。每一次中间及 terminal poll 都必须校验
+`ok/next/reason`、generation、accepted counters、committed-token prefix、in-flight token 与零 recapture 的完整 exact tuple，
+任一漂移都立即失败，不能等待后一条正常 terminal 覆盖。`result` 只读一次。成功前再次固定唯一设备 serial hash、
+fingerprint hash、boot-id hash、package/version、installed base.apk path/hash、local APK hash 与 signer；失败后的 abort
+至多尝试一次，abort/cleanup 不触发采集。仅当 `result` 的 exact bytes 已被严格识别为 observation，并通过 schema、
+validator、T0/provider/device/APK 与冻结实现绑定后，宿主才可标记 session consumed；`result` 返回 control、畸形 JSON
+或上述任一验证失败时必须保持未消费状态，并在 finally 中进行唯一一次幂等 abort。abort 只接受闭合的
+`aborted/failed/expired/absent` terminal control：`ok=false`、`next=none`、reason 白名单、无 in-flight、零 recapture；
+非 absent terminal 的 generation/counters/committed prefix 必须与 abort 前最后一个已验证 snapshot exact 相等，absent
+只能是 generation 0 的 empty/reset tuple，且 reason 仅接受该 abort 端点真实可产生并证明无对应 session 的
+`coordinator_closed/nonce_reused/replay_ledger_full/run_id_reused/session_not_found`。`t0_pending/session_busy/
+generation_exhausted` 即使属于全协议 absent reason，也不能证明 cleanup 完成。任何畸形 terminal 都不得把 cleanup
+标为 completed。
+
+## 成功 sidecar
+
+成功 sidecar 必须符合 `tablet-layout-c1b-sidecar/v1`，绑定：
+
+- fixed SHA、producer/APK、observation、validation 与 upstream T0 hash；
+- 42-file repository-input catalog 与完整 build-environment binding；
+- isolated Android SDK platform-tools trust root、private ADB port/socket、listener owner/server-status/job/
+  cleanup/rebind proof、ADB executable/version-output 前后 hash 与 parsed identity；
+- runner/C1b lib/C1a 低层 helper/T0 runner 与 sidecar、validator/observation/sidecar schema 的实现 hash；
+- Android C1b Model/Probe/Source、debug Provider/Protocol/Coordinator/Controller/Context/Pending Registry、共享
+  TabletLayoutProbe/Model、专用 probe service/manifest/resources 与 Gradle/wrapper/verification metadata 的实现 hash；
+- Debug/Release APK、artifact proof、两份 merged manifest、packaged manifest/a11y AXML、DEX entries/catalog、
+  dependency catalog 与受信 aapt2 binding；
+- fresh install 与 local/pre/post APK 一致性；
+- provider build challenge hash、canonical endpoint-set hash、control transcript hash 与 generation/counter/timestamp；
+- 唯一设备 serial/fingerprint/boot-id 前后 hash；
+- upstream T0 original relative path/hash/bytes/CRLF 与唯一一次 exec-in；
+- observation/validation/upstream T0 的受控 relative path 与重算 hash；
+- `capture_scope=pure_a11y`；
+- 恰好两次 a11y frame capture、零 recapture；
+- screenshot/OCR/action/gesture/input/settings/target-start/MCP/dispatch 全部零次；
+- schema/origin/read-only attestation；
+- cleanup 为 `not_required` 或已完成。
+
+observation validator 自身始终输出 `runtime_origin_verified=false` 与 `runtime_evidence=false`；它只能报告
+`runtime_binding_inputs_match`。runner 在重新计算全部互相独立的 git/implementation/build/provider/device/APK/T0/
+artifact/control 锚点后，才可在 success sidecar 中输出最终 origin/evidence true。ownership/root projection/
+topology/IME 的 verified 必须与对应 observed exact 相等，不能单独抬高。layout 与危险能力仍按 observation C1b v1
+固定为 false/unsupported。
+
+success sidecar bytes 先通过 closed schema 与跨字段等价校验并只留在内存；private ADB server、
+artifact/aapt2/build-environment guards 与全局 device lease 全部 cleanup 成功后才可原子发布。发布后必须从
+final 受控 ordinary path 重新读取 exact bytes，执行 strict JSON、schema、跨绑定、secret absence、
+implementation snapshot 与所有 artifact hash 复核。
+任一 cleanup 失败都禁止发布；任何写后漂移会删除未通过验证的 success sidecar。
+
+## 失败与归因
+
+private ADB server、安装、provider、capture、读取、schema、hash、freshness 或 sidecar 任一失败即冻结该 run；failure evidence 只保存
+闭合 reason code 与 false/unsupported 结论，不泄漏 serial/nonce/build challenge/raw UI。不得自动重试，不得在 abort
+后继续 status/result/采集，也不得用 fixture 或 C1a evidence 补造成功。旧 `tablet-layout-observation/v2` evidence
+永不按 C1b schema 重算。
+
+若 private ADB 在 run promotion 前启动失败，runner 不创建普通 run 目录，而是在全部 cleanup 完成后原子发布唯一
+root-level `docs/runs/evidence/tablet-layout-c1b-attempt-<attempt_id>.json`。该文件必须符合
+`tablet-layout-c1b-attempt-failure/v1`：`run_id=null`，`pre_device_operations.build_completed=true`、
+`artifact_checks_completed=true`、`private_adb_guard_created=false`，device discovery、install、T0、c1、c2、result、
+capture 与 abort 计数全部为 0，并记录 `runner_invocation_count=1`、
+`automatic_runner_retry_count=0`。诊断不得保存 raw stdout/stderr、PID、port、
+socket、argv、path 或 serial，只能保存有界 byte counts、captured bytes SHA-256、strict-UTF-8/overflow 状态、闭合分类与
+cleanup 结果；既有 attempt id 不得覆盖。该 attempt 记录不是 success/failure sidecar，不能升级 runtime/layout/action
+结论，也不能复用任何旧 C1a 或已经消费的旧 C1b 授权。

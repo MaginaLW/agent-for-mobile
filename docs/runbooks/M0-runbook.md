@@ -64,7 +64,7 @@ adb devices                  # 先确认显示 <序列号> device
 scrcpy --no-control          # --no-control = 只看不控，防止误点镜像窗把触摸注进手机干扰 agent
 
 # —— 终端 B：跑 agent ——
-cd D:\repos\agent-for-mobile
+Set-Location -LiteralPath 'PATH_TO_REPOSITORY'
 claude --mcp-config configs/mobile-mcp.json   # 首次工具调用批准一次（或加 --allowedTools "mcp__mobile"）
 ```
 会话内：
@@ -155,7 +155,7 @@ TOML 小坑：双引号字符串里反斜杠是转义符，写 Windows 路径用
 |---|---|
 | `claude mcp list` / `/mcp` 显示连接失败，但终端手动 `npx -y @mobilenext/mobile-mcp@latest` 能起 | Windows 的 spawn npx ENOENT 问题：把 [configs/mobile-mcp.json](../../configs/mobile-mcp.json) 的 `"command": "npx"` 换成 `"command": "cmd", "args": ["/c", "npx", "-y", "@mobilenext/mobile-mcp@0.0.62"]` |
 | MCP 启动超时 | `$env:MCP_TIMEOUT = "60000"; claude` |
-| 工具能列出来但报找不到 adb | MCP 子进程 PATH 与终端不一致（mobile-mcp issue #30）：把 platform-tools 目录加入**系统级** PATH 后重启终端；本机路径 `C:\Users\Magina\AppData\Local\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools` |
+| 工具能列出来但报找不到 adb | MCP 子进程 PATH 与终端不一致（mobile-mcp issue #30）：把 `<Android SDK>\platform-tools` 加入**系统级** PATH 后重启终端 |
 | 中文输入失败/输出 ASCII | §1 第 5 步的 devicekit 没装或没装成功，`adb shell pm list packages devicekit` 验证（应输出 com.mobilenext.devicekit） |
 | 点按没反应（能读屏但点不动） | 国产 ROM 需要额外开关（小米「USB 调试（安全设置）」等），见 §1.1 |
 | 手机中途黑屏 | `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防见 §1 第 7 步「充电时屏幕不休眠」 |
