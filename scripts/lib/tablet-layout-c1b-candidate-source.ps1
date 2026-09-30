@@ -392,7 +392,7 @@ function New-C1bPreflightR14CandidateSource {
         [Parameter(Mandatory)][Collections.IDictionary]$Constants
     )
     if ((Get-C1bCandidateSourceHash $BaselineLeafSource) -cne
-        '4825d118a1f1a99db189567bb4cdc8ce0f8270f6326275df37edd58916f18052') {
+        'a6affee433b4e6c47f71986de25c1c1a463d5334facdc124c36654d9ba908cea') {
         throw 'Maintained preflight source drifted.'
     }
     $BaselineLeafSource = Update-C1bPreflightLauncherBootstrapAssertion $BaselineLeafSource

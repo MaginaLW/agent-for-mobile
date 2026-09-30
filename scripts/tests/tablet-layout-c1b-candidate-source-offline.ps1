@@ -527,6 +527,94 @@ Test-Case 'tracked maintenance sources deterministically derive a candidate with
     Assert-Rejected { New-C1bExactPairCandidateSource @driftArgs } 'Maintained launcher source drifted'
     $leaf = New-C1bPreflightR14CandidateSource -BaselineLeafSource $preflightTemplate -ChecksSource $checksSource -Constants $constants
     Assert-Test (-not $leaf.Contains('__BINDING__') -and -not $leaf.Contains("'-r10.ps1'")) 'Preflight retained historical binding.'
+
+    # 执行生成 preflight 的真实 verifier 静态审查片段；不执行其 native/bootstrap/Git。
+    # 完整原字段的序列化字节必须能由现行 HA 严格 JSON 消费者接受。
+    $leafAst = Get-C1bCandidateSourceAst $leaf
+    $leafStatements = @($leafAst.EndBlock.Statements)
+    $staticDefinitions = foreach ($name in @(
+        'Assert-Preflight','Assert-OrdinalSequence','Assert-Text','Get-Commands','Get-Functions')) {
+        $definition = @($leafStatements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name
+        })
+        Assert-Test ($definition.Count -eq 1) "Generated verifier audit function is not unique: $name"
+        $definition[0].Extent.Text
+    }
+    $namesAssignment = @($leafStatements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Left.Extent.Text -ceq '$verifierFunctionNames'
+    })
+    Assert-Test ($namesAssignment.Count -eq 1) 'Generated verifier function-name authority is not unique.'
+    $staticBodies = @($leafStatements | Where-Object {
+        $_ -is [Management.Automation.Language.TryStatementAst] -and
+        @($_.Body.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $_.Left.Extent.Text -ceq '$verifierFunctions'
+        }).Count -eq 1
+    })
+    Assert-Test ($staticBodies.Count -eq 1) 'Generated verifier static audit body is not unique.'
+    $staticStatements = @($staticBodies[0].Body.Statements)
+    $staticFirst = @($staticStatements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Left.Extent.Text -ceq '$verifierFunctions'
+    })
+    $staticLast = @($staticStatements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $_.Left.Extent.Text -ceq '$verifierEvidence'
+    })
+    Assert-Test ($staticFirst.Count -eq 1 -and $staticLast.Count -eq 1 -and
+        $staticFirst[0].Extent.StartOffset -lt $staticLast[0].Extent.StartOffset) 'Generated verifier evidence boundaries drifted.'
+    $staticCode = $leaf.Substring($staticFirst[0].Extent.StartOffset,
+        $staticLast[0].Extent.EndOffset - $staticFirst[0].Extent.StartOffset)
+    $evidenceMaps = @($staticLast[0].FindAll({
+        param($node) $node -is [Management.Automation.Language.HashtableAst]
+    }, $true))
+    Assert-Test ($evidenceMaps.Count -eq 1) 'Generated verifier evidence map is not unique.'
+    $tailFields = @($evidenceMaps[0].KeyValuePairs | Where-Object {
+        $_.Item1.SafeGetValue() -ceq 'maximum_observer_tail_seconds'
+    })
+    Assert-Test ($tailFields.Count -eq 1) 'Original verifier observer-tail field is not unique.'
+    $tailRhs = $tailFields[0].Item2.Extent
+    $tailOffset = $tailRhs.StartOffset - $staticFirst[0].Extent.StartOffset
+    $verifierSource = [IO.File]::ReadAllText((Join-Path $repoRoot 'scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1'))
+    $verifierAst = Get-C1bCandidateSourceAst $verifierSource
+    $staticPrelude = [string]::Join("`n", @($staticDefinitions) + @($namesAssignment[0].Extent.Text))
+    $evaluateStatic = {
+        param([string]$Code)
+        . ([scriptblock]::Create($staticPrelude))
+        $script:staticCheckCount = 0L
+        $verifierParsed = [pscustomobject]@{Ast=$verifierAst;ParseErrorCount=0L}
+        $verifierBinding = [pscustomobject]@{Text=$verifierSource}
+        . ([scriptblock]::Create($Code))
+        return $verifierEvidence
+    }
+    $staticEvidence = & $evaluateStatic $staticCode
+    Assert-Test (($staticEvidence.maximum_observer_tail_seconds -is [long] -or
+        $staticEvidence.maximum_observer_tail_seconds -is [int]) -and
+        $staticEvidence.maximum_observer_tail_seconds -eq 5) 'Generated observer-tail evidence is not integer five.'
+    $haAst = Get-C1bCandidateSourceAst ([IO.File]::ReadAllText((Join-Path $repoRoot 'scripts/lib/c1b-host-acceptance.ps1')))
+    foreach ($name in @('Assert-C1bHA','ConvertFrom-C1bHAStrictJson')) {
+        $definition = @($haAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name
+        })
+        Assert-Test ($definition.Count -eq 1) "Actual HA JSON consumer function is not unique: $name"
+        . ([scriptblock]::Create($definition[0].Extent.Text))
+    }
+    $utf8 = [Text.UTF8Encoding]::new($false,$true)
+    $receiptBytes = $utf8.GetBytes((ConvertTo-Json -InputObject (
+        [ordered]@{verifier_static_evidence=$staticEvidence}) -Depth 32 -Compress))
+    $decodedEvidence = (ConvertFrom-C1bHAStrictJson $utf8.GetString($receiptBytes)).verifier_static_evidence
+    Assert-Test (($decodedEvidence.maximum_observer_tail_seconds -is [long] -or
+        $decodedEvidence.maximum_observer_tail_seconds -is [int]) -and
+        $decodedEvidence.maximum_observer_tail_seconds -eq 5) 'HA did not consume the original observer-tail field as integer five.'
+    foreach ($oldLiteral in @('5.0','5.25')) {
+        $oldCode = $staticCode.Remove($tailOffset,$tailRhs.EndOffset-$tailRhs.StartOffset).Insert($tailOffset,$oldLiteral)
+        $oldEvidence = & $evaluateStatic $oldCode
+        $oldBytes = $utf8.GetBytes((ConvertTo-Json -InputObject (
+            [ordered]@{verifier_static_evidence=$oldEvidence}) -Depth 32 -Compress))
+        Assert-Rejected { ConvertFrom-C1bHAStrictJson $utf8.GetString($oldBytes) } 'Noncanonical or noninteger JSON number'
+    }
+
     $r14 = New-C1bPreflightR14RendererSource -PairRendererSource $pair.RendererSource `
         -PreflightSource $leaf -BaselineLeafPath (Join-Path $sourceRoot 'preflight-template.ps1') `
         -BaselineLeafSha256 (Get-C1bCandidateSourceHash $preflightTemplate) `
