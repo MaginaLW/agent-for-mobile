@@ -1655,6 +1655,126 @@ try {
             '预检不可用时应照常派单。'
     }
 
+    Test-Case '确认轮询读取前退出快照保留最终状态且不越过截止时间' {
+        # 执行生产 while AST，而不是在测试里重写其判断。只替换时钟依赖，
+        # 并控制状态读取、进程退出属性和 sleep；不启动 runner/native/设备。
+        $tokens = $null; $errors = $null
+        $runnerAst = [Management.Automation.Language.Parser]::ParseFile(
+            $SourceRunner, [ref]$tokens, [ref]$errors)
+        Assert-True ($errors.Count -eq 0) '生产 runner AST 必须可解析。'
+        $loops = @($runnerAst.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.WhileStatementAst] -and
+                $node.Body.Extent.Text -match '\bGet-P0ConfirmationState\b'
+        }, $true))
+        Assert-True ($loops.Count -eq 1) '必须唯一定位生产确认轮询。'
+        $optional = @($runnerAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -ceq 'Get-P0OptionalProperty'
+        })
+        Assert-True ($optional.Count -eq 1) '必须使用生产可选字段读取函数。'
+        . ([scriptblock]::Create($optional[0].Extent.Text))
+        $pollLoop = [scriptblock]::Create(
+            $loops[0].Extent.Text.Replace('[DateTime]::UtcNow', '(Get-P0FixtureClock)'))
+
+        function Invoke-P0ConfirmationLoopCase([string]$Scenario) {
+            $flow = [pscustomobject]@{
+                Now = [DateTime]::new(2026, 9, 30, 0, 0, 0, [DateTimeKind]::Utc)
+                Exited = ($Scenario -ne 'empty_then_final_exit')
+                Reads = 0; Sleeps = 0; EvidenceSaves = 0; AbortedRows = 0
+            }
+            $runId = 'fixture-confirmation-run'
+            $leg = 'Allow'
+            $LegExpectedConfirmation = @{ Allow = 'allowed' }
+            $deadline = $flow.Now.AddSeconds(3)
+            $PollIntervalMs = 20
+            $confirmation = $null
+            $prompted = $true
+            $notificationState = $null
+            $session = [pscustomobject]@{ FixtureOnly = $true }
+            $screenshotPath = Join-Path ([IO.Path]::GetTempPath()) (
+                'p0-poll-no-write-' + [guid]::NewGuid().ToString('N') + '.png')
+            $slug = 'fixture-confirmation-loop'
+            $legDir = [IO.Path]::GetTempPath()
+            $sensitiveArtifactPaths = [Collections.Generic.List[string]]::new()
+            $process = [pscustomobject]@{}
+            $process | Add-Member -MemberType ScriptProperty -Name HasExited -Value {
+                $flow.Exited
+            }.GetNewClosure()
+            $dispatchHandle = [pscustomobject]@{ Process = $process }
+            function Get-P0FixtureClock { return $flow.Now }
+            function Start-Sleep([int]$Milliseconds) {
+                if ($Milliseconds -ne 20) { throw '原轮询间隔不得改变。' }
+                $flow.Sleeps++
+                $flow.Now = $flow.Now.AddMilliseconds($Milliseconds)
+            }
+            function Get-P0ConfirmationState($Session) {
+                $flow.Reads++
+                if ($Scenario -eq 'empty_then_final_exit' -and $flow.Reads -eq 1) {
+                    # 这次读取已经取到 null；随后 child 写最终状态并退出。
+                    # 旧生产 loop 在读取后查 HasExited，会直接误判失败。
+                    $flow.Exited = $true
+                    return $null
+                }
+                if ($Scenario -eq 'missing_final') { return $null }
+                if ($Scenario -eq 'late_terminal') { $flow.Now = $deadline }
+                return [pscustomobject]@{
+                    run_id = $(if ($Scenario -eq 'wrong_run_id') { 'other-run' } else { $runId })
+                    tool = $(if ($Scenario -eq 'wrong_tool') { 'type_text' } else { 'press_key' })
+                    state = $(switch ($Scenario) {
+                        'contradictory_terminal' { 'denied' }
+                        'expired_terminal' { 'timed_out' }
+                        'error_terminal' { 'error' }
+                        'dismissed_terminal' { 'dismissed' }
+                        default { 'allowed' }
+                    })
+                    evidence_file = 'fixture-confirmation.png'
+                }
+            }
+            function Save-P0PrivateEvidence($Session, [string]$EvidenceFile, [string]$Destination) {
+                if ($EvidenceFile -cne 'fixture-confirmation.png' -or $Destination -cne $screenshotPath) {
+                    throw '生产证据保存参数发生偏移。'
+                }
+                $flow.EvidenceSaves++
+            }
+            function Write-P0AbortedLegLedgerRow([string]$Slug, [string]$Expected, [string]$Actual) {
+                $flow.AbortedRows++
+            }
+            $failure = $null
+            try { . $pollLoop } catch { $failure = $_.Exception.Message }
+            return [pscustomobject]@{
+                Confirmed = ($null -ne $confirmation)
+                Failure = $failure
+                Reads = $flow.Reads; Sleeps = $flow.Sleeps
+                EvidenceSaves = $flow.EvidenceSaves; AbortedRows = $flow.AbortedRows
+            }
+        }
+
+        $race = Invoke-P0ConfirmationLoopCase 'empty_then_final_exit'
+        Assert-True ($race.Confirmed -and $null -eq $race.Failure -and
+            $race.Reads -eq 2 -and $race.Sleeps -eq 1 -and $race.EvidenceSaves -eq 1) `
+            '空读取后写最终状态并退出，必须在原 3 秒内重读并经原状态/证据判断通过。'
+        $finished = Invoke-P0ConfirmationLoopCase 'finished_before_read'
+        Assert-True ($finished.Confirmed -and $null -eq $finished.Failure -and
+            $finished.Reads -eq 1 -and $finished.EvidenceSaves -eq 1) `
+            '读取前已退出的 child，仍必须先验证其最终状态。'
+        $missing = Invoke-P0ConfirmationLoopCase 'missing_final'
+        Assert-True (-not $missing.Confirmed -and $missing.Reads -eq 1) '缺少最终状态不得通过。'
+        foreach ($pair in @(@('wrong_run_id','run_id 不匹配'), @('wrong_tool','工具不匹配'))) {
+            $invalid = Invoke-P0ConfirmationLoopCase $pair[0]
+            Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure) '身份错误不得通过。'
+            Assert-Contains $invalid.Failure $pair[1]
+        }
+        foreach ($scenario in @('contradictory_terminal','expired_terminal','error_terminal','dismissed_terminal')) {
+            $invalid = Invoke-P0ConfirmationLoopCase $scenario
+            Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure -and
+                $invalid.AbortedRows -eq 1) '矛盾、过期或失败终态必须保留原失败判据和台账。'
+        }
+        $late = Invoke-P0ConfirmationLoopCase 'late_terminal'
+        Assert-True (-not $late.Confirmed -and $late.Reads -eq 1 -and $late.EvidenceSaves -eq 0) `
+            '读取返回时已到原截止时间的 allowed，不得保存为通过或延长确认窗口。'
+    }
+
     Test-Case 'ToolSearch 加载 schema 不算越权也不进调用序列' {
         $fixture = New-Fixture trace_tool_search
         $result = Invoke-FixtureRunner $fixture @('Allow')
