@@ -221,6 +221,7 @@ $receipt = [ordered]@{
 $checks = @'
 function Get-TL1C1bPreflightGitTreeSnapshot {
     param($Root,$ExpectedFileCount,$ExpectedCatalogSha256,$ExpectedIdentityCount,$ExpectedInternalHardlinkGroupCount,$Stage)
+    if ($Root -cne 'C:\Fixture\Git') { throw 'Synthetic Git tree root drifted.' }
     $script:order.Add($Stage)
     if ($Stage -ceq 'before_git' -and $script:failPre) { throw 'pre drift' }
     if ($Stage -ceq 'after_git' -and $script:failPost) { throw 'post drift' }
@@ -233,10 +234,10 @@ function Assert-TL1C1bPreflightLauncherStreamContract { param($LauncherAst) retu
 $fixture = $declarations + "`n" + $body
 $patched = Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixture -ChecksSource $checks -Constants $constants
 function Invoke-Fixture {
-    param([bool]$FailPre,[bool]$FailGit,[bool]$FailPost)
+    param([bool]$FailPre,[bool]$FailGit,[bool]$FailPost,[string]$Source=$script:patched)
     $ps = [Management.Automation.PowerShell]::Create()
     try {
-        $run = 'param($failPre,$failGit,$failPost); $ErrorActionPreference="Stop"; $script:order=[Collections.Generic.List[string]]::new();' + "`n" + $script:patched
+        $run = 'param($failPre,$failGit,$failPost); $ErrorActionPreference="Stop"; $script:order=[Collections.Generic.List[string]]::new();' + "`n" + $Source
         [void]$ps.AddScript($run).AddArgument($FailPre).AddArgument($FailGit).AddArgument($FailPost)
         $output = @($ps.Invoke())
         if ($ps.Streams.Error.Count -ne 0) { throw $ps.Streams.Error[0] }
@@ -376,7 +377,7 @@ Test-Case 'new repository hash authority rejects missing extra reordered and non
     }
 }
 Test-Case 'preparation binds all seven final repository file bytes without newline normalization' {
-    # 只载入三个生产读取函数；prepare 入口、冻结工件和外部进程均不执行。
+    # 只载入三个生产读取函数；Git 路径校验复用纯转换库，不执行 prepare 入口或外部进程。
     $prepare=Get-C1bCandidateSourceAst ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../prepare-tablet-layout-c1b-candidate-source.ps1')))
     foreach($name in @('Read-CandidateInput','Get-CandidateFileHash','Get-CandidateRepositoryLibraryHashes')){
         $functions=@($prepare.EndBlock.Statements | Where-Object {
@@ -384,6 +385,52 @@ Test-Case 'preparation binds all seven final repository file bytes without newli
         })
         Assert-Test ($functions.Count-eq1) 'Preparation byte reader is not uniquely defined.'
         . ([scriptblock]::Create($functions[0].Extent.Text))
+    }
+    $gitPathCalls=@($prepare.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.PipelineAst] -and
+        $_.PipelineElements.Count -eq 1 -and
+        $_.PipelineElements[0] -is [Management.Automation.Language.CommandAst] -and
+        $_.PipelineElements[0].GetCommandName() -ceq 'Assert-C1bCandidateGitPath'
+    })
+    $repoNormalization=@($prepare.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -ceq '$RepoRoot'
+    })
+    $outputCreation=@($prepare.FindAll({param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Member.Extent.Text -ceq 'CreateDirectory'
+    },$true))
+    Assert-Test ($gitPathCalls.Count -eq 1 -and $gitPathCalls[0].Extent.Text -ceq 'Assert-C1bCandidateGitPath $GitPath' -and
+        $repoNormalization.Count -eq 1 -and $outputCreation.Count -eq 1 -and
+        $gitPathCalls[0].Extent.StartOffset -lt $repoNormalization[0].Extent.StartOffset -and
+        $gitPathCalls[0].Extent.StartOffset -lt $outputCreation[0].Extent.StartOffset) 'Preparation Git path validation was removed or moved after input/output work.'
+    $gitPathCall=[scriptblock]::Create($gitPathCalls[0].Extent.Text)
+    foreach($positive in @(
+        @{Path='C:\Fixture\Git\mingw64\bin\git.exe';Root='C:\Fixture\Git'},
+        @{Path='D:\Git 工具\mingw64\bin\git.exe';Root='D:\Git 工具'})){
+        $GitPath=$positive.Path
+        . $gitPathCall
+        $pathConstants=[hashtable]::new($constants);$pathConstants.gitPath=$GitPath
+        $pathChecks=$checks.Replace('C:\Fixture\Git',$positive.Root)
+        $pathSource=Add-C1bPreflightR14ChecksToSource -BaselineLeafSource $fixture -ChecksSource $pathChecks -Constants $pathConstants
+        $pathResult=Invoke-Fixture $false $false $false -Source $pathSource
+        Assert-Test ($pathResult.Failures.Count -eq 0 -and
+            ($pathResult.Order -join ',') -ceq 'before_git,git,after_git,cleanup') 'Generated r14 did not derive the expected Git installation root.'
+    }
+    $maintainedPreflight=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '../lib/c1b-candidate-source/preflight-template.ps1'))
+    foreach($GitPath in @('C:\Fixture\Git\cmd\git.exe','D:\Git 工具\cmd\git.exe',
+        'C:\Fixture\Git\bin\git.exe','C:\Fixture\Git\mingw32\bin\git.exe',
+        'C:\Fixture\Git\mingw64\libexec\git.exe','C:\Fixture\Git\mingw64\bin\git.cmd','C:\git.exe')){
+        Assert-Rejected { . $gitPathCall } 'mingw64\\bin\\git.exe layout'
+        $badConstants=[hashtable]::new($constants);$badConstants.gitPath=$GitPath
+        Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture $checks $badConstants } 'mingw64\\bin\\git.exe layout'
+        Assert-Rejected { New-C1bPreflightR14CandidateSource $maintainedPreflight $checks $badConstants } 'mingw64\\bin\\git.exe layout'
+    }
+    foreach($GitPath in @('C:/Fixture/Git/mingw64/bin/git.exe','C:\Fixture\Git\cmd\..\mingw64\bin\git.exe',
+        'mingw64\bin\git.exe','\\fixture\share\Git\mingw64\bin\git.exe','C:\Fixture\Git\mingw64\bin\git.exe:metadata')){
+        Assert-Rejected { . $gitPathCall } 'lexically canonical fixed local DOS path'
+        $badConstants=[hashtable]::new($constants);$badConstants.gitPath=$GitPath
+        Assert-Rejected { Add-C1bPreflightR14ChecksToSource $fixture $checks $badConstants } 'lexically canonical fixed local DOS path'
+        Assert-Rejected { New-C1bPreflightR14CandidateSource $maintainedPreflight $checks $badConstants } 'lexically canonical fixed local DOS path'
     }
     $parent=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../.checks'))
     $null=[IO.Directory]::CreateDirectory($parent)

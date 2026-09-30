@@ -51,6 +51,7 @@ function Get-CandidateRepositoryLibraryHashes {
     return $hashes
 }
 
+Assert-C1bCandidateGitPath $GitPath
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 $StagingRoot = [IO.Path]::GetFullPath($StagingRoot)
 $PwshPath = [IO.Path]::GetFullPath($PwshPath)
