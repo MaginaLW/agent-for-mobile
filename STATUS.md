@@ -8,9 +8,9 @@
 >
 > 同 16d 完整复验会话 20007 已自然退出 `1`，9 PASS / 5 FAIL；capture 13/13、C1a 15/15、Android 构建通过，raw archive、intake、C1b host、派单及 runner 未全过。派单 54/55、runner 85/87；双流 EOF、Job active `0`、cleanup failure `0`，未执行独立 Read。5 组失败已由 sub-agent 只读审查，未证明新的生产漏杀或隔离失效，具体子进程终态和原因仍有 unknown。启动前资源 829 MB、后续低至 165 MB，不据资源读数推定因果，其他计算保留。
 >
-> 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色与发布定义已按新 SHA 完成 source-only 独审，无确定 P0/P1，完整门尚未启动，不代表候选通过。
+> 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色与发布定义已按新 SHA 完成 source-only 独审，无确定 P0/P1。准备结果不代表候选通过，实际完整门进度见下。
 >
-> 4a 新 FullCheck 实际准备进程 exit `0`，已生成 129 个唯一源码 pin 的 bootstrap inventory 和完整 `-Shards 1` bindings，独审两次原字节匹配；state 仍是 `preparation`，尚无实际 Run/Read。最新四次只读资源采样可用 31–1028 MiB、commit 为上限的 98.64%–98.77%，未证明持续恢复，其他计算保留。本阶段未启动完整门，也没有新 A1、BuildOnly 或 Ready，见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> Goal 已恢复 active。新四点资源窗口可用 10.7–11.1 GiB、commit 为上限的 47.95%–48.46%；两个旧 PID 未观察到，原因未知，未调整用户计算。4a 的 clean、受信对象、输入 pins 与核定 7.6.5 环境摘要重新核对通过；已在实际会话 39744 串行启动完整 `-Shards 1` 检查，保留 Gradle 和 fixture。最终退出、14 项汇总及独立 Read 尚未取得；没有新 A1、BuildOnly 或 Ready。129 项准备及旧失败均保留，见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 >
 > 最小启动诊断实际孩子在 1000 ms 窗内自然 native `0`、elapsed 840 ms、双 EOF/Job 清理完成；诊断 CLI 错把 JSON `Int64` PID 拒为非 `[int]`，driver/group 实际 exit `1`，预热没有启动。原件保留、不重跑；新 reader 仅离线修正，不能解释原 intake 失败或替代完整门。private ADB server 单 case 定义已完成 source-only 独审、无确定 P0/P1，实际诊断未运行，旧 final_substage 仍 unknown。
 >
