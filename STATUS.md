@@ -10,6 +10,8 @@
 >
 > 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色与发布定义已按新 SHA 完成 source-only 独审，无确定 P0/P1，完整门尚未启动，不代表候选通过。
 >
+> 后续四次只读资源采样可用 494–1179 MiB、commit 为上限的 97.8%–98.3%，没有证明持续恢复，其他计算保留。最小启动诊断实际孩子在 1000 ms 窗内自然 native `0`、elapsed 840 ms、双 EOF/Job 清理完成；诊断 CLI 错把 JSON `Int64` PID 拒为非 `[int]`，driver/group 实际 exit `1`，预热没有启动。原件保留、不重跑；新 reader 仅离线修正，不能解释原 intake 失败或替代完整门。主机链和 Ready 仍未建立，见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+>
 > R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`；PR、Git 远端、父提交、完整 tree 和三份 blob 已独立读回一致。仓库无配置 CI，未声明 CI 通过；功能候选、完整 R6 文档依赖包及新主机链仍待闭合。
 >
 > 旧冻结候选 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 的唯一 UAC BuildOnly 已实际退出 `0`，提升令牌成立，launcher/helper 各一次、重试 `0`。独立读回 `accepted_no_device`，57 项输入 pins 再读一致，69 份原始材料封存；ADB/安装/T0/采集均为 `0`，授权已消费，同 SHA 不重跑。PC Suite `closeMode` 已精确恢复，应用 UI 未动态验证；见[旧候选主机结果](docs/runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)。

@@ -75,6 +75,8 @@ T-L2、语义意图生产接线、分享落地及其他真机项继续使用本�
 
 新增主机维护源的离线实现保留；058 完整门 11 PASS / 3 FAIL、812 完整门 13 PASS / 1 FAIL、16d 首次 8 PASS / 6 FAIL 均不覆盖。同 16d 完整复验会话 20007 已自然退出 `1`，9 PASS / 5 FAIL，双流 EOF 和 Job 清理完成，未进入独立 Read。capture/C1a/Android 通过；raw archive/intake/C1b host/派单/runner 未全过，派单 54/55、runner 85/87，5 组新失败已只读核对，未知子进程事实与原因保持 unknown。本轮 95 个 KEEP 根已保存普通文件原字节；开跑日志记录清扫 91 个旧目录，首次 4 个失败 fixture 路径现已缺失，日志和此前元信息保留。保留模式跳过开跑清扫修复已提交，作者实际 AST mock 4/4、独审 16/16；新候选 `4a65150db9826d668341ad6d9b11cb9883f5c524` 普通 clone clean、无 alternates、baseline object 可读，source-only 材料及发布定义已完成独审，尚未运行完整门。原时限与 87 个用例不变。通过真实完整门及独立 Read 后才启动 A1 和后续主机链，详见[本轮记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。旧冻结 `4b37f34` 保持只读、不重跑，其他计算保留，资源数值不作失败因果证明。
 
+后续四次只读采样可用 494–1179 MiB、commit 97.8%–98.3%，尚未证明持续恢复。最小启动诊断的孩子实际 native `0`、elapsed 840 ms、双 EOF/Job 清理完成；诊断 reader 仅接受 `[int]` 而误拒真实 JSON `Int64` PID，driver/group 实际 exit `1`，Prewarm 未到达。该工具缺陷另在新定义离线修正，原失败收据和 source 保留、不重跑；不能把一个最小孩子的成功视为原 intake、完整门或 Ready 通过。其他单 case 定义仅完成 source-only 准备，实际未执行。
+
 **09-28 进度：** R3 设备发现证据 consumer/reader/freezer 已在实现分支提交
 `7c5511621f9972f2bf2877591e6d19e3b69e7593`，无设备离线测试 9/9、26 项断言通过，真实 ADB/设备调用 0。
 新独占普通 clone 固定该 SHA，42 项原始输入与 HEAD Git blob 逐项一致、工作区 clean、对象库无 alternates。
