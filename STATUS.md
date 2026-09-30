@@ -8,7 +8,7 @@
 >
 > 同 16d 完整复验会话 20007 已自然退出 `1`，9 PASS / 5 FAIL；capture 13/13、C1a 15/15、Android 构建通过，raw archive、intake、C1b host、派单及 runner 未全过。派单 54/55、runner 85/87；双流 EOF、Job active `0`、cleanup failure `0`，未执行独立 Read。5 组失败已由 sub-agent 只读审查，未证明新的生产漏杀或隔离失效，具体子进程终态和原因仍有 unknown。启动前资源 829 MB、后续低至 165 MB，不据资源读数推定因果，其他计算保留。
 >
-> 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色和发布定义正按新 SHA 重绑，完整门尚未启动，不代表候选通过。
+> 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色与发布定义已按新 SHA 完成 source-only 独审，无确定 P0/P1，完整门尚未启动，不代表候选通过。
 >
 > R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`；PR、Git 远端、父提交、完整 tree 和三份 blob 已独立读回一致。仓库无配置 CI，未声明 CI 通过；功能候选、完整 R6 文档依赖包及新主机链仍待闭合。
 >
