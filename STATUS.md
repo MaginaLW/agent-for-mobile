@@ -6,7 +6,9 @@
 >
 > 原候选 058 完整门 11 PASS / 3 FAIL、812 完整门 13 PASS / 1 FAIL 均保留。派单 native 延迟初始化及确认轮询竞态已分别修复，专项验证通过；新候选 `16d66c9f64ae593d6c87c46a800c6bfd66f62bf8` 串行完整门实际 exit `1`，8 PASS / 6 FAIL。Android 1170 项 JVM、全部 lint/build 组通过；派单 52/55、监督 runner 83/87，capture 反例缺双 EOF，intake 超时、C1a 失败，C1b verifier 明确报 Win32“系统资源不足”。原始日志与失败现场已保留；一次私有排空诊断 9/9、exit `0` 未复现 EOF 失败，不替代完整门，各失败具体根因尚未全部核定。待资源条件改善后串行复验完整门；058、812、16d 均未进入新冻结主机链，实际 A1、preflight、BuildOnly 和 Ready 尚未启动。
 >
-> 四组失败现场已由 4 名 sub-agent 只读核对：派单参数测试未完成拒绝断言，intake 超时路径未保存子日志，C1a 缺轮询返回值，监督 runner 的失败先发生在确认、握手或上传阶段，尚未证明新的生产缺陷。私有诊断原始读回一致，原 EOF 原因仍未知。主机后续可用内存仅 555/535 MB，其他计算保留；完整门复验尚未启动。
+> 四组首次失败现场已由 4 名 sub-agent 只读核对，尚未证明新的生产缺陷；私有诊断原始读回一致，原 EOF 原因仍未知。同一 `16d66c9` 的新命名空间串行完整复验已启动，实际会话 20007，最终退出码与独立 Read 尚未返回。已结束的 capture 13/13、C1a 15/15；raw archive 7/8、intake 矩阵未全过，另派 2 名 sub-agent 只读核对新失败。启动前资源读数 829 MB，随后低至 165 MB；此前一次 7120 MB 读数不足以证明资源持续恢复，其他计算保留，不据资源读数推定失败原因。
+>
+> R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`；PR、Git 远端、父提交、完整 tree 和三份 blob 已独立读回一致。仓库无配置 CI，未声明 CI 通过；功能候选、完整 R6 文档依赖包及新主机链仍待闭合。
 >
 > 旧冻结候选 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 的唯一 UAC BuildOnly 已实际退出 `0`，提升令牌成立，launcher/helper 各一次、重试 `0`。独立读回 `accepted_no_device`，57 项输入 pins 再读一致，69 份原始材料封存；ADB/安装/T0/采集均为 `0`，授权已消费，同 SHA 不重跑。PC Suite `closeMode` 已精确恢复，应用 UI 未动态验证；见[旧候选主机结果](docs/runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)。
 >
