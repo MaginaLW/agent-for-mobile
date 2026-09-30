@@ -88,6 +88,140 @@ function Assert-NoExternalTools {
     Assert-True ($Result.ToolCalls.Count -eq 0) "DryRun 触发了外部工具：`n$($Result.ToolCalls -join "`n")"
 }
 
+function Invoke-DispatchNativeFixture {
+    param([Parameter(Mandatory)][string]$Mode)
+
+    $fixtureDirectory = Join-Path $SentinelDir ('native-' + $Mode)
+    [void][IO.Directory]::CreateDirectory($fixtureDirectory)
+    $fixtureScript = Join-Path $fixtureDirectory 'fixture.ps1'
+    $fixtureBody = @'
+param([string]$Mode,[string]$LockLibrary,[string]$BrainLibrary,[string]$DispatchScript,[string]$PausePath)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 3.0
+$names=@('AgentMobileDispatchLockFile','AgentMobileDispatchVersionProbe','AgentMobileDispatchVersionProbeResult')
+function NativeTypes {
+    $result=@()
+    foreach($assembly in [AppDomain]::CurrentDomain.GetAssemblies()){
+        foreach($name in $names){$type=$assembly.GetType($name,$false,$false);if($null-ne$type){$result+=,$type}}
+    }
+    return ,$result
+}
+function Require([bool]$Condition,[string]$Reason){if(-not$Condition){throw $Reason}}
+function Finish { Write-Output ('native-fixture-passed:'+$Mode) }
+Require ((NativeTypes).Count-eq0) 'Native fixture was not cold.'
+if($Mode -like '*Collision'){
+    $definition=switch($Mode){
+        'LockPublicCollision' {'public static class AgentMobileDispatchLockFile {}'}
+        'LockPrivateCollision' {'internal static class AgentMobileDispatchLockFile {}'}
+        'ProbePublicCollision' {'public static class AgentMobileDispatchVersionProbe {}'}
+        'ProbeResultPrivateCollision' {'internal sealed class AgentMobileDispatchVersionProbeResult {}'}
+        default {throw 'Unknown native collision mode.'}
+    }
+    $null=Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $definition -ErrorAction Stop
+}
+. $LockLibrary
+. $BrainLibrary
+if($Mode -like '*Collision'){
+    $before=(NativeTypes)
+    Require ($before.Count-eq1) 'Foreign collision type was not actually loaded.'
+    $rejected=$false
+    try {if($Mode.StartsWith('Lock')){$null=Initialize-DispatchLockNative}else{$null=Initialize-DispatchCodexProbeNative}}
+    catch {$rejected=$_.Exception.Message.Contains('already loaded without this script authority')}
+    Require $rejected 'Foreign public/private native type was accepted.'
+    $after=(NativeTypes)
+    Require ($after.Count-eq1-and[object]::ReferenceEquals($before[0],$after[0])) 'Collision attempted another native compilation.'
+    Finish
+    exit 0
+}
+if($Mode -eq 'OwnedReuse'){
+    $lockType=Initialize-DispatchLockNative
+    $probeType=Initialize-DispatchCodexProbeNative
+    Require ($lockType.FullName-ceq'AgentMobileDispatchLockFile'-and$probeType.FullName-ceq'AgentMobileDispatchVersionProbe') 'Initializer returned wrong type.'
+    Require ((NativeTypes).Count-eq3) 'Owned native type set is incomplete.'
+    . $LockLibrary
+    . $BrainLibrary
+    Require ([object]::ReferenceEquals($lockType,(Initialize-DispatchLockNative))) 'Same-scope lock reload recompiled or lost ownership.'
+    Require ([object]::ReferenceEquals($probeType,(Initialize-DispatchCodexProbeNative))) 'Same-scope probe reload recompiled or lost ownership.'
+    $module=New-Module -ArgumentList $LockLibrary,$BrainLibrary -ScriptBlock {
+        param($LockLibrary,$BrainLibrary)
+        . $LockLibrary
+        . $BrainLibrary
+    }
+    try{
+        $rejected=& $module {
+            $count=0
+            foreach($name in @('Initialize-DispatchLockNative','Initialize-DispatchCodexProbeNative')){
+                try {$null=& $name}
+                catch {if($_.Exception.Message.Contains('already loaded without this script authority')){$count++}else{throw}}
+            }
+            return $count
+        }
+        Require ($rejected-eq2) 'Unregistered module reused caller-owned native types.'
+    }finally{Remove-Module $module -Force -ErrorAction SilentlyContinue}
+    # New-Module exports can shadow names; restore the original owning functions.
+    . $LockLibrary
+    . $BrainLibrary
+    $script:DispatchLockNativeState.types['AgentMobileDispatchLockFile']=[string]
+    $tamperRejected=$false
+    try {$null=Initialize-DispatchLockNative}
+    catch {$tamperRejected=$_.Exception.Message.Contains('not owned by this script initialization');$tamperFailure=$_.Exception.Message}
+    Require $tamperRejected ('Native ownership cache did not reject the unrelated TypeRef: '+$tamperFailure)
+    Finish
+    exit 0
+}
+. $LockLibrary
+. $BrainLibrary
+$null=Get-DispatchSha256 'managed-only'
+Require (Test-DispatchSupportedCodexVersion 'codex-cli 0.149.0') 'Managed version predicate changed.'
+Require ((NativeTypes).Count-eq0) 'Managed import/predicate compiled native code.'
+if($Mode -eq 'ColdDryRun'){
+    try { . $DispatchScript -Task 'offline native cold dryrun' -Slug 'offline-native-cold' -Executor gateway -DryRun }
+    finally {Require ((NativeTypes).Count-eq0) 'DryRun compiled Win32 helpers.';Finish}
+    exit 0
+}
+if($Mode -eq 'ColdReject'){
+    [IO.File]::WriteAllText($PausePath,"slug: offline-native-blocked`nleg: 1`nexecutor: mobile`n---`n[AWAIT_CONFIRM]`nblocked",[Text.UTF8Encoding]::new($false))
+    $rejected=$false
+    try { . $DispatchScript -Confirm $PausePath -DryRun }
+    catch {$rejected=$_.Exception.Message.Contains('mobile -Confirm 已阻断')}
+    Require $rejected 'Cold mobile recovery did not fail closed.'
+    Require ((NativeTypes).Count-eq0) 'Pure recovery rejection compiled Win32 helpers.'
+    Finish
+    exit 0
+}
+Require ($Mode-eq'ColdImport') 'Unknown native fixture mode.'
+Finish
+'@
+    Set-Content -LiteralPath $fixtureScript -Value $fixtureBody -Encoding utf8
+    $start=[Diagnostics.ProcessStartInfo]::new()
+    $start.FileName=$PwshPath
+    $start.UseShellExecute=$false
+    $start.CreateNoWindow=$true
+    $start.RedirectStandardOutput=$true
+    $start.RedirectStandardError=$true
+    foreach($argument in @('-NoProfile','-File',$fixtureScript,'-Mode',$Mode,
+        '-LockLibrary',(Join-Path $SourceRepoRoot 'scripts/lib/dispatch-lock.ps1'),
+        '-BrainLibrary',(Join-Path $SourceRepoRoot 'scripts/lib/dispatch-brain.ps1'),
+        '-DispatchScript',$SourceDispatchPath,'-PausePath',(Join-Path $fixtureDirectory 'blocked.pause.md'))){
+        $start.ArgumentList.Add($argument)
+    }
+    $process=[Diagnostics.Process]::new()
+    $process.StartInfo=$start
+    try{
+        Assert-True ($process.Start()) 'Native fixture did not start.'
+        $stdoutTask=$process.StandardOutput.ReadToEndAsync()
+        $stderrTask=$process.StandardError.ReadToEndAsync()
+        Assert-True ($process.WaitForExit(15000)) 'Native fixture did not exit within the unchanged 15s bound.'
+        $stdout=$stdoutTask.GetAwaiter().GetResult()
+        $stderr=$stderrTask.GetAwaiter().GetResult()
+        Assert-True ($process.ExitCode-eq0) "Native fixture $Mode failed: $stdout`n$stderr"
+        Assert-Contains $stdout ('native-fixture-passed:'+$Mode)
+    }finally{
+        if(-not$process.HasExited){$process.Kill($true);[void]$process.WaitForExit(5000)}
+        $process.Dispose()
+    }
+}
+
 function Invoke-Dispatch {
     param([string[]]$Arguments, [string]$InputText = '')
 
@@ -543,6 +677,16 @@ public static class Program {
         '测试设施错误：fixture 缺少 dispatch lock helper。'
     . $fixtureLockHelper
 
+    Test-Case 'Native helper cold import、DryRun 与纯拒绝不编译 Win32' {
+        foreach($mode in @('ColdImport','ColdDryRun','ColdReject')){Invoke-DispatchNativeFixture $mode}
+    }
+
+    Test-Case 'Native helper 同 scope 缓存复用，未登记的陌生与私有类型 fail closed' {
+        foreach($mode in @('OwnedReuse','LockPublicCollision','LockPrivateCollision','ProbePublicCollision','ProbeResultPrivateCollision')){
+            Invoke-DispatchNativeFixture $mode
+        }
+    }
+
     Test-Case 'DryRun 不创建主机级锁目录' {
         $lockDirectory = Split-Path -Parent $LockPath
         Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) '测试开始前锁目录已存在。'
@@ -636,6 +780,7 @@ public static class Program {
     }
 
     Test-Case 'Codex 版本探针 stdout/stderr 超限时硬截断并清空后代' {
+        $nativeProbeType = Initialize-DispatchCodexProbeNative
         $probeEnvironment = @(
             "SystemRoot=$env:SystemRoot", "WINDIR=$env:WINDIR", "ComSpec=$env:ComSpec",
             "TEMP=$env:TEMP", "TMP=$env:TMP", "PATH=$env:PATH", "PATHEXT=$env:PATHEXT"
@@ -649,7 +794,7 @@ public static class Program {
             $probeStderr = Join-Path $SentinelDir "version-$($case.Name).stderr"
             $failure = $null
             try {
-                [void][AgentMobileDispatchVersionProbe]::Run(
+                [void]$nativeProbeType::Run(
                     [IO.Path]::GetFullPath([string]$case.Executable),
                     [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$case.Executable)),
                     $probeStdout, $probeStderr, [string[]]$probeEnvironment,

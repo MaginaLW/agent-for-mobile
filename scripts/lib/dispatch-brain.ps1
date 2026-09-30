@@ -182,8 +182,14 @@ function Test-DispatchSupportedCodexVersion {
     return $null -ne (Get-DispatchCodexVersionContract -VersionOutput $VersionOutput)
 }
 
-if ($null -eq ('AgentMobileDispatchVersionProbe' -as [type])) {
-    Add-Type -TypeDefinition @'
+# Dot-source is managed-only. Retain the owning script cache on same-scope reload.
+if ($null -eq (Get-Variable -Name 'DispatchCodexProbeNativeState' -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:DispatchCodexProbeNativeState = $null
+}
+
+function Initialize-DispatchCodexProbeNative {
+    # Types have no caller parameter; the owning script state is trusted.
+    $definition = @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -596,6 +602,59 @@ public static class AgentMobileDispatchVersionProbe {
     }
 }
 '@
+    $definitionHasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $definitionSha256 = [BitConverter]::ToString($definitionHasher.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($definition.Replace("`r`n", "`n")))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $definitionHasher.Dispose() }
+    $names = @('AgentMobileDispatchVersionProbe','AgentMobileDispatchVersionProbeResult')
+    $loaded = @{}
+    foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+        foreach ($name in $names) {
+            $found = $assembly.GetType($name, $false, $false)
+            if ($null -eq $found) { continue }
+            if ($loaded.ContainsKey($name) -and -not [object]::ReferenceEquals($loaded[$name], $found)) {
+                throw 'Dispatch native type name is ambiguous.'
+            }
+            $loaded[$name] = $found
+        }
+    }
+    $state = $script:DispatchCodexProbeNativeState
+    if ($null -ne $state) {
+        if ($state -isnot [hashtable] -or $state.Count -ne 2 -or
+            -not $state.ContainsKey('definition_sha256') -or -not $state.ContainsKey('types') -or
+            $state.definition_sha256 -cne $definitionSha256 -or $state.types -isnot [hashtable] -or
+            $state.types.Count -ne $names.Count -or $loaded.Count -ne $names.Count) {
+            throw 'Dispatch native authority cache does not match the current definition.'
+        }
+        foreach ($name in $names) {
+            if (-not $state.types.ContainsKey($name) -or $state.types[$name] -isnot [type] -or
+                -not $state.types[$name].IsPublic -or $state.types[$name].FullName -cne $name -or
+                -not [object]::ReferenceEquals($state.types[$name], $loaded[$name]) -or
+                -not [object]::ReferenceEquals($state.types[$name].Assembly, $state.types['AgentMobileDispatchVersionProbe'].Assembly)) {
+                throw 'Dispatch native type is not owned by this script initialization.'
+            }
+        }
+        return $state.types['AgentMobileDispatchVersionProbe']
+    }
+    if ($loaded.Count -ne 0) {
+        throw 'Dispatch native type is already loaded without this script authority.'
+    }
+    $created = @(Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $definition -PassThru -ErrorAction Stop)
+    $owned = @{}
+    foreach ($type in $created) {
+        if ($names -ccontains $type.FullName) { $owned[$type.FullName] = $type }
+    }
+    if ($owned.Count -ne $names.Count) { throw 'Dispatch native compilation did not produce all required types.' }
+    foreach ($name in $names) {
+        if (-not $owned.ContainsKey($name) -or -not $owned[$name].IsPublic -or
+            -not [object]::ReferenceEquals($owned[$name].Assembly, $owned['AgentMobileDispatchVersionProbe'].Assembly)) {
+            throw 'Dispatch native compilation returned an unexpected type.'
+        }
+    }
+    $script:DispatchCodexProbeNativeState = @{ definition_sha256 = $definitionSha256; types = $owned }
+    return $owned['AgentMobileDispatchVersionProbe']
 }
 
 function Invoke-DispatchCodexVersionProbe {
@@ -605,6 +664,8 @@ function Invoke-DispatchCodexVersionProbe {
         [ValidateRange(1, 30000)][int]$TimeoutMilliseconds = 5000,
         [switch]$ForceAssignFailureForTest
     )
+
+    $nativeProbeType = Initialize-DispatchCodexProbeNative
 
     # 版本探针发生在 bearer 构造前，也不需要认证、网络或用户配置；不能让它因为
     # CreateProcess 默认继承而先拿到宿主任意 secret。
@@ -617,7 +678,7 @@ function Invoke-DispatchCodexVersionProbe {
     $stdoutPath = [IO.Path]::GetTempFileName()
     $stderrPath = [IO.Path]::GetTempFileName()
     try {
-        $probe = [AgentMobileDispatchVersionProbe]::Run(
+        $probe = $nativeProbeType::Run(
             [IO.Path]::GetFullPath($ExecutablePath),
             [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ExecutablePath)),
             $stdoutPath, $stderrPath, $versionEnvironment.ToArray(),
