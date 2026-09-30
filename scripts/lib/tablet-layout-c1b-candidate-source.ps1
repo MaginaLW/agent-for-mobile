@@ -320,7 +320,7 @@ function New-C1bExactPairCandidateSource {
     }
     foreach ($sourceBinding in @(
         [pscustomobject]@{Source=$BaselineRendererSource;Hash='5449c0dc0743d868feea5f13515e1e22e11f3fe79b63638ba2302ad9c2990bd5';Label='renderer'},
-        [pscustomobject]@{Source=$HelperTemplateSource;Hash='54771ba5a9dc5b32ab964f2f191490c2d73cbc3da3eb34b4c3d1346fa8d593df';Label='helper'},
+        [pscustomobject]@{Source=$HelperTemplateSource;Hash='927ada3f52d7424dc8c02a3f3cb174b36db9c22139b086bb3c39589304e5f30e';Label='helper'},
         [pscustomobject]@{Source=$LauncherTemplateSource;Hash='dafecc5e0c0313ed0fa4070a0c9ed718230261942358c39394a343a3ccc64e2a';Label='launcher'}
     )) {
         if ((Get-C1bCandidateSourceHash ([string]$sourceBinding.Source)) -cne $sourceBinding.Hash) {

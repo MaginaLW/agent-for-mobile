@@ -523,6 +523,8 @@ try {
                 Environment = $Environment
                 ClearEnvironment = [bool]$ClearEnvironment
                 AllowFailure = [bool]$AllowFailure
+                TimeoutSec = $TimeoutSec
+                Operation = $Operation
             }
             return [pscustomobject]@{ ExitCode = 0; Bytes = [byte[]]@(); Text = ''; Stderr = '' }
         }
@@ -530,7 +532,12 @@ try {
             -RepoRoot $RepoRoot `
             -Arguments @('status','--porcelain=v1') `
             -GitPath 'X:\Git\cmd\git.exe' `
-            -ProcessEnvironment @{PATH='controlled-git-path';SYSTEMROOT='controlled-root'} `
+            -ProcessEnvironment @{
+                PATH='controlled-git-path';SYSTEMROOT='controlled-root'
+                GIT_CONFIG_NOSYSTEM='unsafe';GIT_CONFIG_GLOBAL='unsafe'
+                GIT_CONFIG_COUNT='unsafe';GIT_OPTIONAL_LOCKS='unsafe'
+                GIT_TERMINAL_PROMPT='unsafe';GCM_INTERACTIVE='unsafe'
+            } `
             -ClearEnvironment -AllowFailure)
         $capture = $script:GitProcessCapture
         Assert-True ($capture.FilePath -ceq 'X:\Git\cmd\git.exe' -and
@@ -542,8 +549,15 @@ try {
             $capture.Environment.GIT_CONFIG_COUNT -ceq '0' -and
             $capture.Environment.GIT_TERMINAL_PROMPT -ceq '0' -and
             $capture.Environment.GCM_INTERACTIVE -ceq 'Never' -and
-            $capture.Environment.GIT_OPTIONAL_LOCKS -ceq '0') `
-            'C1a Git wrapper 未完整下传 controlled/cleared environment。'
+            $capture.Environment.GIT_OPTIONAL_LOCKS -ceq '0' -and
+            $capture.TimeoutSec -eq 30 -and
+            $capture.Operation -ceq 'Git provenance 复核' -and
+            ($capture.Arguments -join "`n") -ceq (@(
+                '--no-optional-locks','-c','core.autocrlf=true',
+                '-c','core.fsmonitor=false','-c','core.untrackedCache=false',
+                '-c','core.hooksPath=NUL','-C',$RepoRoot,'status','--porcelain=v1'
+            ) -join "`n")) `
+            'C1a Git wrapper 未 exact 固定 checkout policy/argv/预算或完整下传 controlled/cleared environment。'
     }
 
     Test-Case 'synthetic ordinary tree catalog 可冻结且 held handles deny write/delete' {
@@ -828,7 +842,7 @@ try {
                 '-Pkotlin.project.persistent.dir.gradle.disableWrite=true'
             ) -join "`n")) 'Gradle controlled arguments 漂移。'
             Assert-True ((Get-TL1C1bBuildEnvironmentGitBaseArguments) -join "`n" -ceq `
-                (@('-c','core.fsmonitor=false','-c','core.untrackedCache=false','-c',
+                (@('-c','core.autocrlf=true','-c','core.fsmonitor=false','-c','core.untrackedCache=false','-c',
                     'core.hooksPath=NUL','--no-optional-locks') -join "`n")) `
                 'Git controlled base arguments 漂移。'
             $post = Complete-TL1C1bBuildEnvironmentBootstrap `

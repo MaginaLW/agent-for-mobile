@@ -872,7 +872,7 @@ Test-Case 'actual pair renderer derives the final repository helper and rejects 
     Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Wrong expected hash reached the publication boundary.'
 
     # 冷 CLI 执行整个 Pair renderer，包括 bootstrap、真实 no-follow handles 和发布。
-    # 只生成合成 pair；生成的 helper/launcher 与 smoke verifier 从不执行。
+    # 只生成合成 pair；helper/launcher 本体与 smoke verifier 不执行，后续只提取 Git 子集作真实回归。
     $pwshPath = [Environment]::ProcessPath
     Assert-Test ([OperatingSystem]::IsWindows() -and $PSVersionTable.PSVersion.ToString() -ceq '7.6.5') 'Pair CLI regression requires pinned Windows PowerShell 7.6.5.'
     $fixtureParent = [IO.Path]::Combine($repository,'.checks','renderer-path-fix-r1')
@@ -957,6 +957,262 @@ Test-Case 'actual pair renderer derives the final repository helper and rejects 
         }
         Assert-Test (@([IO.Directory]::EnumerateFiles($fixtureStage)).Count -eq 2 -and
             @([IO.Directory]::EnumerateFileSystemEntries([IO.Path]::Combine($fixtureRepo,'.checks'))).Count -eq 0) 'Rejected Pair CLI replacement created temporary/smoke outputs.'
+        # 真实 helper/C1a/base-argv 子集只执行 Git；不执行 helper/build 的 native guards、Gradle 或设备。
+        $eolRoot=[IO.Path]::Combine($fixtureRoot,'git-eol matrix')
+        $null=[IO.Directory]::CreateDirectory($eolRoot)
+        $eolGit=[IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),'Git','cmd','git.exe')
+        Assert-Test ([IO.File]::Exists($eolGit)) 'Actual Git installation is required for the EOL matrix.'
+        $eolUtf8=[Text.UTF8Encoding]::new($false,$true)
+        $eolLf=[string][char]10
+        $eolCrlf=[string][char]13+[char]10
+        $eolRuns=[Collections.Generic.List[object]]::new()
+        $eolMatrix=[Collections.Generic.List[object]]::new()
+        $eolSourceBindings=[Collections.Generic.List[object]]::new()
+        function Get-EolRawPin([string]$Path){
+            $raw=[IO.File]::ReadAllBytes($Path)
+            return @{path=$Path;byte_length=$raw.Length;sha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($raw)).ToLowerInvariant()}
+        }
+        function Import-EolProductionFunction([string]$Source,[string]$Name,[string]$SourcePath){
+            $ast=Get-C1bCandidateSourceAst $Source
+            $definitions=@($ast.EndBlock.Statements|Where-Object{
+                $_-is[Management.Automation.Language.FunctionDefinitionAst]-and$_.Name-ceq$Name
+            })
+            Assert-Test ($definitions.Count-eq1) "EOL production function is not unique: $Name"
+            $eolSourceBindings.Add(@{
+                name=$Name;source_pin=(Get-EolRawPin $SourcePath)
+                function_extent_sha256=(Get-C1bCandidateSourceHash $definitions[0].Extent.Text)
+                execution_scope='exact definition subset; caller fixture dependencies only'
+            })
+            return [scriptblock]::Create($definitions[0].Extent.Text)
+        }
+        $helperLeafSource=$eolUtf8.GetString([IO.File]::ReadAllBytes($record.helper_path))
+        Assert-Test ($helperLeafSource-ceq$cliPair.HelperSource) 'EOL helper extraction is not bound to the actual published leaf.'
+        . (Import-EolProductionFunction $helperLeafSource 'Invoke-SmokeBootstrapGit' $record.helper_path)
+        $helperGitFunction=Get-Command Invoke-SmokeBootstrapGit -CommandType Function
+        $helperAst=Get-C1bCandidateSourceAst $helperLeafSource
+        $bootstrapHead=@($helperAst.EndBlock.Statements|Where-Object{
+            $_-is[Management.Automation.Language.AssignmentStatementAst]-and$_.Left.Extent.Text-ceq'$bootstrapHead'
+        })
+        $bootstrapStatusStatement=@($helperAst.EndBlock.Statements|Where-Object{
+            $_-is[Management.Automation.Language.AssignmentStatementAst]-and$_.Left.Extent.Text-ceq'$bootstrapStatus'
+        })
+        $bootstrapHeadGuard=@($helperAst.EndBlock.Statements|Where-Object{
+            $_-is[Management.Automation.Language.IfStatementAst]-and$_.Extent.Text.Contains('Smoke bootstrap HEAD drifted:')
+        })
+        $bootstrapCleanGuard=@($helperAst.EndBlock.Statements|Where-Object{
+            $_-is[Management.Automation.Language.IfStatementAst]-and$_.Extent.Text.Contains('Smoke bootstrap requires an exact clean worktree.')
+        })
+        Assert-Test ($bootstrapHead.Count-eq1-and$bootstrapStatusStatement.Count-eq1-and
+            $bootstrapHeadGuard.Count-eq1-and$bootstrapCleanGuard.Count-eq1) 'Actual helper bootstrap gate is not unique.'
+        $helperGateText=[string]::Join($eolLf,@(
+            $bootstrapHead[0].Extent.Text,$bootstrapHeadGuard[0].Extent.Text,
+            $bootstrapStatusStatement[0].Extent.Text,$bootstrapCleanGuard[0].Extent.Text))
+        $helperGate=[scriptblock]::Create($helperGateText)
+        $c1aPath=Join-Path $repository 'scripts/lib/tablet-layout-c1a.ps1'
+        $c1aSource=$eolUtf8.GetString([IO.File]::ReadAllBytes($c1aPath))
+        foreach($name in @('Invoke-TL1C1aGit','Assert-TL1C1aGitProvenance','Get-TL1C1aWorkingTextBlobSha1')){
+            . (Import-EolProductionFunction $c1aSource $name $c1aPath)
+        }
+        $c1aGitFunction=Get-Command Invoke-TL1C1aGit -CommandType Function
+        $c1aProvenanceFunction=Get-Command Assert-TL1C1aGitProvenance -CommandType Function
+        $c1aAst=Get-C1bCandidateSourceAst $c1aSource
+        $savedProvenanceVariables=@{}
+        foreach($name in @('TL1C1aProducerBaseline','TL1C1aT0Baseline','TL1C1aTrustedBlobs')){
+            $existing=Get-Variable -Name $name -Scope Script -ErrorAction SilentlyContinue
+            $savedProvenanceVariables[$name]=@{exists=($null-ne$existing);value=if($null-ne$existing){$existing.Value}else{$null}}
+            $assignment=@($c1aAst.EndBlock.Statements|Where-Object{
+                $_-is[Management.Automation.Language.AssignmentStatementAst]-and
+                $_.Left.Extent.Text-ceq('$script:'+$name)
+            })
+            Assert-Test ($assignment.Count-eq1) 'Actual C1a trusted constant is not unique.'
+            . ([scriptblock]::Create($assignment[0].Extent.Text))
+        }
+        $buildPath=Join-Path $repository 'scripts/lib/tablet-layout-c1b-build-env.ps1'
+        $buildSource=$eolUtf8.GetString([IO.File]::ReadAllBytes($buildPath))
+        foreach($name in @('Get-TL1C1bBuildEnvironmentGitBaseArguments','New-TL1C1bBuildEnvironmentGitEnvironment')){
+            . (Import-EolProductionFunction $buildSource $name $buildPath)
+        }
+        $buildBaseFunction=Get-Command Get-TL1C1bBuildEnvironmentGitBaseArguments -CommandType Function
+        $buildEnvironmentFunction=Get-Command New-TL1C1bBuildEnvironmentGitEnvironment -CommandType Function
+        $systemDirectory=[Environment]::SystemDirectory
+        $systemRoot=[IO.Directory]::GetParent($systemDirectory).FullName
+        $gitRoot=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($eolGit))
+        $workspaceHome=Join-Path $eolRoot 'workspace-home'
+        $workspaceTemp=Join-Path $eolRoot 'workspace-temp'
+        $null=[IO.Directory]::CreateDirectory($workspaceHome)
+        $null=[IO.Directory]::CreateDirectory($workspaceTemp)
+        $apiGuard=[pscustomobject]@{
+            GitRoot=$gitRoot
+            HostPaths=[pscustomobject]@{SystemRoot=$systemRoot;SystemDirectory=$systemDirectory;CmdPath=(Join-Path $systemDirectory 'cmd.exe')}
+            Workspace=[pscustomobject]@{UserHomeDirectory=$workspaceHome;ProcessTempDirectory=$workspaceTemp}
+        }
+        $actualGitEnvironment=& $buildEnvironmentFunction $apiGuard
+        $baseArguments=@(& $buildBaseFunction)
+        Assert-Test (($baseArguments-join $eolLf)-ceq((@('-c','core.autocrlf=true','-c','core.fsmonitor=false',
+            '-c','core.untrackedCache=false','-c','core.hooksPath=NUL','--no-optional-locks'))-join $eolLf)) 'Actual Git base argv is not exact.'
+        Assert-Test ($actualGitEnvironment.GIT_CONFIG_NOSYSTEM-ceq'1'-and
+            $actualGitEnvironment.GIT_CONFIG_GLOBAL-ceq'NUL'-and$actualGitEnvironment.GIT_CONFIG_COUNT-ceq'0') 'Actual Git environment lost isolation.'
+        function Invoke-EolActualProcess {
+            param([string]$FilePath,[string[]]$Arguments,[string]$Operation,[byte[]]$InputBytes,
+                [hashtable]$Environment,[switch]$ClearEnvironment,[int]$TimeoutSec=30,[switch]$AllowFailure)
+            Assert-Test ($FilePath-ceq$eolGit-and$TimeoutSec-eq30-and$null-eq$InputBytes) 'EOL fixture process boundary changed.'
+            $index=[Array]::IndexOf($Arguments,'-C')
+            if($index-ge0){
+                $worktree=[IO.Path]::GetFullPath($Arguments[$index+1])
+                Assert-Test ($worktree-ceq$eolRoot-or$worktree.StartsWith($eolRoot+'\',[StringComparison]::OrdinalIgnoreCase)) 'EOL fixture Git escaped its root.'
+            }
+            $dir=Join-Path $eolRoot ('native-'+($eolRuns.Count+1).ToString('D3'))
+            $null=[IO.Directory]::CreateDirectory($dir)
+            $child=[Diagnostics.Process]::new()
+            $start=[Diagnostics.ProcessStartInfo]::new()
+            $start.FileName=$FilePath;$start.WorkingDirectory=$eolRoot
+            $start.UseShellExecute=$false;$start.CreateNoWindow=$true
+            $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+            foreach($arg in $Arguments){$start.ArgumentList.Add($arg)}
+            if($ClearEnvironment){$start.Environment.Clear()}
+            foreach($name in $Environment.Keys){$start.Environment[$name]=[string]$Environment[$name]}
+            $child.StartInfo=$start
+            $out=[IO.MemoryStream]::new();$err=[IO.MemoryStream]::new()
+            $started=$false;$natural=$false;$outEof=$false;$errEof=$false;$nativeExit=$null;$observedPid=$null
+            try{
+                $started=$child.Start();Assert-Test $started 'EOL fixture native start failed.'
+                $observedPid=$child.Id
+                $outTask=$child.StandardOutput.BaseStream.CopyToAsync($out)
+                $errTask=$child.StandardError.BaseStream.CopyToAsync($err)
+                Assert-Test ($child.WaitForExit(30000)) 'EOL fixture native timeout.'
+                $natural=$true;$nativeExit=$child.ExitCode
+                Assert-Test ([Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($outTask,$errTask),5000)) 'EOL fixture native streams missing EOF.'
+                $outEof=$outTask.IsCompletedSuccessfully;$errEof=$errTask.IsCompletedSuccessfully
+                $outBytes=$out.ToArray();$errBytes=$err.ToArray()
+                [IO.File]::WriteAllBytes((Join-Path $dir 'stdout.bin'),$outBytes)
+                [IO.File]::WriteAllBytes((Join-Path $dir 'stderr.bin'),$errBytes)
+                $observation=@{
+                    operation=$Operation;arguments=$Arguments;process_id=$observedPid;native_exit_code=$nativeExit
+                    natural_exit=$natural;stdout_copy_eof=$outEof;stderr_copy_eof=$errEof
+                    environment_cleared=[bool]$ClearEnvironment;formal_native_job_capture=$false
+                    stdout_pin=(Get-EolRawPin (Join-Path $dir 'stdout.bin'));stderr_pin=(Get-EolRawPin (Join-Path $dir 'stderr.bin'))
+                }
+                $eolRuns.Add($observation)
+                [IO.File]::WriteAllText((Join-Path $dir 'observation.json'),($observation|ConvertTo-Json -Depth 8),$eolUtf8)
+                if(-not$AllowFailure){Assert-Test ($nativeExit-eq0) "EOL fixture Git native exit $nativeExit"}
+                return [pscustomobject]@{ExitCode=$nativeExit;Bytes=$outBytes;Text=$eolUtf8.GetString($outBytes);Stderr=$eolUtf8.GetString($errBytes)}
+            }finally{
+                if($started-and-not$child.HasExited){$child.Kill($true);Assert-Test ($child.WaitForExit(5000)) 'EOL fixture child did not terminate.'}
+                $child.Dispose();$out.Dispose();$err.Dispose()
+            }
+        }
+        # C1a wrapper 原样调用生产 FI；仅底层进程边界接到真实 fixture Process，而非伪造 Git 返回。
+        $actualProcess=Get-Command Invoke-EolActualProcess -CommandType Function
+        function Invoke-TL1C1aProcess {
+            param([string]$FilePath,[string[]]$Arguments,[string]$Operation,[byte[]]$InputBytes,
+                [hashtable]$Environment,[switch]$ClearEnvironment,[int]$TimeoutSec,[switch]$AllowFailure)
+            return & $actualProcess @PSBoundParameters
+        }
+        function Invoke-EolFixtureGit([string]$Worktree,[string[]]$Arguments,[hashtable]$Environment=$actualGitEnvironment){
+            return & $actualProcess -FilePath $eolGit -Arguments (@('--no-optional-locks','-c','core.hooksPath=NUL','-C',$Worktree)+$Arguments) -Operation 'EOL fixture construction/control' -Environment $Environment -ClearEnvironment -TimeoutSec 30
+        }
+        function Invoke-EolHelperGate([string]$Worktree,[string]$Head){
+            $RepoRoot=$Worktree;$GitPath=$eolGit;$ExpectedCommitSha=$Head
+            $script:SmokeBootstrapGitCount=0L
+            . $helperGate
+            Assert-Test ($script:SmokeBootstrapGitCount-eq2L) 'Actual helper bootstrap did not perform its two queries.'
+            return [string]$bootstrapStatus
+        }
+        function Assert-EolProductionViews([string]$Label,[string]$Worktree,[string]$Head,[bool]$Clean){
+            $helperFailure=$null;$helperText=$null
+            try{$helperText=Invoke-EolHelperGate $Worktree $Head}catch{$helperFailure=$_.Exception.Message}
+            $c1a=& $c1aGitFunction -RepoRoot $Worktree -Arguments @('status','--porcelain=v1','--untracked-files=all') -GitPath $eolGit -ProcessEnvironment $actualGitEnvironment -ClearEnvironment
+            $build=& $actualProcess -FilePath $eolGit -Arguments ($baseArguments+@('-C',$Worktree,'status','--porcelain=v1','--untracked-files=all')) -Operation 'EOL build base argv API only' -Environment $actualGitEnvironment -ClearEnvironment -TimeoutSec 30
+            if($Clean){
+                Assert-Test ($null-eq$helperFailure-and$helperText.Length-eq0-and$c1a.Text.Length-eq0-and$build.Text.Length-eq0) "Clean checkout rejected by production Git view: $Label"
+            }else{
+                Assert-Test ($helperFailure-match'Smoke bootstrap requires an exact clean worktree'-and$c1a.Text.Length-gt0-and$build.Text.Length-gt0) "Dirty checkout accepted by production Git view: $Label"
+            }
+            $before=$eolRuns.Count
+            $provenanceFailure=$null
+            try{& $c1aProvenanceFunction -RepoRoot $Worktree -ExpectedCommitSha $Head -GitPath $eolGit -ProcessEnvironment $actualGitEnvironment -ClearEnvironment|Out-Null}
+            catch{$provenanceFailure=$_.Exception.Message}
+            if($Clean){
+                Assert-Test ($provenanceFailure-match'缺少受信 baseline commit object'-and$eolRuns.Count-$before-eq3) 'Clean-gate positive must still reject the actual absent trusted baseline; no full provenance pass is asserted.'
+            }else{
+                Assert-Test ($provenanceFailure-match'工作树不干净'-and$eolRuns.Count-$before-eq2) 'Real C1a provenance dirty gate did not reject before trusted-baseline queries.'
+            }
+            $eolMatrix.Add(@{label=$Label;clean_gate_expected=$Clean;helper_status=$helperText;helper_failure=$helperFailure
+                helper_native_query_count=$script:SmokeBootstrapGitCount;helper_child_pid=$null
+                helper_child_pid_observation='production function exposes no PID; not inferred'
+                c1a_status=$c1a.Text;build_base_api_status=$build.Text;full_provenance_failure=$provenanceFailure
+                full_provenance_passed=$false;full_build_guard_tested=$false})
+        }
+        try{
+            $globalFixtureConfig=Join-Path $eolRoot 'global-config.fixture'
+            [IO.File]::WriteAllText($globalFixtureConfig,"[core]"+$eolLf+"    autocrlf = true"+$eolLf,$eolUtf8)
+            $globalFixtureEnvironment=$actualGitEnvironment.Clone()
+            $globalFixtureEnvironment.GIT_CONFIG_GLOBAL=$globalFixtureConfig
+            $plainSource=Join-Path $eolRoot 'lf-source'
+            $attrsSource=Join-Path $eolRoot 'attrs-lf-source'
+            $ordinaryClone=Join-Path $eolRoot 'true-checkout-clone'
+            $attrsClone=Join-Path $eolRoot 'attrs-lf-clone'
+            $canonicalText="Write-Output 'fixture-original'"+$eolLf+"Write-Output 'second-line'"+$eolLf
+            foreach($source in @($plainSource,$attrsSource)){
+                $null=[IO.Directory]::CreateDirectory($source)
+                $null=Invoke-EolFixtureGit $source @('init','--initial-branch=main')
+                $null=Invoke-EolFixtureGit $source @('config','--local','user.name','C1b offline fixture')
+                $null=Invoke-EolFixtureGit $source @('config','--local','user.email','fixture@example.invalid')
+                [IO.File]::WriteAllText((Join-Path $source 'fixture.ps1'),$canonicalText,$eolUtf8)
+                $add=@('-c','core.autocrlf=false','add','--','fixture.ps1')
+                if($source-ceq$attrsSource){
+                    [IO.File]::WriteAllText((Join-Path $source '.gitattributes'),'* text eol=lf'+$eolLf,$eolUtf8)
+                    $add=@('-c','core.autocrlf=false','add','--','.gitattributes','fixture.ps1')
+                }
+                $null=Invoke-EolFixtureGit $source $add
+                $null=Invoke-EolFixtureGit $source @('commit','-m','offline Git EOL fixture')
+                $blob=Invoke-EolFixtureGit $source @('show','HEAD:fixture.ps1')
+                Assert-Test ($blob.Text-ceq$canonicalText) 'Synthetic Git commit does not contain the actual canonical LF blob.'
+            }
+            foreach($pairing in @(@($plainSource,$ordinaryClone),@($attrsSource,$attrsClone))){
+                $null=Invoke-EolFixtureGit $eolRoot @('clone','--no-local','--no-checkout','--',$pairing[0],$pairing[1]) $globalFixtureEnvironment
+                $null=Invoke-EolFixtureGit $pairing[1] @('checkout','--force','main') $globalFixtureEnvironment
+                $null=Invoke-EolFixtureGit $pairing[1] @('config','--local','core.autocrlf','false')
+            }
+            $ordinaryFile=Join-Path $ordinaryClone 'fixture.ps1'
+            $attrsFile=Join-Path $attrsClone 'fixture.ps1'
+            $ordinaryBefore=Get-EolRawPin $ordinaryFile
+            Assert-Test ($eolUtf8.GetString([IO.File]::ReadAllBytes($ordinaryFile))-ceq$canonicalText.Replace($eolLf,$eolCrlf)) 'Fixture did not actually checkout CRLF under private globaltrue.'
+            Assert-Test ($eolUtf8.GetString([IO.File]::ReadAllBytes($attrsFile))-ceq$canonicalText) 'Explicit attributes fixture did not actually checkout LF.'
+            [IO.File]::SetLastWriteTimeUtc($ordinaryFile,[IO.File]::GetLastWriteTimeUtc($ordinaryFile).AddSeconds(3))
+            [IO.File]::SetLastWriteTimeUtc($attrsFile,[IO.File]::GetLastWriteTimeUtc($attrsFile).AddSeconds(3))
+            Assert-Test ((Get-EolRawPin $ordinaryFile).sha256-ceq$ordinaryBefore.sha256) 'Metadata-only change altered CRLF bytes.'
+            $ordinaryHead=(Invoke-EolFixtureGit $ordinaryClone @('rev-parse','HEAD')).Text.Trim()
+            $attrsHead=(Invoke-EolFixtureGit $attrsClone @('rev-parse','HEAD')).Text.Trim()
+            $control=Invoke-EolFixtureGit $ordinaryClone @('status','--porcelain=v1','--untracked-files=all')
+            Assert-Test ($control.Text-ceq(' M fixture.ps1'+$eolLf)) 'Unfixed isolated configuration did not reproduce the EOL dirty gate.'
+            Assert-EolProductionViews 'CRLF checkout/localfalse/globalNUL/NOSYSTEM1/mtime invalidated' $ordinaryClone $ordinaryHead $true
+            Assert-EolProductionViews 'explicit attributes LF/localfalse/globalNUL/NOSYSTEM1' $attrsClone $attrsHead $true
+            [IO.File]::WriteAllText($ordinaryFile,$canonicalText.Replace('fixture-original','real-content-change').Replace($eolLf,$eolCrlf),$eolUtf8)
+            Assert-EolProductionViews 'CRLF real content modification' $ordinaryClone $ordinaryHead $false
+            $null=Invoke-EolFixtureGit $ordinaryClone @('-c','core.autocrlf=true','checkout','--force','--','fixture.ps1')
+            [IO.File]::WriteAllText((Join-Path $ordinaryClone 'untracked.fixture'),'must reject'+$eolLf,$eolUtf8)
+            Assert-EolProductionViews 'CRLF untracked file' $ordinaryClone $ordinaryHead $false
+            [IO.File]::WriteAllText($attrsFile,$canonicalText.Replace('fixture-original','real-content-change'),$eolUtf8)
+            Assert-EolProductionViews 'LF real content modification' $attrsClone $attrsHead $false
+            $null=Invoke-EolFixtureGit $attrsClone @('checkout','--force','--','fixture.ps1')
+            [IO.File]::WriteAllText((Join-Path $attrsClone 'untracked.fixture'),'must reject'+$eolLf,$eolUtf8)
+            Assert-EolProductionViews 'LF untracked file' $attrsClone $attrsHead $false
+            $eolReport=@{schema='c1b-production-git-eol-regression/v1';status='offline_matrix_passed'
+                source_bindings=$eolSourceBindings.ToArray();matrix=$eolMatrix.ToArray();native_queries=$eolRuns.ToArray()
+                unfixed_control_status=$control.Text;ordinary_crlf_initial_pin=$ordinaryBefore
+                actual_production_helper_function=$true;actual_production_c1a_function=$true;actual_provenance_dirty_guard=$true
+                actual_build_environment_base_argument_api=$true;complete_build_guard_executed=$false
+                trusted_baseline_constants_substituted=$false;full_provenance_passes=0
+                production_helper_body_executed=$false;gradle_or_adb_calls=0;frozen_candidate_git_calls=0}
+            [IO.File]::WriteAllText((Join-Path $eolRoot 'production-matrix.json'),($eolReport|ConvertTo-Json -Depth 12),$eolUtf8)
+            Write-Output ('Production Git EOL matrix: '+$eolMatrix.Count+' scenarios, actual helper/C1a/base-argv paths; '+$eolRoot)
+        }finally{
+            foreach($name in $savedProvenanceVariables.Keys){
+                if($savedProvenanceVariables[$name].exists){Set-Variable -Name $name -Scope Script -Value $savedProvenanceVariables[$name].value}
+                else{Remove-Variable -Name $name -Scope Script -ErrorAction SilentlyContinue}
+            }
+        }
         Write-Output ('Pair CLI fixture: first exit 0, second exit '+$secondCli.Exit+', bytes/read-only/no-replace verified; '+$fixtureRoot)
     }
     finally {

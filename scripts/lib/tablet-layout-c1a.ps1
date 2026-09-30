@@ -282,6 +282,7 @@ function Invoke-TL1C1aGit {
     )
     $gitArguments = @(
         '--no-optional-locks',
+        '-c', 'core.autocrlf=true',
         '-c', 'core.fsmonitor=false',
         '-c', 'core.untrackedCache=false',
         '-c', 'core.hooksPath=NUL',

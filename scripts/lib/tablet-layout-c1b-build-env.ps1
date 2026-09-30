@@ -3358,6 +3358,8 @@ function Get-TL1C1bBuildEnvironmentGradleArguments {
 function Get-TL1C1bBuildEnvironmentGitBaseArguments {
     return [string[]]@(
         '-c'
+        'core.autocrlf=true'
+        '-c'
         'core.fsmonitor=false'
         '-c'
         'core.untrackedCache=false'
