@@ -2,7 +2,7 @@
 
 > 2026-09-30：已按用户“设立goal，授权充分的权限和批准，完成这些待办任务，多调用sub-agent”建立持续 goal，推进待办实现、新候选准备、受控主机执行、证据与必要源码发布。每次真实启动仍绑定完整候选 SHA、运行时和 launcher raw hash，一次启动、自动重试 `0`；发送、支付、删除等临界操作保留手机可见两段式确认。见[本轮 goal 与证据记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 >
-> 协调源码 `e0fcbb2` 已闭合 P3 候选维护源回退、主机双流与显式子进程环境、R3 真实终态身份派生及一次封存的离线实现；源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过。新增 A1、提升启动、独立 BuildOnly reader、raw 封存和设备入口维护源已有实现与离线证据；正式主机合同及最终依赖整合复验仍待完成。这些记录不代表新候选通过。
+> 协调源码 `e0fcbb2` 已闭合 P3 候选维护源回退、主机双流与显式子进程环境、R3 真实终态身份派生及一次封存的离线实现；源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过。新增 A1、提升启动、独立 BuildOnly reader、raw 封存和设备入口维护源已有实现与离线证据；正式主机合同仍待完成；本轮源码整合完整门及独立 Read 的实际结论见下文，专项不替代设备验收。
 >
 > 原候选 058 完整门 11 PASS / 3 FAIL、812 完整门 13 PASS / 1 FAIL 均保留。派单 native 延迟初始化及确认轮询竞态已分别修复，专项验证通过；`16d66c9f64ae593d6c87c46a800c6bfd66f62bf8` 首次完整门实际 exit `1`，8 PASS / 6 FAIL。Android 1170 项 JVM、全部 lint/build 组通过；派单 52/55、监督 runner 83/87，capture 反例缺双 EOF，intake 超时、C1a 失败，C1b verifier 明确报 Win32“系统资源不足”。首次日志与现场读取元信息保留；私有排空诊断 9/9、exit `0` 不替代完整门，各失败根因尚未全部核定。以下复验结果和新候选为当前续办来源，均未建立新冻结主机链、BuildOnly 或 Ready。
 >
@@ -10,11 +10,13 @@
 >
 > 复验开跑日志确认自动清扫了 91 个旧目录，首次 4 个失败 fixture 路径已不存在；此前只保留日志与现场读取元信息，未复制 fixture 原字节，缺失原件不补造。本轮实际 KEEP 的 95 根已保存 3579 份普通文件只读副本并逐项读回，1 个 reparse 节点仅保存元信息、不跟随目标。保留模式跳过开跑清扫的修复提交协调 `c78862b`、实现 `4a65150db9826d668341ad6d9b11cb9883f5c524`，实际 AST mock 作者 4/4、独审 16/16，87 个用例与时限不变。新普通 clone clean、无 alternates、两枚受信 baseline object 可读；源码角色与发布定义已按新 SHA 完成 source-only 独审，无确定 P0/P1。准备结果不代表候选通过，实际完整门进度见下。
 >
-> Goal 已恢复 active。新四点资源窗口可用 10.7–11.1 GiB、commit 为上限的 47.95%–48.46%；两个旧 PID 未观察到，原因未知，未调整用户计算。4a 的 clean、受信对象、输入 pins 与核定 7.6.5 环境摘要重新核对通过；已在实际会话 39744 串行启动完整 `-Shards 1` 检查，保留 Gradle 和 fixture。最终退出、14 项汇总及独立 Read 尚未取得；没有新 A1、BuildOnly 或 Ready。129 项准备及旧失败均保留，见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> Goal 已恢复 active。新四点资源窗口可用 10.7–11.1 GiB、commit 为上限的 47.95%–48.46%；两个旧 PID 未观察到，原因未知，未调整用户计算。4a 的 clean、受信对象、输入 pins 与核定 7.6.5 环境摘要重新核对通过；实际会话 39744 的完整 `-Shards 1` 检查已自然 exit `0`，14 PASS / 0 FAIL / 0 SKIP，runner 87 PASS / 0 FAIL，Android 219 个任务全部 executed，Gradle 与 fixture 保留。root producer PID 25900、独立 reader PID 28212 均 native `0`，双流 EOF、cleanup failure `0`、Job active `0`、自动重试 `0`；Read 核对 13 个输入 pin，实际阶段 native `0`。129 项准备及旧失败均保留，见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+>
+> 4a 的 A1 已实际 native `0`：460 个 tracked、42 个 implementation 输入及 4 次真实 Git 查询核对完成，四层实际捕获均 native `0`、双流 EOF、cleanup failure `0`、Job active `0`。本次 3 个 synthetic 标记日志及 1359 份 probe build 文件已移至 FullCheck 的 owned-output-quarantine 保全并逐项 hash 读回，无删除、原 build 路径不存在且 marker 为 `0`。PrepareSources 已实际 Run 和独立 Read native `0`，生成 5 份绑定 exact 4a 的 expected/renderer 源码；生成源码独审进行中，Pair/r14/Preflight/BuildOnly/Ready/设备均未运行。
 >
 > 最小启动诊断实际孩子在 1000 ms 窗内自然 native `0`、elapsed 840 ms、双 EOF/Job 清理完成；诊断 CLI 错把 JSON `Int64` PID 拒为非 `[int]`，driver/group 实际 exit `1`，预热没有启动。原件保留、不重跑；新 reader 仅离线修正，不能解释原 intake 失败或替代完整门。private ADB server 单 case 定义已完成 source-only 独审、无确定 P0/P1，实际诊断未运行，旧 final_substage 仍 unknown。
 >
-> R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`。后续复验失败、fixture 保全、新 4a 输入准备及诊断记录已作为独立单文件增量，由 [PR #3](https://github.com/MaginaLW/agent-for-mobile/pull/3) 合入 main `030db3238cd08eadd3f9e652c5dd57ab4e233088`；Git 与 GitHub 的 PR、父提交、完整 tree 和 blob 读回一致，精确只有一份文档变化。仓库无配置 CI，未声明 CI 通过；功能候选、完整 R6 文档依赖包及新主机链仍待闭合。
+> R6 的三份文档增量已由 [PR #2](https://github.com/MaginaLW/agent-for-mobile/pull/2) 合入 main `20398130c27bb7038f0d7ffc37851d7e2b82a6cf`。后续复验失败、fixture 保全、新 4a 输入准备及诊断记录已作为独立单文件增量，由 [PR #3](https://github.com/MaginaLW/agent-for-mobile/pull/3) 合入 main `030db3238cd08eadd3f9e652c5dd57ab4e233088`；Git 与 GitHub 的 PR、父提交、完整 tree 和 blob 读回一致，精确只有一份文档变化。仓库无配置 CI，未声明 CI 通过。通过完整门的 [4a 功能源码](https://github.com/MaginaLW/agent-for-mobile/tree/4a65150db9826d668341ad6d9b11cb9883f5c524) 已在实际会话 82517 自然 exit `0` 后完成一次 create-only 特性分支发布，远端 Git 读回精确对应该 SHA；main 更新、强推、自动重试均为 `0`，尚未合入 main。完整 R6 文档依赖包及新主机链仍待闭合。
 >
 > 旧冻结候选 `4b37f344d5af988ce9b2f7610df98387a49cd2d0` 的唯一 UAC BuildOnly 已实际退出 `0`，提升令牌成立，launcher/helper 各一次、重试 `0`。独立读回 `accepted_no_device`，57 项输入 pins 再读一致，69 份原始材料封存；ADB/安装/T0/采集均为 `0`，授权已消费，同 SHA 不重跑。PC Suite `closeMode` 已精确恢复，应用 UI 未动态验证；见[旧候选主机结果](docs/runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md)。
 >
