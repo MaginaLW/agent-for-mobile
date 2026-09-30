@@ -1510,7 +1510,11 @@ try {
         $prompted = $false
         $notificationState = $null
         while ([DateTime]::UtcNow -lt $deadline) {
+            # 先记退出快照，再读最终状态：本次空读取之后刚好写入并退出的
+            # dispatch，仍应有机会在原截止时间内由下一次读取验证决定。
+            $dispatchExitedBeforeStateRead = $dispatchHandle.Process.HasExited
             $state = Get-P0ConfirmationState -Session $session
+            if ([DateTime]::UtcNow -ge $deadline) { break }
             if ($null -ne $state) {
                 if ([string]$state.run_id -cne $runId) { throw "$leg 腿确认状态 run_id 不匹配。" }
                 if ([string]$state.tool -cne 'press_key') { throw "$leg 腿确认状态工具不匹配。" }
@@ -1549,7 +1553,7 @@ try {
                     throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
                 }
             }
-            if ($dispatchHandle.Process.HasExited) { break }
+            if ($dispatchExitedBeforeStateRead) { break }
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
