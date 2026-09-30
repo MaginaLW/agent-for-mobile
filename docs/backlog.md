@@ -73,7 +73,7 @@ T-L2、语义意图生产接线、分享落地及其他真机项继续使用本�
 
 协调源码 `e0fcbb2` 已补齐 P3 维护源回退、显式 child environment/双流传输及 R3 真实终态身份派生与一次 Freeze 的离线实现。源码专项 `16 passed, 0 skipped`，capture `13/13`、104 项断言，阶段 Run/Read `10/10`、81 项断言，R3 `14/14`、70 项断言及补充反例通过；失败原日志保留，未观察的历史 EOF 不补造。
 
-新增 A1 producer、提升 wrapper、独立 BuildOnly reader、raw sealer 和设备入口维护源已有实现与独立离线证据；部分专项绑定受测依赖快照，设备入口专项 stub 主机合同。实现已提交为新候选 `058faaa3a837fc69b0067c8faf165615d548b614`，建立独立对象库的普通 clone，42 项实际 raw/canonical 输入独审通过。首次 FullCheck 实际 exit `1`，11 PASS / 3 FAIL；派单 4 项超时、lint 内部异常与监督 runner 1 项确认超时串行诊断后，仍须同 SHA 完整门通过才能启动真实 A1 和后续主机链。旧冻结 `4b37f34` 保持只读，不重跑。
+新增 A1 producer、提升 wrapper、独立 BuildOnly reader、raw sealer 和设备入口维护源已有实现与独立离线证据；部分专项绑定受测依赖快照，设备入口专项 stub 主机合同。原候选 `058faaa` 首次完整门实际 exit `1`、11 PASS / 3 FAIL；随后同 SHA 派单诊断 48/5，四个 lint 变体单 worker 复验实际 exit `0`，原失败保留。原生助手延迟编译及类型归属修复已通过冷加载 8/8、可变实现派单 55/55 和监督 runner 错误文本/摘要反例。新候选 `8120401df96450b7c9015a6483eff8aa02579b96` 已形成独立普通 clone，14 组 FullCheck 单分片、单 Gradle worker 运行中；通过后才启动实际 A1 与后续主机链。旧冻结 `4b37f34` 保持只读，不重跑。
 
 **09-28 进度：** R3 设备发现证据 consumer/reader/freezer 已在实现分支提交
 `7c5511621f9972f2bf2877591e6d19e3b69e7593`，无设备离线测试 9/9、26 项断言通过，真实 ADB/设备调用 0。
@@ -136,7 +136,7 @@ raw 保全已完成，不能冒充正式终态封存门；R3 仍须可信 `disco
 
 | 工作 | 当前证据 | 下一步与边界 |
 |---|---|---|
-| **C1b display context 回退及设备发现证据（含 P1 · R3）** | 旧 `7c55116` 参数绑定失败、`14edb4a` 管理员令牌失败已封存；`4b37f34` 唯一 BuildOnly/独立读回/raw 封存通过且已消费。协调 `e0fcbb2` 已接真实终态身份派生与一次封存，R3 离线 `14/14`、70 项断言及补充反例通过；runner 早期失败引用已纳入新候选 `058faaa`，受控 fake-ADB 门实际 32/32 | 新候选首次完整门 exit `1`、11 PASS / 3 FAIL，失败诊断与同 SHA 复验进行中；通过后依次完成实际主机链、正式合同、设备入口与 Ready。没有 Ready/r2，原零设备根因未知，显示回退未获真机验收。见[goal 与证据](runs/2026-09-30-C1b-goal与正式证据闭合.md)及[旧候选主机结果](runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md) |
+| **C1b display context 回退及设备发现证据（含 P1 · R3）** | 旧 `7c55116`、`14edb4a` 失败已封存；`4b37f34` 唯一 BuildOnly/独立读回/raw 封存通过且已消费。R3 离线 `14/14`、70 项断言及补充反例通过；runner 早期失败引用和受控 fake-ADB 32/32 已接线；新增原生助手延迟编译通过 8 项冷加载、派单 55/55、runner 错误文本/摘要反例 | 原 `058faaa` 完整门 11 PASS / 3 FAIL 保留；新 `8120401` 独立普通 clone 完整门单分片运行中。通过后完成实际主机链、正式合同、设备入口与 Ready；没有 Ready/r2，原零设备根因未知，显示回退未获真机验收。见[goal 与证据](runs/2026-09-30-C1b-goal与正式证据闭合.md)及[旧候选主机结果](runs/2026-09-30-C1b-4b37f34-BuildOnly与续办.md) |
 | **语义意图生产接线** | 48f8dd8 已补基础模块及 57 JVM 用例：一次性 store、三时钟、reader 装配、a11y/OCR 三态与绑定内容 | SafetyGate、Android 证据安装、严格执行链及 handler 次数证明未完成；C 队列未清时保持未接线，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) |
 
 **R3 离线闭合范围：** 既有 collector/reader/freezer 的 checkpoint、无 run ID 失败与 raw pins 验证保留；新 terminal discovery 从真实 terminal、observer、binding、一次预约及 stdout 内容引用派生身份，公开 Freeze 再消费原始材料，缺引用或 run 提升未知时保持 unavailable，不按文件名/mtime 猜 ID、不自动重试。协调专项 `14/14`、70 项断言及补充合成/独审反例通过；可变 runner 已补“成功落盘并读回才发布”的 early failure 指针及独立守卫。以上是离线实现证据，实际设备发现、Ready 和显示回退仍待同一新固定候选的真实证据。
@@ -188,7 +188,7 @@ T-L3 的其他多 App 分屏/自由窗及响应式确认 surface、T-P 竖屏兼
 | **手机批次 4** | 67ef56cc8289b34d09843701d7b83986a206ad0e，来源 codex/batch4-precheck-unify | **暂停，仍 0/4，未判定、未合 main**；八条手机历史保留，不自行重跑或计入平板失败 |
 | **T0-L 入场** | 4ca32b131007df58f7752c5ee9b2d049cb1cd54e，已合 main a7940d5 | 入场取证已完成；正确 fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | 4b96f89a6622eb8b5fe04bd249571c7d77936b25 | origin/read-only 成立，diagnostic blocked、七项 blocker 保留；T-L1 未通过、app 未合 main，转 C1b |
-| **T-L1 / C1b** | 旧 c43652a/r1 display/unsupported、a878d12/r1 零设备均失败封存；`4b37f34` 唯一 BuildOnly/raw 封存通过且已消费；新固定候选 `058faaa` 已形成普通 clone，受控 fake-ADB 门 32/32 | 首次完整门 exit `1`、11 PASS / 3 FAIL，待失败诊断与完整门复验后启动实际主机链；正式合同、设备入口、Ready/r2 均未建立。用户 USB 与目标现场陈述不能替代唯一设备发现；原调用点、操作次数及零设备根因仍未知，显示回退和采集未验收，旧消费候选不重跑 |
+| **T-L1 / C1b** | 旧 c43652a/r1 display/unsupported、a878d12/r1 零设备均失败封存；`4b37f34` 唯一 BuildOnly/raw 封存通过且已消费；原 `058faaa` 完整门失败保留；新 `8120401` 已形成独立普通 clone，派单修复专项 55/55 | 新完整门单分片运行中，通过后启动实际主机链；正式合同、设备入口、Ready/r2 均未建立。用户 USB 与目标现场陈述不能替代唯一设备发现；原调用点、操作次数及零设备根因仍未知，显示回退和采集未验收，旧消费候选不重跑 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 和 §4 前置，手机安全门不放宽 |
 
 C1a 证据见 [只读取证成功记录](runs/2026-08-26-T-L1-C1a只读取证成功.md)；
