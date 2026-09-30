@@ -162,6 +162,7 @@ function Invoke-SmokeBootstrapGit {
     }
     foreach ($argument in @(
         '--no-optional-locks',
+        '-c', 'core.autocrlf=true',
         '-c', 'core.fsmonitor=false',
         '-c', 'core.untrackedCache=false',
         '-c', 'core.hooksPath=NUL',

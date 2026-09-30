@@ -35,6 +35,14 @@
    正式 R3 reader/freezer 从真实终态与 stdout 内容指针取 internal attempt/run identity；缺失事实保持 unknown，
    不按 mtime 扫描猜测，失败封存不自动重试。
 
+## 隔离 Git 的换行政策
+
+A1、Preflight、helper bootstrap 与后续 provenance 核对统一在 Git argv 中明确
+`-c core.autocrlf=true`。屏蔽 system/global Git 配置后仍保留该政策，避免普通 CRLF checkout
+因失去主机默认换行转换而被判为内容变更；`.gitattributes` 的显式 LF 或 `-text` 规则仍适用。
+真实内容修改和未跟踪文件继续拒绝，raw implementation pins 仍按实际原始字节核验。
+新候选在 checkout 与冻结前核对这组行为；已消费候选不修改 local config、不重跑 Git 或 BuildOnly。
+
 ## 保留的边界
 
 运行时文件、绝对路径、日志和状态材料放在忽略的证据目录；tracked 文档保留相对指针与原始 hash。
