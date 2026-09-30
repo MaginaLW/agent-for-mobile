@@ -10,8 +10,10 @@ preflight、helper、launcher、Git、构建或 ADB。
 ## 输入与步骤
 
 1. 完成所有代码修改、常驻离线门和最终 clean SHA 固定，再提供完整 40 位 SHA。
-2. `C1B_STAGING_ROOT` 指向已准备的 repo-external 候选输出目录，`C1B_GIT_PATH` 指向本轮核定的
-   `mingw64/bin/git.exe`；helper 另核验同一 Git 安装树的 `cmd/git.exe`。四份维护源、r14 检查源、
+2. `C1B_STAGING_ROOT` 指向已准备的 repo-external 候选输出目录：必须先建立普通空目录并核对路径，
+   源码准备入口不会创建该 staging 目录。`C1B_GIT_PATH` 指向本轮核定 Git 安装树的 `mingw64/bin/git.exe`，
+   使用词法规范的本地绝对路径；入口在读取运行时或生成输出前拒绝 `cmd/git.exe`、其他目录布局、混合斜线及父目录跳转，纯 r14 生成入口复用同一检查。
+   这只提前检查输入路径，不替代后续 raw bytes、no-follow 与完整 Git tree 核验；helper 另核验同一 Git 安装树的 `cmd/git.exe`。四份维护源、r14 检查源、
    verifier、PowerShell 及 Utility DLL 是受控输入；
    维护源 hash 在转换函数中固定，准备记录列出本轮输入 hash。helper 的七份库（c1a、validator、c1b、artifact、
    aapt2、build、runner）按最终仓库实际 raw bytes 重算，保持唯一顶层 ordered map 的键序、数量和小写 hash，

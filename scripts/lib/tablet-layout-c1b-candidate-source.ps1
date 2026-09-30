@@ -18,6 +18,25 @@ function Get-C1bCandidateSourceHash {
         [Text.UTF8Encoding]::new($false, $true).GetBytes($Source))).ToLowerInvariant()
 }
 
+function Assert-C1bCandidateGitPath {
+    param([Parameter(Mandatory)][string]$Path)
+    if ($Path -cnotmatch '\A[A-Za-z]:\\' -or
+        -not [IO.Path]::IsPathFullyQualified($Path) -or
+        $Path.IndexOf([char]0) -ge 0 -or $Path.IndexOf(':', 2) -ge 0 -or
+        $Path.Length -ge 260 -or
+        -not [StringComparer]::Ordinal.Equals([IO.Path]::GetFullPath($Path), $Path)) {
+        throw 'Candidate GitPath must be a lexically canonical fixed local DOS path.'
+    }
+    $bin = [IO.Path]::GetDirectoryName($Path)
+    $mingw = [IO.Path]::GetDirectoryName($bin)
+    $root = if ([string]::IsNullOrEmpty($mingw)) { $null } else { [IO.Path]::GetDirectoryName($mingw) }
+    if ([string]::IsNullOrEmpty($root) -or
+        -not [StringComparer]::OrdinalIgnoreCase.Equals(
+            $Path, [IO.Path]::Combine($root, 'mingw64', 'bin', 'git.exe'))) {
+        throw 'Candidate GitPath must use its Git tree mingw64\bin\git.exe layout; cmd wrappers are not supported.'
+    }
+}
+
 function Get-C1bCandidateLiteralAssignment {
     param([Parameter(Mandatory)][string]$Source, [Parameter(Mandatory)][string]$Name)
     $ast = Get-C1bCandidateSourceAst $Source
@@ -434,6 +453,7 @@ function Add-C1bPreflightR14ChecksToSource {
         'expectedVerifierSha256','summaryLeaf','logLeaf','launcherResultLeaf','receiptLeaf')) {
         if (-not $Constants.Contains($name)) { throw "Missing exact r14 constant: $name" }
     }
+    Assert-C1bCandidateGitPath $Constants.gitPath
     if ($Constants.expectedCommitSha -cnotmatch '^[a-f0-9]{40}$' -or
         $Constants.expectedCommitShort -cne $Constants.expectedCommitSha.Substring(0,7) -or
         $Constants.expectedPwshSha256 -cne
