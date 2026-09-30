@@ -300,7 +300,7 @@ function New-C1bExactPairCandidateSource {
         throw 'Pinned PowerShell 7.6.5 Utility assembly binding drifted.'
     }
     foreach ($sourceBinding in @(
-        [pscustomobject]@{Source=$BaselineRendererSource;Hash='4d3b031cecabcb09e471d0ac5b60daeeb6ef7aeb7e83290b13ee77a39094443a';Label='renderer'},
+        [pscustomobject]@{Source=$BaselineRendererSource;Hash='5449c0dc0743d868feea5f13515e1e22e11f3fe79b63638ba2302ad9c2990bd5';Label='renderer'},
         [pscustomobject]@{Source=$HelperTemplateSource;Hash='54771ba5a9dc5b32ab964f2f191490c2d73cbc3da3eb34b4c3d1346fa8d593df';Label='helper'},
         [pscustomobject]@{Source=$LauncherTemplateSource;Hash='dafecc5e0c0313ed0fa4070a0c9ed718230261942358c39394a343a3ccc64e2a';Label='launcher'}
     )) {

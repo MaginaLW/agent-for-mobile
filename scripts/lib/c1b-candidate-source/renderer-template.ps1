@@ -6,8 +6,10 @@ $stagingRoot = '__BINDING__'
 $repoRoot = '__BINDING__'
 $commitSha = '__BINDING__'
 $commitShort = '__BINDING__'
-$helperTemplatePath = [IO.Path]::Combine($repoRoot, 'scripts/lib/c1b-candidate-source/helper-template.ps1')
-$launcherTemplatePath = [IO.Path]::Combine($repoRoot, 'scripts/lib/c1b-candidate-source/launcher-template.ps1')
+$helperTemplatePath = [IO.Path]::Combine(
+    $repoRoot, 'scripts', 'lib', 'c1b-candidate-source', 'helper-template.ps1')
+$launcherTemplatePath = [IO.Path]::Combine(
+    $repoRoot, 'scripts', 'lib', 'c1b-candidate-source', 'launcher-template.ps1')
 $helperPath = '__BINDING__'
 $launcherPath = '__BINDING__'
 $helperTemporaryPath = '__BINDING__'
@@ -18,7 +20,7 @@ $summaryPath = '__BINDING__'
 $logPath = '__BINDING__'
 $launcherResultPath = '__BINDING__'
 $verifierPath = [IO.Path]::Combine(
-    $repoRoot, 'scripts\lib\tablet-layout-c1b-real-build-smoke-verifier.ps1')
+    $repoRoot, 'scripts', 'lib', 'tablet-layout-c1b-real-build-smoke-verifier.ps1')
 $pwshPath = '__BINDING__'
 $utilityAssemblyPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($pwshPath), 'Microsoft.PowerShell.Commands.Utility.dll')
 

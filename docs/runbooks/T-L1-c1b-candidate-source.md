@@ -127,10 +127,13 @@ launcher 的 held-byte reader 只接受唯一 `return ,$bytes` AST。运行时 c
 
 两个常驻回归使用 synthetic fixture，并对版本控制的维护源做确定性派生；不依赖历史 staging、
 本机账户路径、Git 安装树或真实设备。源码回归包含 4 个无害 bootstrap 子进程，
-验证进度噪声抑制且真实错误仍被拒绝；
+验证进度噪声抑制且真实错误仍被拒绝；另用钉定 PowerShell 7.6.5 的冷 CLI 实际执行合成 pair renderer，
+核验发布字节与 expected pair 相同、只读，以及同一夹具再次执行时拒绝覆盖且原字节不变。
+夹具只生成被忽略的 helper/launcher，不运行它们、构建或设备操作；
 r14 回归为 1300 条断言、28 个变异拒绝（其中输出流合同 18 个），不启动外部进程。
 源码回归共 16 项，还核验 helper 七库 raw hash、FailureDiagnostics 透传、renderer/expected bytes 一致和 LF/CRLF；
 动态、嵌套、重复、错序或不完整库绑定均拒绝。回归执行生成 r14 的路径检查和目录链清理控制流，覆盖仓库维护模板、错误模板路径、staging 子项逃逸及
-源父目录获取失败；该夹具用内存句柄替身，不发布工件。测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
+源父目录获取失败；r14 夹具用内存句柄替身，不发布工件。Pair/r14 生成的模板与 verifier 路径还实际覆盖 Windows 的不同盘符、中文及空格目录，
+原混合斜线和父目录跳转仍由未放宽的 lexical-canonical guard 拒绝。测试还覆盖源码 AST 精确改写、pre/finally-post 故障顺序，以及真实 Windows no-follow handles、内部/外部 hardlink、
 空文件、reparse、catalog/identity 漂移与字节 canary。维护源的派生测试只能证明源码能够生成和通过 Parser，
 不能升级为真实 preflight 或 smoke 通过。
