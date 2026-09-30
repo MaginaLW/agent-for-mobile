@@ -19,8 +19,14 @@ AGENT_MOBILE_DEVICE_LOCK_LEASE 只是父子间的合作租约标识，不是权�
 $script:DispatchLockLeaseEnvironmentVariable = 'AGENT_MOBILE_DEVICE_LOCK_LEASE'
 $script:DispatchLockSchemaVersion = 1
 
-if ($null -eq ('AgentMobileDispatchLockFile' -as [type])) {
-    Add-Type -TypeDefinition @'
+# Dot-source is managed-only. Retain the owning script cache on same-scope reload.
+if ($null -eq (Get-Variable -Name 'DispatchLockNativeState' -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:DispatchLockNativeState = $null
+}
+
+function Initialize-DispatchLockNative {
+    # Types have no caller parameter; the owning script state is trusted.
+    $definition = @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -88,6 +94,59 @@ public static class AgentMobileDispatchLockFile {
     }
 }
 '@
+    $definitionHasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $definitionSha256 = [BitConverter]::ToString($definitionHasher.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($definition.Replace("`r`n", "`n")))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $definitionHasher.Dispose() }
+    $names = @('AgentMobileDispatchLockFile')
+    $loaded = @{}
+    foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+        foreach ($name in $names) {
+            $found = $assembly.GetType($name, $false, $false)
+            if ($null -eq $found) { continue }
+            if ($loaded.ContainsKey($name) -and -not [object]::ReferenceEquals($loaded[$name], $found)) {
+                throw 'Dispatch native type name is ambiguous.'
+            }
+            $loaded[$name] = $found
+        }
+    }
+    $state = $script:DispatchLockNativeState
+    if ($null -ne $state) {
+        if ($state -isnot [hashtable] -or $state.Count -ne 2 -or
+            -not $state.ContainsKey('definition_sha256') -or -not $state.ContainsKey('types') -or
+            $state.definition_sha256 -cne $definitionSha256 -or $state.types -isnot [hashtable] -or
+            $state.types.Count -ne $names.Count -or $loaded.Count -ne $names.Count) {
+            throw 'Dispatch native authority cache does not match the current definition.'
+        }
+        foreach ($name in $names) {
+            if (-not $state.types.ContainsKey($name) -or $state.types[$name] -isnot [type] -or
+                -not $state.types[$name].IsPublic -or $state.types[$name].FullName -cne $name -or
+                -not [object]::ReferenceEquals($state.types[$name], $loaded[$name]) -or
+                -not [object]::ReferenceEquals($state.types[$name].Assembly, $state.types['AgentMobileDispatchLockFile'].Assembly)) {
+                throw 'Dispatch native type is not owned by this script initialization.'
+            }
+        }
+        return $state.types['AgentMobileDispatchLockFile']
+    }
+    if ($loaded.Count -ne 0) {
+        throw 'Dispatch native type is already loaded without this script authority.'
+    }
+    $created = @(Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $definition -PassThru -ErrorAction Stop)
+    $owned = @{}
+    foreach ($type in $created) {
+        if ($names -ccontains $type.FullName) { $owned[$type.FullName] = $type }
+    }
+    if ($owned.Count -ne $names.Count) { throw 'Dispatch native compilation did not produce all required types.' }
+    foreach ($name in $names) {
+        if (-not $owned.ContainsKey($name) -or -not $owned[$name].IsPublic -or
+            -not [object]::ReferenceEquals($owned[$name].Assembly, $owned['AgentMobileDispatchLockFile'].Assembly)) {
+            throw 'Dispatch native compilation returned an unexpected type.'
+        }
+    }
+    $script:DispatchLockNativeState = @{ definition_sha256 = $definitionSha256; types = $owned }
+    return $owned['AgentMobileDispatchLockFile']
 }
 
 function Assert-DispatchOrdinarySingleLinkStream {
@@ -96,7 +155,8 @@ function Assert-DispatchOrdinarySingleLinkStream {
         [Parameter(Mandatory)][string]$Path
     )
 
-    if (-not [AgentMobileDispatchLockFile]::IsOrdinarySingleLink($Stream.SafeFileHandle)) {
+    $nativeLockType = Initialize-DispatchLockNative
+    if (-not $nativeLockType::IsOrdinarySingleLink($Stream.SafeFileHandle)) {
         throw "设备锁必须是单链接普通文件：$Path"
     }
 }
@@ -152,6 +212,7 @@ function Initialize-DispatchLockParent {
 function Open-DispatchLockDirectoryGuards {
     param([Parameter(Mandatory)][string]$Path)
 
+    $nativeLockType = Initialize-DispatchLockNative
     $parent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))
     $directories = [Collections.Generic.List[string]]::new()
     $agentDirectory = [IO.Path]::GetDirectoryName($parent)
@@ -170,7 +231,7 @@ function Open-DispatchLockDirectoryGuards {
     $guards = [Collections.Generic.List[object]]::new()
     try {
         foreach ($directory in $directories) {
-            $guards.Add([AgentMobileDispatchLockFile]::OpenOrdinaryDirectoryGuard($directory))
+            $guards.Add($nativeLockType::OpenOrdinaryDirectoryGuard($directory))
         }
         return [object[]]$guards.ToArray()
     }
