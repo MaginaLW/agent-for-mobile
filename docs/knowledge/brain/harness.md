@@ -102,23 +102,35 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 - **同一个错误码可以来自毫不相干的原因，而"预期错误码"最会骗人**（2026-08-01，Deny 腿首次上真机实锤）。Deny 腿的预期结果就是 `E_BLOCKED`，于是当网关 debug 测试控制的白名单漏了 `deny`、`press_key` 回 `E_BLOCKED("debug 测试腿不在白名单", channel=test-control)` 时，**确认卡根本没弹**，执行器却照常报告"符合本腿预期"，整腿 31 秒结束、看上去完全正确。拦住它的是 runner 独立读 app 私有文件里的 `confirmation`：没有真人决定即判失败。三条推论：①**判据不能只看错误码，要看 channel**——真人拒绝是 `channel=overlay`，测试控制拒收是 `channel=test-control`，此前台账把两者并排记成同一个 `safety-denied`（已按 channel 区分，见 `dispatch-ledger.ps1`）；②**被测组件自报的结论必须有一条不来自它的独立判据兜底**，Deny 腿的四条判据全部自报，正是这次靠 runner 侧独立读文件才没误判；③**新腿接进 runner 时要顺着调用链把每一处按腿枚举的白名单都放开**——白名单在网关 debug 源码里，与 runner 侧的腿枚举相隔很远。
 - **用例会保护 bug：写"不支持 X"的反向用例时，要写死一个永远不会被支持的 X。** 上面那个白名单漏洞被 `TestControlTest` 里 `commandJson(leg = "deny")` 这条"不支持的腿"用例**保护着**——它在 Deny 腿尚未存在时是对的，Deny 腿接进来后就变成了在钉死一个 bug，而套件全绿。这是同一类错误第二次（前一次是 `fromOcrReadback` 把"OCR 一个字没读到"判成已发送，也被自己的用例固化）。反向用例用 `purchase` 这种明确不会存在的值，别用"暂时还没做"的真实名字。
 
-## 工序分流（A/B/C 三道并行）踩出的两个协议洞（2026-08-01）
+## 工序协调：A 直接问答，C 隔离验收（2026-09-08）
 
-把工作按"是否消耗人的精力"分成 A（离线闭环）/ B（一个文字决定）/ C（人在真机旁）三道
-并行推进后，两个洞是在真跑起来之后才暴露的——两个都不是执行错误，是协议本身少写了一句：
+现行协议见 [backlog §1–7](../../backlog.md)。旧 A/B/C 三会话协议及复盘见
+[历史归档](../../backlog-archive.md)；历史 B 道记录能证明用户作过决定，不要求今天另开 B 会话。
 
-- **批次划分按"改动的意图"判会漏，必须按"改动触达的表面"判。** `ForegroundWindowTracker`
-  冷启动自举意图上只是补一个前台身份，但服务重启后 `foregroundKnown=false` 会被
-  `SafetyGate.requireKnownForeground` 挡死——**自举必然改到安全门**，落地成了确认卡措辞
-  与一条新的 stale 判据两处安全面改动。而"批次 2 通知栏审批不与任何碰确认路径的改动同批"
-  这条规矩，只挡得住**主动**碰确认路径的改动，挡不住这种被动牵连。
-- **"验收通过就把分支合回 main"会把没验过的提交一起带进去。** A 道不会停在批次边界上等，
-  分支 tip 一定跑在钉住的 SHA 前面。合的必须是**钉住的那个 SHA**，不是分支。
+- **A 负责协调、离线开发与直接问答。** 常规实现取舍自行闭环；不可替代的用户选择由 A 收敛问题，
+  通过当轮可用的问答工具或直接文字提问取得真实答复，保留来源。等待时继续不依赖答案的工作；
+  复杂选项可派独立审查子任务，子任务不能替用户授权。C 只验固定候选，不改代码，无任务时待命。
+- **协调来源必须随派工明确。** 队列保持单写者，派工给出当前协调工作区/分支或 ref、必要摘要和
+  回报对象；接手先核实来源可达且包含最新决定。不假定 `main` 永远最新，也不读过时 worktree 副本。
+  会话 ID 每次传入，消息、等待和问答工具按运行时可用能力选择，不照抄旧客户端工具名。
+- **复核验证收据，不只听自报。** 同一 SHA、受验内容/构建产物、工具链、参数与相关环境均未改变时，
+  可复用已有完整验证结果；收据须能定位命令、日志、检查范围和结论。协调者核实这些绑定与关键证据，
+  不因换会话自动再跑全量门。新改动、环境漂移、失败或未覆盖疑点出现时，补与风险相称的验证。
+  **复用结果不等于复用授权**：已消费或冻结的 one-shot 不得自动重跑，也不能用旧 PASS 覆盖冻结结果。
+- **批次按触达的真机表面划分。** 离线自举也可能牵动确认路径，不能只按改动意图区分批次。
+  验收后的合并对象是已验的固定 SHA，不是持续前进的分支 tip；离线通过不代替真机结论。
 
-**推论（对任何多会话并行都成立）：交接面本身要有单一写者。** 三个会话各自跑在自己的
-worktree 里，每人手上都有一份 backlog.md 副本，在自己分支上的写入对别人不可见——
-"唯一交接面"会被 worktree 隔离切成三份。现在的规矩是队列只由主会话写，工序会话把队列
-变更当结论报告出来；读队列一律 `git show main:docs/backlog.md`，不读自己 worktree 的副本。
+**2026-09-08 验证补充：离线也会竞争宿主 lease。** 本次脚本整合门的 C1b build-environment 子套件
+在 guard 初始化处因全局 mutex 占用得到 21 pass / 6 fail；没有执行 JDK/Gradle，也未到六项业务断言。
+测试和依赖与修改前的 Git blob 相同，且不加载本次提示词/流程文档；另有真实 C1b 引导进程存活，
+但未直接归属 mutex owner，不能把“看见进程”冒充句柄所有权证据。保留环境失败、不干预其他任务，
+按 [离线验证规程](../../runbooks/离线开发与验证.md)协调后再验受影响门，不能宣称整合门全绿。
+
+**同日恢复结果**：确认 mutex 已不存在、旧进程已退出后，在 clean `da9ab53` 只复跑 C1b host 离线聚合门，
+exit 0；build-environment 27/27、verifier 19/19 零跳过、fake-ADB 29/29，真实 ADB 调用 0。
+本次未改锁、门限或代码，处理方法是避开占用后补验；原失败记录保留，恢复证据另存
+`.checks/agent-workflow-c1b-host-recheck.log`、同名 `.summary.json` / `.receipt.json`。
+这关闭了原环境失败，不把分次验证改写成一次整合门全绿，也不扩大 Android 构建或真机结论。
 
 ### Codex C 证据必须在临时 worktree 回收前持久化（2026-08-12）
 
@@ -342,3 +354,447 @@ execution` 早就把它钉住了，其中 `confirmerCalls == 0` 正是"卡从未
 （接听/拒接/挂断，不支持自定义标签），"允许/拒绝"套不进去，配套的 `setFullScreenIntent`
 又被用户明示决定不声明。**用一个语义不符的 category 去换排序权重，从一开始就没换到。**
 已去掉；紧急度本来就由通道 `IMPORTANCE_HIGH` 提供。
+
+## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
+
+“命令参数是受控的”还不足以证明宿主执行闭包。C1b 把固定 HEAD 的 implementation/build inputs 收敛为
+恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序、逐文件 hash，再动态重算
+`catalog_sha256`；fixture 只能描述结构，不能把预填 catalog 当成目标 HEAD 的事实。Oracle JDK、Gradle、
+ProgramFiles/Git 完整安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与
+source Android SDK 在进入 child 前冻结，构建只看 fresh isolated SDK 的 exact 三包；wrapper 不执行，held Java
+直接进入
+`GradleMain` 与 `ApkSignerTool`。
+
+fresh user/project/Kotlin cache 与 strict dependency verification 是同一条边界。fresh cache 可能需要联网解析
+已钉定依赖，所以这是“允许联网的严格验证构建”，不是 offline dependency build；恢复 `--offline` 会把环境
+偶然缓存状态误写进可重复性条件。专用 probe 同轮构建 Debug/Release，artifact proof 必须再从 merged manifest、
+DEX、依赖闭包与受控 aapt2 输出交叉证明，而不能把“Debug APK 存在”当作 probe 已进入两个变体。
+
+调试签名的合法写入窗口也必须进入协议。受控 build child environment 设置 fresh `ANDROID_USER_HOME`；
+`debug.keystore.lock` 在 Gradle 前预创建为空 ordinary file，只有 Gradle 阶段允许同一 identity 受控可写，返回后立即
+seal。pre/post binding 只允许 `post_gradle_lock_sealed_achieved` 从 false 到 true；canonical token topology、
+TrustGuard/creation-time nested guard 引用身份、workspace `user.home` 与 pre-seal binding 一起固定 build→seal
+邻接，防止移动调用、shadow/rebind 或等值 guard 替换。清理 Gradle zip-cache 时可在 cleanup-only inventory
+接受合法 `=` 文件名，但证据 catalog 继续拒绝这个未转义分隔符。
+
+清空继承环境不是删除几个危险变量：Git 调用由 guard 重建 exact 15-key environment；Gradle、签名器、ADB、
+aapt2、T0 则使用各自显式受控 environment，所有启动均启用 `ClearEnvironment`。source SDK 只作被冻结输入，
+实际 ADB/aapt2 从 fresh isolated SDK 运行。全部设备命令使用本 run 在 `49152..65535` 随机取得的 loopback
+private `server nodaemon`。2026-08-29 的离线归因补充了一条必须分开的 host 规则：server listen 只能使用
+`-L tcp:localhost:<port>`；`ADB_SERVER_SOCKET`、所有 client `-H/-P` 与 listener endpoint proof 仍固定为
+numeric `127.0.0.1`。不能把 server listen 也写成 `tcp:127.0.0.1:<port>`，也不能为这个发生在 USB 初始化
+之前的错误加入 `ADB_USB_LEGACY=1`。listener owner PID、server-status executable、job membership、cleanup
+与 port rebind 都是证明字段，default 5037 永不使用。
+全局设备 lease 的位置由 Windows KnownFolder 导出，不读取可伪造的 `LOCALAPPDATA`；T0 sidecar 也必须加入同一
+lease，而不是在 runner 锁外另开设备窗口。
+
+success sidecar 应当最后发布：先暂存并完成全部验证，再关闭 private ADB server 与 build/artifact guards、
+释放 device lease；任何 cleanup 失败都不得留下 success。只有这些步骤全部成功，才原子发布并读回最终
+sidecar。这条顺序让“成功”
+同时证明没有活跃 guard/lease 残留，而不只是业务校验曾经到过绿色分支。
+
+2026-08-28 候选的 full offline gate 已通过（host coverage 26/26）；当时专项机械证据为 build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
+7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB total 219 = valid 211 +
+rejected 8；valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device
+子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
+E2E 内 real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
+auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无锁、listener、server、build-root
+等残留。另行 real isolated host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool
+1 次、real ADB 0、repository inputs 41；独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b
+build/install/runner 或真机取证。它支持
+的主张严格限于 guard 建立后的 filesystem-and-environment integrity；不覆盖同用户进程内存注入、预先持有
+的可写 handle/mapping、
+ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。上述 smoke 没有访问平板；
+后续 fixed-SHA 唯一授权结果如下，C1a 授权仍不可复用。
+
+2026-08-29 修复工作树的专项离线结果为：host coverage 29/29；七场景 synthetic E2E；fake ADB
+222 = 214 valid + 8 rejected，其中 valid calls 为 server start/status/kill/device 8/7/4/195，另观测
+server exit 7；runner process 9、fake Gradle 8、fake signer 12、repository inputs 42。private ADB 22/22、
+readonly 74/74、新 attempt-failure schema/cross-binding 51/51，observation 49/49（coverage 89/89）；build-env 27/27、
+artifact 32/32、ADB provenance 6/6、T0 sidecar 7/7、aapt2 15/15 保持通过。这些 gates 都是
+synthetic/offline 证据，本身没有运行真实 ADB、JDK、Gradle 或访问设备。2026-08-28 的 real isolated host build
+smoke 只覆盖当时 41-input 候选，不能改写为当前 42-input smoke；当前修复的汇总 gate 与独立复审通过后，候选固定为
+`77473af5223d76b00bf4dbbf33cf44090fde635c`。
+
+该 SHA 的一次 42-input real isolated host build smoke 随后执行并冻结失败。受控 GradleMain 为 `1`；临时
+Debug/Release APK 与 proof 出现后，artifact proof strict JSON reader fail-closed，ApkSigner、held AAPT2、real ADB、
+设备发现/install/T0/采集均为 `0`，retry `0`，契约内 runtime/build residue 为 `0`。离线复现确认 one-shot helper 没有像正式 runner
+一样先加载 observation validator，因而两个 closed-JSON walker 不存在。**Gradle 产物存在不等于 proof 已被接受；
+reader 位于 signer/AAPT2/ADB 之前，失败后必须冻结，不能拿临时 APK 继续。**下一 helper 必须把 validator 纳入
+held/pinned exact load set，并在 Gradle 前验证 walker 存在；修正后仍需另一 clean SHA 和新的 smoke 授权。详见
+[`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
+
+随后 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 exact load set，唯一 build-only
+one-shot 的 helper summary 完整通过：GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/capture `0`、
+cleanup 全绿、residue `0`。但外层 launcher 用固定 PowerShell `7.6.4` 的默认 `ConvertFrom-Json` 读取 summary
+时，把原始 JSON 中合法的 quoted ISO string 自动提升成 `System.DateTime`；后续 strict verifier 要求 string，
+因此 launcher exit `1`。本轮是 **helper-pass / launcher-verifier-fail**，整体 evidence closure 仍失败并冻结，
+helper start `1`、retry `0`。详见
+[`2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
+
+**JSON lexical type 是证据链的一部分。** schema 要求 string 时，consumer 不能让便利型 parser 的日期自动
+转换悄悄改变类型，也不能反过来放宽 schema 接受运行时 `DateTime`。PowerShell strict reader 应使用
+`ConvertFrom-Json -DateKind String` 或等价保形解析；回归必须同时含 quoted ISO → `[string]` 的正对照，以及
+默认解析会复现 `DateTime` 并被 gate 拒绝的防退化检查。helper 自己通过不代表外层证据消费者已经接受。
+
+## PowerShell：Mandatory 空集合会在函数体前失败（2026-08-30）
+
+`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 build-only launcher 在 helper 前退出。根因不是 Add-Type、
+UAC、cwd 或 native handle API，而是第一次给目录 guard 传入刚创建的空 `List[object]`：参数标了
+`[Parameter(Mandatory)]` 却没有 `[AllowEmptyCollection()]`，PowerShell binder 在函数体执行前直接抛
+`ParameterArgumentValidationErrorEmptyCollectionNotAllowed`。因此“循环会马上向 list 加元素”并不能让首次调用成立；
+所有 accumulator-style Mandatory collection 都要有空输入正对照，或显式允许初始空集合。
+
+修复必须精确：只给 accumulator 增加 `[AllowEmptyCollection()]`，不能删目录链或用时间戳替代身份。guard-only
+正对照应覆盖首个空 list 调用，并继续证明目录 stable ID、no-reparse、最终路径、held-handle 以及文件
+identity/hash/size/mtime。目录 mtime 不是可靠 identity 条件，不应重新加入等值门禁。
+
+另一个教训是“fail closed”不等于“failure observable”。advanced script 的 `exit 1` 可能让 PowerShell event log 只留下
+误导性的 `System error.`，而原始 ErrorRecord 停在未持久化的 stderr。one-shot launcher 应在任何 success publication
+之前建立固定 repo root 与 failure-only CreateNew sidecar：保留 phase、完整 ErrorRecord/exception chain，写失败只记
+secondary error，绝不能遮蔽 primary failure；即使正式 result 已发布后才发生 cleanup failure，也不能用
+`$resultPublished` 抑制 sidecar。sidecar 固定 failed-only，不能参与 pass closure。诊断或 preflight receipt
+也不得单独判绿，至少要联合进程 exit、terminal 状态及 primary/cleanup/recording failure counts。
+
+## PowerShell：跨行 cast 与失败消费顺序会遮蔽 primary（2026-08-30）
+
+`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 build-only launcher 把 active-process count 写成：
+
+```powershell
+$count = [long]
+    [Native]::GetActiveProcessCount($job)
+```
+
+这段文本 Parser 0，但 AST 是“把 `[long]` 类型对象赋给变量”与“独立 native call”两个语句，不是 cast。validation
+因此误报 child closure；finally 重查又把同一变量覆盖为真实 `0`，导致 failure sidecar 与最终 result 看似矛盾。
+native/cmdlet 调用需要 cast 时必须用单一表达式（例如 `[long]([Native]::Call(...))`），静态门还要断言 RHS AST 中
+确实含唯一预期调用，不能只看 Parser 0 或文本相邻。
+
+更深一层是失败消费顺序：helper 已原子发布 closed failed summary 后 exit `1`，launcher 若先检查 nonzero exit 或
+stderr-empty，再去 held-bind summary，就只能留下 generic error，具体 primary 仍被遮蔽。安全顺序应是先确认 process/job/
+drain 闭合，再对 stdout 指向的 summary 做 held identity/hash/closed-schema 验证；若 summary 是 failed，就把其 primary 与
+reasons 作为结构化首要失败，exit/stderr 作为并列证据。validation-time snapshot 与 cleanup-time snapshot 必须分开，
+cleanup 成功不能覆盖失败瞬间。`checked=false` 也不能伪装成“验证失败”；应显式区分 absent、not_checked、rejected。
+
+同轮另暴露授权前环境检查缺口：build guard 要求 module output fresh/absent，但 read-only preflight 未检查既有
+`app/tablet-c1b-probe/build`，一次授权因此在 Gradle 前被消费。凡执行期会以“preexisting 即拒绝”为前置的路径，
+preflight 都必须用同等或更强的 no-follow absence 门禁提前覆盖；普通离线 Gradle/check 会重新生成该目录，不能放在
+preflight 与 one-shot 之间。
+
+## PowerShell：nullable string 会绑定成空串，宿主 lease 也要进 preflight（2026-08-31）
+
+`690693ae4113a91f7590457a888b56e93b6e200b` 的唯一 build-only helper 已经生成合法 closed failed summary，
+launcher 却在 held-open 的第一步误报 `Pinned summary SHA-256 is not canonical lowercase hex.`。根因是函数把可选
+expected hash 声明成 `[AllowNull()][string]`：调用点传 `$null` 后，PowerShell binder 把它转换成 `''`；
+`$null -ne $ExpectedSha256` 因而为真，canonical regex 与后续 hash compare 都把“无 pin”误当成“非法 pin”。
+
+可选 string 参数不能用 `$null -ne` 判断 caller 是否提供了值。此类门应使用明确的 nonempty predicate（例如
+`-not [string]::IsNullOrEmpty(...)`），并同时覆盖 canonical check 与 final compare。**无 expected hash 只取消预先
+compare，不取消实际 hashing 或文件身份门。**正对照必须证明刚生成文件仍经 no-follow held handle、stable ID、最终
+路径、长度/mtime 与实际 SHA 读取；负对照必须证明 nonempty malformed hash 仍被拒绝。只把参数改成 `[object]` 或
+放宽 regex 会把 binder 假阴性换成证据弱化，不是修复。
+
+同轮 helper 的真实 primary 是 smoke 前已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener。pre/post 都为 `1`，而本轮
+process-start 与 direct adb attempt 都为 `0`，因此这是手机套件留下的宿主 lease，不是 smoke 启动的 ADB。Gradle/
+签名/aapt2/held Git/设备调用全为 `0`，说明授权再次耗在 build 前。凡执行期要求“default ADB process/listener 为零”的
+合同，read-only preflight 也要做被动 process count 与 TCP listener count；它不得运行 adb、不得枚举设备，也不得自动
+kill 未知进程。snapshot unavailable 与 nonzero 都要 fail closed。这里不能只把命令写成 `Module\Command` 就声明
+authority：可变 `PSModulePath` 仍可能先自动加载同名模块并执行代码，空结果甚至会制造 false-zero。优先使用固定
+BCL/native 只读 API，并用 AST 锁住精确方法、参数与无 mutation 面；若必须使用模块，须在任何自动加载前绑定绝对
+系统路径、内容 hash、命令类型与最终路径。用户关闭手机套件或另行授权精确宿主进程处置后，必须重新形成新 SHA 与
+新 preflight；旧 one-shot 不因环境后来归零而恢复。
+
+repo-external renderer 也属于 authority 链，不只是便利脚本。输入的 `Get-Item`/`Get-FileHash` 分离读取、关闭 temp handle
+后按路径 `Move`、公开 final 后才设 ReadOnly，都会留下对象替换或半套工件窗口。安全发布至少要绑定 ancestor no-reparse、
+handle-derived final path 与 stable ID；temp 在公开前完成 durable write、同柄回读与冻结，发布后以同一 stable ID
+桥接到 deny-write/delete final guard，并持有到整套结果闭合。目录身份复核只比较 stable ID，不恢复目录时间戳等值门。
+
+## PowerShell：函数会枚举数组；执行期完整环境 pin 也要进 preflight（2026-09-01）
+
+`a661f365322bbb8ef3aa83f7a84b9bcb23a51f6e` 的 helper 已把合法 closed failed summary 原子发布，stdout 的
+长度与 SHA 也证明它精确等于 summary bytes + CRLF；launcher 却在 strict parser 之前的 `Buffer.BlockCopy` 抛
+`Object must be an array of primitives`。根因不是文件读取或 stdout 漂移，而是 reader 内部虽建立 `System.Byte[]`，
+却写成 `return $bytes`。PowerShell 函数输出管道会枚举数组；调用方普通赋值后得到多元素 `Object[]`（1-byte 时甚至是
+标量 Byte），不能作为 `Buffer.BlockCopy` 的 primitive-array source。
+
+需要保留数组对象身份时，成功返回应使用 unary comma：`return ,$bytes`。Parser 把这里的逗号表示为只有 `$bytes`
+一个 element 的 `ArrayLiteralAst`，不是 `UnaryExpressionAst`；静态门若查错 AST 类型会制造确定性假拒。不要用 cast 或 `@()` 代替静态合同：它们可能
+碰巧在某一调用形态重新聚合，却没有锁住函数输出对象。静态门要检查唯一 return AST 的 unary-comma 形态，并用普通
+return、cast、`@()` mutation 作负例；隔离 runtime canary 要覆盖 1 byte、多 byte、真实 passed/closed-failed bytes，
+断言 direct result exact type 是 `System.Byte[]`、hash 不变、`BlockCopy` 与唯一 CRLF framing 成功。summary consumer
+还必须证明 failed reason 在 generic exit/stderr 之前公开，passed 才进入 public verifier。
+
+同轮 helper 的真实首因是 `${PROGRAMFILES}/Git` file count 从冻结 `9576` 漂移为 `9577`；退出后独立只读重算又证明
+当前全树 catalog 是 `deeaa…34ee`，而非冻结的 `4c5e…7458`。在当前内存 catalog 中排除 38-byte
+`etc/mtab` 后，count 算术上恢复 `9576`，但 digest 仍为
+`556e…f838`。因此不能靠删文件、忽略 `mtab` 或只增加 count 让门变绿。更一般地，执行期会在 Gradle 前验证的完整宿主
+tree pin（file count、catalog、identity/hardlink topology），read-only preflight 也必须在授权前以同等冻结规则检查；
+若 preflight 随后还会运行被该 tree 供应的只读工具，则工具调用后必须在 `finally` 中再次按同一规则检查，保持 primary-first；
+离散 pre/post 只能证明调用结束后仍满足冻结 binding，只有等价的跨调用 held guard 才能声称全程未变。否则 preflight 虽绿，
+one-shot 仍会耗在环境 guard。恢复路径只能是可信来源的 exact 安装，或带逐路径 manifest、来源、
+identity/hardlink 复核的新基线；两者都是主机/合同变更，不能由一次 build-only 授权隐含放行。
+
+完整 preflight、one-shot、失败证据与退出闭包见
+[a661f36 real build-only smoke 失败记录](../../runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)。
+
+## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
+
+fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
+exit 1，尚未进入设备发现、install、T0 或两帧采集。runner 只留下 generic timeout；run_id 在更晚阶段才分配，
+所以 early failure 没有 failure sidecar。Windows Application/WER 离线记录证明，同轮 isolated SDK 的
+`adb.exe` 在 15 秒 startup window 内以六个不同 PID 同签名崩溃：`ucrtbase.dll` offset `0x2da71`、
+exception `0xc0000409`、data `7`。这能解释未 ready，却因没有 argv/dump，仍分不清 `server nodaemon`
+本体和 `server-status` client 谁先崩。
+
+上段是 2026-08-28 运行结束时、仅凭该 run 已持久材料能成立的认知边界。2026-08-29 继续做了不接设备的
+源码、binary 与 synthetic 复核，形成高置信根因解释：AOSP `tcp_host_is_local()` 对 server listen 只把空 host
+或 literal `localhost` 当作 local；原命令 `adb -L tcp:127.0.0.1:<port> server nodaemon` 因而落入
+“specified hostname unsupported”，server 重试后 `LOG(FATAL)`。这与旧 WER 的 `0xc0000409`/FAST_FAIL 7
+以及六进程约 0.64–0.72 秒寿命一致。它不是旧 run 自身持久化的 argv/FATAL 直接证据，不能追溯改写成当时
+已经证明。修复只把 server listen 改为 `tcp:localhost:<port>`；env/client/listener proof 仍为 numeric
+`127.0.0.1`，且不引入无关的 `ADB_USB_LEGACY`。
+
+安全失败和可诊断性是两件事：失败必须冻结且不得自动重试。当前实现会在 host readonly preflight 后、
+device lease/private ADB open 前建立 attempt identity；若仍在 `run_id` 分配前失败，则保存 closed、独立的
+`tablet-layout-c1b-attempt-failure/v1`，其中 `run_id=null`，并在全部 cleanup 完成后才把单个 root-level
+attempt record 原子发布。structured diagnostic 只保存 attempt ordinal、terminal substage、listener observed、
+process/status-client 状态、有界捕获 byte count/overflow/SHA-256/strict-UTF-8/classification 与 cleanup 结果；
+不持久化 raw stdout/stderr、PID、port、socket、argv、path 或 serial。这样既不泄露原始输出，也不会把一次
+授权失败转换成自动重试；后续成功路径才把同一 attempt identity 提升为 `run_id`。
+
+## PowerShell：Volume-GUID `-File` 先经过 AuthorizationManager（2026-09-01）
+
+Git 恢复 `A-Acquire` r1 的唯一授权运行中，parent 已按 SHA、stable ID、ReadOnly、single-link、no-reparse、
+最终 DOS/Volume-GUID 路径与 held handle 绑定 exact leaf，但固定 PowerShell child 仍在 leaf 正文前 exit `1`。
+child stderr 是 51-byte `SecurityError: AuthorizationManager check failed.`；同宿主、同 Volume-GUID `-File`
+形态的不联网 canary 在默认 policy 下得到完全相同的 bytes/SHA，增加显式 `-ExecutionPolicy Bypass` 后 exit `0`，
+且 `$PSCommandPath` 仍保持精确 Volume-GUID 路径。这说明脚本内容门禁与 PowerShell 的启动策略门是两个不同阶段。
+
+若必须保留 Volume-GUID `-File` authority 并使用 CLI Bypass，至少同时满足：
+
+- 将 `-ExecutionPolicy Bypass` 作为固定 `ArgumentList` 的逐项 Ordinal 合同，禁止字符串拼接或额外参数；
+- 继续在 parent 中持有并复核 exact leaf bytes、stable ID、ReadOnly、single-link、no-reparse 与最终路径；
+- 结果明确记录其 requested scope 是 child 的 `Process/current_session`、设置非持久化、可能被更高优先级
+  machine/user policy 覆盖、可能由 PowerShell 后代继承、effective policy 未由 leaf 独立取证；
+- 明确 Bypass 不改变 token/elevation，不是 content/identity authority，也不是网络或进程创建沙箱；
+- 明确 PowerShell 引擎会按命名路径重新打开脚本，而不是消费 parent held file handle；AuthorizationManager
+  又先于 leaf 自身门禁，因此 pre-execution script-read identity 仍是外部 trust boundary。
+
+失败流不能只保存 byte count/hash 而隐藏原始首因。可以发布有界 strict-UTF-8 preview，但它只能是诊断字段：
+先去除 CR/LF/NUL，再对 HTTPS query 做 best-effort 脱敏，限制字符数与总 JSON UTF-8 bytes，标明 prefix/truncation、
+可能仍含非 query 敏感信息且不是 byte-stream authority；完整流仍以 total bytes/SHA/EOF/overflow 为准。结果对象构造、
+序列化与写出必须在同一保护块内，失败 fallback 要 primary-first，并把 phase/type/message/hresult/external exit 分别
+保护；captured byte arrays 放在 `finally` 清零。Console.Error 损坏、OOM 或进程被强制终止仍是无法由 renderer
+闭合的外部边界。
+
+outer caller 的宿主版本也是独立边界。本次原始 bytes/hash/terminal/exit 已捕获后，宿主 PowerShell 7.4 又因不支持
+`ConvertFrom-Json -DateKind String` 产生解析次因；它没有改变目标结果，但没有必要地削弱了外层结构化记录。caller 应
+先固定原始 stdout/stderr bytes、SHA-256、EOF/terminal 与 external exit，再做可选解析；需要 `-DateKind String` 时使用
+已钉定且支持该参数的 PowerShell 7.6.4，或显式 feature-detect。解析/记录失败只能作为 secondary，不能重启目标、覆盖
+primary，或把已经消费的一次性授权变成 retry。
+
+完整授权、失败、canary 与冻结证据见
+[Git A-Acquire r1 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)。
+
+## PowerShell：`Get-AuthenticodeSignature -Content` 不是 PE 路径验签（2026-09-01）
+
+Git 恢复 `A-Acquire` r2 已通过固定 Bypass 进入 leaf，并下载到发布期望的 exact installer：长度
+65388144 B、SHA-256 `af12577d…f1dca`。运行内 receipt 只记录 generic Authenticode contract failure；退出后 exact 重演
+leaf 的 `Get-AuthenticodeSignature -Content ... -SourcePathOrExtension '.exe'` 才得到 `NotSigned/None`，另一次对同一
+ReadOnly、ordinary、non-reparse、single-link 文件的最终 native path `-LiteralPath` 调用得到 `Valid`、预期 signer 与
+timestamp。installer 未执行，失败 receipt 与 installer 原样冻结；不能把重演所得 status/signature type 追溯写成 receipt 字段。
+
+这是 API 输入 authority 的差异，不是签名状态在两次调用之间变化。固定 PowerShell 7.6.4 的 `-Content` 分支走
+`WTD_CHOICE_BLOB`，并使用 hardcoded PowerShell script SIP subject GUID；`-SourcePathOrExtension '.exe'` 只提供来源提示，
+不会把 blob validation 切到 PE embedded-signature SIP。`-LiteralPath` 走 `WTD_CHOICE_FILE`，由命名文件的实际类型派发，
+所以能消费 PE 内嵌 Authenticode。对于 PE installer，不得把 `-Content` 的 `NotSigned` 当作可靠的签名否定，也不得把
+expected status 改成 `NotSigned` 来让门变绿。
+
+Windows share mode 约束的是 FileObject 上请求过的 access，不会因关闭一个 managed writer wrapper 而把 duplicate handle
+降级成 read-origin handle。旧 leaf 的 native CreateNew FileObject 请求 `GENERIC_READ | GENERIC_WRITE`、share=`READ`；
+duplicate 出所谓 read guard 后，即使 writer wrapper 已关闭，该 duplicate 仍保留 writer-origin `WriteAccess` share
+bookkeeping。exact share canary 证明，duplicate 存续时 `-LiteralPath` 的只读命名重开确定性报 sharing violation。
+因此“关闭 write stream 后继续持有该 duplicate，既拒绝 write/delete 又允许 read reopen”是错误模型。
+
+同一 signed-PE canary 的两侧结果钉住了可用性：writer-origin duplicate 存续时稳定 `0x80070020`；完全关闭 writer
+FileObject 后，以 fresh `GENERIC_READ`、share=`READ` guard 重绑并重验 stable ID/SHA，`-LiteralPath`=`Valid`，post
+identity/SHA 不变。旧 leaf 对 pinned PowerShell executable 本就使用同类 read-origin final-native-path guard +
+`-LiteralPath` 并成功。临时 canary 已精确清理，无残留；不能用“可能 API 不支持 held guard”解释失败，也不能跳过重绑门。
+
+需要命名路径 Authenticode 时，安全流必须显式换代 handle：
+
+1. writer-origin handle 在同一 FileObject 上完成 flush、hash、identity 与 ReadOnly，随后关闭全部 writer-origin handles；
+2. 诚实记录关闭 writer 到 read-origin 重绑之间的短 gap：`continuous_custody=false`、
+   `preverification_rebind_gap=true`；
+3. 在任何验签或 consumer 使用前，经 exact native path 新开 `GENERIC_READ`、share=`READ` 的 read-origin guard，并立即
+   重新证明 initial stable ID、最终 DOS/native path、ordinary/no-reparse、single-link、ReadOnly、length 与 pinned held
+   SHA-256；全部闭合后才记 `authority_reestablished_before_use=true`；
+4. read-origin guard live 时调用 `-LiteralPath`，并在 `finally` 无条件执行 post-held identity/SHA-256。
+
+gap 内仍活跃的 writer 会让 read-origin 重绑失败；gap 内临时改动后恢复，仍必须先经过步骤 3 的 exact authority 重建才
+能被消费。这个流不具 continuous custody，receipt 必须披露 preverification gap、命名路径重开并非
+held-handle-backed validation，以及 native namespace 仍是外部 trust boundary；不能用 pre/post 检查夸大成无 gap。
+
+异步等待也可能污染协议 stdout：PowerShell 中未接收的 `$task.GetAwaiter().GetResult()` 会把
+`System.Threading.Tasks.VoidTaskResult` 写入 pipeline。若 stdout 必须 exact-empty，应使用 `$null = ...` 或等价显式接收，
+并用回归门同时验证 success/failure 两条路径的 stdout framing；这类诊断缺陷不能改变 primary、触发 retry 或覆盖已消费授权。
+
+外层 summary 的 framing 同样要机械验证。把字符串字面 `\n` 追加到 JSON 后得到的是两个非 whitespace bytes，不是真实 LF；
+文件即使长度/hash 已冻结，也不能宣称 strict-JSON。caller 应先固定 raw stdout/stderr、exit 与 terminal，再写无尾随字面或只含
+真实 whitespace 的 summary 并严格 round-trip parse。summary 写出/解析失败只能成为 secondary，不能重启已消费的目标。
+
+完整单跑、failure receipt、path-based 只读复核与下一候选边界见
+[Git A-Acquire r2 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md)。
+
+## 漂移门报警后，先分「新增」还是「修改」——两者恢复路径不同（2026-09-02）
+
+C1b 的 Git trust-root 门只报出 file count `9576`→`9577` 与 full-tree catalog `4c5e…7458`→`deeaa…34ee`，
+没有区分漂移形态。据此直接立了 `A-Acquire → B-Backup → C-HostChange → D-Reboot → E-Cleanup`
+五道重装阶梯，消费两次一次性 A 授权、产出两份失败记录之后，才用一次只读全树复算发现：
+漂移是**多了一个文件**，其余 9576 个逐字节未变。**重装阶梯从一开始就闭合不了这个失败**——
+新增文件不在 Inno Setup 卸载日志内，卸载器只删日志内文件，卸载+重装后它仍在，门仍 fail-closed。
+
+教训不是"该早点复算"，而是：**恢复手段本身也需要一次对照。** 立恢复方案时必须先回答
+"这个手段作用在哪个对象上、能不能让判据回到冻结值"，而不是从"信任根不对了"直接跳到"重装信任根"。
+`catalog 漂移` 是聚合信号，它至少覆盖三种互不相同的形态，恢复路径完全不同：
+
+| 形态 | 判别 | 恢复 |
+|---|---|---|
+| 新增文件 | 排除候选项后 catalog 回到冻结值 | 移出该文件即可，重装无效 |
+| 修改文件 | 文件数不变、catalog 变 | 重装或从可信源覆盖 |
+| 缺失文件 | 文件数减少 | 重装或补齐 |
+
+判别成本极低：按门自己的规则（inventory → Ordinal 排序 → `relpath=sha256:hex` 以 LF 连接 →
+UTF-8 no-BOM 的 SHA-256）复算一次全树，再按候选集合做差。**复算脚本自己也要有对照**——
+先让它独立重现门记录的漂移值，证明规则复刻正确，才有资格用它的"排除后回到冻结值"作结论。
+
+同一轮还有两条一般化的判据纪律：
+
+- **"某字符串不在日志里"必须先证明该日志能被检索到已知在场的字符串。** 本轮先用
+  `git.exe`=14 / `bash.exe`=11 / `sed.exe`=1 / `msys-2.0.dll`=2 确认 UTF-16 检索有效，
+  `busybox`=0 才是有效否定而非编码假阴性。
+- **`NotSigned` 在 MSYS2 载荷目录里是常态，不是信号。** 同树 `sed.exe`、`msys-2.0.dll` 同样
+  `NotSigned`，只有 `cmd/git.exe` 是 `Valid`；把未签名当成异常会指向错误结论。
+  （另注：此处用的是 `-LiteralPath` 命名路径分支，不是上一节 r2 踩过的 `-Content` blob 分支。）
+
+定位过程与完整取证见
+[Git 信任根漂移定位](../../runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)。
+
+## `check.ps1` 跑不起来会伪装成"门失败"（2026-09-02）
+
+本机默认 `pwsh` 是 **7.4.19**（`<PowerShell-7-install-root>`），而 `scripts/check.ps1` 声明
+`#Requires -Version 7.5`。用默认 shell 调它，PowerShell 在**执行第一行之前**就拒绝：
+
+    The script 'check.ps1' cannot be run because it contained a "#requires" statement for
+    PowerShell 7.5. The version ... does not match the currently running version of PowerShell 7.4.19.
+
+外部 exit=`1`，日志只有 3 行，**一个检查都没跑**。它和"跑了 11 道门、某道失败"的外部信号完全一样。
+
+**判据纪律：`exit 1` 至少要分两种——「跑了并失败」和「根本没跑」。** 门的汇总表是不是出现过，
+是区分二者最便宜的机械证据；只看退出码会把环境问题误记成回归。这与本册"漂移门要先分新增/修改/缺失"
+是同一类错误：**聚合信号被当成了具体结论。**
+
+钉定的 7.6.4 在 Codex 运行时缓存内，与 A-Acquire 记录中的 pinned runtime 是同一个：
+
+    ~/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe
+    301368 B / SHA-256 db6dd811…458f / 7.6.4
+
+用它跑同一条命令，全量门 11/11 PASS。需要 ≥7.5 的仓库脚本（`check.ps1` 及其调用链）一律用它，
+不要用默认 `pwsh`；同理，需要 `ConvertFrom-Json -DateKind String` 的解析路径也只能用它（见本册前文）。
+
+## 待办条目写的"必须解决"，先确认它描述的东西存在（2026-09-02）
+
+backlog §6.N 记着「语义意图开关打开后，非宏路径危险 `ui_action` 一律 `E_STALE_REF`，
+接任务 4/2 端到端前必须解决」。读码核实的结果是两处与原文不符：
+
+1. **整套机制零实现。** `resolveViaIntent`、`intentTtl`、`approvedAtMs`、`foregroundWaitBudget`、
+   证据重建三态在全仓 Kotlin 里都不存在；`resolveViaIntent` 只存在于那条 backlog 原文里。
+   只有 spec。所以它从来不是"待修的 bug"，而是"别让实现继承的设计洞"——两者要做的事完全不同。
+2. **描述范围过宽。** 「危险 `ui_action` 一律」实际只覆盖命中 `send_words` 的 II 级点击：
+   决定四规定只有 II 级走延后执行，而 `ui_action` 未命中词表按 fail-closed 归 I 级。
+   范围一收窄，原本二选一的两条出路就变成了可以按档位各取其一的合成解。
+
+这与本册另外两条是同一族错误——**转述过的信号被当成了具体结论**：
+`exit 1` 要分「跑了并失败 / 根本没跑」；catalog 漂移要分「新增 / 修改 / 缺失」；
+待办条目要分「已实现且有缺陷 / 只存在于设计里」。三者的代价都是按错误形态去修。
+
+**成本对比很值得记**：这次核实只花了几条 grep（`resolveViaIntent`、`intentTtl`、`approvedAtMs`
+是否出现在 `app/` 的 `.kt` 里），而如果按原文直接动手，会去改一个不存在的调用点。
+接手他人写的待办时，**第一步是让它落到具体文件与行号上**，落不下去就说明描述本身要先修。
+
+## 「最长函数」第四次量错：别再用 grep/awk 量 Kotlin（2026-09-05）
+
+本册此前记过一次「`callInternal` 179 全仓最长」是量错，STATUS 随后改成
+「`ConfirmOverlay.ask`（307）第一、`ToolRegistry.callInternal`（180）第二」。2026-09-05 重量，**两个数都不对**：
+
+| 函数 | 实测行数 | 旧说法 |
+|---|---:|---:|
+| `overlay/ConfirmOverlay.kt:45` `ask` | **365**（45–409） | 307 |
+| `tablet/TabletLayoutProbe.kt:145` `sanitizeFrame` | **354** | 未提及 |
+| `mcp/ToolRegistry.kt:526` `callInternal` | **78**（526–603） | 180 |
+
+`ConfirmOverlay` 那条可判定：全文 410 行、仅一个 indent-4 `fun`、其后仅一个 indent-4 闭合括号（409）。
+但**整体排名仍标注为未验证**——本轮用的是缩进匹配启发式，第一次尝试的括号计数 awk 甚至给出
+「`shouldExposeWindow` 1442 行」这种超过文件长度的结果。
+
+**结论不是「再量一次」，是换工具**：Kotlin 的花括号会出现在字符串、lambda、字符串模板 `${}` 里，
+行式脚本天然量不准。要动这条先上 detekt / ktlint 的函数长度指标（真语法树），
+否则第五次还会错。**这处已经烧掉四轮，值得记成「不许用 grep 量」而不是又一个数字。**
+
+**09-07 已完成工具修复**：`scripts/measure-kotlin.ps1` 使用锁定 SHA256 的 detekt 独立 JAR、
+真实 Kotlin PSI 与官方指标实现。当天 AST 复核 `ask` 的物理跨度为 365、`sanitizeFrame` 为 354、
+`callInternal` 为 78；前两者也是当次全 `.kt` 函数范围的最长两项。
+这次是可重复的 AST 结论，不沿用上表的启发式证据。最新排名应重新运行工具；
+输出包含文件清单、源码哈希和分析器哈希，分析前后漂移会拒绝成功报告。
+物理跨度、detekt 代码行和复杂度的定义见[指标说明](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/scripts/lib/kotlin-metrics/README.md)。
+
+## 信任根不能放在别人会自更新的目录里（2026-09-05）
+
+本册前文写过「跑仓库脚本一律用钉定 7.6.4」，并给出了它在 Codex 运行时缓存里的路径。
+**那条建议的路径部分是错的**：2026-09-05 该缓存被 Codex 自行重装，7.6.4 变成 7.6.5，
+SHA 从 `db6dd811…458f` 变成 `362a356c…d139`，树从 983 文件缩到 658，本机不留 7.6.4 副本。
+缓存旁边躺着 7 个 09-04 的 `codex-runtime-install-*` 暂存目录，就是它自己换的痕迹。
+
+**教训与 Git 那次同族**：Git 那次是"重装治不了多出来的文件"，这次是"钉定治不了会自更新的目录"——
+两次都是**手段作用不到成因上**。判据写得再严，只要它指向一个第三方能随时替换的位置，
+就不是信任根，只是一次快照。
+
+处置：把运行时**复制**到项目自控位置并冻结（`<repos-root>/_toolchain/powershell-7.6.5`），
+不重新下载——迁移前在原位复核 Authenticode，`pwsh.exe` `Valid`/Microsoft 签名、带时间戳，
+同树 517 个 `.exe`/`.dll` 非 `Valid` 者为 `0`，来源可信度足够，比重走一遍下载/验签阶梯更省也更稳。
+复制后**逐文件重算 SHA 比对**再冻结（不信任 `Copy-Item`），随后按与 Git 信任根同族规则编目。
+
+冻结值：`pwsh.exe` `362a356c…d139` / `7.6.5` / 658 文件 / 40 目录 / 256592846 B /
+catalog `sha256:7b68ced0…076d`。详见
+[钉定 PowerShell 迁出自更新缓存](../../runs/2026-09-05-钉定PowerShell迁出自更新缓存.md)。
+
+**选钉定位置时的判据**：这个路径由谁写？只要答案不是"只有本项目"，它就会漂。
+`~/.cache/**`、包管理器目录、IDE 自带运行时、`%TEMP%` 都不合格。
+
+## 离线门也要验证自己消费的结果（2026-09-07）
+
+重新核对 09-05 的 C1b 红门发现，旧摘要「唯一因为 skipped 不等于 0」不符合代码：
+旧 gate 实际允许最多两项 skip，却把 `pwsh_version` 硬编码为 `7.6.4`。
+实际子套件在 `7.6.5` 下返回 `17 passed / 0 failed / 2 skipped`，因此版本契约先拒绝了合法报告；
+两个符号链接反例同时确实因缺少 Windows 特权未运行。**环境缺口和报告消费缺陷是两件事。**
+
+已把生产报告校验提取到 `scripts/lib/check-summary.ps1`：子进程版本必须等于启动它的父进程版本，
+仍严格验证单行 JSON、重复键、字段类型和计数等式；真实 skip 现在单独拒绝且直接提示所需能力。
+监督式 runner 同时拒绝缺失/重复分片、零用例、非零失败与覆盖数不齐。
+`scripts/tests/check-summary-offline.ps1` 直接调用这些生产函数，避免在 fixture 里另写一份 consumer。
+
+PowerShell 的另一个边界：在 `if` 和 `else` 之间误插普通语句，Parser 可能仍返回零错误，
+因为 `else` 被解析成普通命令；本轮独审在执行前发现并修复。**Parser0 不等于控制结构正确**，
+门脚本必须实际跑到汇总；静态复核可额外排除名为 `else` 的 `CommandAst`。
+
+## EncodedCommand 的进度也是 stderr 字节（2026-09-07）
+
+`6fbb157` build-only 的 helper exit 0、自报 passed，仍被 launcher 的非空 stderr 门正确拒绝；
+stderr 共 2,439,272 bytes，超过 1 MiB 捕获上限。只存 hash/计数而不保存有界原文，会失去失败归因能力，
+不能事后把整个流猜成无害进度。证据见[本轮记录](../../runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。
+
+固定 PowerShell 7.6.5 的无害替身复现：`-EncodedCommand` 下 `Write-Progress` 会产生 CLIXML stderr；
+最早设置 `$ProgressPreference='SilentlyContinue'` 只抑制进度，Write-Error 和 Console.Error 仍可见。
+因此应在源头关闭进度，保留空 stderr 与 overflow 门；不能仅凭 CLIXML 头、exit 0 或 helper 摘要放行。
+generic launcher/preflight JSON 含合法 `5.0` 阈值，不适用 helper summary 专属的“全部数字必须 Int64”规则；
+generic reader 应拒绝重复键并按各字段合同验证，helper 的 strict reader 保持原样。

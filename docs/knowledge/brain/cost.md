@@ -18,6 +18,14 @@
 - 预算护栏实测有效：$0.05 上限 2 轮即熔断（$0.077 停）；$2 上限恰好兜住跑偏任务。
 - 结论不变：纯视觉（微信类）仍贵一个量级；护栏默认 $2 合理。
 
+## Codex 订阅通道计量边界（2026-08-28）
+
+- `dispatch.ps1 -Brain codex -Executor gateway` 走 ChatGPT 订阅通道，CLI JSONL 提供 token usage，
+  但不提供可写入台账的单次 API 美元成本；因此 `cost_usd` 留空。
+- `-MaxBudgetUsd` 只传给 Claude CLI，且只接受大于 0 的有限数字。Codex 当前没有等价的美元硬上限，DryRun、提示词与结果摘要必须显示
+  “订阅通道/无 API 硬上限”，不能把默认 `$2` 冒充为 Codex 成本护栏。
+- Codex 仍受 1–60 分钟墙钟、整棵 Job 进程树归零，以及 stdout 16 MiB / stderr 4 MiB 的机械上限约束。
+
 ## 结论（M0 发现 #12，可行性级别）
 
 - 纯视觉任务比原估**高一个数量级**——每轮都带截图是成本主因（微信 a11y 树为空所致，见 [../apps/wechat.md](../apps/wechat.md)）。

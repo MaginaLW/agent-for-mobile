@@ -3,8 +3,42 @@
 > 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 clean producer
 > `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
 > fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
-> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`，
-> 尚未接受控 runner/attest 或做真机 C1a，app 未合 main；T-L1/P0 仍未放行。
+> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`。
+> fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
+> `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
+> 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
+> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成。
+> 2026-08-29 private-ADB 修复工作树的专项离线结果为 observation 49/49、coverage 89/89、host coverage
+> 29/29；build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、
+> aapt2 15/15、readonly 74/74、新 attempt-failure schema/cross-binding 51/51。七场景 synthetic host E2E 通过，fake
+> ADB 222（214 valid + 8 rejected；start/status/kill/device 8/7/4/195，另观测 exit 7）、runner process 9、
+> fake Gradle 8、fake signer 12、repository inputs 42；synthetic E2E 内 real ADB/JDK/Gradle executions 0。
+> 另行 real isolated
+> host build smoke 已完整退出 0（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审
+> P0/P1/P2=0；它只属于此前 41-input 候选，不得写成当前 42-input smoke，也不构成 fixed-SHA C1b
+> build/install/runner 或平板取证。随后 fixed SHA
+> `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB ready guard exit 1；同轮
+> isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。后续离线复核已
+> 高置信归因为 numeric listen host 触发 ADB FATAL，并实现 bounded/hash diagnostic 与 run_id 前 root-level
+> attempt failure record；该归因不是旧 run 持久化的直接证据。当前汇总 gate 与独立复审已通过，42-input 候选固定为
+> `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 又在 artifact proof
+> strict JSON reader [冻结失败](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
+> ApkSigner/AAPT2/ADB/设备/install/采集 `0`，retry `0`，契约内 runtime/build residue 为 `0`。根因是 one-shot helper 漏载 validator；
+> 该 SHA 不得进入设备授权。新 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 load set；其唯一
+> build-only smoke 为 [helper-pass / launcher-verifier-fail](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)：
+> GradleMain `1`、ApkSigner `1`、aapt2 `4`，ADB/设备/install/capture `0`、cleanup 全绿、residue `0`；但默认
+> `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime`，外层 strict verifier exit `1`。整体未闭合，
+> 后续 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 launcher 又在 helper 前因 Mandatory 空集合参数
+> 绑定失败并[冻结](../../runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)：launcher start/exit `1/1`、
+> retry `0`，helper/verifier/build/ADB/设备 `0`。下一 clean HEAD `21d29866a428f49e6ea79fe7fedc56f6cf42e16e`
+> 的 r7 read-only preflight 已闭合；其授权 smoke 又因启动前既有 module build output 在 Gradle 前 fail-closed，
+> Gradle/ADB/设备/install 均 `0`。旧 build 树已可恢复隔离，但 launcher 还暴露 active-count cast 与 failed-summary
+> 消费顺序缺陷，详见 [冻结记录](../../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与
+> [C1b runbook](../../runbooks/T-L1-tablet-layout-c1b-v1.md)。修复后的 `690693ae4113a91f7590457a888b56e93b6e200b`
+> r11 preflight 闭合，但唯一 smoke 又被宿主预存 `adb.exe` / TCP/5037 listener 在 Gradle 前拒绝；launcher 的
+> optional string null→empty 绑定随后误拒 summary SHA 并遮蔽 helper primary。build/设备/install/采集仍为 `0`，
+> 四件失败证据与新待办已[冻结](../../runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。
+> 旧 C1a/C1b 授权均不可复用，宿主 ADB 环境归零和新 preflight 闭合前仍不得再申请 build-only 或设备授权。
 
 ## 当前能力边界
 
@@ -80,7 +114,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   `multi_landscape` + 两个微信 base window 与系统原生设计一致是**有官方旁证的推断**，不是仅凭字段名
   断言内部实现。后续应建模双 window/pane，不能要求用户关闭该功能来满足旧单窗门。
 
-## T-L1 v2 无机冻结 · 2026-08-26
+## T-L1 v2 / C1a 无机冻结、首次失败与修复后取证 · 2026-08-26
 
 - diagnostic-only contract/schema/validator/gate 源提交 `c8bd3e3...`，以 main `589421a` 合入；gate
   self-test 5/5、cases 24/24、required coverage 24/24，输出恒为 layout/P0/execution false。
@@ -90,9 +124,178 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 - producer 专项 33/33；全量 Debug 350/350、Release 259/259，`assembleDebug` 成功；标准仓库检查的 T0、
   T-L1、dispatch 28/28、runner 82/82 与凭据扫描全部通过，独立终审 P0/P1/P2=0。以上全是无设备结果，
   不构成 runtime evidence、微信布局验证或 P0 放行。
-- 下一步先以 `b5769df...` 为基线补独立受控 runner/attest、离线 gate 与独审，再钉 clean descendant SHA 并
-  另行授权 C1a；只读观察保持 vivo 应用多窗开启的日常横屏形态，不得靠关功能满足旧单窗门。真机结果
-  用于修订/冻结后续契约，不自动授予 action 或 execution。
+- C1a 候选位于 `codex/tablet-tl1-c1a`：从当前 main 干净移植、机械绑定 producer/T0 六个基线 blob；
+  debug-only provider 与独立受控 runner/attest 已实现，本轮固定 c1/等待至少 900 ms/c2、不补拍；release
+  全包 absence 通过。C1a 15/15、coverage 45/45、self 3/3；全量 Debug 373/373、Release 261/261，
+  标准全门通过，跨层独审 P0/P1=0。这组计数只描述 fixed SHA `2635fc9...` 的 pre-C 基线，不能转写成
+  当前 A 修复后的全门结果。
+- 第一个明确授权的 C 轮在安装阶段超时；脚本没有生成 `run_id`，没有调用 c1/c2，也没有产生 evidence。
+  本轮按“安装失败不自动重试”冻结。用户随后另行明确授权一次重试，才启动下一轮。
+- 第二轮唯一 run `tl1-c1a-20260826t114535z-63667b68ce4f` 只调用 c1/c2 各一次，capture token/ID 分别为
+  `c1`/`capture-c1` 与 `c2`/`capture-c2`，时间间隔 1982.304 ms；result 单次消费后会话结束，没有补拍或
+  自动重试。observation 为 `diagnostic_status=blocked`，trusted-runtime validation 失败，无 success sidecar，
+  所以 origin 未建立；runtime/layout/微信布局/editor/P0/execution 均为 false/unsupported。
+- 第一条根因是 Windows 普通 `adb shell` stdin 将 T0 原始 23,865 bytes 中 747 个 CRLF 归一为 LF：宿主
+  artifact hash `43d9529ce10dca04c4bc60528d66376844f23edf0ebea9b63f0de04e8ff48fed`，provider 所见
+  `f9d548...`，触发 `upstream_t0_hash_mismatch`。修复只把 T0 write 改为 `adb exec-in content write` 的
+  binary stdin，并传 raw canonical URI；只读 endpoint 仍走 `adb shell content read` 与远端 POSIX 引号。
+- 第二条根因是静态页面没有新无障碍事件，两帧 raw event revision 合法地保持 15/15，而旧跨帧严格递增
+  断言把它误判成 `capture_order_invalid`。A 修复仅在 debug-only C1a adapter 公开可逆 logical marker：
+  `logical revision = raw event revision + c1/c2 capture ordinal`；用 token 可还原 raw，帧内 event 漂移、
+  跨帧 raw 下降与溢出仍 fail closed，producer/T0 六个 baseline blob 不改。
+- 修复不会删除真实诊断 blocker：`focus_fallback_insufficient`、`focus_target_conflict`、
+  `node_binding_invalid`、`region_candidate_missing`、`target_title_not_unique`、
+  `target_window_pane_missing`、`window_pane_bijection_invalid` 仍须保留。因此即使后续 origin 能建立，
+  本次形态仍应保持 diagnostic blocked，且不会提升 runtime/layout/P0/execution。
+- A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、
+  Release 261/261、dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence 与凭据扫描
+  全绿，独立终审 P0/P1=0。新 fixed SHA 为 `4b96f89a6622eb8b5fe04bd249571c7d77936b25`；失败 SHA
+  不复用。用户现场全程保持 vivo“应用多窗”，runner 未读取该开关值，也未为取证或修复修改设备设置。
+- 唯一成功 C1a run `tl1-c1a-20260826t125127z-354a7b4b0ed5` runner exit 0。fresh APK 的 local/pre/post
+  base SHA-256 均为 `0f2e5922e5f4c12b03b74fe06b7e0e40aa870ec376eca2cf06a4984ac2e4b288`；success
+  sidecar 给出 `c1a_origin_binding_verified=true`、`c1a_probe_entrypoint_read_only=true`、schema valid，
+  cleanup=`not_required`。标准 evidence 恰好五文件，无 failure/tmp。
+- Windows T0 修复已获真机机械证明：profile 与 upstream 均为 23,865 bytes，包含 747 个 CRLF，且无 bare
+  LF/CR；两者 SHA-256 同为 `6f5b1539d3d09bf77e26dc2ba5d700d11857c3edac84eef33fee03df4a81c316`，
+  sidecar 标记 `original_bytes_forwarded=true`。因此 `adb exec-in` binary stdin + raw canonical URI 在真机
+  保持了原始 bytes，不再出现失败 run 的 CRLF→LF 漂移。
+- c1/c2 各一次，对应 `capture-c1`/`capture-c2`，帧间 delta 2023.223 ms；host wait 905 ms、总 span
+  3140 ms、recapture=0。两帧都是横屏 2800×1968，并稳定枚举两个 `com.tencent.mm` application window：
+  `[0,0,985,1968]` 与 `[989,0,2800,1968]`。
+- 取证只证明来源与只读边界，不证明布局。validation 保持 `diagnostic_observed=false`、
+  `diagnostic_status=blocked`，七项 reason 为
+  `window_pane_bijection_invalid`、`target_window_pane_missing`、`node_binding_invalid`、
+  `target_title_not_unique`、`region_candidate_missing`、`focus_fallback_insufficient`、
+  `focus_target_conflict`；runtime/layout/微信/editor/execution 均 false，P0 unsupported。因此 C1a 取证
+  成功不等于 T-L1 通过，不能进入 T-L2。
+- 本 run 没有修改 settings、没有启动目标 App、没有截图；用户现场保持 vivo 日常“应用多窗”，机械证据是
+  T0 `multi_landscape` 与两个稳定 a11y application window，并不构成系统开关值 attest。它证明可信只读诊断
+  可在该双窗形态下完成，而不是布局已经适配。direct C1a runner 未走 dispatch，按其合同不写 ledger；本次以五文件 evidence
+  和 `docs/runs/2026-08-26-T-L1-C1a只读取证成功.md` 冻结归因，不补造 ledger 行。
+
+## A3/C1b 第一批设计结论 · 2026-08-26
+
+- v2 observation/schema/validator/fixture 与两条 C1a evidence 永久冻结，不追溯换语义；C1b 另开
+  `tablet-layout-observation/c1b-v1`。现有 `rootStatus=readable` 不能被回填成“语义树可用”。
+- Android 平台 window type 必须同时保存 raw code 与闭合名称。API 36 code `7` 记为
+  `window_control`，只表示控制关联窗口的系统 window；不能事后把 C1a 的 `unknown` 断言成分栏线。
+- 每个 window 独立记录 root-handle 状态、root→window exact/mismatch/unknown、subtree complete/truncated/
+  read-error/not-attempted、root child 数、visited/正几何可见/focused-editable/read-error 数与 budget exhaustion。
+  `complete` 只表示完整遍历平台暴露的树；`child=0 + visited=1 + positive-visible=0` 仍是 opaque。
+- projection pane 只把 application window/root 投影到 run-local `awN/apN`；首版 `semantic_role=unknown`、
+  evidence 为空。禁止用左右、宽窄、layer、active/focused、包名、scrollable 或 editable 推断
+  navigation/conversation。左右镜像交换必须保持全部语义结论不变。
+- `AccessibilityWindowInfo.title` 只做 caller-known expected hash 的 window-level match state，不保存明文或
+  未命中内容 hash，也不冒充 toolbar title。direct input focus 只有 refresh、focused/editable/visible/enabled、
+  微信 owner、正几何、windowId 与唯一 focused application window 全部一致时才可记 `editor_known`；仍不得
+  选择 conversation/target。只有 window focus 时记 `window_only`，不报成 editor 冲突。
+- 第一批未来 fresh C1b sidecar 最多提升可信来源、微信 window ownership、root projection、双 application
+  window topology 与 hidden IME；navigation/conversation/target/regions/layout/微信布局/editor/P0/execution
+  一律 false/unsupported。若 fresh C1b 仍 opaque，下一步另审 pane/window-bound 视觉通道，不关闭 vivo
+  “应用多窗”，也不回退整屏 OCR/坐标猜测。
+- **observation 不能靠 caller 传入的 SHA 自证真机来源**：schema 正确、run id/producer SHA/APK hash 与参数一致，
+  最多叫 `runtime_binding_inputs_match`。只有宿主独立重算 clean HEAD、实现文件、签名/APK、唯一设备/
+  fingerprint/boot、provider challenge/control transcript、T0 原始 bytes、c1/c2 计数与 evidence hash，并由
+  closed success sidecar 绑定后，consumer 才能提升 `runtime_origin_verified/runtime_evidence`。
+- **重复读取失败不能伪装成跨帧稳定（C1b 无机复核，2026-08-26）**：display/type/layer/touchable/
+  active/focused 等 window shell 字段若两帧都异常，不能各自回退到合法默认值再得到“相等”。wire 没有
+  显式 unknown 状态的关键字段应丢弃该 window 并标记 inventory truncated；成功读到未映射 type code 可
+  保留 raw code，但必须阻断完整 topology/focus/hidden-IME。producer 的 focus fail-closed 条件还必须能由
+  consumer 从持久化的 root/subtree/node/pane/bounds/count 重新算出；只在内存 diagnostic 里记失败而不让
+  wire 结论变化，会造成 producer 诚实报 unknown、consumer 却期待 absent/window_only 的跨层错位。
+- **传输程序也是来源链的信任根（C1b 无机复核，2026-08-27/28）**：仅要求 `-AdbPath` 是绝对普通文件，
+  不能支撑“独立来源绑定”。caller 提供的 source SDK 必须满足 `ANDROID_SDK_ROOT == ANDROID_HOME`，guard
+  再从其中冻结并复制 exact `platform-tools`、`build-tools/35.0.0` 与 `platforms/android-35` 到 fresh isolated
+  SDK；ADB 与 aapt2 的实际路径、hash、版本/输出都绑定这棵 isolated SDK，而不是继续执行 source SDK。
+  Git 调用固定使用 exact 15-key environment + `ClearEnvironment`；ADB、aapt2、Gradle、签名器与 T0 子进程
+  使用各自受控 child environment + `ClearEnvironment`。
+  全部设备命令另由本 run 的随机 `49152..65535` loopback private `server nodaemon` 承载。server listen 使用
+  `-L tcp:localhost:<port>`；client `-H/-P`、`ADB_SERVER_SOCKET` 与 listener endpoint proof 仍绑定 numeric
+  `127.0.0.1`。listener owner PID、server-status executable、job membership、cleanup 和 port rebind
+  必须闭合，default 5037 永不使用。该规则明确了宿主信任边界；它不声称能抵抗已完全控制本机 SDK 或
+  同用户进程的攻击者。
+- **构建输入必须闭合到 exact bytes（C1b 无机复核，2026-08-28）**：固定 HEAD 的 implementation/build
+  inputs 必须按相对路径 ordinal 排序后动态重算
+  `catalog_sha256`；fixture 中的 catalog 不能代替目标 HEAD 的实算值。专用 probe 同轮构建 Debug 与 Release，
+  artifact proof 还要独立验证 APK、
+  merged manifest、DEX、依赖闭包与受控 aapt2 解析，Debug 可安装不等于 Release 也含 probe。2026-08-28
+  候选为 41 个输入；新增 attempt-failure schema 后，2026-08-29 工作树为 42 个。此前 41-input real smoke
+  不能替代当前 42-input smoke。
+- **受控构建不是离线依赖构建（C1b 无机复核，2026-08-28）**：冻结 Oracle JDK、Gradle、完整
+  ProgramFiles/Git 安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与
+  source/isolated SDK，fresh user/project/Kotlin cache 仍配合 strict dependency verification；构建允许联网，
+  不得恢复 `--offline` 或把它表述成 offline dependency build。wrapper 不执行，runner 用 held Java 直接调用
+  `GradleMain` 与 `ApkSignerTool`。
+- **全局 lease 和发布顺序也是证据（C1b 无机复核，2026-08-28）**：全局设备锁路径只从 Windows
+  KnownFolder 导出，不信任 `LOCALAPPDATA`；success sidecar 先暂存，只有 private ADB server、build/artifact
+  guards 与 device lease cleanup 都成功后才原子发布并读回。环境主张只覆盖 guard 建立后的 filesystem-and-environment
+  integrity，不覆盖同用户内存注入、预先存在的可写 handle/mapping、ACL/ownership takeover，或对刻意可写
+  fresh build state 的同用户并发篡改。
+- **调试签名锁必须把合法写入窗口显式化（C1b 复核，2026-08-28）**：受控 build child environment 设置
+  fresh `ANDROID_USER_HOME`。在启动 Gradle 前预创建空 `debug.keystore.lock` 并保存 creation-time guard/
+  `user.home` anchor；只有 Gradle 期间允许同一 identity 受控可写，进程返回后紧邻 seal。pre/post binding 除
+  `post_gradle_lock_sealed_achieved=false -> true` 外不得变化；canonical token topology 先于语义 AST 校验，
+  因而移动调用、shadow/rebind 与 nested guard 等值替换都不能绕过。cleanup 按引用去重并关闭 anchor/current；
+  证据 catalog 仍拒绝 `=` 分隔符，只给清理 Gradle zip-cache 的 inventory 开放合法 `=` 文件名。
+- **A 道证明基线（2026-08-28）**：build-env 27/27、artifact 32/32、ADB provenance 6/6、private
+  ADB 16/16、T0 sidecar 7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake
+  ADB 219 = 211 valid + 8 rejected；valid 为 private server start/status/kill 6/6/4 + device 195，T0 4 是
+  device 子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，
+  synthetic E2E 内 real ADB/JDK/Gradle executions 0；direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
+  auto-start attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。另行 real isolated host build
+  smoke 已完整退出 0：JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41；独立复审 P0/P1/P2=0。
+  该 smoke 不构成 fixed-SHA C1b build/install/runner 或真机取证。
+- **第一次 C1b fixed-SHA 授权在设备边界前冻结（2026-08-28）**：`87ac7b45...` 只启动一次，runner
+  exit 1，终态是 private ADB server 未在 15 秒内 ready。Application/WER 同期记录来自本轮 isolated SDK 的
+  `adb.exe` 六次同签名崩溃（`ucrtbase.dll` offset `0x2da71`、`0xc0000409`、data `7`）；这解释未 ready，
+  但无 argv/dump，runner 又未持久化每次尝试的 substage/stderr/exit，因此不能离线区分 server 本体与
+  `server-status` client 崩溃，也不能恢复 ADB FATAL。控制流未进入设备发现、install、T0 或 c1/c2，
+  没有 runtime evidence；所有语义/layout/P0/execution 结论不变。失败后 build/temp/journal/lease/process/
+  listener 均无残留。失败终态不授权重跑：当时冻结的下一步是先补 early failure record 与有界诊断，
+  重新过门、固定新 SHA，再单独取得用户授权；旧 C1a 与本次 C1b 授权都不能复用。
+- **private ADB 启动失败的离线后续归因与修复（2026-08-29）**：上条“无法区分”是旧 run 当时持久
+  证据的正确边界；后续 AOSP 源码、binary 与 synthetic 复核形成高置信解释，但不是旧 run 新长出来的直接
+  证据。`tcp_host_is_local()` 对 listen 只把空 host 或 literal `localhost` 当 local；旧命令
+  `adb -L tcp:127.0.0.1:<port> server nodaemon` 落入 specified-hostname unsupported，重试后
+  `LOG(FATAL)`，与旧 WER `0xc0000409`/FAST_FAIL 7 和 0.64–0.72 秒进程寿命一致。修复只将 server
+  listen 改为 `tcp:localhost:<port>`，env/client/listener proof 继续使用 numeric `127.0.0.1`；故障发生在
+  USB 之前，不加入 `ADB_USB_LEGACY`。
+- **run_id 前失败证据已闭合到独立 attempt（2026-08-29）**：host readonly preflight 后、device lease/
+  private ADB open 前先建立 attempt identity；成功后才提升成 run_id。启动失败时以 `run_id=null` 写 closed
+  attempt-failure schema，且须等全部 cleanup 完成后才原子发布 root-level attempt record。structured
+  diagnostic 只保留 ordinal/substage/listener/process/status-client、bounded byte counts、overflow、SHA-256、
+  UTF-8/classification 与 cleanup；不保留 raw stdout/stderr、PID、port、socket、argv、path 或 serial，且
+  自动重试仍为 0。当前专项离线结果：host 29/29；七场景；fake ADB 222 = 214 valid + 8 rejected，valid
+  start/status/kill/device 8/7/4/195，另观测 exit 7；runner 9、Gradle 8、signer 12、inputs 42；private
+  22/22、readonly 74/74、新 schema/cross-binding 51/51、observation 49/49（coverage 89/89），其余 build-env 27/27、
+  artifact 32/32、provenance 6/6、T0 7/7、aapt2 15/15。上述 gates 全是离线 synthetic 证据，本身未运行真实
+  ADB/JDK/Gradle 或访问设备；汇总 gate 与独立复审已通过，候选固定为
+  `77473af5223d76b00bf4dbbf33cf44090fde635c`。随后一次 build-only smoke 的真实 GradleMain 已执行 `1` 次，
+  但 one-shot helper 未加载 validator，artifact proof strict JSON reader fail-closed；signer/AAPT2/ADB/设备均 `0`，
+  retry `0` 且契约内 runtime/build residue 为 `0`。**经验：Gradle 产物存在不等于 artifact proof 已被宿主接受；reader 失败后不得利用
+  临时 APK 跳到签名或安装。**`8882add...` 随后证明 exact load set 与 helper/build/artifact 路径已经成立，
+  但 launcher 又在 summary 日期类型上 fail-closed。**JSON lexical type 同样属于证据链**：默认日期提升会改变
+  schema 类型，closed reader 必须用 `-DateKind String` 或等价保形解析；helper 接受产物仍不等于外层消费者已接受。
+  修复时不得放宽 schema 接受 `DateTime`，须固定新 SHA 并另取一次 build-only smoke 授权。
+- **外层 consumer 也要闭合 bytes、identity 与本轮时间（C1b 无机复核，2026-08-30）**：只补
+  `-DateKind String` 仍不足够。summary reader 还必须递归拒绝 duplicate property，闭合 exact key/type 与
+  canonical Int64 lexical token，并要求三项时间保持七位小数 `Z` 结尾的 UTC string。summary 只能从固定
+  expected parent 下的 ordinary、非 reparse、single-link file 读取；length/hash/strict-UTF-8/parse 必须来自同一
+  deny-write/delete held stream，opened identity 与最终路径 identity exact 相等，不能以先查路径、后另开文件的
+  TOCTOU 形态建立证据。launcher 的 helper start/exit envelope 还必须包住 summary 时间，observer end 距 helper
+  completed 最多 5 秒，防止旧/future summary replay。
+- **repo 外 one-shot launcher 是独立信任根，不是第 43 个 build input**：tracked outer verifier 不由
+  runner/helper 加载，因此 42-file implementation/build catalog 保持不变；launcher 另行 pin/hold
+  self/helper/verifier/pwsh，并机械约束 verifier load `1`、captured-function invoke `1`、helper start `1`/retry `0`。
+  helper hard deadline 为 45 分钟，process-tree kill 与 output drain 各自最多 30 秒；无界等待或 cleanup 未闭合都
+  必须失败。最终 clean HEAD 的静态 preflight 只可给出 `prepared_not_authorized`，不能执行 launcher/helper/真实
+  toolchain/ADB，也不能被表述成新的 smoke、设备授权或对 `8882add...` 历史失败的追溯修绿。
+- **不完整 inventory、无效 identity 与 replay ledger 都要向拒绝方向收敛**：`windows_truncated=true`
+  时即便 IME tuple 长得像 hidden，也不能产生 hidden observed/verified；负 window ID（含平台 `-1`
+  sentinel）不能形成 exact binding 或跨帧 token；每帧 `ime.capture_token` 还必须 exact 绑定同帧
+  `capture.token`。进程内 consumed ledger 固定 128 项且永不淘汰；容量满后以 `replay_ledger_full` 拒绝新
+  identity，不能为了有界内存而让最旧 nonce 再次可用。failure evidence 的 `cleanup=completed` 也只能来自
+  与最后可信 generation/counter/committed-prefix 完整一致的闭合 abort terminal control；只看状态名不够。
 
 ## 横屏路线与硬边界
 
@@ -100,11 +303,13 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
    `wechat_layout_unverified` + `tablet_landscape_p0_unimplemented`，P0 unsupported。
 2. **T-L1 无机契约** v2 synthetic schema/validator/gate 已合 main；fixture 只能验证诊断契约，不能产生
    runtime、微信验证或执行授权。未显式 fixture mode 时，入口在读取 caller 文件前固定 unavailable。
-3. **T-L1 真机 producer 基线** 已在隔离 SHA `b5769df...` 实现但未接 runtime、未合 main；须先增加独立
-   受控 runner/attest 并重新钉 SHA。C1a 必须纯感知多帧，先绑定 vivo 同 App 双 OS window，再找到唯一目标
-   pane，证明目标标题是目标 window/pane toolbar、不是另一窗会话列表同名行；toolbar/message/input bounds 与
-   window/pane identity 跨帧稳定。只保存 run-local label、bounds/hash/reason，不保存 raw identity/明文；
-   descendant 固定 SHA 真机验收前仍称 unavailable。
+3. **T-L1 C1a/C1b 只读 producer**：clean-port C1a 已在 `4b96f89...` 建立可信 origin/read-only，并真实
+   观察到 vivo 同 App 双 OS window，但七项诊断 blocker 使 T-L1 保持 blocked。C1b 第一批只验证 window
+   inventory/owner、root binding/subtree、run-local root projection、focus inventory 与 hidden IME；它不寻找
+   navigation/conversation/target，不证明 toolbar/title-node，也不划分 message/input regions。即使 fresh C1b
+   sidecar 将 origin/ownership/root projection/topology/IME 置真，layout/T-L1/P0/execution 仍称 blocked/
+   unsupported。若 pure-a11y 仍 opaque，下一步另审 window/pane-bound 视觉合同；不得把目标语义塞回本合同，
+   也不得关闭 vivo“应用多窗”或退回整屏坐标猜测。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一
    display + app window + pane + layout epoch。首版禁用 IME-only 与整屏坐标兜底。
 5. 四腿带外 OCR 必须覆盖 Allow/Stale/Deny/Reentry、保留 X/Y 并裁 target pane；unavailable、unreadable
