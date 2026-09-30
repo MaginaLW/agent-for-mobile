@@ -5196,7 +5196,7 @@ try {
         process_or_build_capability_count = 0L
         expected_parent_parameter_verified = $true
         helper_envelope_parameters_verified = $true
-        maximum_observer_tail_seconds = 5.0
+        maximum_observer_tail_seconds = [long]5
         exact_observer_limitation_verified = $true
         same_held_stream_verified = $true
     }

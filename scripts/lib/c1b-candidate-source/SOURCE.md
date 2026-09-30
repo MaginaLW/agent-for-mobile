@@ -30,3 +30,8 @@ r14 renderer 的 preflight 基准输入固定为本轮仓库中的
 `scripts/lib/c1b-candidate-source/preflight-template.ps1`；其父目录纳入 no-follow held chain，
 原始 hash、长度与 PowerShell Parser 门保持有效。生成的 preflight、临时文件、回执以及已冻结的
 helper/launcher 则必须是 staging 目录的直接子项，不能将维护源误套入输出路径约束。
+
+preflight 回执的 `verifier_static_evidence.maximum_observer_tail_seconds` 是固定五秒上限的
+静态证据，序列化为明确的整数 `5`，供现行 HA 严格 JSON 消费者读取；这不转换运行时浮点
+输入。summary verifier 的 double 参数、零至五秒校验与实际观察预算保持原值。源码离线回归
+执行生成 preflight 的真实静态审查片段并消费其序列化字节，同时保留 `5.0` 与小数反例的拒绝。
