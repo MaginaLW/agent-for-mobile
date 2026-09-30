@@ -200,7 +200,60 @@ Test-Case 'real binding native publication preserves boundaries with explicit is
  }
  $hostPin=Save-ReadonlyJson (Join-Path $OutputDirectory 'synthetic-host-contract.json') @{scope='isolated test stub only'}
  $null=[IO.Directory]::CreateDirectory((Join-Path $fixture '.checks/c1b-device-once/1111111'))
- $n=New-TestNative;try{$script:bindingResult=New-C1bDeviceEntryBinding $n $manifestPath $manifestPin.sha256 $reviewPath $reviewPin.sha256 $hostPin.path $hostPin.sha256 $OutputDirectory 0 0 $supportPin.path $supportPin.sha256 0 0;$script:bindingPin=$bindingResult.binding;$b=ConvertFrom-C1bEntryJson ([IO.File]::ReadAllBytes($bindingPin.path));foreach($k in @('device_stage_started','device_stage_authorized_by_this_binding','device_evidence_verified','wrapper_enforces_binding','tablet_scene_ready_confirmed_by_user')){Assert-C1bEntry ($b[$k] -is [bool] -and -not $b[$k]) 'Binding falsely grants device stage.'};Assert-C1bEntry (@([IO.Directory]::EnumerateFileSystemEntries($bindingResult.receipt_root)).Count -eq 1) 'Binding consumed device attempt.'}finally{Close-C1bEntryNativeContext $n}
+ $attemptRoot=Join-Path $fixture '.checks/c1b-device-once/1111111/r1'
+ foreach($mutation in @('missing','null','integer','array','naked','short','uppercase','trailing-newline')){
+  $bad=Copy-Object $manifest
+  switch($mutation){
+   missing {$bad.context.implementation_hashes.Remove('runner_sha256')}
+   null {$bad.context.implementation_hashes.runner_sha256=$null}
+   integer {$bad.context.implementation_hashes.runner_sha256=42}
+   array {$bad.context.implementation_hashes.runner_sha256=@($implementation.runner_sha256)}
+   naked {$bad.context.implementation_hashes.runner_sha256=$implementation.runner_sha256.Substring(7)}
+   short {$bad.context.implementation_hashes.runner_sha256='sha256:'+('1'*63)}
+   uppercase {$bad.context.implementation_hashes.runner_sha256=$implementation.runner_sha256.ToUpperInvariant()}
+   trailing-newline {$bad.context.implementation_hashes.runner_sha256=$implementation.runner_sha256+[char]10}
+  }
+  $bad.context.authority.implementation_hashes=Copy-Object $bad.context.implementation_hashes
+  $badPin=Save-ReadonlyJson (Join-Path $OutputDirectory ('binding-runner-'+$mutation+'-manifest.json')) $bad
+  $expectedRejection='Runner raw hash|Implementation raw hash|Implementation catalog|Exact 42|Missing exact key|Closed object'
+  if($mutation -ceq 'array'){$expectedRejection='Runner raw hash|Cannot process argument transformation on parameter ''Condition''\..*System\.Object\[\].*System\.Boolean'}
+  $n=New-TestNative
+  try{
+   Must-Fail {New-C1bDeviceEntryBinding $n $badPin.path $badPin.sha256 $reviewPath $reviewPin.sha256 $hostPin.path $hostPin.sha256 $OutputDirectory 0 0 $supportPin.path $supportPin.sha256 0 0} $expectedRejection
+   Assert-C1bEntry (-not [IO.Directory]::Exists($attemptRoot) -and -not [IO.File]::Exists($attemptRoot)) 'Invalid runner hash consumed the attempt root.'
+  }finally{Close-C1bEntryNativeContext $n}
+ }
+ $n=New-TestNative
+ try{
+  $script:bindingResult=New-C1bDeviceEntryBinding $n $manifestPath $manifestPin.sha256 $reviewPath $reviewPin.sha256 $hostPin.path $hostPin.sha256 $OutputDirectory 0 0 $supportPin.path $supportPin.sha256 0 0
+  $script:bindingPin=$bindingResult.binding
+  $b=ConvertFrom-C1bEntryJson ([IO.File]::ReadAllBytes($bindingPin.path))
+  foreach($k in @('device_stage_started','device_stage_authorized_by_this_binding','device_evidence_verified','wrapper_enforces_binding','tablet_scene_ready_confirmed_by_user')){Assert-C1bEntry ($b[$k] -is [bool] -and -not $b[$k]) 'Binding falsely grants device stage.'}
+  Assert-C1bEntry (@([IO.Directory]::EnumerateFileSystemEntries($bindingResult.receipt_root)).Count -eq 1) 'Binding consumed device attempt.'
+  # Import the actual R3 decoder/guard definitions; no R3 flow, runner or device is started.
+  $tdText=[IO.File]::ReadAllText((Join-Path $fixture 'scripts/lib/c1b-terminal-discovery.ps1'))
+  $tdTokens=$null;$tdErrors=$null;$tdAst=[Management.Automation.Language.Parser]::ParseInput($tdText,[ref]$tdTokens,[ref]$tdErrors)
+  Assert-C1bEntry ($tdErrors.Count -eq 0) 'Actual R3 source parser rejected.'
+  foreach($name in @('Assert-C1bTd','ConvertFrom-C1bTdJson','Assert-C1bTdTerminalAuthority')){
+   $definitions=@($tdAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name})
+   Assert-C1bEntry ($definitions.Count -eq 1) 'One actual R3 decoder/guard definition required.'
+   . ([scriptblock]::Create($definitions[0].Extent.Text))
+  }
+  $r3Binding=ConvertFrom-C1bTdJson ([IO.File]::ReadAllBytes($bindingPin.path))
+  $r3Context=[pscustomobject]@{Root=$fixture;Commit=$sha}
+  $r3Observation=[ordered]@{schema='c1b-device-external-process-observation/v1';expected_commit_sha=$sha;observation_status='observed';wrapper_started=$true;wrapper_launch_call_count=1;automatic_wrapper_retry_count=0;errors=@();binding_sha256=$bindingPin.sha256;expected_binding_sha256=$bindingPin.sha256;observed_runner_exit=1;observed_wrapper_exit=1;native_wrapper_exit=1;runner_pid=123;wrapper_pid=124}
+  $r3Terminal=[ordered]@{schema='c1b-device-terminal-readback/v1';verification_status='verified';expected_commit_sha=$sha;cleanup_failure_count=0;readback_external_process_invocation_count=0;readback_device_invocation_count=0;observed_runner_exit=1;runner_exit=1;observed_outer_exit=1;observed_runner_pid=123;runner_pid=123;stdout_byte_length=0;stderr_byte_length=0;terminal_status='failed'}
+  Assert-C1bTdTerminalAuthority $r3Context $r3Observation $r3Terminal $r3Binding $bindingPin.sha256
+  $runner=Read-C1bEntryHeldFile $n (Join-Path $fixture $map.runner_sha256) $r3Binding.runner_sha256 -1 $false
+  Assert-C1bEntry ($runner.Hash -ceq (Pin-Fixture $runner.Path).sha256 -and ('sha256:'+$runner.Hash) -ceq $implementation.runner_sha256) 'R3 binding does not match the actual current runner bytes.'
+  foreach($mutation in @('missing','integer','prefixed','short')){
+   $badBinding=Copy-Object $r3Binding
+   switch($mutation){missing {$badBinding.Remove('runner_sha256')} integer {$badBinding.runner_sha256=42} prefixed {$badBinding.runner_sha256=$implementation.runner_sha256} short {$badBinding.runner_sha256='1'*63}}
+   Must-Fail {Assert-C1bTdTerminalAuthority $r3Context $r3Observation $r3Terminal $badBinding $bindingPin.sha256} 'binding raw pin|runner_sha256'
+  }
+  $badBinding=Copy-Object $r3Binding;$badBinding.runner_sha256='0'*64
+  Must-Fail {Read-C1bEntryHeldFile $n $runner.Path $badBinding.runner_sha256 -1 $false} 'Repeated pin differs|raw hash differs'
+ }finally{Close-C1bEntryNativeContext $n}
 }
 if($null -ne $bindingPin){
  $bindingCapture=Save-CaptureFixture 'binding-native-fixture' -Stage Binding -StdoutBytes $utf8.GetBytes(($bindingResult|ConvertTo-Json -Depth 40 -Compress)+"`r`n")

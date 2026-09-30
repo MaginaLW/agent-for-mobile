@@ -322,6 +322,10 @@ function Assert-C1bEntryReviewForManifest($Native,$Manifest,[string]$ManifestSha
 function New-C1bDeviceEntryBinding($Native,[string]$ManifestPath,[string]$ManifestSha256,[string]$SourceReviewPath,[string]$SourceReviewSha256,[string]$HostAcceptanceContractPath,[string]$HostAcceptanceContractSha256,[string]$EvidenceRoot,[int]$ObservedBuildOnlyCallerExit,[int]$ObservedBuildOnlyReaderExit,[string]$SupportInputsPath,[string]$SupportInputsSha256,[int]$ObservedSourcePublicationCaptureExit,[int]$ObservedSourcePublicationOuterCaptureExit) {
  Assert-C1bEntry ($ObservedBuildOnlyCallerExit -eq 0 -and $ObservedBuildOnlyReaderExit -eq 0) 'Both independently observed BuildOnly exits required.'
  $m=Assert-C1bDeviceEntryManifest $Native $ManifestPath $ManifestSha256 $true
+ Assert-C1bEntry ($m.context.implementation_hashes.Contains('runner_sha256')) 'Runner raw hash is required before binding publication.'
+ $runnerHash=$m.context.implementation_hashes['runner_sha256']
+ Assert-C1bEntry ($runnerHash -is [string] -and $runnerHash -cmatch '\Asha256:[0-9a-f]{64}\z') 'Runner raw hash must be a canonical prefixed string before binding publication.'
+ $runnerSha256=$runnerHash.Substring(7)
  $review=Assert-C1bEntryReviewForManifest $Native $m $ManifestSha256 $SourceReviewPath $SourceReviewSha256
  $support=Assert-C1bDeviceEntrySupport $Native $m $ManifestPath $ManifestSha256 $SourceReviewPath $SourceReviewSha256 $SupportInputsPath $SupportInputsSha256 $ObservedSourcePublicationCaptureExit $ObservedSourcePublicationOuterCaptureExit
  Import-C1bEntryPinnedDependency $Native $m.context.dependency_pins.host_acceptance
@@ -340,7 +344,7 @@ function New-C1bDeviceEntryBinding($Native,[string]$ManifestPath,[string]$Manife
  $null=New-Item -ItemType Directory -Path $root -ErrorAction Stop
  Add-C1bEntryHeldDirectories $Native $root
  $binding=[ordered]@{
-  schema='c1b-device-root-preparation-binding/v1';status='prepared_binding_pending_prefix';commit_sha=$m.context.candidate_sha;repo_root=$repo;attempt='r1'
+  schema='c1b-device-root-preparation-binding/v1';status='prepared_binding_pending_prefix';commit_sha=$m.context.candidate_sha;repo_root=$repo;attempt='r1';runner_sha256=$runnerSha256
   branch=$contract.authority.branch;git_entry_kind=$contract.authority.git_entry_kind;git_index_sha256=$contract.authority.git_index_sha256;git_index_byte_length=$contract.authority.git_index_byte_length;tracked_path_count=$contract.authority.tracked_path_count
   implementation_catalog_sha256=$m.context.implementation_catalog_sha256;implementation_hashes=$m.context.implementation_hashes
   tools=$m.outputs;host_evidence_root=$EvidenceRoot;source_publication_support_inputs=[ordered]@{path=$SupportInputsPath;sha256=$SupportInputsSha256};root_observed_source_publication_capture_exit=$ObservedSourcePublicationCaptureExit;root_observed_source_publication_outer_capture_exit=$ObservedSourcePublicationOuterCaptureExit;authorities=[ordered]@{host_terminal=(Get-C1bEntryPin $hostContractHeld);device_source_review=$review;manifest=[ordered]@{path=$ManifestPath;sha256=$ManifestSha256}}

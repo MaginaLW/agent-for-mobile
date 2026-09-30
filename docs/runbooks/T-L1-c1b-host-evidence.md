@@ -30,6 +30,8 @@
    合同输入都是精确 path/byte_length/sha256；receipt、review 结论或 raw 副本本身不能替代进程证据。
 8. `prepare-c1b-device-entry-source.ps1` 从版本控制维护源派生本候选入口，独审后发布；Binding、observer Prefix
    与 Ready 都绑定真实阶段退出和双流。Ready 重消费当前主机合同，不访问设备，不自行确认当前现场。
+   Binding 在创建 attempt 目录前验证已核定 `context.implementation_hashes.runner_sha256` 是严格
+   `sha256:` 加小写 64 位十六进制字符串，再将裸 hash 写入顶层 `runner_sha256`，供 R3 核对当前 runner。
    正式 R3 reader/freezer 从真实终态与 stdout 内容指针取 internal attempt/run identity；缺失事实保持 unknown，
    不按 mtime 扫描猜测，失败封存不自动重试。
 
