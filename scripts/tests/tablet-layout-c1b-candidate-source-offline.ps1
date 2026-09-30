@@ -609,6 +609,38 @@ Test-Case 'tracked maintenance sources deterministically derive a candidate with
         $null -eq $rejected.Specs -and $rejected.Opened.Count -eq 5 -and
         ($rejected.Closed -join "`n") -ceq ($partialClosedReverse -join "`n") -and
         $rejected.CleanupFailures -eq 0) 'R14 source-parent failure continued or leaked earlier held parents.'
+
+    # 路径构造也必须经过真实 Windows 求值，不能只检查模板能够 Parse。
+    Assert-Test ([OperatingSystem]::IsWindows()) 'Renderer path regression requires Windows.'
+    $pairPathAst = Get-C1bCandidateSourceAst $pair.RendererSource
+    $canonicalGuard = @($pairPathAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $_.Name -ceq 'Assert-RendererCanonicalPath'
+    })
+    Assert-Test ($canonicalGuard.Count -eq 1) 'Renderer canonical guard is not unique.'
+    . ([scriptblock]::Create($canonicalGuard[0].Extent.Text))
+    foreach ($generatedSource in @($pair.RendererSource,$r14)) {
+        $pathAst = Get-C1bCandidateSourceAst $generatedSource
+        $pathAssignments = @($pathAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+            $_.Left.VariablePath.UserPath -cin @('helperTemplatePath','launcherTemplatePath','verifierPath')
+        })
+        Assert-Test ($pathAssignments.Count -eq 3) 'Generated renderer template/verifier paths are not unique.'
+        $pathCode = [scriptblock]::Create([string]::Join("`n", @($pathAssignments | ForEach-Object {$_.Extent.Text})))
+        foreach ($repoRoot in @('C:\Fixture\CandidateRepo','D:\Fixture Repo\候选')) {
+            . $pathCode
+            Assert-Test ($helperTemplatePath -ceq ($repoRoot+'\scripts\lib\c1b-candidate-source\helper-template.ps1') -and
+                $launcherTemplatePath -ceq ($repoRoot+'\scripts\lib\c1b-candidate-source\launcher-template.ps1') -and
+                $verifierPath -ceq ($repoRoot+'\scripts\lib\tablet-layout-c1b-real-build-smoke-verifier.ps1')) 'Generated renderer path escaped its exact maintenance leaf.'
+            foreach ($path in @($helperTemplatePath,$launcherTemplatePath,$verifierPath)) {
+                Assert-RendererCanonicalPath $path 'generated maintenance path'
+            }
+            $mixed = [IO.Path]::Combine($repoRoot,'scripts/lib/c1b-candidate-source/helper-template.ps1')
+            Assert-Rejected { Assert-RendererCanonicalPath $mixed 'mixed separator fixture' } 'not lexically canonical'
+            Assert-Rejected { Assert-RendererCanonicalPath ($repoRoot+'\scripts\..\helper-template.ps1') 'parent traversal fixture' } 'not lexically canonical'
+        }
+    }
 }
 Test-Case 'actual pair renderer derives the final repository helper and rejects drift before publication' {
     $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -703,5 +735,102 @@ Test-Case 'actual pair renderer derives the final repository helper and rejects 
     }
     Assert-Rejected { Invoke-ActualHelperFixture $helperTemplate -WrongExpectedHash } 'final helper binding'
     Assert-Test ($script:actualHelperCandidateCount -eq 0) 'Wrong expected hash reached the publication boundary.'
+
+    # 冷 CLI 执行整个 Pair renderer，包括 bootstrap、真实 no-follow handles 和发布。
+    # 只生成合成 pair；生成的 helper/launcher 与 smoke verifier 从不执行。
+    $pwshPath = [Environment]::ProcessPath
+    Assert-Test ([OperatingSystem]::IsWindows() -and $PSVersionTable.PSVersion.ToString() -ceq '7.6.5') 'Pair CLI regression requires pinned Windows PowerShell 7.6.5.'
+    $fixtureParent = [IO.Path]::Combine($repository,'.checks','renderer-path-fix-r1')
+    $null = [IO.Directory]::CreateDirectory($fixtureParent)
+    $fixtureRoot = [IO.Path]::Combine($fixtureParent,'cli-fixture-'+[guid]::NewGuid().ToString('N'))
+    $fixtureRepo = [IO.Path]::Combine($fixtureRoot,'repository space')
+    $fixtureStage = [IO.Path]::Combine($fixtureRoot,'pair staging')
+    $null = [IO.Directory]::CreateDirectory([IO.Path]::Combine($fixtureRepo,'scripts','lib','c1b-candidate-source'))
+    $null = [IO.Directory]::CreateDirectory([IO.Path]::Combine($fixtureRepo,'.checks'))
+    $null = [IO.Directory]::CreateDirectory($fixtureStage)
+    function Invoke-PairRendererCliFixture {
+        param([string]$ScriptPath)
+        $child=$null;$stdout=$null;$stderr=$null;$started=$false
+        try {
+            $start=[Diagnostics.ProcessStartInfo]::new()
+            $start.FileName=$pwshPath;$start.WorkingDirectory=$fixtureRepo
+            $start.UseShellExecute=$false;$start.CreateNoWindow=$true
+            $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+            foreach($arg in @('-NoLogo','-NoProfile','-NonInteractive','-File',$ScriptPath)){$start.ArgumentList.Add($arg)}
+            $stdout=[IO.MemoryStream]::new();$stderr=[IO.MemoryStream]::new()
+            $child=[Diagnostics.Process]::new();$child.StartInfo=$start
+            $started=$child.Start()
+            Assert-Test $started 'Pair CLI fixture did not start.'
+            $outTask=$child.StandardOutput.BaseStream.CopyToAsync($stdout)
+            $errTask=$child.StandardError.BaseStream.CopyToAsync($stderr)
+            if(-not $child.WaitForExit(60000)){throw 'Pair CLI fixture timed out.'}
+            Assert-Test ([Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($outTask,$errTask),5000)) 'Pair CLI fixture streams did not reach EOF.'
+            return [pscustomobject]@{Exit=$child.ExitCode;Stdout=$stdout.ToArray();Stderr=$stderr.ToArray()}
+        }
+        finally {
+            if($null -ne $child){
+                if($started -and -not $child.HasExited){$child.Kill($true);Assert-Test ($child.WaitForExit(5000)) 'Pair CLI fixture did not terminate.'}
+                $child.Dispose()
+            }
+            if($null -ne $stdout){$stdout.Dispose()};if($null -ne $stderr){$stderr.Dispose()}
+        }
+    }
+    try {
+        foreach($leaf in @('helper-template.ps1','launcher-template.ps1')){
+            [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRepo,'scripts','lib','c1b-candidate-source',$leaf),
+                [IO.File]::ReadAllBytes((Join-Path $sources $leaf)))
+        }
+        $verifierBytes=[IO.File]::ReadAllBytes((Join-Path $repository 'scripts/lib/tablet-layout-c1b-real-build-smoke-verifier.ps1'))
+        [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRepo,'scripts','lib','tablet-layout-c1b-real-build-smoke-verifier.ps1'),$verifierBytes)
+        $cliArguments=$arguments.Clone()
+        $cliArguments.RepoRoot=$fixtureRepo;$cliArguments.StagingRoot=$fixtureStage;$cliArguments.PwshPath=$pwshPath
+        $cliArguments.VerifierSha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($verifierBytes)).ToLowerInvariant()
+        $cliPair=New-C1bExactPairCandidateSource @cliArguments
+        $cliPath=[IO.Path]::Combine($fixtureRoot,'render-pair.ps1')
+        [IO.File]::WriteAllBytes($cliPath,[Text.UTF8Encoding]::new($false,$true).GetBytes($cliPair.RendererSource))
+        $firstCli=Invoke-PairRendererCliFixture $cliPath
+        [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRoot,'first.stdout.bin'),$firstCli.Stdout)
+        [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRoot,'first.stderr.bin'),$firstCli.Stderr)
+        Assert-Test ($firstCli.Exit -eq 0 -and $firstCli.Stderr.Length -eq 0) 'Actual Pair renderer CLI did not complete successfully.'
+        $record=[Text.UTF8Encoding]::new($false,$true).GetString($firstCli.Stdout) | ConvertFrom-Json
+        Assert-Test ($record.renderer_execution_scope -ceq 'artifact_generation_only' -and
+            -not $record.helper_executed -and -not $record.launcher_executed -and
+            -not $record.build_executed -and -not $record.adb_or_device_operation_executed) 'Pair CLI fixture expanded execution scope.'
+        $leaves=@(
+            @{Path=$record.helper_path;Text=$cliPair.HelperSource;Hash=$cliPair.HelperSha256;Length=$cliPair.HelperByteLength},
+            @{Path=$record.launcher_path;Text=$cliPair.LauncherSource;Hash=$cliPair.LauncherSha256;Length=$cliPair.LauncherByteLength})
+        foreach($leaf in $leaves){
+            $bytes=[IO.File]::ReadAllBytes($leaf.Path)
+            Assert-Test ([IO.Path]::GetDirectoryName($leaf.Path) -ceq $fixtureStage -and
+                $bytes.Length -eq $leaf.Length -and
+                [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() -ceq $leaf.Hash -and
+                [Text.UTF8Encoding]::new($false,$true).GetString($bytes) -ceq $leaf.Text -and
+                ([IO.File]::GetAttributes($leaf.Path) -band [IO.FileAttributes]::ReadOnly) -ne 0) 'Actual Pair CLI bytes/read-only state differ from generated expected pair.'
+        }
+        Assert-Test (@([IO.Directory]::EnumerateFiles($fixtureStage)).Count -eq 2 -and
+            @([IO.Directory]::EnumerateFileSystemEntries([IO.Path]::Combine($fixtureRepo,'.checks'))).Count -eq 0) 'Pair CLI fixture created temporary/smoke outputs.'
+        $secondCli=Invoke-PairRendererCliFixture $cliPath
+        [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRoot,'second.stdout.bin'),$secondCli.Stdout)
+        [IO.File]::WriteAllBytes([IO.Path]::Combine($fixtureRoot,'second.stderr.bin'),$secondCli.Stderr)
+        Assert-Test ($secondCli.Exit -ne 0 -and $secondCli.Stdout.Length -eq 0 -and
+            [Text.UTF8Encoding]::new($false,$true).GetString($secondCli.Stderr).Contains('unexpectedly exists')) 'Pair CLI fixture replaced an existing final leaf.'
+        foreach($leaf in $leaves){
+            $bytes=[IO.File]::ReadAllBytes($leaf.Path)
+            Assert-Test ($bytes.Length -eq $leaf.Length -and
+                [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() -ceq $leaf.Hash -and
+                ([IO.File]::GetAttributes($leaf.Path) -band [IO.FileAttributes]::ReadOnly) -ne 0) 'Rejected Pair CLI replacement changed a frozen fixture leaf.'
+        }
+        Assert-Test (@([IO.Directory]::EnumerateFiles($fixtureStage)).Count -eq 2 -and
+            @([IO.Directory]::EnumerateFileSystemEntries([IO.Path]::Combine($fixtureRepo,'.checks'))).Count -eq 0) 'Rejected Pair CLI replacement created temporary/smoke outputs.'
+        Write-Output ('Pair CLI fixture: first exit 0, second exit '+$secondCli.Exit+', bytes/read-only/no-replace verified; '+$fixtureRoot)
+    }
+    finally {
+        if($env:P0_KEEP_FIXTURE -cne '1'){
+            $full=[IO.Path]::GetFullPath($fixtureRoot)
+            Assert-Test ([IO.Path]::GetDirectoryName($full) -ceq $fixtureParent -and
+                [IO.Path]::GetFileName($full) -cmatch '^cli-fixture-[0-9a-f]{32}$') 'Pair CLI fixture cleanup escaped its exact generated root.'
+            Remove-Item -LiteralPath $full -Recurse -Force
+        }
+    }
 }
 Write-Output "candidate source offline: $passed passed, 0 skipped"
