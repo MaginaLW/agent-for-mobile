@@ -42,7 +42,12 @@ $script:FixturePhases = [Collections.Generic.List[object]]::new()
 # 开跑前自愈：上一轮被 kill 的跑测留下的临时仓库副本不会自己消失，攒到几十个就会把这台机器
 # 压到进程启动都超时（2026-07-26 实测 81 个残留 + 常驻 daemon → 整轮 11/38，全是假超时）。
 # 只扫 30 分钟前的：0 会把并行跑的另一个套件正在用的目录也当成残留删掉。
-$staleSweep = Clear-DevEnvStaleFixture -OlderThanMinutes $DevEnvDefaultStaleMinutes
+# 与 finally 使用相同的非空判断：保留模式跳过开跑清场，避免删除旧失败现场。
+$staleSweep = if ($env:P0_KEEP_FIXTURE) {
+    [pscustomobject]@{ Removed = 0; Failed = [string[]]@() }
+} else {
+    Clear-DevEnvStaleFixture -OlderThanMinutes $DevEnvDefaultStaleMinutes
+}
 if ($staleSweep.Removed -gt 0 -or $staleSweep.Failed.Count -gt 0) {
     Write-Host ("开跑前清场：删除残留跑测目录 $($staleSweep.Removed) 个" +
         $(if ($staleSweep.Failed.Count -gt 0) { "，$($staleSweep.Failed.Count) 个删不掉（可能仍被进程占用）" } else { '' })
@@ -2716,7 +2721,7 @@ finally {
     $leftover = [Collections.Generic.List[string]]::new()
     # P0_KEEP_FIXTURE=1 保留临时仓库副本供事后翻 adb.log / manifest。用例一失败，能看的现场
     # 只有一行断言消息，而 fixture 目录当场就被删了——2026-08-01 排一个假 adb 的重定向坑
-    # 全靠手工复刻现场，来回烧了近一小时。开跑前的自动清场会兜住忘记关掉的情况。
+    # 全靠手工复刻现场，来回烧了近一小时。保留模式也跳过开跑清场，关闭后才按原规则清扫。
     $roots = if ($env:P0_KEEP_FIXTURE) { Write-Host "KEEP: $($TestRoots -join '；')" -ForegroundColor Yellow; @() } else { $TestRoots }
     foreach ($root in $roots) {
         $done = $false
