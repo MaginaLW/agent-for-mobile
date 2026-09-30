@@ -6,6 +6,7 @@
 - **设备范围**：Android 手机与平板复用同一执行器和 MCP 架构。手机保留为历史开发基线；自 2026-08-24 起，后续真机任务以 vivo PA2553 / Android 16 / 日常横屏为当前验收基线。先做横屏全屏单窗口 T0-L 只读入场，再做微信 pane 只读探针和 pane-aware P0；竖屏兼容、多窗与浮动键盘后置，未验形态一律 fail-closed。
 - **设计说明**：[docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
 - **当前状态**：见 [STATUS.md](STATUS.md)（每次工作会话收尾更新）
+- **协调续办记录（2026-09-30）**：见[来源与工作树盘点](docs/runs/2026-09-27-协调来源与工作树盘点.md)及[C1b goal 与正式证据闭合](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。新候选 `16d66c9` 完整门为 8 PASS / 6 FAIL，尚无新 Ready 或真机验收；这两份记录反映协调来源进展，main 的其余状态仍代表其已发布版本。
 - **文档结构**：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（跑测归档）；开发指南见 [CLAUDE.md](CLAUDE.md)
 
 ## 里程碑
