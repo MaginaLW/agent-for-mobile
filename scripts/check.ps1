@@ -246,7 +246,7 @@ Invoke-Check 'C1b 候选生成与预检离线测试' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-build-only-host-readback-offline.ps1')
     ) | Out-Null
     $readbackSummary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-build-only-host-readback-offline.log')
-    if ($readbackSummary -cne 'BuildOnly host readback offline: 15 passed, 0 skipped; 46 assertions; synthetic only; external candidate/device calls 0') {
+    if ($readbackSummary -cne 'BuildOnly host readback offline: 20 passed, 0 skipped; 74 assertions; synthetic only; external candidate/device calls 0') {
         throw "BuildOnly 读回测试汇总不符：$readbackSummary"
     }
     Invoke-Logged -LogName 'c1b-host-acceptance-offline.log' -FilePath $PwshPath -Arguments @(
