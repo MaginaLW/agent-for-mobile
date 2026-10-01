@@ -86,6 +86,28 @@ function Assert-C1bRBFields {
         else{Assert-C1bRB ($actual-is[string]-and$actual-ceq$wanted) "$Name.$($entry.Key) literal mismatch."}
     }
 }
+function Assert-C1bRBHelperRawBindings {
+    param($launcher,$log,[byte[]]$summaryBytes,$map,[string]$CandidateSha)
+    Assert-C1bRBFields $launcher.streams ([ordered]@{capture_cap_bytes_per_stream=1048576L;drain_completed=$true}) 'helper streams'
+    $empty='sha256:'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]@())).ToLowerInvariant())
+    Assert-C1bRBFields $launcher.streams.stderr ([ordered]@{total_byte_length=0L;captured_byte_length=0L;sha256=$empty;overflowed=$false;forced_closed=$false}) 'helper stderr'
+    $stdoutBytes=[byte[]]::new($summaryBytes.Length+2);[Buffer]::BlockCopy($summaryBytes,0,$stdoutBytes,0,$summaryBytes.Length);$stdoutBytes[-2]=13;$stdoutBytes[-1]=10
+    try {$stdoutHash='sha256:'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stdoutBytes)).ToLowerInvariant())}
+    finally {[Array]::Clear($stdoutBytes,0,$stdoutBytes.Length)}
+    Assert-C1bRBFields $launcher.streams.stdout ([ordered]@{total_byte_length=([long]$summaryBytes.Length+2L);captured_byte_length=([long]$summaryBytes.Length+2L);sha256=$stdoutHash;overflowed=$false;forced_closed=$false}) 'helper stdout'
+    Assert-C1bRBFields $launcher.outputs.summary ([ordered]@{path=$map.summary_pin.path;preexisting=$false;create_new_and_stdout_bound=$true;byte_length=$map.summary_pin.byte_length;sha256=('sha256:'+$map.summary_pin.sha256)}) 'summary output'
+    Assert-C1bRBFields $launcher.outputs.log ([ordered]@{preexisting=$false;atomic_no_overwrite_published=$true;byte_length=$map.log_pin.byte_length;sha256=('sha256:'+$map.log_pin.sha256)}) 'log output'
+    Assert-C1bRBFields $log ([ordered]@{schema='tablet-layout-c1b-real-build-smoke-launcher-log/v2';expected_commit_sha=$CandidateSha}) 'launcher log'
+    foreach($name in @('stdout','stderr')){
+        Assert-C1bRB ($log.Contains($name)) "Launcher log missing $name."
+        foreach($field in @('total_byte_length','captured_byte_length','sha256','overflowed','forced_closed')){
+            Assert-C1bRB ($log[$name]-is[Collections.IDictionary]-and$log[$name].Contains($field)) "Launcher log $name missing $field."
+            Assert-C1bRB ($log[$name][$field]-ceq$launcher.streams[$name][$field]) 'Log/helper stream binding mismatch.'
+        }
+    }
+    foreach($field in @('byte_length','sha256')){Assert-C1bRB ($log.summary[$field]-ceq$launcher.outputs.summary[$field]) 'Log summary raw binding mismatch.'}
+}
+
 function Assert-C1bRBTransport {
     param($Session,$Map,[string]$Candidate)
     $capture=& $haCommands['Assert-C1bHACapture'] $Session $Map.launcher_capture_pin
@@ -247,22 +269,7 @@ try {
         Assert-C1bRBFields $launcher.residual ([ordered]@{helper_root_process_alive=$false;helper_job_active_processes_nonzero=$false;expected_summary_present=$true;expected_log_present=$true}) 'launcher residual'
     }
     Add-C1bRBCheck 'helper.summary_and_log_raw_bindings' {
-        Assert-C1bRBFields $launcher.streams ([ordered]@{capture_cap_bytes_per_stream=1048576L;drain_completed=$true}) 'helper streams'
-        $empty='sha256:'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]@())).ToLowerInvariant())
-        Assert-C1bRBFields $launcher.streams.stderr ([ordered]@{total_byte_length=0L;captured_byte_length=0L;sha256=$empty;overflowed=$false;forced_closed=$false}) 'helper stderr'
-        $stdoutBytes=[byte[]]::new($summaryBytes.Length+2);[Buffer]::BlockCopy($summaryBytes,0,$stdoutBytes,0,$summaryBytes.Length);$stdoutBytes[-2]=13;$stdoutBytes[-1]=10
-        try {$stdoutHash='sha256:'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stdoutBytes)).ToLowerInvariant())}
-        finally {[Array]::Clear($stdoutBytes,0,$stdoutBytes.Length)}
-        Assert-C1bRBFields $launcher.streams.stdout ([ordered]@{total_byte_length=([long]$summaryBytes.Length+2L);captured_byte_length=([long]$summaryBytes.Length+2L);sha256=$stdoutHash;overflowed=$false;forced_closed=$false}) 'helper stdout'
-        Assert-C1bRBFields $launcher.outputs.summary ([ordered]@{path=$map.summary_pin.path;preexisting=$false;create_new_and_stdout_bound=$true;byte_length=$map.summary_pin.byte_length;sha256=('sha256:'+$map.summary_pin.sha256)}) 'summary output'
-        Assert-C1bRBFields $launcher.outputs.log ([ordered]@{preexisting=$false;atomic_no_overwrite_published=$true;byte_length=$map.log_pin.byte_length;sha256=('sha256:'+$map.log_pin.sha256)}) 'log output'
-        Assert-C1bRBFields $log ([ordered]@{schema='tablet-layout-c1b-real-build-smoke-launcher-log/v2';expected_commit_sha=$CandidateSha}) 'launcher log'
-        foreach($name in @('stdout','stderr')){
-            foreach($field in @('total_byte_length','captured_byte_length','sha256','overflowed','forced_closed')){
-                Assert-C1bRB ($log.streams[$name][$field]-ceq$launcher.streams[$name][$field]) 'Log/helper stream binding mismatch.'
-            }
-        }
-        foreach($field in @('byte_length','sha256')){Assert-C1bRB ($log.summary[$field]-ceq$launcher.outputs.summary[$field]) 'Log summary raw binding mismatch.'}
+        Assert-C1bRBHelperRawBindings $launcher $log $summaryBytes $map $CandidateSha
     }
     Add-C1bRBCheck 'repository.final_42_raw_inputs' {
         $implementation=& $haCommands['Get-C1bHAImplementationMap'] $utf8.GetString((& $haCommands['Read-C1bHAFile'] $session $map.implementation_map_pin))

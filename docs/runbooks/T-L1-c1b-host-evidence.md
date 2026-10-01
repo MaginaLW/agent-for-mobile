@@ -23,6 +23,8 @@
 5. `read-c1b-build-only-host.ps1` 作为 Readback 阶段，核定真实 launcher/driver capture、PID、原始流、摘要和日志。
    strict verifier/private FunctionInfo 从准确 held source bytes 载入；成功报告要求没有失败或 unknown。
    报告发布 exit 0 与 accepted_no_device 是两个不同事实，reader 的真实退出由其外层 capture 核验。
+   `launcher-log/v2` 的原始流位于顶层 `stdout`、`stderr`；`launcher/v3` 的对应流位于 `streams`。
+   两种实际形状分别读取，逐项核对五个流字段及 summary raw 长度/hash，不能因摘要通过而跳过日志绑定。
 6. `seal-c1b-host-raw-evidence.ps1` 对精确 inventory 进行唯一 raw 封存：source/copy pins、ordinary parents、
    stable identity、single-link、原始长度/hash、只读副本和清理均核验；调用方捕获封存进程最后退出。
 7. `write-c1b-host-acceptance.ps1` 消费 caller-pinned InputMap 和独立 source review，重读所有 A1、阶段、

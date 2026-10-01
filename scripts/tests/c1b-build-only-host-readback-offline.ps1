@@ -79,6 +79,44 @@ function New-ElevationFixture($Map){
         argument_list_sha256=(Hash-Bytes ([Text.UTF8Encoding]::new($false).GetBytes(($argv|ConvertTo-Json -Compress))));native_exit_code=0L;elevated_native_exit_code=0L
     }
 }
+function New-HelperRawBindingsFixture {
+    # Actual log/v2 flat stream shape and launcher/v3 nested streams; synthetic gate only.
+    $summaryBytes=[IO.File]::ReadAllBytes((Join-Path $repo 'scripts/tests/fixtures/tablet-layout-c1b-real-build-smoke-summary-v1.json'))
+    $summaryValue=[Text.UTF8Encoding]::new($false,$true).GetString($summaryBytes)|ConvertFrom-Json -AsHashtable
+    $sha=[string]$summaryValue.expected_commit_sha
+    $empty='sha256:'+(Hash-Bytes ([byte[]]@()))
+    $stdoutBytes=[byte[]]::new($summaryBytes.Length+2)
+    [Buffer]::BlockCopy($summaryBytes,0,$stdoutBytes,0,$summaryBytes.Length)
+    $stdoutBytes[-2]=13;$stdoutBytes[-1]=10
+    try {$stdoutHash='sha256:'+(Hash-Bytes $stdoutBytes)}
+    finally {[Array]::Clear($stdoutBytes,0,$stdoutBytes.Length)}
+    $stdout=[ordered]@{total_byte_length=([long]$summaryBytes.Length+2L);captured_byte_length=([long]$summaryBytes.Length+2L);sha256=$stdoutHash;overflowed=$false;forced_closed=$false}
+    $stderr=[ordered]@{total_byte_length=0L;captured_byte_length=0L;sha256=$empty;overflowed=$false;forced_closed=$false}
+    $summaryHash='sha256:'+(Hash-Bytes $summaryBytes)
+    $log=[ordered]@{
+        schema='tablet-layout-c1b-real-build-smoke-launcher-log/v2';expected_commit_sha=$sha
+        bindings=[ordered]@{};verifier=[ordered]@{};helper=[ordered]@{}
+        stdout=([ordered]@{}+$stdout)
+        stderr=[ordered]@{total_byte_length=0L;captured_byte_length=0L;captured_prefix_base64='';captured_prefix_sha256=$empty;captured_prefix_byte_length=0L;capture_is_prefix=$true;uncaptured_byte_length=0L;sha256=$empty;overflowed=$false;forced_closed=$false}
+        summary=[ordered]@{byte_length=[long]$summaryBytes.Length;sha256=$summaryHash;stdout_exact_summary_plus_crlf=$true}
+    }
+    $logBytes=[Text.UTF8Encoding]::new($false).GetBytes(($log|ConvertTo-Json -Depth 12)+[char]10)
+    $map=[ordered]@{
+        summary_pin=[ordered]@{path=(Join-Path $root 'helper-summary.json');byte_length=[long]$summaryBytes.Length;sha256=(Hash-Bytes $summaryBytes)}
+        log_pin=[ordered]@{path=(Join-Path $root 'helper.log');byte_length=[long]$logBytes.Length;sha256=(Hash-Bytes $logBytes)}
+    }
+    $launcher=[ordered]@{
+        streams=[ordered]@{capture_cap_bytes_per_stream=1048576L;drain_completed=$true;stdout=([ordered]@{}+$stdout);stderr=([ordered]@{}+$stderr)}
+        outputs=[ordered]@{
+            summary=[ordered]@{path=$map.summary_pin.path;preexisting=$false;create_new_and_stdout_bound=$true;byte_length=$map.summary_pin.byte_length;sha256=$summaryHash}
+            log=[ordered]@{path=$map.log_pin.path;preexisting=$false;atomic_no_overwrite_published=$true;byte_length=$map.log_pin.byte_length;sha256=('sha256:'+$map.log_pin.sha256)}
+        }
+    }
+    return @{launcher=$launcher;log=$log;summary_bytes=$summaryBytes;map=$map;candidate_sha=$sha}
+}
+function Invoke-HelperRawBindingsFixture($Fixture) {
+    Assert-C1bRBHelperRawBindings $Fixture.launcher $Fixture.log $Fixture.summary_bytes $Fixture.map $Fixture.candidate_sha
+}
 try {
     Test-Case 'separate launcher driver and elevation scopes are accepted as synthetic transport' {
         $fixture=New-TransportFixture;$transport=Invoke-TransportFixture $fixture
@@ -181,6 +219,57 @@ try {
             }
             Expect-Rejected {Assert-C1bRBHelperEnvelope $capture $bad} 'outside the actual launcher|canonical UTC'
         }
+    }
+    Test-Case 'actual log v2 flat streams bind to launcher v3 streams' {
+        $fixture=New-HelperRawBindingsFixture
+        Assert-Test (-not$fixture.log.Contains('streams')-and$fixture.log.Contains('stdout')-and$fixture.log.Contains('stderr')) 'Fixture lost the actual log/v2 flat stream shape.'
+        Invoke-HelperRawBindingsFixture $fixture
+    }
+    Test-Case 'each log stdout and stderr raw field drift is rejected' {
+        foreach($stream in @('stdout','stderr')){
+            foreach($field in @('total_byte_length','captured_byte_length','sha256','overflowed','forced_closed')){
+                $fixture=New-HelperRawBindingsFixture
+                switch($field){
+                    total_byte_length {$fixture.log[$stream][$field]++}
+                    captured_byte_length {$fixture.log[$stream][$field]++}
+                    sha256 {$fixture.log[$stream][$field]='sha256:'+('f'*64)}
+                    overflowed {$fixture.log[$stream][$field]=$true}
+                    forced_closed {$fixture.log[$stream][$field]=$true}
+                }
+                Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} 'Log/helper stream binding mismatch'
+            }
+        }
+    }
+    Test-Case 'missing log streams and each required raw field are rejected' {
+        foreach($stream in @('stdout','stderr')){
+            $fixture=New-HelperRawBindingsFixture
+            $fixture.log.Remove($stream)
+            Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} ('Launcher log missing '+$stream)
+            foreach($field in @('total_byte_length','captured_byte_length','sha256','overflowed','forced_closed')){
+                $fixture=New-HelperRawBindingsFixture
+                $fixture.log[$stream].Remove($field)
+                Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} ('Launcher log '+$stream+' missing '+$field)
+            }
+        }
+    }
+    Test-Case 'nested-only log streams do not substitute for producer v2 fields' {
+        $fixture=New-HelperRawBindingsFixture
+        $fixture.log.streams=[ordered]@{stdout=$fixture.log.stdout;stderr=$fixture.log.stderr}
+        $fixture.log.Remove('stdout');$fixture.log.Remove('stderr')
+        Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} 'Launcher log missing stdout'
+    }
+    Test-Case 'summary plus CRLF and published raw pin bindings stay mandatory' {
+        $fixture=New-HelperRawBindingsFixture
+        $fixture.summary_bytes[0]=$fixture.summary_bytes[0]-bxor1
+        Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} 'helper stdout.sha256 literal mismatch'
+        foreach($field in @('byte_length','sha256')){
+            $fixture=New-HelperRawBindingsFixture
+            if($field-ceq'byte_length'){$fixture.log.summary[$field]++}else{$fixture.log.summary[$field]='sha256:'+('f'*64)}
+            Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} 'Log summary raw binding mismatch'
+        }
+        $fixture=New-HelperRawBindingsFixture
+        $fixture.map.log_pin.sha256=('f'*64)
+        Expect-Rejected {Invoke-HelperRawBindingsFixture $fixture} 'log output.sha256 literal mismatch'
     }
     Test-Case 'actual reader CLI publishes a failed report pointer and never overwrites it' {
         # One harmless reader subprocess; invalid synthetic input rejects before any candidate read.
