@@ -1,6 +1,6 @@
 # 项目状态
 
-> 2026-10-01 最新状态：goal 为 `active`。读回接口修复 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586`（根整合 `568e826287d6912efdfbdd49a65d8101ac63da8a`）已通过两仓 20/74 专项和独审。新 r13 FullCheck 自然退出 0，14/0/0，219 Android 任务 / 126 JUnit XML / 1170 tests 零失败，全图独审通过；输出保全和特性源码发布实际 0 / 独审通过。A1、五源、Pair、R14、唯一 Preflight 均 actual 0 / 独审通过，候选已冻结；冻结后不运行普通 Git/check/Gradle。A5 Prepare actual 0 / 实际独审通过，26＋20 源码语义独审无 P0/P1；BuildOnlyPrepare actual 0，未启动 UAC、launcher 或构建。机械 Reviews、正式20源码发布、final sourceReview7、Probe / 唯一 BO / Readback / 合同仍待闭合；658 旧轮不重跑，Ready/R3 仍无成功。见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> 2026-10-01 最新状态：goal 为 `active`。读回接口修复 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586`（根整合 `568e826287d6912efdfbdd49a65d8101ac63da8a`）已通过两仓 20/74 专项和独审。新 r13 FullCheck 自然退出 0，14/0/0，219 Android 任务 / 126 JUnit XML / 1170 tests 零失败，全图独审通过；输出保全和特性源码发布实际 0 / 独审通过。A1、五源、Pair、R14、唯一 Preflight 均 actual 0 / 独审通过，候选已冻结；冻结后不运行普通 Git/check/Gradle。A5 Prepare、三项机械 Reviews actual 0 / 实际独审通过，正式20源码发布 actual 0（运行图独审待闭合），当前113个源码角色绑定及四份语义收据已完成。final sourceReview7 输入准备 actual 0 / 输入独审通过，原 publisher 待执行；BuildOnlyPrepare actual 0，UAC、launcher 与构建尚未启动。Probe / 唯一 BO / Readback / 合同仍待闭合；658 旧轮不重跑，Ready/R3 仍无成功。见[本轮记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 
 > 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
 
