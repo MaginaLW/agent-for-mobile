@@ -1,6 +1,6 @@
 # 工序分流与验收批次
 
-> 2026-10-01 本次恢复最新状态：goal 为 `active`。operation-r2 Probe2 与唯一 Drive2 均自然退出 `0`，BuildOnly 摘要 passed、一次启动已消费。实际 Readback 为 `not_accepted_or_incomplete`，十项检查 9 pass / 1 failed；独审确认 reader 的 log/v2 路径接口 P1，stdout/stderr 实际十字段均一致。保留已消费 658 候选与失败报告，修复维护源及有效回归后形成新 SHA / 新整轮；冻结规程不变，旧轮不改、不重跑。HostContract、Ready 与 R3 仍待实际闭合，phone batch4 paused 0/4。见[本次恢复记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> 2026-10-01 最新状态：goal 为 `active`。继任 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586` 已通过 20/74 专项、源码独审及本轮 FullCheck（15070 actual 0，14/0/0，Run/Read 0），Full 实际全图独审通过。本轮输出保全 actual 0、1359文件 / 695目录 / 3日志、删除0；源码已一次 create-only 发布并精确远端读回，发布实际独审通过。A1 actual 0 / 独审通过，PrepareSources actual 0 / 五源独审收尾中；Pair / R14 / 唯一 Preflight / 新一次 BO / 正式 Readback / 合同尚须依次实际闭合。已消费 658 的成功 BO 与失败读回原件保留、不重跑；Ready / R3 待办，phone batch4 paused 0/4。见[本轮记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 
 > 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
 
