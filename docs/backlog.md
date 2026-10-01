@@ -1,6 +1,6 @@
 # 工序分流与验收批次
 
-> 2026-10-01 最新状态：goal 为 `active`。继任 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586` 已通过 20/74 专项、源码独审及本轮 FullCheck（15070 actual 0，14/0/0，Run/Read 0），Full 实际全图独审通过。本轮输出保全 actual 0、1359文件 / 695目录 / 3日志、删除0；源码已一次 create-only 发布并精确远端读回，发布实际独审通过。A1 actual 0 / 独审通过，PrepareSources actual 0 / 五源独审收尾中；Pair / R14 / 唯一 Preflight / 新一次 BO / 正式 Readback / 合同尚须依次实际闭合。已消费 658 的成功 BO 与失败读回原件保留、不重跑；Ready / R3 待办，phone batch4 paused 0/4。见[本轮记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> 2026-10-01 最新状态：goal 为 `active`。继任 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586` 已通过专项、Full（14/0/0）、输出保全、特性源码发布、A1、五源、Pair、R14、唯一 Preflight 的实际运行与独审；候选已冻结。A5 Prepare actual 0 / 实际独审通过，26＋20 源码语义独审无 P0/P1；BuildOnlyPrepare actual 0（UAC / launcher / 构建 0）。机械 Reviews / 正式20源码发布 / final sourceReview7 / Probe / 唯一 BO / 正式 Readback / 合同尚须实际闭合。已消费 658 的成功 BO 与失败读回原件保留、不重跑；Ready / R3 待办，phone batch4 paused 0/4。见[本轮记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 
 > 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
 
