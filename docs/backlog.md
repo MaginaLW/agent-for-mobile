@@ -1,5 +1,9 @@
 # 工序分流与验收批次
 
+> 2026-10-01 本次恢复最新状态：goal 为 `active`。operation-r2 Probe2 与唯一 Drive2 均自然退出 `0`，BuildOnly 摘要 passed、一次启动已消费。实际 Readback 为 `not_accepted_or_incomplete`，十项检查 9 pass / 1 failed；独审确认 reader 的 log/v2 路径接口 P1，stdout/stderr 实际十字段均一致。保留已消费 658 候选与失败报告，修复维护源及有效回归后形成新 SHA / 新整轮；冻结规程不变，旧轮不改、不重跑。HostContract、Ready 与 R3 仍待实际闭合，phone batch4 paused 0/4。见[本次恢复记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+
+> 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
+
 > 2026-10-01 当前 goal 为 `blocked`，目标尚未完成：同一 UAC 现场事实缺口已持续三个目标回合，现有问题未收到答复。658 恢复 r2 输入未变化，Probe2/Drive2/BuildOnly 未启动，固定 once/dispatch 标记不存在；HostContract、Ready 和 R3 保持待办。可独立准备与离线文档关闭已完成，等待现场答复后恢复，不自动重试提升。见[受阻审计](runs/2026-09-30-C1b-goal与正式证据闭合.md)，下方 active 为历史检查点状态。
 
 > 2026-09-08：A 负责协调、开发和 ask；C 按需执行固定候选真机验收，不设常驻 B。

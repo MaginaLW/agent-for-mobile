@@ -1,5 +1,9 @@
 # 项目状态
 
+> 2026-10-01 本次恢复最新状态：goal 为 `active`。用户亲自点击 UAC 后，6587adf 的 operation-r2 Probe2 与唯一 Drive2 均自然退出 `0`；BuildOnly 摘要 passed，一次性启动已消费，不重跑。独立 Readback 的进程虽退出 `0`，实际报告为 `not_accepted_or_incomplete`，十项检查 9 pass / 1 failed：reader 错将 log/v2 顶层 stdout/stderr 读作 streams。三份独审确认实际十个 stream 字段一致、接口缺陷为 P1，原失败报告与冻结候选保留；尚无 HostContract、Ready 或 R3 成功。按冻结规程修复维护源和回归后建立新 SHA / 新整轮，旧轮不补改、不重跑。Probe/Drive 及失败读回详见[本次恢复记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+
+> 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
+
 > 2026-10-01 当前执行状态：goal 已标记 `blocked`，完整目标尚未完成。同一 UAC 现场事实缺口已持续三个目标回合，现有问题未收到答复；首次 Probe 的系统错误为“操作已被用户取消”，取消者及原因仍 unknown。658 的恢复 r2 材料已封存，但 Probe2/Drive2/BuildOnly、运行时 HostContract、Ready 与 R3 设备终态均未执行。固定 once/dispatch 标记仍不存在，不自动重试提升；收到现场答复后沿已准备入口恢复。见[受阻审计](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。下方 active 表述保留各历史检查点状态。
 
 > 2026-09-30：已按用户“设立goal，授权充分的权限和批准，完成这些待办任务，多调用sub-agent”建立持续 goal，推进待办实现、新候选准备、受控主机执行、证据与必要源码发布。每次真实启动仍绑定完整候选 SHA、运行时和 launcher raw hash，一次启动、自动重试 `0`；发送、支付、删除等临界操作保留手机可见两段式确认。见[本轮 goal 与证据记录](docs/runs/2026-09-30-C1b-goal与正式证据闭合.md)。
