@@ -1,6 +1,6 @@
 # 工序分流与验收批次
 
-> 2026-10-01 最新状态：goal 为 `active`。继任 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586` 已通过专项、Full（14/0/0）、输出保全、特性源码发布、A1、五源、Pair、R14、唯一 Preflight 的实际运行与独审；候选已冻结。A5 Prepare、三项机械 Reviews actual 0 / 实际独审通过，正式20源码发布 actual 0（运行图独审待闭合），113个当前源码角色绑定和四份语义收据已完成。final sourceReview7 输入准备 actual 0 / 输入独审通过，原 publisher 待执行；BuildOnlyPrepare actual 0（UAC / launcher / 构建 0）。Probe / 唯一 BO / 正式 Readback / 合同尚须实际闭合。已消费 658 的成功 BO 与失败读回原件保留、不重跑；Ready / R3 待办，phone batch4 paused 0/4。见[本轮记录](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+> 2026-10-01 最新状态：用户要求暂时保留 PCSuite 手机助手及其 ADB 会话，独立收尾完成后暂停后续执行，完整 goal 未完成。r13 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586` 已通过 Full（14/0/0）、A1、五源、Pair、R14、Preflight、A5 源码阶段和 final sourceReview7；Probe 实际 0、管理员令牌 true。唯一 Drive 因宿主 ADB / TCP5037 非空在本轮 UAC 和构建前失败，once / dispatch 已消费，frozen_failed，不重跑。Readback / 合同 / Ready / R3 待办，phone batch4 paused 0/4。恢复规程维护源为 `cad74113a9f957edf8acc327fc0717e6979d3800`，只有文档门通过；新候选与完整运行证据仍须另建。见[本轮收尾](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
 
 > 以下 blocked 段为本次恢复前的历史检查点，原审计和原件保留。
 
@@ -54,6 +54,17 @@ A 优先完成能减少真机人工操作、缩短验收时间的工作。离线
 ## 4. 当前工作与验收批次
 
 ### 09-27 审查待办
+
+#### 2026-10-01 保留 PCSuite 后的恢复顺序
+
+当前按用户要求停止执行依赖宿主边界的工作，保留 PCSuite、ADB 会话和全部失败原件。完成的静态接口与独立源码审查只用于后续重绑参考，不能执行已消费 r13 的固定输入。
+
+- [ ] 用户可结束当前手机助手 / 同步会话时，先被动核定宿主 `adb.exe` 与 TCP/5037 listener 均为零；BuildOnly 启动前再次核定。当前不关闭、终止或绕过这些会话。
+- [ ] 从维护源 `cad74113a9f957edf8acc327fc0717e6979d3800` 形成新的普通 clean clone 和完整 SHA；重新绑定 A1—A5、全量门、源码发布 / 角色审查、pair / r14 / 唯一 Preflight。该维护源尚无新 Full 或冻结候选成功。
+- [ ] 对新候选执行 Probe、一次 BuildOnly、独立 Readback、RawArchive 和 HostContract。r13 / 658 原 once 不删除、同 SHA 不重跑，旧运行事实不移植。
+- [ ] 新合同通过后完成 Binding → Prefix → Ready；实际 Ready 后取得新的人工现场确认，再走正式 C1b 只读采集、Terminal → R3 Read → 一次 Freeze。静态接线不代替设备验收；发送 / 支付 / 删除仍须手机可见两段式确认。
+
+下游 Readback、Archive / Contract、A5 finish、Terminal / R3 的 SOURCE 材料与独审已准备；固定 r13 的参数、路径和 raw pins 必须随新候选重绑并再次审查，当前无这些阶段的运行成功事实。其他已关闭离线项和暂停的 phone batch4 保持原状态。
 
 依据 [项目审查记录](runs/2026-09-27-项目审查与待办.md)纳入当前队列；下表维护后续进度，审查页保留当时证据。
 09-30 持续 goal 已按本轮直接授权推进；协调源码 `e0fcbb2` 的 P3、主机传输与 R3 离线增量已闭合，新模块、可变实现整合及新 clean 候选按下方实际证据续办，离线通过不替代设备验收。

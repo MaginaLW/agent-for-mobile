@@ -60,6 +60,10 @@ exact pair、只读 preflight 与 BuildOnly 的通用核对项，均须绑定该
 8. 对 exact staging 执行只读 preflight；除 clean SHA、hash/identity、load/invoke、deadline、既有输出与 failure-only
    sidecar 缺席、module build output no-follow absent 外，还必须被动确认宿主 `adb.exe` 与 TCP/5037 listener 都为零，
    才可发布 `prepared_not_authorized`；snapshot unavailable 也 fail closed；
+   BuildOnly one-shot 启动前须再次被动确认宿主 `adb.exe` 与 TCP/5037 listener 仍为零；连接 USB 或启动手机助手/同步软件，
+   可能在 preflight 与 one-shot 之间启动 default ADB。先确认当前手机助手/同步等宿主 ADB 会话及其中的用户工作，
+   确认该会话可结束后再关闭；本轮新 Ready 成立后再连接真机并核验现场。环境非空或 snapshot unavailable 仍 fail closed，
+   不自动终止外部宿主进程。wrapper 先写 `once` 再校验宿主边界，因此这类失败也消耗唯一尝试；不得删除 `once` 或重跑失败的同一 SHA，恢复须新候选。
 9. `prepared_not_authorized` 不执行 launcher/helper/Gradle/JDK/ADB、不访问设备、不自动终止宿主进程，也不是 smoke 或
    授权。冻结后到 one-shot 之间不得运行会重建 module `build` 或重启 default ADB 的工具；授权前须先用不调用
    launcher/Git/构建/ADB 的探针证明 UAC 提升后的进程持有管理员令牌。只有用户针对该完整 SHA 明确授权，才可由
