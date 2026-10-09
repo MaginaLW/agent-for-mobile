@@ -2,6 +2,7 @@
 docs/runs/traces/
 docs/runs/ledger.csv.write.lock
 docs/runs/ledger.csv.tmp.*
+# 少量早期 C1a/T0 证据 JSON 是有意强制入库的（被文档引用，部分由 .gitattributes 固定原字节）
 docs/runs/evidence/
 
 # 派单并发锁
@@ -19,7 +20,7 @@ configs/gateway-mcp.json.restore-*.tmp
 **/.kotlin/
 **/local.properties
 
-# 构建/工具日志：落盘后 grep 用，不入库（曾误提交 4 个 .codex-task1-quality-*.log）
+# 构建/工具日志：落盘后 grep 用，不入库
 *.log
 !docs/runs/**/*.log
 

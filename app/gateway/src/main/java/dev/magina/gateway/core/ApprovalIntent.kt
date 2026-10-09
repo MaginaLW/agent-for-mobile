@@ -36,7 +36,7 @@ data class ApprovalIntent(
     /**
      * 卡上已批准完整内容的 OCR 基线，仅在进程内存保存。预览可能截断，不能充当它。
      * 归一全文与摘要/长度由同一次构造绑定，重建时仍与本意图逐项核对；缺失则 fail closed。
-     * 现行 OCR 归一包含与 4 字长度守卫见 STATUS 的比对方式条目，尚未接入安全门。
+     * 现行 OCR 归一包含与 4 字长度守卫见 EvidenceRebuildPolicy 与 docs/specs/2026-08-02-语义意图审批-design.md §5，尚未接入安全门。
      */
     val ocrBaseline: IntentOcrBaseline? = null,
 ) {

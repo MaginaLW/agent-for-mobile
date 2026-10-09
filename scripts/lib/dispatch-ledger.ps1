@@ -296,7 +296,7 @@ function Get-FailReason {
     $lastCode = ''
     $lastChannel = ''
     if ($TraceFile -and (Test-Path -LiteralPath $TraceFile -PathType Leaf)) {
-        # 只尾读（会话纪律 3）；不整读、不做完整 JSON 解析——这里只要一个归因线索。
+        # 只尾读（见 docs/runbooks/离线开发与验证.md 排障）；不整读、不做完整 JSON 解析——这里只要一个归因线索。
         #
         # 反斜杠必须可选：信封是被当成**字符串**塞进 tool_result 的，落到 trace 里是
         # `\"code\":\"E_BLOCKED\"`（转义），只写未转义形式的话真机 trace 一个码都匹配不到。

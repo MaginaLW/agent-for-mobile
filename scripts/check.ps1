@@ -18,7 +18,7 @@ diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚�
 并在它开跑前停掉 gradle daemon 释放内存——那套件对进程启动延迟极敏感，daemon 常驻会把它压出
 成片的假超时（2026-07-26 实测，详见 docs/knowledge/android/common.md）。
 
-长输出一律先落盘再尾读（会话纪律 3）：完整日志在 .checks/（已 gitignore），失败时只把关键行打到屏幕。
+长输出一律先落盘再尾读（见 docs/runbooks/离线开发与验证.md 排障）：完整日志在 .checks/（已 gitignore），失败时只把关键行打到屏幕。
 #>
 [CmdletBinding()]
 param(
