@@ -1,6 +1,6 @@
 # 知识库索引（渐进式披露入口）
 
-> **载入纪律：按需读单册，不整目录读。** 遇到左列情况才载入右列文件；没遇到就不读。CLAUDE.md 文档地图只指到本文件。
+> **载入纪律：按需读单册，不整目录读。** 遇到左列情况才载入右列文件；没遇到就不读。AGENTS.md 文档地图只指到本文件。
 
 ## 载入路由
 
@@ -24,7 +24,7 @@
 
 ```
 knowledge/
-├─ android/          # 安卓阵营：common · tablet(当前平板基线) · vivo-originos(历史手机基线) · other-vendors · sys-cli
+├─ android/          # 安卓阵营：common · tablet(当前平板基线) · vivo-originos(历史手机基线) · m1b-capabilities · other-vendors · sys-cli
 ├─ ios/              # 苹果阵营：边界占位
 ├─ apps/             # 每 app 一册（wechat/xiaohongshu/jd/…）+ deeplinks 注册表
 └─ brain/            # 大脑侧：cost(成本校准) · harness(链路坑)

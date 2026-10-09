@@ -1,35 +1,37 @@
 # 手机 Agent（代号待定）
 
-把已付费的 AI 订阅（Claude Pro / ChatGPT Plus）变成一个能替你操作手机各应用的托管助手。
+把已付费的 AI 订阅（Claude Pro / ChatGPT Plus）变成能替你操作手机和平板各 App 的托管助手。
 
-- **架构一句话**：手机 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI（官方订阅通道，零 API key 成本起步）。
-- **设备范围**：Android 手机与平板复用同一执行器和 MCP 架构。手机保留为历史开发基线；自 2026-08-24 起，后续真机任务以 vivo PA2553 / Android 16 / 日常横屏为当前验收基线。vivo“应用多窗”保持日常开启，同一微信双 OS window 是主线适配对象，不是待关闭的异常形态；先做 T0-L 画像与 T-L1 只读 window/root/pane 证据，再做 pane-aware P0。其它 App 分屏/自由窗、浮动键盘与平板竖屏兼容后置，未验形态一律 fail-closed。
-- **设计说明**：[docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
-- **当前状态**：见 [STATUS.md](STATUS.md)（有实质状态变化时更新）
-- **当前待办与有效决定**：见 [docs/backlog.md](docs/backlog.md)；历史审查记录不替代该队列
-- **文档结构**：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（跑测归档）；开发指南见 [CLAUDE.md](CLAUDE.md)
+**架构**：设备端 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI，只走官方订阅通道。
+
+**设备基线**：Android 手机与平板复用同一执行器。当前验收基线是 vivo PA2553 / Android 16 / 日常横屏“应用多窗”，同一微信的双 OS window 是主线适配对象。手机是历史基线，手机 C 道（手机真机验收）暂停。未验证的形态一律 fail-closed。
+
+## 入口
+
+- 开发指南：[AGENTS.md](AGENTS.md)（Claude 经 [CLAUDE.md](CLAUDE.md) 导入）
+- 当前状态与卡点：[STATUS.md](STATUS.md)
+- 待办与有效决定：[docs/backlog.md](docs/backlog.md)
+- 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
+- 文档结构：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/contracts`（契约与 schema）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（跑测记录与台账）
 
 ## 里程碑
 
 | | 内容 | 状态 |
 |---|---|---|
-| M0 | mobile-mcp 真机跑通 5 个验收任务，拿到成功率/token 数据 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)·[runbook](docs/runbooks/M0-runbook.md)） |
-| M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 进行中——网关已在真机跑通（a11y + IME + OCR 融合 + 内嵌 MCP server），P0 安全硬门见下 |
-| M1-T | Android 平板横屏基线（T0-L 画像 + T-L1 pane 探针 + T-L2 P0） | 🟡 进行中；当前候选、验收结论与前置条件统一见 [STATUS](STATUS.md)，架构见[适配设计](docs/specs/2026-08-23-Android平板适配-design.md) |
-| M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ |
-| M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ |
+| M0 | mobile-mcp 真机跑通 5 个验收任务 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)） |
+| M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 网关已在历史手机上跑通，部分工具仍是占位（见[能力现状](docs/knowledge/android/m1b-capabilities.md)）；P0 安全硬门未闭合 |
+| M1-T | Android 平板横屏基线（T0-L 入场 → T-L1 只读证据 → T-L2 横屏 P0） | 🟡 T0-L 完成；T-L1 未通过，卡在 C1b 主机证据链 |
+| M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ 未开始 |
+| M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ 未开始 |
 
-### P0 · 危险动作安全硬门（M1 内的验收门）
+当前候选、卡点与下一步见 [STATUS.md](STATUS.md)；平板架构见[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)。
 
-发送/支付/删除类动作必须**两段式**：网关停下弹确认卡，真人在手机上决定，确认前后各复核一次上下文。
-监督式真机跑测由 [scripts/run-p0-safety-smoke.ps1](scripts/run-p0-safety-smoke.ps1) 驱动（[runbook](docs/runbooks/P0-safety-hard-gate-smoke.md)）。
+## 危险动作安全硬门
 
-| 腿 | 验证什么 | 状态 |
-|---|---|---|
-| Allow | 真人允许后动作执行且只执行一次 | 🟡 链路已通（2026-07-26 真机：确认卡→允许→放行→只读复核全绿），发送本身待验 |
-| Stale | 确认后上下文变了就必须拒绝执行 | 🟡 待在新链路下复跑 |
-| Deny | 真人拒绝后绝不执行 | ✅ 历史批次 3 已通过带外验证；语义意图批次 4 仍待复验 |
+发送、支付、删除类动作必须两段式：网关在临界动作前停下并弹出确认卡，由真人在设备上决定，确认前后各复核一次上下文。通知只能拒绝或查看证据，不能批准。
 
-进度与卡点以 [STATUS.md](STATUS.md) 为准。
+硬门尚未闭合，各腿现状见 [STATUS](STATUS.md)。监督式跑测由 [scripts/run-p0-safety-smoke.ps1](scripts/run-p0-safety-smoke.ps1) 驱动，规程见 [P0 runbook](docs/runbooks/P0-safety-hard-gate-smoke.md)。
 
-无真机开发可直接按[离线开发与验证](docs/runbooks/离线开发与验证.md)运行完整检查。
+## 无真机开发
+
+按[离线开发与验证](docs/runbooks/离线开发与验证.md)运行完整检查。

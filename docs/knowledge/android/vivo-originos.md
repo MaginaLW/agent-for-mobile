@@ -1,4 +1,4 @@
-# vivo / OriginOS（主力测试机：V2352A · X100 系列，Android 16，1260×2800）
+# vivo / OriginOS（历史手机基线：V2352A · X100 系列，Android 16，1260×2800）
 
 > 来源：M0/M0.5 实测（2026-07-16/17）。原始记录：[../../runs/2026-07-16-M0.md](../../runs/2026-07-16-M0.md)。品牌开关完整矩阵见 [M0 runbook §1.1](../../runbooks/M0-runbook.md)。
 
