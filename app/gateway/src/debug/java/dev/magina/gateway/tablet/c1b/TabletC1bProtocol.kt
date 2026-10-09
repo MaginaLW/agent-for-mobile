@@ -378,6 +378,16 @@ internal class C1bProtocolControl(
                 require(reasonCode in C1B_PROTOCOL_FAILURE_REASONS) {
                     "C1b failed control reason is invalid"
                 }
+                C1B_PROTOCOL_CAPTURE_FAILURE_REASONS[reasonCode]?.let { token ->
+                    val expected = if (token == "c1") {
+                        C1B_PROTOCOL_C1_IN_FLIGHT_TUPLE
+                    } else {
+                        C1B_PROTOCOL_C2_IN_FLIGHT_TUPLE
+                    }
+                    require(generation > 0L && tuple == expected) {
+                        "C1b capture failure diagnostic tuple is invalid"
+                    }
+                }
             }
 
             C1bProtocolState.ABORTED -> {
@@ -443,6 +453,13 @@ private val C1B_PROTOCOL_ABSENT_REASONS = setOf(
     "session_not_found",
     "t0_pending",
 )
+private val C1B_PROTOCOL_CAPTURE_FAILURE_REASONS = C1B_PROTOCOL_CAPTURE_TOKENS.flatMap { token ->
+    C1bCaptureFailureStage.entries.flatMap { stage ->
+        C1bCaptureFailureKind.entries.map { kind ->
+            "capture_${token}_${stage.wire}_${kind.wire}" to token
+        }
+    }
+}.toMap()
 private val C1B_PROTOCOL_FAILURE_REASONS = setOf(
     "a11y_service_replaced",
     "a11y_service_unavailable",
@@ -459,7 +476,7 @@ private val C1B_PROTOCOL_FAILURE_REASONS = setOf(
     "session_expiry_scheduler_rejected",
     "start_replayed",
     "t0_invalid",
-)
+) + C1B_PROTOCOL_CAPTURE_FAILURE_REASONS.keys
 private val C1B_PROTOCOL_ABORT_REASONS = setOf("coordinator_shutdown", "session_aborted")
 private val C1B_PROTOCOL_REASON_CODES =
     C1B_PROTOCOL_ABSENT_REASONS + C1B_PROTOCOL_FAILURE_REASONS +

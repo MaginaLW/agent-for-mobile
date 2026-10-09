@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.charset.StandardCharsets
@@ -11,6 +13,79 @@ import java.security.MessageDigest
 import java.time.Instant
 
 class TabletC1bProbeTest {
+    @Test
+    fun captureFailureStagesKeepOnlyClosedTypesAndNeverRetainSourceExceptions() {
+        val secret = "private-title /private/content/path"
+        val hostile = object : Exception() {
+            override val message: String get() = throw AssertionError("must not read message")
+            override fun toString(): String = throw AssertionError("must not render exception")
+        }
+        val failures = listOf(
+            SecurityException(secret, Exception(secret)) to C1bCaptureFailureKind.SECURITY,
+            IllegalArgumentException(secret) to C1bCaptureFailureKind.ILLEGAL_ARGUMENT,
+            IllegalStateException(secret) to C1bCaptureFailureKind.ILLEGAL_STATE,
+            UnsupportedOperationException(secret) to C1bCaptureFailureKind.UNSUPPORTED,
+            hostile to C1bCaptureFailureKind.UNKNOWN,
+        )
+        C1bCaptureFailureStage.entries.forEach { stage ->
+            failures.forEach { (source, kind) ->
+                val failure = captureFailure { c1bCaptureStage(stage) { throw source } }
+                failure.addSuppressed(source)
+                assertEquals(stage, failure.stage)
+                assertEquals(kind, failure.kind)
+                assertNull(failure.cause)
+                assertTrue(failure.stackTrace.isEmpty())
+                assertTrue(failure.suppressed.isEmpty())
+                assertFalse(failure.toString().contains(secret))
+                assertEquals("C1b capture failed", failure.message)
+            }
+        }
+        val inner = C1bCaptureFailure(C1bCaptureFailureStage.DISPLAY, C1bCaptureFailureKind.SECURITY)
+        assertTrue(inner === captureFailure { c1bCaptureStage(C1bCaptureFailureStage.PROBE) { throw inner } })
+    }
+
+    @Test
+    fun probeClassifiesDisplayAndOtherFatalBoundariesWithoutChangingReadFallbacks() {
+        val base = FakePort(windowList = emptyList())
+        val displayPort = object : TabletC1bReadPort by base {
+            override fun display(): C1bDisplayRead = throw SecurityException("private display detail")
+        }
+        val displayFailure = captureFailure { TabletC1bProbe(displayPort).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.DISPLAY, displayFailure.stage)
+        assertEquals(C1bCaptureFailureKind.SECURITY, displayFailure.kind)
+
+        val revisionPort = object : TabletC1bReadPort by base {
+            override fun currentRevision(): Long = throw SecurityException("private revision detail")
+        }
+        val revisionFailure = captureFailure { TabletC1bProbe(revisionPort).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.PROBE, revisionFailure.stage)
+        // The pre-existing attempt converts revision read rejection to a fixed IllegalStateException.
+        assertEquals(C1bCaptureFailureKind.ILLEGAL_STATE, revisionFailure.kind)
+
+        val clockFailure = captureFailure {
+            TabletC1bProbe(base, now = { throw UnsupportedOperationException("private time") }).capture(request())
+        }
+        assertEquals(C1bCaptureFailureStage.PROBE, clockFailure.stage)
+        assertEquals(C1bCaptureFailureKind.UNSUPPORTED, clockFailure.kind)
+        val windowsPort = object : TabletC1bReadPort by base {
+            override fun windows(): List<C1bWindowHandle> = throw SecurityException("private windows")
+        }
+        val degraded = TabletC1bProbe(windowsPort, now = { FIRST_AT }).capture(request())
+        assertTrue(degraded.windowsTruncated)
+        assertTrue("window_inventory_truncated" in degraded.diagnosticCodes)
+    }
+
+    @Test
+    fun diagnosticBoundaryDoesNotCatchErrors() {
+        val fatal = AssertionError("synthetic fatal error")
+        try {
+            c1bCaptureStage(C1bCaptureFailureStage.PROBE) { throw fatal }
+            throw AssertionError("expected original error")
+        } catch (observed: AssertionError) {
+            assertTrue(fatal === observed)
+        }
+    }
+
     @Test
     fun rootOnlyTreeKeepsRootHandleBindingAndSubtreeStatusSeparate() {
         val root = node(token = 101, windowId = 11)
@@ -97,6 +172,132 @@ class TabletC1bProbeTest {
         assertEquals(2_800, display.width)
         assertEquals(1_968, display.height)
         assertEquals("landscape", display.orientation)
+    }
+
+    @Test
+    fun contextDisplayIsPreservedWithoutConsultingDefaultDisplay() {
+        val associated = Any()
+        var contextReads = 0
+        val selected = c1bDisplayOrDefault(
+            contextDisplay = { contextReads += 1; associated },
+            defaultDisplay = { throw AssertionError("must not replace the associated display") },
+        )
+        assertSame(associated, selected)
+        assertEquals(1, contextReads)
+    }
+
+    @Test
+    fun unassociatedContextUsesExistingDefaultDisplayOnce() {
+        val contextReads = listOf<() -> Any?>(
+            { null },
+            { throw UnsupportedOperationException("context has no display association") },
+        )
+        contextReads.forEach { readContext ->
+            val fallback = Any()
+            var primaryCalls = 0
+            var fallbackCalls = 0
+            val selected = c1bDisplayOrDefault(
+                contextDisplay = { primaryCalls += 1; readContext() },
+                defaultDisplay = { fallbackCalls += 1; fallback },
+            )
+            assertSame(fallback, selected)
+            assertEquals(1, primaryCalls)
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun contextSecurityAndOtherFailuresDoNotTriggerDefaultDisplay() {
+        val failures = listOf(
+            SecurityException("display permission denied"),
+            IllegalArgumentException("invalid context"),
+            IllegalStateException("context stopped"),
+            Exception("unknown display failure"),
+            AssertionError("fatal display failure"),
+        )
+        failures.forEach { failure ->
+            var fallbackCalls = 0
+            val observed = assertThrows(Throwable::class.java) {
+                c1bDisplayOrDefault<Any>(
+                    contextDisplay = { throw failure },
+                    defaultDisplay = { fallbackCalls += 1; Any() },
+                )
+            }
+            assertSame(failure, observed)
+            assertEquals(0, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun missingDefaultDisplayRemainsUnavailable() {
+        var fallbackCalls = 0
+        val selected = c1bDisplayOrDefault<Any>(
+            contextDisplay = { throw UnsupportedOperationException("no associated display") },
+            defaultDisplay = { fallbackCalls += 1; null },
+        )
+        assertNull(selected)
+        assertEquals(1, fallbackCalls)
+    }
+
+    @Test
+    fun defaultDisplayFailuresArePropagatedWithoutAnotherLookup() {
+        val failures = listOf(
+            UnsupportedOperationException("default display unsupported"),
+            SecurityException("default display denied"),
+            IllegalStateException("default display unavailable"),
+        )
+        failures.forEach { failure ->
+            var fallbackCalls = 0
+            val observed = assertThrows(Exception::class.java) {
+                c1bDisplayOrDefault<Any>(
+                    contextDisplay = { throw UnsupportedOperationException("no associated display") },
+                    defaultDisplay = { fallbackCalls += 1; throw failure },
+                )
+            }
+            assertSame(failure, observed)
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun defaultResolutionDoesNotRelaxDisplayIdAndRealMetricsValidation() {
+        val invalid = listOf(
+            Triple(-1, 2_800, 1_968), Triple(17, 2_800, 1_968),
+            Triple(0, 0, 1_968), Triple(0, 2_800, 0),
+            Triple(0, 16_385, 1_968), Triple(0, 2_800, 16_385),
+            Triple(0, 1_968, 1_968),
+        )
+        invalid.forEach { metrics ->
+            var fallbackCalls = 0
+            val selected = c1bDisplayOrDefault(
+                contextDisplay = { null },
+                defaultDisplay = { fallbackCalls += 1; metrics },
+            )!!
+            assertThrows(IllegalArgumentException::class.java) {
+                c1bDisplayFromRealMetrics(selected.first, selected.second, selected.third)
+            }
+            assertEquals(1, fallbackCalls)
+        }
+    }
+
+    @Test
+    fun remainingDisplayUnsupportedFailureStopsBeforeWindowReads() {
+        val base = FakePort(windowList = emptyList())
+        var windowReads = 0
+        val port = object : TabletC1bReadPort by base {
+            override fun display(): C1bDisplayRead = throw UnsupportedOperationException("private metrics detail")
+            override fun windows(): List<C1bWindowHandle> {
+                windowReads += 1
+                return emptyList()
+            }
+        }
+        val failure = captureFailure { TabletC1bProbe(port).capture(request()) }
+        assertEquals(C1bCaptureFailureStage.DISPLAY, failure.stage)
+        assertEquals(C1bCaptureFailureKind.UNSUPPORTED, failure.kind)
+        assertEquals(0, windowReads)
+        assertNull(failure.cause)
+        assertTrue(failure.stackTrace.isEmpty())
+        assertFalse(failure.toString().contains("private"))
     }
 
     @Test
@@ -1037,6 +1238,13 @@ class TabletC1bProbeTest {
         assertTrue("subtree_capture_incomplete" in result.reasonCodes)
         assertTrue(result.reasonCodes.none { it.endsWith("_read_failed") || it.startsWith("node_") })
         assertTrue(result.reasonCodes.all { it in CONTRACT_REASON_CODES })
+    }
+
+    private fun captureFailure(block: () -> Unit): C1bCaptureFailure = try {
+        block()
+        throw AssertionError("expected closed capture failure")
+    } catch (failure: C1bCaptureFailure) {
+        failure
     }
 
     private fun capture(

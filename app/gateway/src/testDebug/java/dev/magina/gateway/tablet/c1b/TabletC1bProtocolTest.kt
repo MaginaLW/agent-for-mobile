@@ -9,6 +9,75 @@ import org.junit.Test
 class TabletC1bProtocolTest {
 
     @Test
+    fun `all closed capture diagnostics require their exact failed capture tuple`() {
+        val stages = listOf("binding", "display", "probe", "frame_validation", "unknown")
+        val kinds = listOf("security", "illegal_argument", "illegal_state", "unsupported", "unknown")
+        listOf("c1", "c2").forEach { token ->
+            stages.forEach { stage ->
+                kinds.forEach { kind ->
+                    val reason = "capture_${token}_${stage}_$kind"
+                    val c2Count = if (token == "c2") 1 else 0
+                    val committed = if (token == "c2") listOf("c1") else emptyList()
+                    val accepted = control(
+                        state = C1bProtocolState.FAILED,
+                        reasonCode = reason,
+                        c1RequestsAccepted = 1,
+                        c2RequestsAccepted = c2Count,
+                        committedTokens = committed,
+                    ).toJson(BUILD, true)
+                    assertEquals(reason, accepted.getString("reason_code"))
+                    assertFalse(accepted.getBoolean("ok"))
+                    assertEquals("none", accepted.getString("next"))
+                    assertTrue(accepted.isNull("in_flight_token"))
+                    assertEquals(0, accepted.getInt("recapture_count"))
+                    expectFailure { control(state = C1bProtocolState.FAILED, reasonCode = reason) }
+                    expectFailure {
+                        control(
+                            generation = 0L,
+                            state = C1bProtocolState.FAILED,
+                            reasonCode = reason,
+                            c1RequestsAccepted = 1,
+                            c2RequestsAccepted = c2Count,
+                            committedTokens = committed,
+                        )
+                    }
+                    expectFailure {
+                        control(
+                            state = C1bProtocolState.FAILED,
+                            reasonCode = reason,
+                            c1RequestsAccepted = 1,
+                            c2RequestsAccepted = 1 - c2Count,
+                            committedTokens = if (token == "c1") listOf("c1") else emptyList(),
+                        )
+                    }
+                    expectFailure { control(state = C1bProtocolState.READY_C1, reasonCode = reason) }
+                    expectFailure { control(state = C1bProtocolState.ABORTED, reasonCode = reason) }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `unknown wire diagnostics reject while legacy generic failures remain accepted`() {
+        listOf(
+            "capture_c1_display_permission_denied",
+            "capture_c1_windows_security",
+            "capture_c3_display_security",
+            "capture_c1_DISPLAY_security",
+            "capture_c1_display_security_private_path",
+            "capture_c1_display_security\n",
+            "capture_c1_display",
+        ).forEach { reason ->
+            expectFailure {
+                control(state = C1bProtocolState.FAILED, reasonCode = reason, c1RequestsAccepted = 1)
+            }
+        }
+        listOf("capture_c1_failed", "capture_c2_failed").forEach { legacy ->
+            assertEquals(legacy, control(state = C1bProtocolState.FAILED, reasonCode = legacy).reasonCode)
+        }
+    }
+
+    @Test
     fun `all endpoints round trip through the canonical URI grammar`() {
         val endpoints = listOf(
             C1bEndpoint.WriteT0(ENVELOPE) to "w",

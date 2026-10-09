@@ -11,6 +11,53 @@ import java.nio.charset.StandardCharsets
 
 class TabletC1bRuntimeControllerTest {
     @Test
+    fun captureAndFrameValidationFailuresExposeOnlyClosedDiagnostics() {
+        val cases = listOf<Pair<String, (String, String) -> C1bRawFrame>>(
+            "probe_security" to { _, _ -> throw SecurityException("private title and path") },
+            "probe_unknown" to { _, _ -> throw Exception("private raw message") },
+            "display_unsupported" to { _, _ ->
+                throw C1bCaptureFailure(C1bCaptureFailureStage.DISPLAY, C1bCaptureFailureKind.UNSUPPORTED)
+            },
+            "frame_validation_illegal_argument" to { token, hash ->
+                frame(token, hash).copy(captureId = "wrong-binding")
+            },
+        )
+        listOf("c1", "c2").forEach { failedToken ->
+            cases.forEach { (suffix, failingCapture) ->
+                val worker = QueuedWorker()
+                val service = FakeService("service")
+                var captures = 0
+                val controller = controller(worker, { service }) { _, _, token, hash ->
+                    captures += 1
+                    if (token == failedToken) failingCapture(token, hash) else frame(token, hash)
+                }
+                controller.start(ENVELOPE, t0Raw())
+                controller.capture(KEY, "c1")
+                worker.runNext()
+                if (failedToken == "c2") {
+                    controller.capture(KEY, "c2")
+                    worker.runNext()
+                }
+                val failed = controller.status(KEY)
+                assertEquals(C1bProtocolState.FAILED, failed.state)
+                assertEquals("capture_${failedToken}_$suffix", failed.reasonCode)
+                assertEquals(1, failed.c1RequestsAccepted)
+                assertEquals(if (failedToken == "c2") 1 else 0, failed.c2RequestsAccepted)
+                assertEquals(if (failedToken == "c2") listOf("c1") else emptyList<String>(), failed.committedTokens)
+                assertTrue(controller.result(KEY) is C1bRuntimeResult.Control)
+                assertEquals(failed.reasonCode, controller.abort(KEY).reasonCode)
+                assertEquals(failed.reasonCode, controller.capture(KEY, failedToken).reasonCode)
+                assertEquals(if (failedToken == "c2") 2 else 1, captures)
+                assertEquals(0, worker.size)
+                val json = failed.toJson(BUILD, true)
+                assertFalse(json.toString().contains("private"))
+                assertEquals(0, json.getInt("recapture_count"))
+                controller.shutdown()
+            }
+        }
+    }
+
+    @Test
     fun trustedFactoryBindsExactT0BytesAndNeverRetainsInputAliases() {
         val raw = t0Raw()
         val expectedHash = probeSha256Bytes(raw)
