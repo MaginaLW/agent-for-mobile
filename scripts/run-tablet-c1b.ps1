@@ -98,7 +98,7 @@ function New-C1bUri([string]$Endpoint) {
     $path = switch ($Endpoint) { 'c1' { 'capture/c1' } 'c2' { 'capture/c2' } default { $Endpoint } }
     $uri = "content://$Authority/$path/$($script:Run.run_id)?nonce=$script:Nonce"
     if ($Endpoint -ceq 't0') {
-        $uri += "&title_hash=$TitleHash&producer_commit_sha=$($script:Run.commit_sha)&producer_artifact_sha256=$($script:Run.apk_sha256)"
+        $uri += "&title_hash=$TitleHash&producer_commit_sha=$($script:Run.producer_commit_sha)&producer_artifact_sha256=$($script:Run.apk_sha256)"
     }
     # 设备端 adbd 以 sh -c 解释 shell/exec-in 命令，URI 中的 & 必须整体单引号包裹。
     if ($uri -match "['\s%+]") { throw 'C1b URI 含非法字符。' }
@@ -117,13 +117,24 @@ function Read-C1bControl([string]$Endpoint) {
         throw "C1b $Endpoint control 的 run_id/provider 绑定不符。"
     }
     if ($control.state -cne 'absent' -and ($control.expected_title_hash -cne $TitleHash -or
-        $control.producer_commit_sha -cne $script:Run.commit_sha -or $control.producer_artifact_sha256 -cne $script:Run.apk_sha256)) {
+        $control.producer_commit_sha -cne $script:Run.producer_commit_sha -or $control.producer_artifact_sha256 -cne $script:Run.apk_sha256)) {
         throw "C1b $Endpoint control 的 producer 绑定不符。"
     }
-    if ($control.provider.embedded_git_head -cne $script:Run.commit_sha) {
-        throw "设备上探针 APK 的 embedded_git_head 与 HEAD 不一致（APK 不是从当前 HEAD 构建）。"
+    if ($script:Run.producer_commit_sha -and $control.provider.embedded_git_head -cne $script:Run.producer_commit_sha) {
+        throw "设备上探针 APK 的 embedded_git_head 在运行中漂移。"
     }
     return $control
+}
+
+# APK 内嵌的构建提交须是 HEAD 的祖先，且两者之间 app/ 无差异：证明设备上的探针就是当前代码构建的，
+# 又不必因只改脚本/文档而重装（重装会让 vivo 解绑无障碍服务）。producer_commit_sha 取 APK 的构建提交。
+function Resolve-C1bProducerCommit([string]$Embedded) {
+    if ($Embedded -cnotmatch '^[0-9a-f]{40}$') { throw '探针未报告完整的 embedded_git_head。' }
+    $ancestor = Invoke-Process 'git' @('-C', $RepoRoot, 'merge-base', '--is-ancestor', $Embedded, 'HEAD')
+    if ($ancestor.ExitCode -ne 0) { throw "设备上探针 APK 的 embedded_git_head $Embedded 不是 HEAD 的祖先（APK 过期）；请去掉 -SkipBuild 重新构建安装。" }
+    $appDiff = Invoke-Process 'git' @('-C', $RepoRoot, 'diff', '--quiet', $Embedded, 'HEAD', '--', 'app')
+    if ($appDiff.ExitCode -ne 0) { throw "设备上探针 APK 的 embedded_git_head $Embedded 与 HEAD 之间 app/ 有改动（APK 过期）；请去掉 -SkipBuild 重新构建安装。" }
+    $script:Run.producer_commit_sha = $Embedded
 }
 
 function Assert-C1bState($Control, [string]$State, [int]$C1, [int]$C2, [string[]]$Committed, $InFlight) {
@@ -154,7 +165,7 @@ function Set-Stage([string]$Name) { $script:Run.stage = $Name; $script:Run.times
 
 $script:Run = [ordered]@{
     schema = 'tablet-c1b-run/v1'; run_id = $null; outcome = 'failed'; exit_code = 1; failure_reason = $null; stage = 'init'
-    commit_sha = $null; apk_sha256 = $null; apk_built = (-not $SkipBuild); serial_sha256 = $null
+    commit_sha = $null; producer_commit_sha = $null; apk_sha256 = $null; apk_built = (-not $SkipBuild); serial_sha256 = $null
     t0_sha256 = $null; observation_sha256 = $null
     timestamps = [ordered]@{ started_at = Get-Utc }
     capture = [ordered]@{ generation = $null; host_wait_ms = $null; total_span_ms = $null; status_polls = 0; content_reads = 0 }
@@ -238,13 +249,20 @@ try {
         Write-Host '  设置 → 无障碍 →（已下载的应用/已安装的服务）→「平板 C1b 只读探针」→ 打开并确认授权。'
         throw [C1bNeedsUser]::new('无障碍服务 dev.magina.gateway/.a11y.GatewayA11yService 未启用。')
     }
+    # 以探针自报的 a11y_service_ready 为准：vivo 的 dumpsys 绑定列表不一定列出已连接的探针服务。
+    $script:Nonce = 'n-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16)).ToLowerInvariant()
     $boundWatch = [Diagnostics.Stopwatch]::StartNew()
+    $ready = $false
     do {
-        $bound = Test-TL1C1aA11yReady -EnabledText $enabled -BoundText (Invoke-Adb @('shell', 'dumpsys', 'accessibility')).Text
-        if ($bound.Ready) { break }
+        $info = Read-C1bControl 'status'
+        if ($info.state -cne 'absent') { throw "会话开始前 provider 状态应为 absent，实际 $($info.state)。" }
+        if (-not $script:Run.producer_commit_sha) { Resolve-C1bProducerCommit ([string]$info.provider.embedded_git_head) }
+        $ready = [bool]$info.provider.a11y_service_ready -or
+            (Test-TL1C1aA11yReady -EnabledText $enabled -BoundText (Invoke-Adb @('shell', 'dumpsys', 'accessibility')).Text).Ready
+        if ($ready) { break }
         Start-Sleep -Milliseconds 1000
     } while ($boundWatch.Elapsed.TotalSeconds -lt 30)
-    if (-not $bound.Ready) { throw [C1bNeedsUser]::new('无障碍已启用但服务未绑定：请在设置中关闭再打开「平板 C1b 只读探针」后重试。') }
+    if (-not $ready) { throw [C1bNeedsUser]::new('无障碍已启用但服务未绑定：请在设置中关闭再打开「平板 C1b 只读探针」后重试。') }
 
     Set-Stage 't0_captured'
     $t0Source = Join-Path $runDir 'tablet-profile.json'
@@ -268,7 +286,6 @@ try {
     [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'upstream-t0-v5.json'), $t0Bytes)
 
     Set-Stage 't0_written'
-    $script:Nonce = 'n-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16)).ToLowerInvariant()
     $sessionStarted = $true
     $write = Invoke-Adb @('exec-in', 'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0Bytes
     if ($write.Bytes.Length -or $write.Stderr.Trim().Length) { throw "T0 write 返回了意外输出：$($write.Text.Trim()) $($write.Stderr.Trim())" }
@@ -306,7 +323,7 @@ try {
     $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String
     if ($observation.schema -cne 'tablet-layout-observation/c1b-v1' -or $observation.run_id -cne $RunId -or
         $observation.expected_title_hash -cne $TitleHash -or $observation.provenance.kind -cne 'gateway_runtime_probe' -or
-        $observation.provenance.producer_commit_sha -cne $script:Run.commit_sha -or
+        $observation.provenance.producer_commit_sha -cne $script:Run.producer_commit_sha -or
         $observation.provenance.producer_artifact_sha256 -cne $script:Run.apk_sha256 -or
         $observation.upstream_t0.source_kind -cne 'trusted_runtime' -or $observation.upstream_t0.run_id -cne $RunId -or
         $observation.upstream_t0.artifact_sha256 -cne $script:Run.t0_sha256 -or
@@ -321,7 +338,7 @@ try {
 
     Set-Stage 'validated'
     $validation = Test-TabletLayoutObservationC1BV1TrustedRuntimeFile -Path $observationPath -EvidenceRoot $evidenceDir `
-        -ExpectedRunId $RunId -ExpectedProducerCommitSha $script:Run.commit_sha -ExpectedProducerArtifactSha256 $script:Run.apk_sha256
+        -ExpectedRunId $RunId -ExpectedProducerCommitSha $script:Run.producer_commit_sha -ExpectedProducerArtifactSha256 $script:Run.apk_sha256
     $script:Run.validation = [ordered]@{
         fixture_contract_valid = [bool]$validation.fixture_contract_valid
         runtime_binding_inputs_match = [bool]$validation.runtime_binding_inputs_match

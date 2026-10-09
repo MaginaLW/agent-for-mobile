@@ -73,16 +73,19 @@ function Save { $session | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $
 function Out-Control {
     $s = $session; $active = $s.state -in @('ready_c1', 'capturing_c1', 'ready_c2', 'capturing_c2', 'complete')
     $next = switch ($s.state) { 'ready_c1' { 'capture_c1' } 'ready_c2' { 'capture_c2' } 'complete' { 'read_result' } { $_ -like 'capturing*' } { 'wait' } default { 'none' } }
-    $head = if ($scenario -ceq 'stale_apk') { '0' * 40 } else { $env:FAKE_ADB_HEAD }
     Out-Text (([ordered]@{
         schema = 'tablet-c1b-control/v1'; ok = $active; run_id = $s.run_id; generation = $s.generation; state = $s.state; next = $next
         reason_code = $s.reason; in_flight_token = $s.inflight; c1_requests_accepted = $s.c1; c2_requests_accepted = $s.c2
         committed_tokens = @($s.committed); recapture_count = 0
         expected_title_hash = 'sha256:5d3510ec998c991305fcede15b32be9ea1c4061d82ab15a3994a38faa243311c'
         producer_commit_sha = $s.commit; producer_artifact_sha256 = $s.artifact
-        provider = [ordered]@{ authority = 'dev.magina.gateway.tablet.c1b'; protocol_version = '1'; package_name = 'dev.magina.gateway'
-            version_name = '0.1.0'; version_code = 1; embedded_git_head = $head; build_challenge = 'offline-c1b-read-only-placeholder'; a11y_service_ready = $true }
+        provider = (Get-Provider)
     } | ConvertTo-Json -Depth 5 -Compress) + "`n")
+}
+function Get-Provider {
+    $head = if ($scenario -ceq 'stale_apk') { '0' * 40 } else { $env:FAKE_ADB_HEAD }
+    [ordered]@{ authority = 'dev.magina.gateway.tablet.c1b'; protocol_version = '1'; package_name = 'dev.magina.gateway'
+        version_name = '0.1.0'; version_code = 1; embedded_git_head = $head; build_challenge = 'offline-c1b-read-only-placeholder'; a11y_service_ready = $true }
 }
 if ($cmd -ceq 'shell pm path dev.magina.gateway') {
     if ($scenario -ceq 'same_apk') { Out-Text "package:/data/app/fake/base.apk`n"; exit 0 } else { exit 1 }
@@ -93,7 +96,9 @@ if ($cmd -ceq 'shell settings get secure enabled_accessibility_services') {
     Out-Text $(if ($scenario -ceq 'a11y_off') { "null`n" } else { "dev.magina.gateway/.a11y.GatewayA11yService`n" }); exit 0
 }
 if ($cmd -ceq 'shell dumpsys accessibility') {
-    Out-Text "ACCESSIBILITY MANAGER (dumpsys accessibility)`nUser state[`n  Bound services:{Service[label=gw, component=dev.magina.gateway/.a11y.GatewayA11yService]}`n]`n"; exit 0
+    # vivo 实测：探针已连接但 dumpsys 绑定列表只列出 vivo 输入法；runner 须以 provider 自报为准。
+    $boundLine = if ($scenario -ceq 'vivo_hidden_bound') { 'Service[label=vivo输入法, component=com.vivo.ai.ime.pad/x.AutoSendImageService]' } else { 'Service[label=gw, component=dev.magina.gateway/.a11y.GatewayA11yService]' }
+    Out-Text "ACCESSIBILITY MANAGER (dumpsys accessibility)`nUser state[`n  Bound services:{$boundLine}`n]`n"; exit 0
 }
 if ($cmd -notmatch '^(exec-in content write|shell content read) --uri (?<uri>.+)$') { [Console]::Error.WriteLine("fake adb: unsupported $cmd"); exit 1 }
 $uri = $Matches.uri
@@ -109,6 +114,14 @@ if ($path -match '^t0/(?<run>.+)$') {
         commit = $query.producer_commit_sha; artifact = $query.producer_artifact_sha256; title = $query.title_hash
         t0_sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant(); t0_at = $t0.captured_at_utc }
     Save; exit 0
+}
+if ($null -eq $session -and $path -match '^status/(?<run>.+)$') {
+    Out-Text (([ordered]@{
+        schema = 'tablet-c1b-control/v1'; ok = $false; run_id = $Matches.run; generation = 0; state = 'absent'; next = 'none'
+        reason_code = 'session_not_found'; in_flight_token = $null; c1_requests_accepted = 0; c2_requests_accepted = 0
+        committed_tokens = @(); recapture_count = 0; expected_title_hash = $null; producer_commit_sha = $null; producer_artifact_sha256 = $null
+        provider = (Get-Provider)
+    } | ConvertTo-Json -Depth 5 -Compress) + "`n"); exit 0
 }
 if ($null -eq $session -or $query.nonce -cne $session.nonce) { [Console]::Error.WriteLine('fake adb: nonce mismatch'); exit 1 }
 switch -regex ($path) {
@@ -234,10 +247,31 @@ try {
         $r = Invoke-Runner 'stale' 'stale_apk'
         Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match 'embedded_git_head') "exit=$($r.Exit) $($r.Output)"
     }
+    Test-Case 'vivo-dumpsys-hides-bound-uses-provider' {
+        $r = Invoke-Runner 'vivo' 'vivo_hidden_bound'
+        Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+    }
     Test-Case 'dirty-tree-rejected' {
         $dirty = Join-Path $Sandbox 'dirty.txt'; [IO.File]::WriteAllText($dirty, 'x')
         try { $r = Invoke-Runner 'dirty' 'ok' } finally { Remove-Item -LiteralPath $dirty -Force }
         Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '工作树不干净' -and $r.Log.Count -eq 0) "exit=$($r.Exit) $($r.Output)"
+    }
+    # 以下两例会在沙箱里追加提交，须放在最后：APK 的 embedded head 保持旧 $Head。
+    Test-Case 'docs-only-commit-after-build-passes' {
+        [IO.File]::WriteAllText((Join-Path $Sandbox 'notes.md'), 'docs only')
+        Invoke-Git @('add', '-A') | Out-Null
+        Invoke-Git @('-c', 'user.name=offline', '-c', 'user.email=offline@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'docs') | Out-Null
+        $r = Invoke-Runner 'docsafter' 'ok'
+        Assert-True ($r.Exit -eq 0 -and $r.Run.producer_commit_sha -ceq $Head -and $r.Run.commit_sha -cne $Head) "exit=$($r.Exit) $($r.Output)"
+    }
+    Test-Case 'app-change-after-build-rejected' {
+        [void](New-Item -ItemType Directory -Path (Join-Path $Sandbox 'app') -Force)
+        [IO.File]::WriteAllText((Join-Path $Sandbox 'app/x.kt'), 'changed')
+        Invoke-Git @('add', '-A') | Out-Null
+        Invoke-Git @('-c', 'user.name=offline', '-c', 'user.email=offline@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'app') | Out-Null
+        $r = Invoke-Runner 'appafter' 'ok'
+        Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match 'app/') "exit=$($r.Exit) $($r.Output)"
+        Assert-True (-not ($r.Log -match 'content write')) 'APK 过期时不应开始会话'
     }
 }
 finally {
