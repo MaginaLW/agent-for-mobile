@@ -17,6 +17,8 @@
 - **后台 overlay 被静默拦截**（2026-07-18）：`SYSTEM_ALERT_WINDOW` ≠「后台弹出界面」权限；网关在后台时 `addView(TYPE_APPLICATION_OVERLAY)` 不抛异常但不显示，确认卡弹不出。✅ 授「后台弹出界面」后，微信前台时确认卡正常弹出（2026-07-22）。
 - **充电胶囊/灵动岛是带文本的大 a11y 悬浮节点**，罩住屏幕上部——OCR 融合去重按「内容相同」判重，不能按「bbox 包含」判。
 
+- **无启动入口的应用开不了无障碍**（2026-10-09，PA2553 / Android 16 实测）：adb 安装、无 launcher activity 的探针在系统里带 vivo 专有 `vHidden=1`；设置里打开开关会弹 i管家「该应用请求监控和控制设备」，选“允许”后 1 秒内仍被移出 `enabled_accessibility_services`、从未绑定；`settings put` 写入同样几秒后被撤，`appops ACCESS_RESTRICTED_SETTINGS allow` 无效，i管家里没有放行入口。对策：给应用保留一个只显示说明的 MAIN/LAUNCHER 启动页（🔵 修复后的真机结果见 C1b 运行记录）。
+
 ## 深链 / Intent
 
 - **系统设置子页深链不可靠**：`am start -a android.settings.BLUETOOTH_SETTINGS` 不把蓝牙页带到前台（主设置、无障碍页可靠）。`open_uri` 必须有「深链失败 → UI 导航兜底」。其余子页见 [sys-cli.md §4](sys-cli.md)。

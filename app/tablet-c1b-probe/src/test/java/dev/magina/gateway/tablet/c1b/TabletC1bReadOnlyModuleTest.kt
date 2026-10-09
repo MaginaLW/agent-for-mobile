@@ -42,7 +42,13 @@ class TabletC1bReadOnlyModuleTest {
         val projectDir = File(requireNotNull(System.getProperty("user.dir")))
         val manifest = xml(File(projectDir, "src/main/AndroidManifest.xml"))
         assertEquals(0, manifest.getElementsByTagName("uses-permission").length)
-        assertEquals(0, manifest.getElementsByTagName("activity").length)
+        // 唯一 activity 是只显示说明的启动入口（vivo 不绑定无启动入口应用的无障碍服务）。
+        assertEquals(1, manifest.getElementsByTagName("activity").length)
+        val activity = manifest.getElementsByTagName("activity").item(0)
+        assertEquals(".a11y.C1bProbeInfoActivity", activity.attributes.getNamedItemNS(ANDROID_NS, "name").nodeValue)
+        assertEquals(1, manifest.getElementsByTagName("intent-filter").length - 1)
+        assertEquals(1, manifest.getElementsByTagName("category").length)
+        assertEquals(0, manifest.getElementsByTagName("data").length)
         assertEquals(0, manifest.getElementsByTagName("activity-alias").length)
         assertEquals(0, manifest.getElementsByTagName("receiver").length)
         assertEquals(1, manifest.getElementsByTagName("service").length)
@@ -88,10 +94,15 @@ class TabletC1bReadOnlyModuleTest {
 
         val sourceRoot = File(projectDir, "src/main/java")
         val localSources = sourceRoot.walkTopDown().filter { it.isFile }.toList()
-        assertEquals(listOf("dev/magina/gateway/a11y/GatewayA11yService.kt"), localSources.map { source ->
-            sourceRoot.toPath().relativize(source.toPath()).toString().replace(File.separatorChar, '/')
-        })
-        val serviceSource = localSources.single().readText(Charsets.UTF_8)
+        assertEquals(
+            listOf("dev/magina/gateway/a11y/C1bProbeInfoActivity.kt", "dev/magina/gateway/a11y/GatewayA11yService.kt"),
+            localSources.map { source ->
+                sourceRoot.toPath().relativize(source.toPath()).toString().replace(File.separatorChar, '/')
+            }.sorted(),
+        )
+        val serviceSource = localSources.single { it.name == "GatewayA11yService.kt" }.readText(Charsets.UTF_8)
+        val activitySource = localSources.single { it.name == "C1bProbeInfoActivity.kt" }.readText(Charsets.UTF_8)
+        assertTrue(activitySource.contains("setText(R.string.probe_info)"))
         assertTrue(serviceSource.contains("var instance: GatewayA11yService?"))
         assertTrue(serviceSource.contains("val revision: Long"))
         assertTrue(serviceSource.contains("onAccessibilityEvent"))
@@ -106,7 +117,10 @@ class TabletC1bReadOnlyModuleTest {
             "InputMethodService",
             "GestureDescription",
             "MediaProjection",
-        ).forEach { forbidden -> assertFalse("minimal service contains $forbidden", serviceSource.contains(forbidden)) }
+        ).forEach { forbidden ->
+            assertFalse("minimal service contains $forbidden", serviceSource.contains(forbidden))
+            assertFalse("info activity contains $forbidden", activitySource.contains(forbidden))
+        }
     }
 
     @Test

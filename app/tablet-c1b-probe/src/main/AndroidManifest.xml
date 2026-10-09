@@ -23,5 +23,14 @@
             android:exported="true"
             android:grantUriPermissions="false"
             android:permission="android.permission.DUMP" />
+
+        <activity
+            android:name=".a11y.C1bProbeInfoActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

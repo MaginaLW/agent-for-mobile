@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">平板 C1b 只读探针</string>
     <string name="a11y_desc">只读取窗口、节点、显示与输入法可见状态，用于平板布局 C1b 诊断。</string>
+    <string name="probe_info">平板 C1b 只读探针\n\n本应用只读取窗口与节点信息，用于平板布局诊断，不执行任何操作。\n\n请在 设置 → 快捷与辅助 → 无障碍 中开启「平板 C1b 只读探针」。</string>
 </resources>

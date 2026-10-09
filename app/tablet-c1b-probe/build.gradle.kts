@@ -14,6 +14,7 @@ plugins {
 private val C1B_APPLICATION_ID = "dev.magina.gateway"
 private val C1B_SERVICE = "dev.magina.gateway.a11y.GatewayA11yService"
 private val C1B_PROVIDER = "dev.magina.gateway.tablet.c1b.TabletC1bContentProvider"
+private val C1B_INFO_ACTIVITY = "dev.magina.gateway.a11y.C1bProbeInfoActivity"
 private val C1B_AUTHORITY = "dev.magina.gateway.tablet.c1b"
 private val ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android"
 private val C1B_BUILD_TOOLS_VERSION = "35.0.0"
@@ -62,6 +63,7 @@ private fun quotedBuildConfigString(value: String): String =
 
 private val productionSourceIncludes = listOf(
     "GatewayA11yService.kt",
+    "C1bProbeInfoActivity.kt",
     "TabletLayoutProbe.kt",
     "TabletLayoutProbeModel.kt",
     "c1b/AndroidTabletC1bSource.kt",
@@ -92,6 +94,7 @@ private val testSourceIncludes = listOf(
 private val allowedAppDescriptorRoots = sortedSetOf(
     "dev/magina/gateway/BuildConfig",
     "dev/magina/gateway/R",
+    "dev/magina/gateway/a11y/C1bProbeInfoActivity",
     "dev/magina/gateway/a11y/GatewayA11yService",
     "dev/magina/gateway/tablet/ProbeCapture",
     "dev/magina/gateway/tablet/ProbeConsistency",
@@ -261,7 +264,7 @@ android {
         )
     }
     lint {
-        // The replacement probe has no launcher surface or persistent app data by design.
+        // The probe has only a text-only launcher entry and no persistent app data by design.
         disable += setOf("DataExtractionRules", "MissingApplicationIcon")
         warningsAsErrors = true
     }
@@ -449,6 +452,10 @@ private fun verifyPackagedManifestTree(tree: Aapt2XmlTree, variant: String) {
         "manifest/application/service/intent-filter/action",
         "manifest/application/service/meta-data",
         "manifest/application/provider",
+        "manifest/application/activity",
+        "manifest/application/activity/intent-filter",
+        "manifest/application/activity/intent-filter/action",
+        "manifest/application/activity/intent-filter/category",
     )
     check(tree.elementPaths == expectedPaths) {
         "$variant packaged manifest has missing/extra/reordered elements: ${tree.elementPaths}"
@@ -529,6 +536,25 @@ private fun verifyPackagedManifestTree(tree: Aapt2XmlTree, variant: String) {
             androidAapt2Attribute("grantUriPermissions", "0x0101001b") to "false",
         ),
     )
+    exact(
+        "manifest/application/activity",
+        linkedMapOf(
+            androidAapt2Attribute("name", "0x01010003") to aapt2RawString(C1B_INFO_ACTIVITY),
+            androidAapt2Attribute("exported", "0x01010010") to "true",
+        ),
+    )
+    exact("manifest/application/activity/intent-filter", emptyMap())
+    exact(
+        "manifest/application/activity/intent-filter/action",
+        mapOf(androidAapt2Attribute("name", "0x01010003") to aapt2RawString("android.intent.action.MAIN")),
+    )
+    exact(
+        "manifest/application/activity/intent-filter/category",
+        mapOf(
+            androidAapt2Attribute("name", "0x01010003") to
+                aapt2RawString("android.intent.category.LAUNCHER"),
+        ),
+    )
 }
 
 private fun verifyPackagedA11yTree(tree: Aapt2XmlTree, variant: String) {
@@ -568,7 +594,11 @@ private fun verifyMergedManifest(file: File): ManifestVerification {
         val nodes = document.getElementsByTagName(tag)
         (0 until nodes.length).map { index -> tag to (nodes.item(index) as Element) }
     }
-    val expectedComponents = setOf("service:$C1B_SERVICE", "provider:$C1B_PROVIDER")
+    val expectedComponents = setOf(
+        "service:$C1B_SERVICE",
+        "provider:$C1B_PROVIDER",
+        "activity:$C1B_INFO_ACTIVITY",
+    )
     val actualComponents = components.map { (tag, element) ->
         "$tag:${resolveComponentName(element.androidAttribute("name"))}"
     }
@@ -600,6 +630,20 @@ private fun verifyMergedManifest(file: File): ManifestVerification {
     check(provider.androidAttribute("exported") == "true")
     check(provider.androidAttribute("grantUriPermissions") == "false")
     check(provider.androidAttribute("permission") == "android.permission.DUMP")
+
+    // 唯一允许的 activity：只作启动入口，恰好一个 MAIN/LAUNCHER filter，没有其他 action 或 data。
+    val activity = components.single { (tag, _) -> tag == "activity" }.second
+    check(resolveComponentName(activity.androidAttribute("name")) == C1B_INFO_ACTIVITY)
+    check(activity.androidAttribute("exported") == "true")
+    val activityFilters = activity.getElementsByTagName("intent-filter")
+    check(activityFilters.length == 1)
+    val activityActions = activity.getElementsByTagName("action")
+    val activityCategories = activity.getElementsByTagName("category")
+    check(activityActions.length == 1 && activityCategories.length == 1)
+    check((activityActions.item(0) as Element).androidAttribute("name") == "android.intent.action.MAIN")
+    check((activityCategories.item(0) as Element).androidAttribute("name") ==
+        "android.intent.category.LAUNCHER")
+    check(activity.getElementsByTagName("data").length == 0)
 
     return ManifestVerification(
         sha256 = file.sha256Hex(),
@@ -682,6 +726,7 @@ tasks.register("verifyTabletC1bReadOnlyArtifact") {
         }
 
         val expectedSources = listOf(
+            file("src/main/java/dev/magina/gateway/a11y/C1bProbeInfoActivity.kt"),
             file("src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt"),
             file("../gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt"),
             file("../gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbeModel.kt"),
@@ -988,6 +1033,9 @@ tasks.register("verifyTabletC1bReadOnlyArtifact") {
                     C1B_SERVICE,
                     C1B_PROVIDER,
                     C1B_AUTHORITY,
+                    C1B_INFO_ACTIVITY,
+                    "android.intent.action.MAIN",
+                    "android.intent.category.LAUNCHER",
                     "android.accessibilityservice.AccessibilityService",
                     "android.permission.BIND_ACCESSIBILITY_SERVICE",
                     "android.permission.DUMP",
@@ -995,7 +1043,6 @@ tasks.register("verifyTabletC1bReadOnlyArtifact") {
                     "service",
                 )
                 val forbiddenPackagedManifestStrings = listOf(
-                    "activity",
                     "activity-alias",
                     "receiver",
                     "instrumentation",
