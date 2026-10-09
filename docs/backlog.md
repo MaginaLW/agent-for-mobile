@@ -28,8 +28,8 @@
 
 旧主机证据链已退役（最后提交 `7a3b069`），改用 [C1b 规程](runbooks/T-L1-tablet-c1b.md)的简单 runner：HEAD 固定、设备锁、构建安装、两帧只读采集，一次调用一次采集。
 
-- [ ] a. 新 runner `scripts/run-tablet-c1b.ps1` 落地并通过离线测试（A）。
-- [ ] b. 将实现线 `codex/c1b-host-evidence-20260930` 的 C1b app 修复合入协调分支（A）：采集失败分类 `ec2782b`、只读制品清单 `b362639`、无 display 上下文的默认显示回退 `a878d12`；见下表“两线合并”。
+- [x] a. 新 runner `scripts/run-tablet-c1b.ps1` 落地并通过离线测试（`d015da3`，全量门 13/13）。
+- [x] b. 实现线 C1b app 修复已合入协调分支（`cc74daf`，含 Android 全量构建与测试）：采集失败分类 `ec2782b`、只读制品清单 `b362639`、无 display 上下文的默认显示回退 `a878d12`；见下表“两线合并”。
 - [ ] c. 用户就位：如有冲突，结束占用 TCP 5037 的 PC Suite 会话；平板现场就位；开启探针无障碍服务。
 - [ ] d. 按 §7.3 报就位、得开跑令后，真机跑一次 C1b，验证显示回退与设备发现。
 - [ ] e. 通过后进入 T-L2 准备。
@@ -43,7 +43,7 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 | R1 PC CONFIRM 真人确认边界 | 离线修复 `da37f3d`（53/53）：mobile `-Confirm` 在副作用前阻断 | 在含该修复的固定候选上真机验证阻断，gateway 手机确认卡保留 | 需真机；需用户现场 |
 | R5 intent_send 落地验证 | 离线实现 `7814fac`，Debug/Release 各 7 个 JVM 用例 | 真机覆盖“启动无异常但目标没到前台”，应返回 `E_VERIFY_FAIL`；通过后才按受测版本发布 | 需真机 |
 | 语义意图生产接线 | 基础模块 `48f8dd8`；SafetyGate、Android 证据安装、严格执行链、handler 次数证明未做 | C 队列清空后接线，只接受可见 ConfirmOverlay 的允许回调，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) | 需真机 |
-| 两线合并 | 已核实（`git diff --stat HEAD cad7411 -- app`、`git log HEAD..cad7411 -- app`）：app 差异只剩 C1b 探针修复 `ec2782b`、`b362639`、`a878d12`，只在实现线 `cad7411`；R1/R5 的 app 与 dispatch 内容已由 `7b2f394` 等价并入实现线，两线在这部分一致 | C1b 真机运行前先把这三项 app 修复合入协调分支（§4 b）；之后协调分支同时含 R1/R5 与 C1b 修复，是否搭车由 A 选候选时决定 | A |
+| 两线合并 | C1b 探针修复已合入协调分支（`cc74daf`）；R1/R5 的 app 与 dispatch 内容本就在协调分支，实现线 `cad7411` 不再有独有 app 改动 | 协调分支 HEAD 同时含 R1/R5 与 C1b 修复；R1/R5 是否随 C1b 真机运行搭车，按 §3 配额由 A 决定 | A |
 | 受测功能合入 main | R1/R5/C1b 等功能改动均未合入 main | 按 §7.2 只合验过的 SHA | 依赖真机验收 |
 | M1b 占位工具实现 | 静态标注已完成，见 [能力现状](knowledge/android/m1b-capabilities.md) | 有需求时分别安排实现及通道、失败路径验收 | 按需 |
 

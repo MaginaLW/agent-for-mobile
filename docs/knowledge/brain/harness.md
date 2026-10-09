@@ -1,21 +1,23 @@
 # 大脑侧链路知识（headless / 按需挂载 / 两段式）
 
-> 手机执行 harness 的设计素材集；harness 已立项落地（设计：[执行harness spec](../../specs/2026-07-17-执行harness-design.md)，入口 `scripts/dispatch.ps1`）。本册继续记录大脑侧链路的坑与原则。
+> 大脑侧链路与执行/验证 harness 的可复用经验：遇到对应情况时查。执行 harness 设计见
+> [执行harness spec](../../specs/2026-07-17-执行harness-design.md)，入口 `scripts/dispatch.ps1`。
+> 过程叙述与证据细节在 `docs/runs/` 对应记录与 git 历史里，本册只留结论与做法。
 
-## 执行器的工具面是"枚举拒绝"，天生会漏——两轮真机栽在这上面（2026-07-26 / 07-31）
+## 执行器工具面：`--allowedTools` 不是限制，`--disallowedTools` 是手写枚举（2026-07-26 / 07-31）
 
-`--allowedTools` **只是免确认名单，不阻止任何工具**；真正限制工具面的是 `--disallowedTools`，
-而它是一份**手写枚举**。harness 每多一个内置工具，这份名单就多一个洞：
-
-- **2026-07-26**：`ToolSearch` 被 trace 越权审计当成非 gateway 工具（白名单侧漏项）。
-- **2026-07-31**：执行器调了 `ReportFindings`。Allow 腿**在真人已点「允许本次」、危险动作已
-  真实执行之后**才被审计判死——安全结论一个都没拿到，一轮真机白烧。
-- 同轮复查发现 **`PowerShell` 从来没被禁**：注释写着"本机 shell 一律拒绝"，名单里却只有
-  `Bash`。本机是 Windows，等于执行器一直握着一个可用的本机 shell，而仓库里就放着 gateway token。
-
-**教训**：这类"默认全开、逐条拒绝"的名单要按**类**补（shell / 文件 / 网络 / 派生执行体 /
-汇报交互），并给关键项上离线断言（两个 shell 必须成对出现）。指望"想起来一个加一个"，
-代价是每漏一个烧一轮真机——而且往往烧在最贵的那一步之后。
+- **`--allowedTools` 只是免确认名单，不阻止任何工具。** 07-26 Allow 腿实锤执行器在本机跑了
+  `Bash`；仓库里放着 gateway token（`configs/gateway-mcp.json`），等于开了后门。真正限制的是
+  `dispatch.ps1` 的 `--disallowedTools`。
+- **枚举拒绝天生会漏**：07-26 `ToolSearch` 被越权审计误杀；07-31 执行器调 `ReportFindings`，
+  在真人已点「允许本次」、危险动作已执行之后才被判死，一轮真机白烧；同轮发现 `PowerShell`
+  从未被禁（只禁了 `Bash`，本机是 Windows）。
+- **做法**：名单按**类**补（shell / 文件 / 网络 / 派生执行体 / 汇报交互），关键项上离线断言
+  （两个 shell 必须成对出现）。
+- **`ToolSearch` 必须留在白名单**：gateway MCP 工具延迟注册，执行器要先用它加载 schema；
+  trace 审计对它走显式白名单，不计入调用序列、不当证据解析。
+- **只在成功路径上跑的审计等于没有审计。** 越权这类与语义无关的策略检查要抽成独立函数，
+  失败路径也跑并写进 manifest（`tool_policy_violations`）。
 
 ## 已验证：headless 派单链路（M0 发现 #11）
 
@@ -23,780 +25,315 @@
 claude -p "<任务提示词>" --output-format json --mcp-config configs/mobile-mcp.json --allowedTools "mcp__mobile"
 ```
 
-- JSON 输出自带精确 token/成本/轮次——M0 的 $6.44/$1.26 就是这么量出来的。
-- ⚠️ 坑：headless 在不信任的工作区会**忽略 settings.json 的 permissions.allow**，必须用 `--allowedTools` 旁路（或先交互跑一次接受信任对话框）。
-- 这条链路 = M2「手机上 Termux 跑大脑」的原型：主会话/入口派单，执行会话干活，天然隔离上下文。
+- JSON 输出自带精确 token/成本/轮次（M0 的成本数据即由此量出）。
+- ⚠️ headless 在不信任的工作区会**忽略 settings.json 的 permissions.allow**，必须用 `--allowedTools`
+  旁路（或先交互跑一次接受信任对话框）。
 
 ## mobile server 按需挂载
 
-2026-07-16 开发 harness 重组后，mobile server 不再常驻项目 `.mcp.json`（开发会话物理碰不到手机）。要跑真机：
+2026-07-16 起 mobile server 不常驻项目 `.mcp.json`（开发会话碰不到手机）。要跑真机：
 
 ```powershell
 claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 ```
 
-配置在 [configs/mobile-mcp.json](../../../configs/mobile-mcp.json)，版本锁定 `@mobilenext/mobile-mcp@0.0.62`（保证测试数据可比；升级需有意为之并记录）。中文输入依赖手机侧 devicekit APK（现有机制已死，见 [../android/common.md](../android/common.md)）。
+配置在 [configs/mobile-mcp.json](../../../configs/mobile-mcp.json)，版本锁定 `@mobilenext/mobile-mcp@0.0.62`
+（保证数据可比；升级需有意为之并记录）。中文输入依赖的 devicekit 机制已死，见 [../android/common.md](../android/common.md)。
 
 ## 已定原则（供执行 harness 设计继承）
 
-1. **危险操作必须由人确认**（用户 2026-07-16 批准，2026-07-19 细化）：mobile 执行器在临界动作前停下，人工键盘确认后才走第二腿；gateway 在首次危险工具调用中等待现场人操作手机确认卡。gateway 只有在危险工具尚未调用时遇到纯人工前置条件，才允许暂停后恢复。
+1. **危险操作必须由人确认**（用户 2026-07-16 批准，07-19 细化）：mobile 执行器在临界动作前停下，人工键盘确认后才走
+   第二腿；gateway 在首次危险工具调用中等待现场人操作手机确认卡。只有危险工具尚未调用时遇到纯人工前置条件，才允许暂停后恢复。
 2. 全量 trace 落盘 `docs/runs/`，只让摘要进派单方上下文。
 3. 每次派单记录 token/成本（JSON 计量），持续校准 [cost.md](cost.md)。
 
 ## 执行 harness（2026-07-17 已落地）
 
-设计与协议全文见 [执行harness spec](../../specs/2026-07-17-执行harness-design.md)。入口 `scripts/dispatch.ps1`，站规 `scripts/prompts/executor-preamble.md`，任务卡 `scripts/tasks/`，台账 `docs/runs/ledger.csv`。
+入口 `scripts/dispatch.ps1`，站规 `scripts/prompts/executor-preamble.md`，任务卡 `scripts/tasks/`，台账 `docs/runs/ledger.csv`。
+实施期实测（claude 2.1.206）：
 
-实施期实测的坑（claude 2.1.206）：
-
-- **`--max-turns` 已从 CLI 移除**，机械上限改用 `--max-budget-usd`（wrapper 默认 $2）；轮数只能做站规软预算。
-- **会话内派单的环境卫生**：子进程要清 `CLAUDE*` 环境变量（wrapper 已做），否则子会话带着宿主会话标记跑；`ANTHROPIC_BASE_URL` 有意保留——它是回落通道开关，派单认证异常先查它。
-- 预检不做 npm registry 探测：国内网络假阴性多；版本锁定靠 configs/mobile-mcp.json，server 启不来会体现为首轮 fail。
-- 确认门 `Read-Host` 在非交互 shell 直接抛错（实测）——代理经 Bash/PowerShell 无法代答 CONFIRM，两段式硬门机械成立。
+- **`--max-turns` 已从 CLI 移除**，机械上限用 `--max-budget-usd`（wrapper 默认 $2）；轮数只能做站规软预算。
+- **会话内派单要清 `CLAUDE*` 环境变量**（wrapper 已做），否则子会话带宿主会话标记；`ANTHROPIC_BASE_URL` 有意保留
+  （回落通道开关），派单认证异常先查它。
+- 预检不做 npm registry 探测（国内网络假阴性多）。
+- 确认门 `Read-Host` 在非交互 shell 直接抛错——代理经 shell 无法代答 CONFIRM，两段式硬门机械成立。
+- **派单锁判活的真值是"锁文件能否被独占打开"**（`scripts/lib/dispatch-lock.ps1`）：崩溃后 OS 回收句柄、文件残留，
+  这种残锁自动清理一次再取。别用超时或 pid 存活猜（pid 会被复用）。
 
 ## Claude Code 会话本地构建工具链（2026-07-24 补装）
 
-- 这个仓库从未提交 gradle wrapper，本机也没装 Android Studio；此前"263 tests 全绿""debug APK 已重装验证"等构建结论都是在 Codex CLI 沙箱里跑出来的。2026-07-24 发现 Claude Code 会话本地跑不了任何 gradle task 后，征得用户同意下载官方 `gradle-8.9-bin.zip`（`https://services.gradle.org/distributions/gradle-8.9-bin.zip`）装到 `%USERPROFILE%\.local-tools\gradle-8.9`（本机已有 JDK 21，够用），再用它在 `app/` 下跑了一次 `gradle wrapper --gradle-version 8.9` 生成 `gradlew`/`gradlew.bat`/`gradle/wrapper/`。
-- 现在 Claude Code 会话可以直接在 `app/` 目录用 `./gradlew testDebugUnitTest testReleaseUnitTest`、`./gradlew assembleDebug` 等自行验证改动，不必再等 Codex CLI 额度或求助 Android Studio；这几个 wrapper 文件用户已自行提交入库（commit "Gradle"，2026-07-24）。
-- 测试结果统计走 `build/reports/tests/<variant>/index.html` 里的 `class="counter"`（tests/failures/ignored 三个数字），比 gradle 控制台默认输出（只报 BUILD SUCCESSFUL，不报具体条数）更可靠；单个测试类的结果在 `build/reports/tests/<variant>/classes/<全限定类名>.html`。
+- 仓库原先没有 gradle wrapper、本机没装 Android Studio，早期构建结论都出自 Codex CLI 沙箱。2026-07-24 经用户同意装了官方
+  Gradle 8.9 发行包（本机 JDK 21），在 `app/` 下生成 wrapper，已入库。
+- 现在可在 `app/` 直接 `./gradlew testDebugUnitTest testReleaseUnitTest`、`./gradlew assembleDebug` 自验。
+- 测试条数看 `build/reports/tests/<variant>/index.html` 的 `class="counter"`（控制台只报 BUILD SUCCESSFUL）；
+  单类结果在 `build/reports/tests/<variant>/classes/<全限定类名>.html`。
 
 ## 真机调试：单次只读诊断优于反复整套重跑（2026-07-24）
 
-- **改完代码想验证某个真机猜测，先用 `dispatch.ps1 -Task "..." -Executor gateway` 派一个几毛钱、几十秒的只读诊断任务，别直接重跑整套 `run-p0-safety-smoke.ps1`**：后者每轮都带 `-Provision`（重装 APK+权限/IME 重建，还会消耗用户一次手动操作手机的配合），一次盲猜失败的成本是"用户等几十秒+跑一轮 provision"；而 `dispatch.ps1` 直接派单不需要 `-Provision`（前提是设备此前已被某次 `-Provision` 跑过，gateway 进程/无障碍绑定还在——只是 IME 和端口转发这类会被跑测收尾清理掉的状态需要重新建立，`dispatch.ps1` 自己会重建端口转发），几毛钱一次，能反复试。
-- **只读诊断要在提示词里显式禁止写入/危险工具**（"不得调用 macro_run/type_text/press_key/ui_action/notification_reply 等"），否则子代理可能"顺便"多做事；同时明确"输出完就结束，不做任何其他动作"，避免子代理自作主张追加步骤。
-- **`ui_snapshot()` 只读文字元素列表，看不出截图本身是否陈旧**——如果怀疑视觉管线返回的不是真实当前画面（例如连续两次读数完全一样、且和用户口头描述的画面对不上），改派一个只调用 `screen_capture()`、让子代理直接用自己的视觉描述截图内容（标题栏文字、中间主要内容类型、底部有没有输入框/按钮）的诊断任务，不要调用 `ui_snapshot`。两者结果一致说明截图管线本身没问题、缺的是 OCR 提取；结果不一致才需要往截图/视觉管线本身查。
-- **诊断提示词里对可能含真实敏感信息（代理/VPN 订阅链接、密钥等）的元素要求脱敏**（如替换成 `[REDACTED-LEN=n]`），因为诊断结果会原样进入派单方的对话上下文和本地 trace；这类要求要写在派单提示词里，不能事后再补救——子代理只服从这一轮收到的指令。
+- **验证某个真机猜测，先派几毛钱的只读诊断**（`dispatch.ps1 -Task "..." -Executor gateway`），别直接重跑整套
+  `run-p0-safety-smoke.ps1`（每轮带 `-Provision` 重装、还要用户配合）。前提是设备此前被 `-Provision` 过、gateway/无障碍仍在。
+- **只读诊断提示词要显式禁止写入/危险工具**（列出 `macro_run`/`type_text`/`press_key`/`ui_action` 等），并写明"输出完就结束"。
+- **`ui_snapshot()` 看不出截图是否陈旧**：怀疑视觉管线时，另派只调 `screen_capture()`、由子代理自己描述画面的任务；两者一致说明
+  缺的是 OCR 提取，不一致才查截图管线。
+- **可能含敏感信息的元素要求在派单提示词里脱敏**（如 `[REDACTED-LEN=n]`）——结果会原样进上下文与 trace，事后补救无效。
 
 ## 派单前先自查设备状态（2026-07-26，实测省了多轮）
 
-- **开发会话可以直接 `adb exec-out screencap -p` 拿截图自己看**，判断"输入框是不是空的、App 停在哪一页、上一轮残留有没有清掉"。这不算"操作手机"（只读，不注入任何输入），但能挡掉一整类"前置条件不满足→派单必失败"的空跑。2026-07-26 那轮实测：盲点探针要求候选区视觉为空，而每次失败的 `type_text` 都会留下文字，不自查就是白烧一轮。
-- **同理，跑测前先跑一次零 token 的 `scripts/lib/p0-gateway-health-probe.ps1`**：服务被杀/端口转发失效时它 1 秒内就报，不必等派单超时。
-- **"前置条件不满足→必然失败"的场景，正确解法是让网关出一个 R 级只读判据、PC 侧零 token 预检，而不是放宽安全判据、也不是靠人记得做**（2026-07-26 落地）：残留文字必拒这条曾被列为"harness 摩擦"，但盲点探针要求输入框为空是刻意的安全属性，不能为省事放宽；宏侧自动清空又等于让宏删它无法归属的内容。最终做法是新增 debug 专用 R 级工具 `p0_probe_region_state`（判据与 `P0FocusProbeValidator.build` 共用同一实现，不另写几何），runner 每腿开跑前经 MCP 直接问一句。**预检不可用时只警告不阻断**——它是省钱的优化，不该反过来变成新的阻断条件。
-- **错误信息把多个并列条件合并成一句话，是真机排查里最贵的反模式。** 同一轮里 fresh proof、盲点前置校验、`type_text` 前/后复核四处都犯了这个毛病，每处都害得多派一轮单才定位。**凡是"A 或 B 或 C 已变化"式的 fail-closed，都应逐条点名并附上"旧值 → 新值"**；诊断专用分支只在失败路径上跑、不参与放行判定，不会削弱安全性。
-- ~~**runner 崩溃会残留 `scripts/.dispatch.lock`**，下一次派单会在 2 秒内被"疑似并发"挡掉~~ 已修（2026-07-26，`scripts/lib/dispatch-lock.ps1`）：**判活的真值是"锁文件能否被独占打开"，不是文件在不在、也不是时间戳**。派单进程全程持有句柄，崩溃/被 kill 后 OS 立刻回收句柄而文件留在盘上——这种残锁自动清理一次再取；只要还有人持着句柄就照旧拒绝。别用超时或 pid 存活猜（pid 会被复用）。
-
-## 执行器权限面：`--allowedTools` 不是限制（2026-07-26 实测）
-
-- **`--allowedTools mcp__gateway` 只是免确认名单，不阻止别的工具。** 2026-07-26 Allow 腿实锤：执行器在 Enter 被安全门拦掉之后，真的在本机跑起了 `Bash{command:"true"}`。仓库里就放着 gateway 私密 token（`configs/gateway-mcp.json`），执行器能读本机文件/跑 shell，等于给 runner 那整套敏感值脱敏链开了后门。修法：`dispatch.ps1` 补 `--disallowedTools`，把 Bash/文件读写/Web/子代理一律禁掉。
-- **`ToolSearch` 必须留在白名单里**：gateway 的 MCP 工具是延迟注册的，执行器要先用它加载 schema 才调得动 `macro_run` 等；禁掉它整条链就没法起步。同理，trace 事后审计原先"任何非 `mcp__gateway__` 的 tool_use 一律抛错"会**误杀每一次正常跑测**（这道门此前从没在成功路径上真正执行过，所以一直没暴露）——现在 `ToolSearch` 走显式白名单且不计入调用序列，它的纯文本结果也不再被当作证据信封解析或孤儿结果。
-- **只在成功路径上跑的审计等于没有审计。** 那次 `Bash` 之所以无人发现，是因为完整语义审计排在"确认卡截图已就位"之后，腿早在那之前就抛错了。凡是"执行器有没有越权"这类与语义无关的策略检查，都要抽成独立函数，在失败路径上也跑一遍并写进 manifest（现为 `tool_policy_violations`）。
+- **开发会话可以 `adb exec-out screencap -p` 只读截图自查**（输入框是否空、停在哪页、残留是否清掉），挡掉"前置条件不满足→必失败"的空跑。
+- **跑测前先跑零 token 的 `scripts/lib/p0-gateway-health-probe.ps1`**：服务被杀/端口转发失效 1 秒内报。
+- **"前置条件不满足→必然失败"的正解是网关出 R 级只读判据、PC 侧零 token 预检**，不是放宽安全判据、也不是靠人记得做
+  （例：`p0_probe_region_state` 与 `P0FocusProbeValidator.build` 共用实现）。**预检不可用时只警告不阻断**——它是省钱优化。
+- **错误信息把多个并列条件合并成一句话，是真机排查里最贵的反模式。** "A 或 B 或 C 已变化"式的 fail-closed 要逐条点名并附
+  "旧值 → 新值"；诊断分支只在失败路径上跑，不削弱安全性。
 
 ## 危险动作统一硬门（2026-07-19 离线测试）
 
-- **风险等级只作元数据会产生旁路**：把 `Level.D` 写进工具注册信息并不会机械阻止 handler；统一安全门必须位于所有 handler 之前，静态等级和动态目标风险都在这里判定。
-- **逐工具确认必然漏接**：只在 `ui_action` 等个别工具里弹确认，新工具、IME 回车或其他执行通道仍可能绕过。确认策略应集中，具体工具只负责执行已放行的本次动作。
-- **自由文本 `confirm(action_desc)` 不是授权**：模型填写的描述无法绑定随后真正调用的工具，会形成“确认 A、执行 B”旁路。确认卡必须由网关根据实际工具、冻结参数以及当前 App/Activity/目标控件上下文生成，并在最终执行前复核。
-- **安全失败不计 retry**：拒绝、超时、上下文或目标失效属于安全控制结果，不得累计为执行失败，否则可能诱导大脑换路或重试危险动作。
-- **成功记账失败不能反向诱发动作重试**：动作 executor 已成功后，retry guard 的成功记账应 best-effort；记账异常只进审计，不能把已发生的动作包装成失败交给上层重试。
-
-本轮已离线通过 `SafetyGate` 12 条、`SafetyPolicy` 7 条单测及 gateway debug 构建；未连接手机，三项 P0 真机 smoke 待验。
+- **风险等级只作元数据会产生旁路**：统一安全门必须位于所有 handler 之前，静态等级和动态目标风险都在这里判定。
+- **逐工具确认必然漏接**（新工具、IME 回车等通道会绕过）；确认策略集中，工具只执行已放行的本次动作。
+- **自由文本 `confirm(action_desc)` 不是授权**：会形成"确认 A、执行 B"。确认卡由网关按实际工具、冻结参数与当前
+  App/Activity/目标控件生成，最终执行前复核。
+- **安全失败不计 retry**：拒绝、超时、上下文/目标失效是安全结果，累计为执行失败会诱导大脑换路或重试危险动作。
+- **成功记账失败不能反向诱发重试**：动作已成功后 retry guard 记账 best-effort，异常只进审计。
 
 ## 双 executor 派单接线（2026-07-19 离线测试）
 
-- `dispatch.ps1 -Executor mobile|gateway` 共用锁、trace、ledger 和结果解析；默认仍是 `mobile`。gateway 的本地配置只允许放在已 gitignore 的 `configs/gateway-mcp.json`，仓库仅保存 example。
-- **DryRun 的位置是安全契约**：必须在任何 adb 调用、私密配置内容读取、锁创建和 trace/暂停件/ledger 落盘之前返回。否则“无手机离线验装配”会意外触碰设备、凭据或台账。
-- **暂停件必须持久化 executor**：确认腿自动继承原 profile，显式跨 profile 必须 fail-fast；无 executor 的旧暂停件只按 `mobile` 兼容，不能猜测或自动迁移到 gateway。
-- **凭据不进入观测面**：gateway token 与 Authorization 不得写入 trace、ledger、错误消息、TEMP fixture 或测试快照。离线夹具只使用合成值，且不得读取工作区可能存在的真实私密配置。
-- **发送无白名单**：旧 harness 的“文件传输助手免确认”已取消；自收消息也要通过相同安全门，任务卡不得保留豁免暗示。
-- **safety terminal 没有第二腿**：gateway 的拒绝、确认超时、`E_STALE_REF`、blocked、缺权限/通道等结果必须常规失败；不得写成 `[AWAIT_CONFIRM]`，不得用 `-Confirm` 重试。AWAIT 仅用于危险工具尚未调用时的纯人工前置条件。
-- **同一个错误码可以来自毫不相干的原因，而"预期错误码"最会骗人**（2026-08-01，Deny 腿首次上真机实锤）。Deny 腿的预期结果就是 `E_BLOCKED`，于是当网关 debug 测试控制的白名单漏了 `deny`、`press_key` 回 `E_BLOCKED("debug 测试腿不在白名单", channel=test-control)` 时，**确认卡根本没弹**，执行器却照常报告"符合本腿预期"，整腿 31 秒结束、看上去完全正确。拦住它的是 runner 独立读 app 私有文件里的 `confirmation`：没有真人决定即判失败。三条推论：①**判据不能只看错误码，要看 channel**——真人拒绝是 `channel=overlay`，测试控制拒收是 `channel=test-control`，此前台账把两者并排记成同一个 `safety-denied`（已按 channel 区分，见 `dispatch-ledger.ps1`）；②**被测组件自报的结论必须有一条不来自它的独立判据兜底**，Deny 腿的四条判据全部自报，正是这次靠 runner 侧独立读文件才没误判；③**新腿接进 runner 时要顺着调用链把每一处按腿枚举的白名单都放开**——白名单在网关 debug 源码里，与 runner 侧的腿枚举相隔很远。
-- **用例会保护 bug：写"不支持 X"的反向用例时，要写死一个永远不会被支持的 X。** 上面那个白名单漏洞被 `TestControlTest` 里 `commandJson(leg = "deny")` 这条"不支持的腿"用例**保护着**——它在 Deny 腿尚未存在时是对的，Deny 腿接进来后就变成了在钉死一个 bug，而套件全绿。这是同一类错误第二次（前一次是 `fromOcrReadback` 把"OCR 一个字没读到"判成已发送，也被自己的用例固化）。反向用例用 `purchase` 这种明确不会存在的值，别用"暂时还没做"的真实名字。
+- `dispatch.ps1 -Executor mobile|gateway` 共用锁、trace、ledger 和结果解析；默认 `mobile`。gateway 本地配置只放 gitignored 的
+  `configs/gateway-mcp.json`，仓库只存 example。
+- **DryRun 的位置是安全契约**：必须在任何 adb 调用、私密配置读取、锁创建与 trace/暂停件/ledger 落盘之前返回。
+- **暂停件持久化 executor**：确认腿继承原 profile，跨 profile fail-fast；无 executor 的旧暂停件只按 `mobile` 兼容。
+- **凭据不进观测面**：token 与 Authorization 不得进 trace、ledger、错误消息、fixture 或快照；离线夹具只用合成值。
+- **发送无白名单**：自收消息（文件传输助手）也走同一安全门。
+- **safety terminal 没有第二腿**：拒绝、确认超时、`E_STALE_REF`、blocked、缺权限/通道一律常规失败，不得写成
+  `[AWAIT_CONFIRM]`、不得用 `-Confirm` 重试。
+- **同一错误码可以来自毫不相干的原因，"预期错误码"最会骗人**（2026-08-01 Deny 腿实锤）：debug 测试控制白名单漏了 `deny`，
+  `press_key` 回 `E_BLOCKED(channel=test-control)`，确认卡根本没弹，执行器却报"符合预期"。推论：①判据要看 channel
+  （真人拒绝是 `overlay`，台账已按 channel 区分）；②被测组件自报的结论要有一条独立判据兜底（这次靠 runner 独立读
+  app 私有文件里的 `confirmation`）；③新腿接进 runner 时顺着调用链放开每一处按腿枚举的白名单。
+- **用例会保护 bug**：上述漏洞被一条"不支持的腿 = `deny`"反向用例钉住而套件全绿。反向用例要写死一个永远不会被支持
+  的值（如 `purchase`），别用"暂时还没做"的真实名字。
 
 ## 工序协调：A 直接问答，C 隔离验收（2026-09-08）
 
-现行协议见 [backlog §1–7](../../backlog.md)。旧 A/B/C 三会话协议及复盘见
-[历史归档](../../backlog-archive.md)；历史 B 道记录能证明用户作过决定，不要求今天另开 B 会话。
+现行协议见 [backlog §1–7](../../backlog.md)；旧 A/B/C 三会话协议见 [历史归档](../../backlog-archive.md)
+（历史 B 道记录能证明用户作过决定，不要求另开 B 会话）。
 
-- **A 负责协调、离线开发与直接问答。** 常规实现取舍自行闭环；不可替代的用户选择由 A 收敛问题，
-  通过当轮可用的问答工具或直接文字提问取得真实答复，保留来源。等待时继续不依赖答案的工作；
-  复杂选项可派独立审查子任务，子任务不能替用户授权。C 只验固定候选，不改代码，无任务时待命。
-- **协调来源必须随派工明确。** 队列保持单写者，派工给出当前协调工作区/分支或 ref、必要摘要和
-  回报对象；接手先核实来源可达且包含最新决定。不假定 `main` 永远最新，也不读过时 worktree 副本。
-  会话 ID 每次传入，消息、等待和问答工具按运行时可用能力选择，不照抄旧客户端工具名。
-- **复核验证收据，不只听自报。** 同一 SHA、受验内容/构建产物、工具链、参数与相关环境均未改变时，
-  可复用已有完整验证结果；收据须能定位命令、日志、检查范围和结论。协调者核实这些绑定与关键证据，
-  不因换会话自动再跑全量门。新改动、环境漂移、失败或未覆盖疑点出现时，补与风险相称的验证。
-  **复用结果不等于复用授权**：已消费或冻结的 one-shot 不得自动重跑，也不能用旧 PASS 覆盖冻结结果。
-- **批次按触达的真机表面划分。** 离线自举也可能牵动确认路径，不能只按改动意图区分批次。
-  验收后的合并对象是已验的固定 SHA，不是持续前进的分支 tip；离线通过不代替真机结论。
-
-**2026-09-08 验证补充：离线也会竞争宿主 lease。** 本次脚本整合门的 C1b build-environment 子套件
-在 guard 初始化处因全局 mutex 占用得到 21 pass / 6 fail；没有执行 JDK/Gradle，也未到六项业务断言。
-测试和依赖与修改前的 Git blob 相同，且不加载本次提示词/流程文档；另有真实 C1b 引导进程存活，
-但未直接归属 mutex owner，不能把“看见进程”冒充句柄所有权证据。保留环境失败、不干预其他任务，
-按 [离线验证规程](../../runbooks/离线开发与验证.md)协调后再验受影响门，不能宣称整合门全绿。
-
-**同日恢复结果**：确认 mutex 已不存在、旧进程已退出后，在 clean `da9ab53` 只复跑 C1b host 离线聚合门，
-exit 0；build-environment 27/27、verifier 19/19 零跳过、fake-ADB 29/29，真实 ADB 调用 0。
-本次未改锁、门限或代码，处理方法是避开占用后补验；原失败记录保留，恢复证据另存
-`.checks/agent-workflow-c1b-host-recheck.log`、同名 `.summary.json` / `.receipt.json`。
-这关闭了原环境失败，不把分次验证改写成一次整合门全绿，也不扩大 Android 构建或真机结论。
+- **A 负责协调、离线开发与直接问答**；不可替代的用户选择由 A 收敛并取得真实答复，保留来源；子任务不能替用户授权。
+  C 只验固定候选，不改代码。
+- **协调来源随派工明确**：队列单写者；派工给出协调工作区/分支或 ref、摘要与回报对象；不假定 `main` 最新、
+  不读过时 worktree 副本；会话 ID 每次传入，工具按运行时可用能力选。
+- **复核验证收据，不只听自报。** 同一 SHA、受验内容、工具链、参数与环境未变时可复用完整验证结果，收据须能定位命令、
+  日志、范围和结论。**复用结果不等于复用授权**：已消费或冻结的 one-shot 不得自动重跑，旧 PASS 不能覆盖冻结结果。
+- **批次按触达的真机表面划分**；合并对象是已验的固定 SHA，不是前进中的分支 tip；离线通过不代替真机结论。
+- **离线门也会竞争宿主资源**（2026-09-08：全局 mutex 被另一任务占用致子套件失败）。看见进程不等于证明句柄归属；
+  保留环境失败、不干预他人任务，资源释放后只补验受影响的门，**分次补验不能改写成一次整合门全绿**。
 
 ### Codex C 证据必须在临时 worktree 回收前持久化（2026-08-12）
 
-批次 4 的两条 Codex C 结束后，临时 worktree 被清理，manifest、trace、截图路径随之失效，
-ledger 也没有自动进入 main；最终只能从 archived session 恢复两行台账。**任务消息里出现过路径，
-不等于证据已经归档。** 后续 C 无论通过还是冻结，都必须在释放 worktree 前完成三件事：
+批次 4 的 Codex C 结束后 worktree 被清理，manifest/trace/截图路径失效，ledger 也没进 main，只能从 archived session 恢复。
+**消息里出现过路径不等于证据已归档。** C 释放 worktree 前必须：
 
-1. 把 ledger 原始行交给 main 单写者，并按 run ID 验证 main 中**恰好一行**；dispatch 成功而
-   runner 后验失败时保留原始 dispatch 状态，不得为了迎合最终结论改写台账。
-2. 将需要长期保留且已经脱敏的 manifest、trace、截图和 cleanup 证据复制到主工作区
-   `docs/runs/evidence/<run-id>/`，逐文件记录 SHA-256。该目录 gitignored、只作本机持久证据；
-   token、私密配置和未脱敏输出不得复制。
-3. 最终回报完整 SHA、task、run、逐腿结论、cleanup、ledger 去重结果与持久证据路径。
-   这些交接完成前，C task 不得宣告完成或允许临时 worktree 被回收。
+1. 把 ledger 原始行交给 main 单写者，按 run ID 验证 main 中**恰好一行**；dispatch 成功而 runner 后验失败时保留原始状态，不为迎合结论改写。
+2. 把已脱敏的 manifest、trace、截图、cleanup 证据复制到主工作区 `docs/runs/evidence/<run-id>/`（gitignored，本机持久），
+   逐文件记 SHA-256；token、私密配置、未脱敏输出不得复制。
+3. 回报完整 SHA、task、run、逐腿结论、cleanup、ledger 去重结果与证据路径；完成前不得宣告完成。
 
-## C 道真机验收踩出的三条（2026-08-01，批次 1 连跑两轮验收）
+## C 道真机验收踩出的三条（2026-08-01）
 
-- **新 worktree 首跑必然空转两轮，除非先构建。** ①`run-p0-safety-smoke.ps1` **只装不构建**，
-  没有 APK 直接 `setup-fail：缺少 debug APK`；②`app/local.properties` 是 gitignored 的，
-  **不随 `git checkout` 进 worktree**，于是 `assembleDebug` 报 `SDK location not found`。
-  两条都在人已经守在手机旁之后才暴露。**C 道开跑前的固定动作：先 `assembleDebug` 出 APK，
-  再派单**；`local.properties` 缺就补（内容只有 `sdk.dir=`，gitignored，不污染钉住的 SHA）。
-- **验收判据里，"场景没构造成功"必须是独立的一态。** 批次 1 首轮验 tracker 冷启动自举：
-  三次 `-Provision` 全程 `foreground_identity_source=event`、`bootstrap` 零次出现——
-  **自举分支压根没被执行到**，而"没触达"与"通过"在当时的判据下长得一模一样（都不报错、
-  都没被 `identity_unset` 卡死）。真因是 `-Provision` 重绑之后还要 `am start` 拉面板、
-  再拉回微信，**每一步都产生窗口事件**，而自举只在"从未收到窗口事件"时生效。修法不是调参数，
-  是给"未触达"一个自己的名字：专用零 token 脚本四态 `passed`/`not_reproduced`/`unavailable`/
-  `failed`，退出码即结论。二次验收当场拿到 `event → bootstrap` 的真跃迁。
-  **这是"把错误行为/未触达钉成预期"的同族风险第三次出现**，前两次分别在用例和台账归因上。
-- **定位真机故障，先找只差一个变量的对照腿，比加日志快一轮。** teardown 首轮在 Stale 腿
-  失效（`unverified` 且框真脏），当轮 Deny 腿 `keyboard` **同为 `already_hidden` 却 `clean`**
-  ——一个对照直接排除了"键盘分支判错"，把真因锁死在"微信在不在前台"（Stale 腿按定义停在桌面，
-  28 次退格打给了桌面）。这条与《修不动的时候先加可观测性》互补：**可观测性解决"看不见"，
-  对照实验解决"看得见但归因不了"。**
+- **新 worktree 首跑先构建。** `run-p0-safety-smoke.ps1` 只装不构建；`app/local.properties`（gitignored，只含 `sdk.dir=`）
+  不随 checkout 进 worktree。开跑前固定动作：补 `local.properties` → `assembleDebug` → 再派单。
+- **"场景没构造成功"必须是独立的一态。** tracker 冷启动自举验收时，`-Provision` 后的 `am start` 等动作都产生窗口事件，
+  自举分支从未被执行到，而"未触达"与"通过"在旧判据下长得一样。修法是给它一个名字：四态
+  `passed`/`not_reproduced`/`unavailable`/`failed`，退出码即结论。
+- **定位真机故障先找只差一个变量的对照腿**，比加日志快一轮。可观测性解决"看不见"，对照实验解决"看得见但归因不了"。
 
 ## 离线套件提速：先量，再动手（2026-08-01，567s → 213s）
 
-- **"慢在哪"必须是读出来的。** 第一步只加逐条用例计时与 new-fixture/runner 分段归因，
-  结论与直觉不同：造 fixture 只占 1%（81 次共 4 秒），98% 在 runner 子进程里，
-  而一次 runner 跑 56 次假 adb、单次 68ms。
-- **热路径上的假设备脚本，每多一个进程都要乘以几千次。** 那 68ms 不是 cmd.exe 本身慢，
-  是假 adb 每次调用都先无条件跑五个进程才开始分发（`echo %*| findstr` 的管道本身就是
-  两个 cmd，加两次 `findstr scenario.txt`）。场景名改由 fixture 构造时烤进脚本、分发换成
-  `if "%n"==` 与 `if exist` 这类零进程内建后，单次降到 21ms。
-- **并行选分片、不选进程内并行。** 分片是同一个脚本起 N 份各跑一部分，语义与顺序跑逐字
-  相同，出问题能单独重跑一片；进程内并行要把几十个函数搬进 runspace，共享计数器与临时
-  目录全得重写。**并行度必须打印出来**：它随可用内存变化，一次假失败若不知道当时跑的是
-  几片，就分不清是代码问题还是并发压出来的。
+- **"慢在哪"必须是读出来的**：先加逐用例计时与分段归因（实测 98% 在 runner 子进程、假 adb 每次调用，不在造 fixture）。
+- **热路径上的假设备脚本，每多一个进程都乘以几千次**：假 adb 分发改用 `if "%n"==`、`if exist` 等零进程内建，
+  场景名在 fixture 构造时烤进脚本。
+- **并行选分片、不选进程内并行**（语义与顺序跑相同、可单片重跑）；**并行度必须打印出来**，否则分不清假失败是代码还是并发压出来的。
+- `P0_KEEP_FIXTURE=1` 保留临时仓库副本——用例失败时 fixture 会被当场删除。
 
-### cmd 批处理的三个坑（都在本轮真踩到，改假设备脚本前先读）
+### cmd 批处理的三个坑（改假设备脚本前先读）
 
-1. **块内的 `rem` 仍然会被解析。** 圆括号会提前闭合整个 `if (...)` 块、重定向号会真的
-   重定向。一条带括号的中文注释让 44/55 条用例全红，而报出来的错是"重置无障碍配置失败"，
-   跟真因八竿子打不着。说明写在生成它的 PowerShell 注释里，别写进 .cmd 的括号块。
-2. **重定向号前面紧挨着数字，那个数字就变成文件句柄号。** `echo 2>"file"` 是把 stderr
-   重定向走、内容一个字没写；`echo %*>>"adb.log"` 在命令以数字结尾时（`... keyevent 4`）
-   变成 `4>>`，**那一条根本不进日志**——于是"按了 BACK"被读成"没按 BACK"，断言看起来
-   铁证如山，其实是日志说了谎。一律写成 `>"file" echo 2` / `>>"adb.log" echo %*`。
-3. **.cmd 按 OEM 代码页读，不是 UTF-8。** 一串中文的 UTF-8 字节数是 3 的倍数，按 GBK
-   双字节配对后会剩半个字，把行尾的 CRLF 一起吃掉，下一行被并进上一行。新增注释只写 ASCII。
+1. **块内的 `rem` 仍会被解析**：括号会提前闭合 `if (...)` 块、重定向号会真的重定向，报错与真因无关。说明写在生成它的 PowerShell 注释里。
+2. **重定向号前紧挨数字会变成句柄号**：`echo %*>>"adb.log"` 在命令以数字结尾时变成 `4>>`，那一行不进日志——日志说了谎。
+   一律写成 `>"file" echo 2` / `>>"adb.log" echo %*`。
+3. **.cmd 按 OEM 代码页读**：中文 UTF-8 按 GBK 配对会吃掉行尾 CRLF、把下一行并进来。注释只写 ASCII。
 
-配套：`P0_KEEP_FIXTURE=1` 保留临时仓库副本。用例一失败，能看的现场只有一行断言消息，
-而 fixture 目录当场就被删了——排上面第 2 个坑时靠手工复刻现场烧了近一小时。
+## 量函数长度：别用 grep/awk 量 Kotlin（2026-08-01 起四次量错，09-07 换工具）
 
-## 量函数长度：括号匹配，且只算块体函数（2026-08-01 第三次量错）
-
-STATUS 里"`ToolRegistry.callInternal` 179 行、全仓最长"两半都不准。正确测法是剔除
-注释与字符串后做括号匹配，**并且跳过表达式体（`fun f() = expr`）与抽象声明**——它们没有
-`{`，直接找下一个 `{` 会一路窜到文件后面别的块里，量出 1410 行这种荒唐数字。
-实测：`ConfirmOverlay.ask` 307 行才是全仓最长，`callInternal` 180 行第二，
-`GatewayA11yService.snapshot` 130 行第三，全仓 ≥100 行的块体函数共 5 个。
-前两次量错都是把"到下一个 `fun` 的距离"当长度，这一次是新错法——**每次报函数长度前，
-先拿一个已知的表达式体函数验一下测法**。
+- 「全仓最长函数」先后四次量错：把"到下一个 `fun` 的距离"当长度；表达式体函数（`fun f() = expr`）没有 `{`，
+  括号匹配会窜到别的块；Kotlin 花括号还出现在字符串、lambda、模板 `${}` 里，行式脚本天然量不准。
+- **做法**：用 `scripts/measure-kotlin.ps1`（锁定 SHA256 的 detekt 独立 JAR、真实 Kotlin PSI）。**不要引用旧的具体行数**，
+  要排名就重新运行；输出含文件清单与哈希，分析前后漂移会拒绝报告。指标定义见
+  [指标说明](../../../scripts/lib/kotlin-metrics/README.md)。
 
 ## 反复调参数之前先搜文档（2026-08-02，批次 2 烧掉三轮真机才醒）
 
-**触发条件**：同一现象连撞两轮还没定位。第三轮之前**先查官方文档/搜网**，不要接着调参数。
-已进 [离线开发与验证 · 排障](../../runbooks/离线开发与验证.md)。
+**触发条件**：同一现象连撞两轮还没定位。第三轮之前**先查官方文档/搜网**，不要接着调参数
+（已进 [离线开发与验证 · 排障](../../runbooks/离线开发与验证.md)）。批次 2「锁屏免解锁批准」三轮都在调通知属性，
+一次搜索就判死方向：通话级待遇授予的是 `CallStyle` 而非 `CATEGORY_CALL`（详见 [android/common.md](../android/common.md)）。
 
-批次 2「锁屏免解锁批准」连挂三轮，三轮都在调通知属性：`setOngoing` → `setTimeoutAfter` →
-准备试 autogroup。**一次搜索就查出方向本身是错的**：通话级待遇授予的是 `CallStyle` 而非
-`CATEGORY_CALL`，而 `CallStyle` 的强制按钮（接听/拒接）与"允许/拒绝"语义天然冲突、我们
-结构上用不了（详见 [android/common.md](../android/common.md)）。
+- **厂商 ROM 文档常抓不到正文**（如 vivo 开放平台 JS 渲染）。抓不到就明确记"指望不上文档"，转单变量实验。
+- **搜到的东西分级记**：官方文档与媒体报道分开标注，后者按未证实处理、转成可实验的假设。
 
-**代价核算**：三轮真机 ≈ 用户三次守在手机旁；那次搜索花了不到五分钟。**反复试参数是在
-用真机时间换本该几分钟搜到的知识。**
-
-三条附带经验：
-
-- **厂商 ROM 文档常抓不到正文**（vivo 开放平台是 JS 渲染的，抓下来只有站点标题；中文搜索
-  结果几乎全是面向终端用户的设置教程）。**抓不到就明确记一句"这条线指望不上文档"**，转做
-  单变量实验，别在检索上无限投入。
-- **搜索的价值常常不是给出答案，而是把方向判死。** 这次真正解题的是随后重读代码——但如果
-  没有那次搜索把"继续调通知属性"这条路否掉，也不会去读 `GatewayA11yService` 那段注释。
-- **搜到的东西要分级记**：官方文档写的（`CallStyle` 的强制按钮）与媒体报道（Android 16 隐藏
-  "已读过"的锁屏通知）**必须分开标注**，后者按未证实处理并转成可实验的假设。
 ## 判据看不见的东西就会烂掉（2026-08-02，四个实例）
 
-一条东西**只要没有任何判据能看见它**，它出错时就没有任何信号。它不会报错、不会变红，
-只会安静地与现实脱节，直到某次真机跑测或某个人顺着它走错路才暴露——那时代价已经付过了。
+一条东西**只要没有判据能看见它**，出错时就不会报错，只会安静地与现实脱节。修法一样：**挪到判据看得见的地方。**
 
-同一轮里出了四例，**修法完全一样：把东西挪到判据看得见的地方。**
-
-| # | 看不见的东西 | 后果 | 修法 |
-|---|---|---|---|
-| 1 | 耗尽路径的 fallback 字符串**内联**在 `ToolRegistry` 的 lambda 里，无任何用例覆盖 | 它写着"输出 `[AWAIT_CONFIRM]`"，而站规 §4 明令这些终态**不得**输出——**代码反过来教大脑违规**，错了很久没人发现 | 措辞挪进 `StaleReconfirmGuard` 的纯 Kotlin 常量，加用例断言它指向「结果：失败」且不含 `[AWAIT_CONFIRM]` |
-| 2 | `.ps1` 缺 UTF-8 BOM，而检查用的是 **pwsh 7 的 AST 解析** | pwsh 7 按 UTF-8 读，一切正常；文件的**真实运行环境是 5.1**，按 ANSI 读、中文乱码成解析错误。于是"OK 可解析"这个绿是**假的** | 字节级断言 BOM + **真拿 5.1 解析一遍** |
-| 3 | 核查"用户到底拍过板没有"的脚本，过滤条件写着 `if any(b['type']=='tool_result'): continue` | 而 **AskUserQuestion 的答案恰恰以 `tool_result` 回来**——唯一能证明用户拍过板的证据被整类丢弃。于是把"我没查到"报成"某会话**编造了**用户授权"，写进 backlog、写进 commit message、并当面向用户宣告 | 换掉过滤条件；**并在判据只有单一来源、且指向"某方造假"时，先找第二来源再下结论** |
-| 4 | `Assert-NotMatches $source 'setDeleteIntent'` | 被**自己写的注释**（"所以这里也没有 setDeleteIntent"）匹配到。这次是误报所以立刻发现；**反过来就是漏报**——注释里出现某个名字，就能让"代码里不许有它"的断言永远绿 | 只匹配调用形态 `^\s*\.setDeleteIntent\(` |
-
-**第 3 例是主会话犯的，代价最大**（一度对着用户宣告某个会话编造了他的授权，而用户其实答过三次）。
-记在这里不是为了清算，是因为**教训册只记子会话的坑，本身就是一次"判据看不见"**：
-主会话的核查脚本从来没有被任何东西检查过。
+| 看不见的东西 | 后果 | 修法 |
+|---|---|---|
+| fallback 字符串内联在 lambda 里，无用例覆盖 | 写着"输出 `[AWAIT_CONFIRM]`"，代码反过来教大脑违反站规 | 挪进可被用例引用的常量并断言 |
+| `.ps1` 缺 BOM，却用 pwsh 7 AST 验 | 真实运行环境 5.1 按 ANSI 读、中文变解析错误，"可解析"是假绿 | 字节级断言 BOM + 真拿 5.1 解析 |
+| 核查"用户是否拍板"的脚本丢弃所有 `tool_result` | AskUserQuestion 答案恰以 `tool_result` 回来，于是把"没查到"报成"某会话编造授权" | 换过滤条件；结论指向"某方造假"时先找第二来源 |
+| `Assert-NotMatches $source 'setDeleteIntent'` | 被注释匹配到；反过来注释里出现名字就能让断言永远绿 | 只匹配调用形态 `^\s*\.setDeleteIntent\(` |
 
 ### 可操作的四条
 
-1. **安全相关的字符串不要内联。** 提示词、fallback、错误措辞——凡是"约束大脑行为"的文本，
-   放进能被用例引用的常量，否则它与站规的漂移无人看得见。
-2. **用目标运行时去验，别用手边顺手的那个。** 给 5.1 跑的脚本要用 5.1 验；给 cmd 跑的
-   `.cmd` 要按 OEM 代码页想（本册上面那三条 cmd 坑同源）。
-3. **源码文本断言分不清代码与注释。** 一律匹配调用/声明形态，别匹配裸名字。
-4. **一条判据写完，先问它一句"如果目标真的存在/真的出错，我这条能看见吗"。**
-   第 3 例正是漏了这一问：脚本从没做过一次正对照。
+1. **约束大脑行为的文本（提示词、fallback、错误措辞）不要内联**，放进能被用例引用的常量。
+2. **用目标运行时去验**：给 5.1 跑的脚本用 5.1 验，`.cmd` 按 OEM 代码页想。
+3. **源码文本断言分不清代码与注释**：匹配调用/声明形态，别匹配裸名字；必要时先剥注释。
+4. **判据写完先做一次正对照**：临时塞一处违规，确认它真的变红。
 
-同族的还有本仓已记两次的「用例把错误行为钉成预期」，以及它的变体
-**「过时预期靠巧合存活」**（断言本身没错，只是它保护的预期已作废，而实现恰好没触发它）。
-2026-08-02 又出一次更毒的形态：一条 doc 注释写着"那条在调用方"，而调用方的行为当轮刚被改成
-相反的——**它不是笼统的过时说法，是一条明确的指路**，把人指向一个已经不存在的行为。
-改动一处行为时，顺手搜一遍还有谁在指着它。
+同族还有「用例把错误行为钉成预期」（本册已记三次）及其变体「过时预期靠巧合存活」；以及**过时的明确指路**：
+doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动一处行为时，顺手搜一遍还有谁在指着它。
 
-### 搜的是行为的形态，不是这次改动的标签（2026-08-02 当场又栽一次）
+### 搜的是行为的形态，不是这次改动的标签（2026-08-02）
 
-改完上面那处指路之后，我按"还有谁在指着它"搜了一遍，检索词用的是**这次改动的标签**
-（"决定四"），于是又找出四处挂着同一标签的注释——看起来很彻底。
-
-但真正该搜的是**行为的形态**：「谁的 `fallback` 在指示 `[AWAIT_CONFIRM]`」。
-换成这个词，`ConfirmOverlay` 里立刻又冒出**四处**，比刚修的那处更老、更容易撞上——
-其中 `E_CONFIRM_TIMEOUT` 那条每次确认超时都会走，而上一轮真机验收恰恰超时了两次。
-
-**标签只覆盖这次改动碰过的地方；形态覆盖所有同类。** 前者给人"已经搜干净了"的错觉。
-
-判定它们是否真冲突时，有一条比引用站规更硬的机械理由：
-`dispatch.ps1 -Confirm` 对 gateway 暂停件的终态码检查里，`E_CONFIRM_TIMEOUT`、
-`E_PERM_MISSING`、`E_CHANNEL_DOWN` **全在拒绝恢复的名单上**——也就是说，就算大脑照着旧
-fallback 输出了 `[AWAIT_CONFIRM]`，下一步也会被机械拒绝。旧措辞指的是一条**保证走不通**的路。
-**判断"某条指令是否自相矛盾"时，去看它指向的那条路在系统里到底通不通，比逐字对照规矩更可靠。**
-
-已加一条离线断言把这一整类钉死：主源码里任何 `fallback = "…"` 都不得含 `[AWAIT_CONFIRM]`
-（白名单显式列出、当前为空）。断言先剥注释再匹配——那几个文件的注释里正解释着"为什么不这么写"。
-**并做过一次正对照**：临时塞一处违规，确认它真的变红。
+按改动标签（"决定四"）搜只找到挂同一标签的注释；按行为形态（「谁的 `fallback` 在指示 `[AWAIT_CONFIRM]`」）
+搜，`ConfirmOverlay` 又冒出四处更老的。**标签只覆盖这次碰过的地方，形态覆盖所有同类。**
+判断"某条指令是否自相矛盾"时，去看它指向的路在系统里通不通（这里 `dispatch.ps1 -Confirm` 对
+`E_CONFIRM_TIMEOUT` 等终态本就拒绝恢复），比逐字对照规矩可靠。已加离线断言：主源码任何 `fallback = "…"`
+不得含 `[AWAIT_CONFIRM]`（先剥注释，做过正对照）。
 
 ## 判据把实现细节当成了语义（2026-08-02，五个实例）
 
-上一条说的是「**没有**判据看着」；这一条说的是「判据**看错了地方**」——它盯住的是
-"这次恰好长什么样"，而不是"要证明的那件事"。后果比没有判据更坏：它会**误杀正确的行为**，
-而现场看到的是一条言之凿凿的失败。
+判据盯住"这次恰好长什么样"而不是"要证明的事"，会**误杀正确行为**，现场是一条言之凿凿的失败。
 
-| 判据写的 | 实际要证明的 | 误杀形态 |
+| 判据写的 | 实际要证明的 | 修法 |
 |---|---|---|
-| `ui_find` 命中数 `== 1` | 消息区**只有**期望的 marker，没有别的东西混进来 | OCR 对同一条气泡回了两个重叠框（差 3px，一个带空格），`Count=2` 直接短路，文本比对根本没跑到——而消息真的发出去了 |
-| marker 用十六进制 | marker 要能被 OCR 稳定读回 | `0/O`、`C/0`、`B/8`、`D/0`、`E/F` 全在一个字符集里，落框复核连着两次把合法输入判成不匹配 |
-| 审计增量 = 当天文件的新增行 | 本腿期间产生的审计行 | 跨零点，行落进第二天的文件，读成 0 行 |
-| 「dispatch 没记台账」默认成立 | 这一轮有没有留痕 | dispatch 记了，runner 又补一行，同一腿两行且补的那行归因是错的 |
-| 日志里出现某行 = 当前状态 | **这一轮**的状态 | 旧日志行被当成当前状态。**连出三次**：C 道自纠那次；2026-08-02 又一次——把 `dumpsys` 日志最后一行当成当前状态，得出“卡还在等而通知已消失”，**实际那两次查询发生在确认已结束之后**，“发得出、留不住”整个假设作废 |
+| `ui_find` 命中数 `== 1` | 消息区只有期望 marker | OCR 对同一气泡回两个重叠框 → 改为「归一后全部命中同一 marker」 |
+| marker 用十六进制 | marker 能被 OCR 稳定读回 | `0/O`、`B/8` 等易混 → 换字符集（改锚点不改判据） |
+| 审计增量 = 当天文件新增行 | 本腿期间的审计行 | 跨零点读成 0 → 腿末复核日期、跨天接上新文件 |
+| 「dispatch 没记台账」默认成立 | 这轮有没有留痕 | 重复两行 → 先查再补 |
+| 日志里出现某行 = 当前状态 | **这一轮**的状态 | 已连出三次 → 带本轮标识再比 |
 
-**共同的修法**：把判据挪回语义。
-- 命中数 → 「归一后**全部**命中同一 marker」（框数是 OCR 的实现细节）；
-- 十六进制 → 换一个躲开易混字符的字符集（**改锚点，不改判据**——放宽 fail-closed
-  是拿安全换通过率）；
-- 当天文件 → 腿末复核日期、跨天就把新那一天接上；
-- 默认没记 → 先查再补；
-- 日志行 → 带上本轮标识再比。
+**改哪一侧**：误杀时默认**换掉被判的东西**，不放宽判据（放宽 fail-closed 是拿安全换通过率）。
+只有判据本身描述错了语义（如第一行）才动判据。
 
-### 一条实操判断：改哪一侧
+## 锁屏时危险动作走不到确认那一步（2026-08-02 离线判定，🔵 未上真机）
 
-误杀发生时有两条路——**放宽判据**，或**换掉被判的那个东西**。默认选后者。
-本轮 `type_text` 落框复核把合法输入判成不匹配，网关那侧的行为是**对的**（读不实就不记证据），
-错在 marker 的字符集。换字符集不损失任何严格性；放宽读回比对则是在安全侧开口子。
-**只有当判据本身描述错了语义时（如上表第一行），才该动判据。**
-
-## 锁屏时危险动作走不到确认那一步（2026-08-02 离线判定，未上真机）
-
-批次 2 想服务的真实场景是「人没在看手机、手机锁着，agent 要做危险动作」，也就是
-**先锁屏、后 post 通知**。开工之前先离线判了一次这条路通不通——结论是**不通，而且比预想的更早**。
-
-**不是会吃 `E_STALE_REF`，是根本走不到 post。** 链条：
-
-1. `press_key` 是 `Level.W`；
-2. `SafetyGate.execute` **第一件事**就是读上下文，紧接着 `requireKnownForeground`，
-   **早于 `policy.assess`**——也就是早于任何确认卡与通知；
-3. `foregroundKnown` 要求 `applicationWindow()` 拿得到一个 `isActive`（否则 `isFocused`）的
-   `TYPE_APPLICATION` 窗口；
-4. 锁屏后目标 App 不再是 resumed，keyguard 属于系统窗口而非 `TYPE_APPLICATION`
-   → `applicationWindow()` 为 null → `NO_APPLICATION_WINDOW`；
-5. 冷启动自举也救不了：`bootstrapFromWindow` 同样要求先有活动应用窗口；
-6. → `E_BLOCKED`「前台 APPLICATION 身份未知」。**确认卡与审批通知都不会出现。**
-
-这不是推测：`SafetyGateTest` 里 `unknown foreground blocks Level W before confirmation and
-execution` 早就把它钉住了，其中 `confirmerCalls == 0` 正是"卡从未弹出"的机械证据。
-
-**讽刺的是这完全是按设计工作**：D1「身份必须归属到活动 APPLICATION 窗口」拦的就是
-"不知道现在在哪个 App 就不许做危险动作"，而锁屏恰好落进这个定义。
-
-**所以这是安全姿态问题，不是实验设计问题**，四个方向的代价各不相同：
+「先锁屏、后 post 通知」的路不通，且比预想更早：`SafetyGate.execute` 先读上下文并 `requireKnownForeground`，
+**早于 `policy.assess`**；锁屏后 keyguard 不是 `TYPE_APPLICATION` 窗口 → `applicationWindow()` 为 null →
+`E_BLOCKED`「前台 APPLICATION 身份未知」，确认卡与审批通知都不会出现（冷启动自举也要求活动应用窗口）。
+`SafetyGateTest` 的 `unknown foreground blocks Level W before confirmation and execution`（`confirmerCalls == 0`）已钉住。
+这是 D1「身份必须归属活动 APPLICATION 窗口」按设计工作，所以是**安全姿态问题，不是实验设计问题**：
 
 | 方向 | 代价 |
 |---|---|
-| 放宽 `requireKnownForeground` | **直接拆掉 D1**。反对 |
-| 把 keyguard 视作"前台被遮住"而非"前台未知" | 需要新概念区分两者；**放宽了确认前后的硬相等**（批准时与执行时前台不再逐字段相等） |
-| 审批对象上移到语义意图，批准后**重新走一遍严格链** | 不放宽任何证据要求，是 backlog 早就记的正解；代价是另起一篇 spec 与实现 |
-| 缩小批次 2 的目标到"屏幕亮着但没盯着" | 零安全代价，但与"锁屏上点一下"的原始诉求有出入 |
+| 放宽 `requireKnownForeground` | 直接拆掉 D1，反对 |
+| keyguard 视作"前台被遮住"而非"未知" | 需新概念，且放宽批准时/执行时前台的硬相等 |
+| 审批对象上移到语义意图，批准后重走严格链 | 不放宽证据，backlog 记的正解；需另起 spec 与实现 |
+| 目标缩到"屏幕亮着但没盯着" | 零安全代价，但偏离原诉求 |
 
-**第二道结构性障碍**（即使过了第一道也还在）：确认卡是 `TYPE_APPLICATION_OVERLAY`，
-**不显示在 keyguard 之上**。锁屏审批天然只能靠通知，卡在那一刻是看不见的。
-
-### 顺带纠正一条自己的判断
-
-`category=call` 一直是**一个永远兑现不了的申请**：通话级待遇授予的是
-`NotificationCompat.CallStyle`，不是 category；而 `CallStyle` 的按钮是强制的
-（接听/拒接/挂断，不支持自定义标签），"允许/拒绝"套不进去，配套的 `setFullScreenIntent`
-又被用户明示决定不声明。**用一个语义不符的 category 去换排序权重，从一开始就没换到。**
-已去掉；紧急度本来就由通道 `IMPORTANCE_HIGH` 提供。
+第二道障碍：确认卡是 `TYPE_APPLICATION_OVERLAY`，**不显示在 keyguard 之上**，锁屏审批只能靠通知。
+另：`category=call` 换不到通话级待遇（那属于 `CallStyle`，其按钮强制为接听/拒接，套不进允许/拒绝），已去掉；
+紧急度由通道 `IMPORTANCE_HIGH` 提供。
 
 ## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
 
-> 该主机证据链已于 2026-10-09 退役（现行见 [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)）；本节及后续 C1b 条目保留为 PowerShell 与宿主边界经验。
+> 旧 C1b 主机证据链已于 2026-10-09 退役，现行入口 `scripts/run-tablet-c1b.ps1`，规程见
+> [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)。旧主机链细节见 git 提交 7a3b069 前的历史。下面只留对新流程仍有用的通用教训。
 
-“命令参数是受控的”还不足以证明宿主执行闭包。C1b 把固定 HEAD 的 implementation/build inputs 收敛为
-恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序、逐文件 hash，再动态重算
-`catalog_sha256`；fixture 只能描述结构，不能把预填 catalog 当成目标 HEAD 的事实。Oracle JDK、Gradle、
-ProgramFiles/Git 完整安装树（9,576 paths、9,489 identities、85 个内部 hardlink groups、6 个关键 hash）与
-source Android SDK 在进入 child 前冻结，构建只看 fresh isolated SDK 的 exact 三包；wrapper 不执行，held Java
-直接进入
-`GradleMain` 与 `ApkSignerTool`。
+- **success 最后发布**：先暂存并完成全部验证，再关闭 server/guard、释放 device lease；任何 cleanup 失败都不得留下 success。
+  这样"成功"同时证明没有残留。
+- **产物存在不等于证明已被接受**（2026-08-29）：Gradle 出了 APK 而 proof reader fail-closed，就必须冻结，不能拿临时产物继续。
+- **fail-closed 不等于 failure observable**：早期失败（标识分配之前）也要有独立、已脱敏的失败记录，保留 phase 与 primary；
+  记录写失败只能是 secondary，不得遮蔽 primary；cleanup 后出错也不能因"结果已发布"而吞掉失败记录。
+- **失败消费顺序 primary-first**：子进程已发布结构化 failed summary 时，先读它的 primary/原因，再把 exit/stderr 作并列证据；
+  validation 与 cleanup 时刻的快照分开，cleanup 成功不能覆盖失败瞬间；区分 absent / not_checked / rejected。
+- **执行期的前置门，preflight 必须同等覆盖**：执行期"已存在即拒绝"的输出目录、"default ADB 进程/5037 listener 必须为零"、
+  完整宿主树 pin，都要在授权前以同一规则只读检查，否则一次性授权会耗在环境门上。被动检查不运行 adb、不自动 kill 未知进程；
+  snapshot 不可用与非零同样 fail closed。
+- **一次性授权失败后冻结，不自动重试**；环境后来恢复也不复活旧授权，须重新形成候选与 preflight。
+- **ADB 私有 server listen 必须写 `-L tcp:localhost:<port>`**（2026-08-29 源码复核：`tcp_host_is_local()` 只认空 host 或字面
+  `localhost`，写 `127.0.0.1` 会 `LOG(FATAL)`、WER 表现为 `0xc0000409`）；client `-H/-P` 与 `ADB_SERVER_SOCKET` 仍可用 numeric
+  `127.0.0.1`。与 USB 无关，不要加 `ADB_USB_LEGACY=1`。
 
-fresh user/project/Kotlin cache 与 strict dependency verification 是同一条边界。fresh cache 可能需要联网解析
-已钉定依赖，所以这是“允许联网的严格验证构建”，不是 offline dependency build；恢复 `--offline` 会把环境
-偶然缓存状态误写进可重复性条件。专用 probe 同轮构建 Debug/Release，artifact proof 必须再从 merged manifest、
-DEX、依赖闭包与受控 aapt2 输出交叉证明，而不能把“Debug APK 存在”当作 probe 已进入两个变体。
+## PowerShell 坑（2026-08-30 起，固定 7.6.x 实测）
 
-调试签名的合法写入窗口也必须进入协议。受控 build child environment 设置 fresh `ANDROID_USER_HOME`；
-`debug.keystore.lock` 在 Gradle 前预创建为空 ordinary file，只有 Gradle 阶段允许同一 identity 受控可写，返回后立即
-seal。pre/post binding 只允许 `post_gradle_lock_sealed_achieved` 从 false 到 true；canonical token topology、
-TrustGuard/creation-time nested guard 引用身份、workspace `user.home` 与 pre-seal binding 一起固定 build→seal
-邻接，防止移动调用、shadow/rebind 或等值 guard 替换。清理 Gradle zip-cache 时可在 cleanup-only inventory
-接受合法 `=` 文件名，但证据 catalog 继续拒绝这个未转义分隔符。
-
-清空继承环境不是删除几个危险变量：Git 调用由 guard 重建 exact 15-key environment；Gradle、签名器、ADB、
-aapt2、T0 则使用各自显式受控 environment，所有启动均启用 `ClearEnvironment`。source SDK 只作被冻结输入，
-实际 ADB/aapt2 从 fresh isolated SDK 运行。全部设备命令使用本 run 在 `49152..65535` 随机取得的 loopback
-private `server nodaemon`。2026-08-29 的离线归因补充了一条必须分开的 host 规则：server listen 只能使用
-`-L tcp:localhost:<port>`；`ADB_SERVER_SOCKET`、所有 client `-H/-P` 与 listener endpoint proof 仍固定为
-numeric `127.0.0.1`。不能把 server listen 也写成 `tcp:127.0.0.1:<port>`，也不能为这个发生在 USB 初始化
-之前的错误加入 `ADB_USB_LEGACY=1`。listener owner PID、server-status executable、job membership、cleanup
-与 port rebind 都是证明字段，default 5037 永不使用。
-全局设备 lease 的位置由 Windows KnownFolder 导出，不读取可伪造的 `LOCALAPPDATA`；T0 sidecar 也必须加入同一
-lease，而不是在 runner 锁外另开设备窗口。
-
-success sidecar 应当最后发布：先暂存并完成全部验证，再关闭 private ADB server 与 build/artifact guards、
-释放 device lease；任何 cleanup 失败都不得留下 success。只有这些步骤全部成功，才原子发布并读回最终
-sidecar。这条顺序让“成功”
-同时证明没有活跃 guard/lease 残留，而不只是业务校验曾经到过绿色分支。
-
-2026-08-28 候选的 full offline gate 已通过（host coverage 26/26）；当时专项机械证据为 build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 16/16、T0 sidecar
-7/7、aapt2 15/15、readonly 70/70。五场景 synthetic host E2E 稳定复跑通过：fake ADB total 219 = valid 211 +
-rejected 8；valid 由 private server start/status/kill 6/6/4 与 device calls 195 构成，T0 calls 4 是 device
-子集，另观测 server exit 6。runner process 7、fake Gradle 6、fake signer 10、repository inputs 41，synthetic
-E2E 内 real ADB/JDK/Gradle executions 全为 0。direct client Job active limit 1、T0 四层 Job 链 limit 4、official-style
-auto-start attempts 2，escaped child/listener/side-effect 0，正常 cleanup 无锁、listener、server、build-root
-等残留。另行 real isolated host build smoke 已完整退出 0：受控 JDK/GradleMain 1 次、held-Java ApkSignerTool
-1 次、real ADB 0、repository inputs 41；独立复审 P0/P1/P2=0。该 smoke 不构成 fixed-SHA C1b
-build/install/runner 或真机取证。它支持
-的主张严格限于 guard 建立后的 filesystem-and-environment integrity；不覆盖同用户进程内存注入、预先持有
-的可写 handle/mapping、
-ACL/ownership takeover，或对刻意可写 fresh build state 的同用户并发篡改。上述 smoke 没有访问平板；
-后续 fixed-SHA 唯一授权结果如下，C1a 授权仍不可复用。
-
-2026-08-29 修复工作树的专项离线结果为：host coverage 29/29；七场景 synthetic E2E；fake ADB
-222 = 214 valid + 8 rejected，其中 valid calls 为 server start/status/kill/device 8/7/4/195，另观测
-server exit 7；runner process 9、fake Gradle 8、fake signer 12、repository inputs 42。private ADB 22/22、
-readonly 74/74、新 attempt-failure schema/cross-binding 51/51，observation 49/49（coverage 89/89）；build-env 27/27、
-artifact 32/32、ADB provenance 6/6、T0 sidecar 7/7、aapt2 15/15 保持通过。这些 gates 都是
-synthetic/offline 证据，本身没有运行真实 ADB、JDK、Gradle 或访问设备。2026-08-28 的 real isolated host build
-smoke 只覆盖当时 41-input 候选，不能改写为当前 42-input smoke；当前修复的汇总 gate 与独立复审通过后，候选固定为
-`77473af5223d76b00bf4dbbf33cf44090fde635c`。
-
-该 SHA 的一次 42-input real isolated host build smoke 随后执行并冻结失败。受控 GradleMain 为 `1`；临时
-Debug/Release APK 与 proof 出现后，artifact proof strict JSON reader fail-closed，ApkSigner、held AAPT2、real ADB、
-设备发现/install/T0/采集均为 `0`，retry `0`，契约内 runtime/build residue 为 `0`。离线复现确认 one-shot helper 没有像正式 runner
-一样先加载 observation validator，因而两个 closed-JSON walker 不存在。**Gradle 产物存在不等于 proof 已被接受；
-reader 位于 signer/AAPT2/ADB 之前，失败后必须冻结，不能拿临时 APK 继续。**下一 helper 必须把 validator 纳入
-held/pinned exact load set，并在 Gradle 前验证 walker 存在；修正后仍需另一 clean SHA 和新的 smoke 授权。详见
-[`2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)。
-
-随后 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 exact load set，唯一 build-only
-one-shot 的 helper summary 完整通过：GradleMain `1`、ApkSigner `1`、aapt2 `4`、ADB/设备/install/capture `0`、
-cleanup 全绿、residue `0`。但外层 launcher 用固定 PowerShell `7.6.4` 的默认 `ConvertFrom-Json` 读取 summary
-时，把原始 JSON 中合法的 quoted ISO string 自动提升成 `System.DateTime`；后续 strict verifier 要求 string，
-因此 launcher exit `1`。本轮是 **helper-pass / launcher-verifier-fail**，整体 evidence closure 仍失败并冻结，
-helper start `1`、retry `0`。详见
-[`2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md`](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)。
-
-**JSON lexical type 是证据链的一部分。** schema 要求 string 时，consumer 不能让便利型 parser 的日期自动
-转换悄悄改变类型，也不能反过来放宽 schema 接受运行时 `DateTime`。PowerShell strict reader 应使用
-`ConvertFrom-Json -DateKind String` 或等价保形解析；回归必须同时含 quoted ISO → `[string]` 的正对照，以及
-默认解析会复现 `DateTime` 并被 gate 拒绝的防退化检查。helper 自己通过不代表外层证据消费者已经接受。
-
-## PowerShell：Mandatory 空集合会在函数体前失败（2026-08-30）
-
-`83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 build-only launcher 在 helper 前退出。根因不是 Add-Type、
-UAC、cwd 或 native handle API，而是第一次给目录 guard 传入刚创建的空 `List[object]`：参数标了
-`[Parameter(Mandatory)]` 却没有 `[AllowEmptyCollection()]`，PowerShell binder 在函数体执行前直接抛
-`ParameterArgumentValidationErrorEmptyCollectionNotAllowed`。因此“循环会马上向 list 加元素”并不能让首次调用成立；
-所有 accumulator-style Mandatory collection 都要有空输入正对照，或显式允许初始空集合。
-
-修复必须精确：只给 accumulator 增加 `[AllowEmptyCollection()]`，不能删目录链或用时间戳替代身份。guard-only
-正对照应覆盖首个空 list 调用，并继续证明目录 stable ID、no-reparse、最终路径、held-handle 以及文件
-identity/hash/size/mtime。目录 mtime 不是可靠 identity 条件，不应重新加入等值门禁。
-
-另一个教训是“fail closed”不等于“failure observable”。advanced script 的 `exit 1` 可能让 PowerShell event log 只留下
-误导性的 `System error.`，而原始 ErrorRecord 停在未持久化的 stderr。one-shot launcher 应在任何 success publication
-之前建立固定 repo root 与 failure-only CreateNew sidecar：保留 phase、完整 ErrorRecord/exception chain，写失败只记
-secondary error，绝不能遮蔽 primary failure；即使正式 result 已发布后才发生 cleanup failure，也不能用
-`$resultPublished` 抑制 sidecar。sidecar 固定 failed-only，不能参与 pass closure。诊断或 preflight receipt
-也不得单独判绿，至少要联合进程 exit、terminal 状态及 primary/cleanup/recording failure counts。
-
-## PowerShell：跨行 cast 与失败消费顺序会遮蔽 primary（2026-08-30）
-
-`21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 build-only launcher 把 active-process count 写成：
-
-```powershell
-$count = [long]
-    [Native]::GetActiveProcessCount($job)
-```
-
-这段文本 Parser 0，但 AST 是“把 `[long]` 类型对象赋给变量”与“独立 native call”两个语句，不是 cast。validation
-因此误报 child closure；finally 重查又把同一变量覆盖为真实 `0`，导致 failure sidecar 与最终 result 看似矛盾。
-native/cmdlet 调用需要 cast 时必须用单一表达式（例如 `[long]([Native]::Call(...))`），静态门还要断言 RHS AST 中
-确实含唯一预期调用，不能只看 Parser 0 或文本相邻。
-
-更深一层是失败消费顺序：helper 已原子发布 closed failed summary 后 exit `1`，launcher 若先检查 nonzero exit 或
-stderr-empty，再去 held-bind summary，就只能留下 generic error，具体 primary 仍被遮蔽。安全顺序应是先确认 process/job/
-drain 闭合，再对 stdout 指向的 summary 做 held identity/hash/closed-schema 验证；若 summary 是 failed，就把其 primary 与
-reasons 作为结构化首要失败，exit/stderr 作为并列证据。validation-time snapshot 与 cleanup-time snapshot 必须分开，
-cleanup 成功不能覆盖失败瞬间。`checked=false` 也不能伪装成“验证失败”；应显式区分 absent、not_checked、rejected。
-
-同轮另暴露授权前环境检查缺口：build guard 要求 module output fresh/absent，但 read-only preflight 未检查既有
-`app/tablet-c1b-probe/build`，一次授权因此在 Gradle 前被消费。凡执行期会以“preexisting 即拒绝”为前置的路径，
-preflight 都必须用同等或更强的 no-follow absence 门禁提前覆盖；普通离线 Gradle/check 会重新生成该目录，不能放在
-preflight 与 one-shot 之间。
-
-## PowerShell：nullable string 会绑定成空串，宿主 lease 也要进 preflight（2026-08-31）
-
-`690693ae4113a91f7590457a888b56e93b6e200b` 的唯一 build-only helper 已经生成合法 closed failed summary，
-launcher 却在 held-open 的第一步误报 `Pinned summary SHA-256 is not canonical lowercase hex.`。根因是函数把可选
-expected hash 声明成 `[AllowNull()][string]`：调用点传 `$null` 后，PowerShell binder 把它转换成 `''`；
-`$null -ne $ExpectedSha256` 因而为真，canonical regex 与后续 hash compare 都把“无 pin”误当成“非法 pin”。
-
-可选 string 参数不能用 `$null -ne` 判断 caller 是否提供了值。此类门应使用明确的 nonempty predicate（例如
-`-not [string]::IsNullOrEmpty(...)`），并同时覆盖 canonical check 与 final compare。**无 expected hash 只取消预先
-compare，不取消实际 hashing 或文件身份门。**正对照必须证明刚生成文件仍经 no-follow held handle、stable ID、最终
-路径、长度/mtime 与实际 SHA 读取；负对照必须证明 nonempty malformed hash 仍被拒绝。只把参数改成 `[object]` 或
-放宽 regex 会把 binder 假阴性换成证据弱化，不是修复。
-
-同轮 helper 的真实 primary 是 smoke 前已有 1 个 `adb.exe` 与 1 个 TCP/5037 listener。pre/post 都为 `1`，而本轮
-process-start 与 direct adb attempt 都为 `0`，因此这是手机套件留下的宿主 lease，不是 smoke 启动的 ADB。Gradle/
-签名/aapt2/held Git/设备调用全为 `0`，说明授权再次耗在 build 前。凡执行期要求“default ADB process/listener 为零”的
-合同，read-only preflight 也要做被动 process count 与 TCP listener count；它不得运行 adb、不得枚举设备，也不得自动
-kill 未知进程。snapshot unavailable 与 nonzero 都要 fail closed。这里不能只把命令写成 `Module\Command` 就声明
-authority：可变 `PSModulePath` 仍可能先自动加载同名模块并执行代码，空结果甚至会制造 false-zero。优先使用固定
-BCL/native 只读 API，并用 AST 锁住精确方法、参数与无 mutation 面；若必须使用模块，须在任何自动加载前绑定绝对
-系统路径、内容 hash、命令类型与最终路径。用户关闭手机套件或另行授权精确宿主进程处置后，必须重新形成新 SHA 与
-新 preflight；旧 one-shot 不因环境后来归零而恢复。
-
-repo-external renderer 也属于 authority 链，不只是便利脚本。输入的 `Get-Item`/`Get-FileHash` 分离读取、关闭 temp handle
-后按路径 `Move`、公开 final 后才设 ReadOnly，都会留下对象替换或半套工件窗口。安全发布至少要绑定 ancestor no-reparse、
-handle-derived final path 与 stable ID；temp 在公开前完成 durable write、同柄回读与冻结，发布后以同一 stable ID
-桥接到 deny-write/delete final guard，并持有到整套结果闭合。目录身份复核只比较 stable ID，不恢复目录时间戳等值门。
-
-## PowerShell：函数会枚举数组；执行期完整环境 pin 也要进 preflight（2026-09-01）
-
-`a661f365322bbb8ef3aa83f7a84b9bcb23a51f6e` 的 helper 已把合法 closed failed summary 原子发布，stdout 的
-长度与 SHA 也证明它精确等于 summary bytes + CRLF；launcher 却在 strict parser 之前的 `Buffer.BlockCopy` 抛
-`Object must be an array of primitives`。根因不是文件读取或 stdout 漂移，而是 reader 内部虽建立 `System.Byte[]`，
-却写成 `return $bytes`。PowerShell 函数输出管道会枚举数组；调用方普通赋值后得到多元素 `Object[]`（1-byte 时甚至是
-标量 Byte），不能作为 `Buffer.BlockCopy` 的 primitive-array source。
-
-需要保留数组对象身份时，成功返回应使用 unary comma：`return ,$bytes`。Parser 把这里的逗号表示为只有 `$bytes`
-一个 element 的 `ArrayLiteralAst`，不是 `UnaryExpressionAst`；静态门若查错 AST 类型会制造确定性假拒。不要用 cast 或 `@()` 代替静态合同：它们可能
-碰巧在某一调用形态重新聚合，却没有锁住函数输出对象。静态门要检查唯一 return AST 的 unary-comma 形态，并用普通
-return、cast、`@()` mutation 作负例；隔离 runtime canary 要覆盖 1 byte、多 byte、真实 passed/closed-failed bytes，
-断言 direct result exact type 是 `System.Byte[]`、hash 不变、`BlockCopy` 与唯一 CRLF framing 成功。summary consumer
-还必须证明 failed reason 在 generic exit/stderr 之前公开，passed 才进入 public verifier。
-
-同轮 helper 的真实首因是 `${PROGRAMFILES}/Git` file count 从冻结 `9576` 漂移为 `9577`；退出后独立只读重算又证明
-当前全树 catalog 是 `deeaa…34ee`，而非冻结的 `4c5e…7458`。在当前内存 catalog 中排除 38-byte
-`etc/mtab` 后，count 算术上恢复 `9576`，但 digest 仍为
-`556e…f838`。因此不能靠删文件、忽略 `mtab` 或只增加 count 让门变绿。更一般地，执行期会在 Gradle 前验证的完整宿主
-tree pin（file count、catalog、identity/hardlink topology），read-only preflight 也必须在授权前以同等冻结规则检查；
-若 preflight 随后还会运行被该 tree 供应的只读工具，则工具调用后必须在 `finally` 中再次按同一规则检查，保持 primary-first；
-离散 pre/post 只能证明调用结束后仍满足冻结 binding，只有等价的跨调用 held guard 才能声称全程未变。否则 preflight 虽绿，
-one-shot 仍会耗在环境 guard。恢复路径只能是可信来源的 exact 安装，或带逐路径 manifest、来源、
-identity/hardlink 复核的新基线；两者都是主机/合同变更，不能由一次 build-only 授权隐含放行。
-
-完整 preflight、one-shot、失败证据与退出闭包见
-[a661f36 real build-only smoke 失败记录](../../runs/2026-09-01-T-L1-C1b-a661f36-real-build-smoke失败.md)。
-
-## C1b：run_id 之前的失败也必须可诊断（2026-08-28）
-
-fixed SHA `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB server ready guard
-exit 1，尚未进入设备发现、install、T0 或两帧采集。runner 只留下 generic timeout；run_id 在更晚阶段才分配，
-所以 early failure 没有 failure sidecar。Windows Application/WER 离线记录证明，同轮 isolated SDK 的
-`adb.exe` 在 15 秒 startup window 内以六个不同 PID 同签名崩溃：`ucrtbase.dll` offset `0x2da71`、
-exception `0xc0000409`、data `7`。这能解释未 ready，却因没有 argv/dump，仍分不清 `server nodaemon`
-本体和 `server-status` client 谁先崩。
-
-上段是 2026-08-28 运行结束时、仅凭该 run 已持久材料能成立的认知边界。2026-08-29 继续做了不接设备的
-源码、binary 与 synthetic 复核，形成高置信根因解释：AOSP `tcp_host_is_local()` 对 server listen 只把空 host
-或 literal `localhost` 当作 local；原命令 `adb -L tcp:127.0.0.1:<port> server nodaemon` 因而落入
-“specified hostname unsupported”，server 重试后 `LOG(FATAL)`。这与旧 WER 的 `0xc0000409`/FAST_FAIL 7
-以及六进程约 0.64–0.72 秒寿命一致。它不是旧 run 自身持久化的 argv/FATAL 直接证据，不能追溯改写成当时
-已经证明。修复只把 server listen 改为 `tcp:localhost:<port>`；env/client/listener proof 仍为 numeric
-`127.0.0.1`，且不引入无关的 `ADB_USB_LEGACY`。
-
-安全失败和可诊断性是两件事：失败必须冻结且不得自动重试。当前实现会在 host readonly preflight 后、
-device lease/private ADB open 前建立 attempt identity；若仍在 `run_id` 分配前失败，则保存 closed、独立的
-`tablet-layout-c1b-attempt-failure/v1`，其中 `run_id=null`，并在全部 cleanup 完成后才把单个 root-level
-attempt record 原子发布。structured diagnostic 只保存 attempt ordinal、terminal substage、listener observed、
-process/status-client 状态、有界捕获 byte count/overflow/SHA-256/strict-UTF-8/classification 与 cleanup 结果；
-不持久化 raw stdout/stderr、PID、port、socket、argv、path 或 serial。这样既不泄露原始输出，也不会把一次
-授权失败转换成自动重试；后续成功路径才把同一 attempt identity 提升为 `run_id`。
-
-## PowerShell：Volume-GUID `-File` 先经过 AuthorizationManager（2026-09-01）
-
-Git 恢复 `A-Acquire` r1 的唯一授权运行中，parent 已按 SHA、stable ID、ReadOnly、single-link、no-reparse、
-最终 DOS/Volume-GUID 路径与 held handle 绑定 exact leaf，但固定 PowerShell child 仍在 leaf 正文前 exit `1`。
-child stderr 是 51-byte `SecurityError: AuthorizationManager check failed.`；同宿主、同 Volume-GUID `-File`
-形态的不联网 canary 在默认 policy 下得到完全相同的 bytes/SHA，增加显式 `-ExecutionPolicy Bypass` 后 exit `0`，
-且 `$PSCommandPath` 仍保持精确 Volume-GUID 路径。这说明脚本内容门禁与 PowerShell 的启动策略门是两个不同阶段。
-
-若必须保留 Volume-GUID `-File` authority 并使用 CLI Bypass，至少同时满足：
-
-- 将 `-ExecutionPolicy Bypass` 作为固定 `ArgumentList` 的逐项 Ordinal 合同，禁止字符串拼接或额外参数；
-- 继续在 parent 中持有并复核 exact leaf bytes、stable ID、ReadOnly、single-link、no-reparse 与最终路径；
-- 结果明确记录其 requested scope 是 child 的 `Process/current_session`、设置非持久化、可能被更高优先级
-  machine/user policy 覆盖、可能由 PowerShell 后代继承、effective policy 未由 leaf 独立取证；
-- 明确 Bypass 不改变 token/elevation，不是 content/identity authority，也不是网络或进程创建沙箱；
-- 明确 PowerShell 引擎会按命名路径重新打开脚本，而不是消费 parent held file handle；AuthorizationManager
-  又先于 leaf 自身门禁，因此 pre-execution script-read identity 仍是外部 trust boundary。
-
-失败流不能只保存 byte count/hash 而隐藏原始首因。可以发布有界 strict-UTF-8 preview，但它只能是诊断字段：
-先去除 CR/LF/NUL，再对 HTTPS query 做 best-effort 脱敏，限制字符数与总 JSON UTF-8 bytes，标明 prefix/truncation、
-可能仍含非 query 敏感信息且不是 byte-stream authority；完整流仍以 total bytes/SHA/EOF/overflow 为准。结果对象构造、
-序列化与写出必须在同一保护块内，失败 fallback 要 primary-first，并把 phase/type/message/hresult/external exit 分别
-保护；captured byte arrays 放在 `finally` 清零。Console.Error 损坏、OOM 或进程被强制终止仍是无法由 renderer
-闭合的外部边界。
-
-outer caller 的宿主版本也是独立边界。本次原始 bytes/hash/terminal/exit 已捕获后，宿主 PowerShell 7.4 又因不支持
-`ConvertFrom-Json -DateKind String` 产生解析次因；它没有改变目标结果，但没有必要地削弱了外层结构化记录。caller 应
-先固定原始 stdout/stderr bytes、SHA-256、EOF/terminal 与 external exit，再做可选解析；需要 `-DateKind String` 时使用
-已钉定且支持该参数的 PowerShell 7.6.4，或显式 feature-detect。解析/记录失败只能作为 secondary，不能重启目标、覆盖
-primary，或把已经消费的一次性授权变成 retry。
-
-完整授权、失败、canary 与冻结证据见
-[Git A-Acquire r1 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire失败.md)。
-
-## PowerShell：`Get-AuthenticodeSignature -Content` 不是 PE 路径验签（2026-09-01）
-
-Git 恢复 `A-Acquire` r2 已通过固定 Bypass 进入 leaf，并下载到发布期望的 exact installer：长度
-65388144 B、SHA-256 `af12577d…f1dca`。运行内 receipt 只记录 generic Authenticode contract failure；退出后 exact 重演
-leaf 的 `Get-AuthenticodeSignature -Content ... -SourcePathOrExtension '.exe'` 才得到 `NotSigned/None`，另一次对同一
-ReadOnly、ordinary、non-reparse、single-link 文件的最终 native path `-LiteralPath` 调用得到 `Valid`、预期 signer 与
-timestamp。installer 未执行，失败 receipt 与 installer 原样冻结；不能把重演所得 status/signature type 追溯写成 receipt 字段。
-
-这是 API 输入 authority 的差异，不是签名状态在两次调用之间变化。固定 PowerShell 7.6.4 的 `-Content` 分支走
-`WTD_CHOICE_BLOB`，并使用 hardcoded PowerShell script SIP subject GUID；`-SourcePathOrExtension '.exe'` 只提供来源提示，
-不会把 blob validation 切到 PE embedded-signature SIP。`-LiteralPath` 走 `WTD_CHOICE_FILE`，由命名文件的实际类型派发，
-所以能消费 PE 内嵌 Authenticode。对于 PE installer，不得把 `-Content` 的 `NotSigned` 当作可靠的签名否定，也不得把
-expected status 改成 `NotSigned` 来让门变绿。
-
-Windows share mode 约束的是 FileObject 上请求过的 access，不会因关闭一个 managed writer wrapper 而把 duplicate handle
-降级成 read-origin handle。旧 leaf 的 native CreateNew FileObject 请求 `GENERIC_READ | GENERIC_WRITE`、share=`READ`；
-duplicate 出所谓 read guard 后，即使 writer wrapper 已关闭，该 duplicate 仍保留 writer-origin `WriteAccess` share
-bookkeeping。exact share canary 证明，duplicate 存续时 `-LiteralPath` 的只读命名重开确定性报 sharing violation。
-因此“关闭 write stream 后继续持有该 duplicate，既拒绝 write/delete 又允许 read reopen”是错误模型。
-
-同一 signed-PE canary 的两侧结果钉住了可用性：writer-origin duplicate 存续时稳定 `0x80070020`；完全关闭 writer
-FileObject 后，以 fresh `GENERIC_READ`、share=`READ` guard 重绑并重验 stable ID/SHA，`-LiteralPath`=`Valid`，post
-identity/SHA 不变。旧 leaf 对 pinned PowerShell executable 本就使用同类 read-origin final-native-path guard +
-`-LiteralPath` 并成功。临时 canary 已精确清理，无残留；不能用“可能 API 不支持 held guard”解释失败，也不能跳过重绑门。
-
-需要命名路径 Authenticode 时，安全流必须显式换代 handle：
-
-1. writer-origin handle 在同一 FileObject 上完成 flush、hash、identity 与 ReadOnly，随后关闭全部 writer-origin handles；
-2. 诚实记录关闭 writer 到 read-origin 重绑之间的短 gap：`continuous_custody=false`、
-   `preverification_rebind_gap=true`；
-3. 在任何验签或 consumer 使用前，经 exact native path 新开 `GENERIC_READ`、share=`READ` 的 read-origin guard，并立即
-   重新证明 initial stable ID、最终 DOS/native path、ordinary/no-reparse、single-link、ReadOnly、length 与 pinned held
-   SHA-256；全部闭合后才记 `authority_reestablished_before_use=true`；
-4. read-origin guard live 时调用 `-LiteralPath`，并在 `finally` 无条件执行 post-held identity/SHA-256。
-
-gap 内仍活跃的 writer 会让 read-origin 重绑失败；gap 内临时改动后恢复，仍必须先经过步骤 3 的 exact authority 重建才
-能被消费。这个流不具 continuous custody，receipt 必须披露 preverification gap、命名路径重开并非
-held-handle-backed validation，以及 native namespace 仍是外部 trust boundary；不能用 pre/post 检查夸大成无 gap。
-
-异步等待也可能污染协议 stdout：PowerShell 中未接收的 `$task.GetAwaiter().GetResult()` 会把
-`System.Threading.Tasks.VoidTaskResult` 写入 pipeline。若 stdout 必须 exact-empty，应使用 `$null = ...` 或等价显式接收，
-并用回归门同时验证 success/failure 两条路径的 stdout framing；这类诊断缺陷不能改变 primary、触发 retry 或覆盖已消费授权。
-
-外层 summary 的 framing 同样要机械验证。把字符串字面 `\n` 追加到 JSON 后得到的是两个非 whitespace bytes，不是真实 LF；
-文件即使长度/hash 已冻结，也不能宣称 strict-JSON。caller 应先固定 raw stdout/stderr、exit 与 terminal，再写无尾随字面或只含
-真实 whitespace 的 summary 并严格 round-trip parse。summary 写出/解析失败只能成为 secondary，不能重启已消费的目标。
-
-完整单跑、failure receipt、path-based 只读复核与下一候选边界见
-[Git A-Acquire r2 单跑失败记录](../../runs/2026-09-01-T-L1-C1b-Git-A-Acquire-r2失败.md)。
+- **JSON lexical type**：默认 `ConvertFrom-Json` 会把合法的 quoted ISO 字符串自动转成 `DateTime`。strict reader 用
+  `ConvertFrom-Json -DateKind String`（7.4 不支持，需 ≥7.5 或 feature-detect），回归同时含 string 正对照与默认解析被拒的防退化。
+- **Mandatory 集合参数拒绝空集合**：`[Parameter(Mandatory)]` 收到刚建的空 `List` 会在函数体前抛
+  `ParameterArgumentValidationErrorEmptyCollectionNotAllowed`。accumulator 参数加 `[AllowEmptyCollection()]` 并有空输入正对照。
+- **跨行 cast 不是 cast**：`$x = [long]` 换行再写调用，Parser 0 但实际是两条语句（把类型对象赋值 + 独立调用）。
+  cast 写成单一表达式 `[long]([Native]::Call(...))`，静态门断言 RHS AST 含预期调用。
+- **`[string]` 参数传 `$null` 会绑定成 `''`**：`$null -ne $p` 恒真。用 `-not [string]::IsNullOrEmpty(...)` 判断是否提供；
+  别靠改成 `[object]` 或放宽 regex。
+- **函数会枚举返回的数组**：`return $bytes` 在调用方变成 `Object[]`（1 元素时变标量），`Buffer.BlockCopy` 报错。
+  保留数组身份用 `return ,$bytes`（AST 是单元素 `ArrayLiteralAst`，不是 `UnaryExpressionAst`）；别用 cast 或 `@()` 代替。
+- **未接收的 `$task.GetAwaiter().GetResult()` 会向 stdout 写 `VoidTaskResult`**；协议 stdout 须为空时用 `$null = ...`。
+- **字符串字面 `\n` 不是 LF**：拼到 JSON 后就不是 strict JSON；写出后要严格 round-trip parse。
+- **`if`/`else` 之间误插语句，Parser 仍可能零错误**（`else` 被当普通命令）。Parser0 不等于控制结构正确，门脚本要实际跑到汇总。
+- **`-EncodedCommand` 下 `Write-Progress` 会产生 CLIXML stderr**（2026-09-07，曾撑爆 1 MiB 捕获上限）。最早设
+  `$ProgressPreference='SilentlyContinue'`，保留空 stderr 与 overflow 门；不能凭 CLIXML 头或 exit 0 放行。stderr 超限时要留
+  有界原文预览，只存 hash/计数会失去归因能力。
+- **Volume-GUID 路径 `-File` 先过 AuthorizationManager**：默认策略下在脚本正文前报
+  `SecurityError: AuthorizationManager check failed.`；`-ExecutionPolicy Bypass` 作固定参数可过，但它只作用于该进程会话、
+  不是内容/身份 authority；引擎按路径重新打开脚本，不消费父进程持有的句柄。
+- **`Get-AuthenticodeSignature -Content` 不能验 PE**：blob 分支固定走 PowerShell 脚本 SIP，对签名 exe 返回 `NotSigned`；
+  PE 用 `-LiteralPath`。不得把 expected 改成 `NotSigned` 让门变绿。
+- **share mode 跟随 FileObject 的原始 access**：从 writer 句柄 duplicate 出的"只读 guard"仍保留写共享记账，会让按路径只读重开报
+  sharing violation（`0x80070020`）。需要命名路径验签时：关闭全部 writer 句柄 → 新开 read-origin guard 并重验身份/SHA →
+  再调用；如实记录中间存在重绑 gap。
 
 ## 漂移门报警后，先分「新增」还是「修改」——两者恢复路径不同（2026-09-02）
 
-C1b 的 Git trust-root 门只报出 file count `9576`→`9577` 与 full-tree catalog `4c5e…7458`→`deeaa…34ee`，
-没有区分漂移形态。据此直接立了 `A-Acquire → B-Backup → C-HostChange → D-Reboot → E-Cleanup`
-五道重装阶梯，消费两次一次性 A 授权、产出两份失败记录之后，才用一次只读全树复算发现：
-漂移是**多了一个文件**，其余 9576 个逐字节未变。**重装阶梯从一开始就闭合不了这个失败**——
-新增文件不在 Inno Setup 卸载日志内，卸载器只删日志内文件，卸载+重装后它仍在，门仍 fail-closed。
-
-教训不是"该早点复算"，而是：**恢复手段本身也需要一次对照。** 立恢复方案时必须先回答
-"这个手段作用在哪个对象上、能不能让判据回到冻结值"，而不是从"信任根不对了"直接跳到"重装信任根"。
-`catalog 漂移` 是聚合信号，它至少覆盖三种互不相同的形态，恢复路径完全不同：
+旧 C1b 的 Git 信任根门只报 file count +1 与 catalog 变化，据此立了五道重装阶梯、消费两次一次性授权后，才用一次只读全树复算
+发现只是**多了一个文件**——新增文件不在安装器卸载日志里，重装根本闭合不了。**恢复手段本身也需要对照**：先回答
+"这个手段作用在哪个对象上、能否让判据回到冻结值"。
 
 | 形态 | 判别 | 恢复 |
 |---|---|---|
-| 新增文件 | 排除候选项后 catalog 回到冻结值 | 移出该文件即可，重装无效 |
+| 新增文件 | 排除候选项后 catalog 回到冻结值 | 移出该文件，重装无效 |
 | 修改文件 | 文件数不变、catalog 变 | 重装或从可信源覆盖 |
 | 缺失文件 | 文件数减少 | 重装或补齐 |
 
-判别成本极低：按门自己的规则（inventory → Ordinal 排序 → `relpath=sha256:hex` 以 LF 连接 →
-UTF-8 no-BOM 的 SHA-256）复算一次全树，再按候选集合做差。**复算脚本自己也要有对照**——
-先让它独立重现门记录的漂移值，证明规则复刻正确，才有资格用它的"排除后回到冻结值"作结论。
-
-同一轮还有两条一般化的判据纪律：
-
-- **"某字符串不在日志里"必须先证明该日志能被检索到已知在场的字符串。** 本轮先用
-  `git.exe`=14 / `bash.exe`=11 / `sed.exe`=1 / `msys-2.0.dll`=2 确认 UTF-16 检索有效，
-  `busybox`=0 才是有效否定而非编码假阴性。
-- **`NotSigned` 在 MSYS2 载荷目录里是常态，不是信号。** 同树 `sed.exe`、`msys-2.0.dll` 同样
-  `NotSigned`，只有 `cmd/git.exe` 是 `Valid`；把未签名当成异常会指向错误结论。
-  （另注：此处用的是 `-LiteralPath` 命名路径分支，不是上一节 r2 踩过的 `-Content` blob 分支。）
-
-定位过程与完整取证见
-[Git 信任根漂移定位](../../runs/2026-09-02-T-L1-C1b-Git信任根漂移定位.md)。
+- 复算脚本自己也要先对照：独立重现门记录的漂移值，证明规则复刻正确，才能用它下结论。
+- **"某字符串不在日志里"必须先证明该日志能检出已知在场的字符串**（例如 UTF-16 编码假阴性）。
+- **`NotSigned` 在 MSYS2 载荷目录里是常态**，只有少数入口 exe 是 `Valid`，不要当异常信号。
 
 ## `check.ps1` 跑不起来会伪装成"门失败"（2026-09-02）
 
-本机默认 `pwsh` 是 **7.4.19**（`C:\Program Files\PowerShell\7`），而 `scripts/check.ps1` 声明
-`#Requires -Version 7.5`。用默认 shell 调它，PowerShell 在**执行第一行之前**就拒绝：
-
-    The script 'check.ps1' cannot be run because it contained a "#requires" statement for
-    PowerShell 7.5. The version ... does not match the currently running version of PowerShell 7.4.19.
-
-外部 exit=`1`，日志只有 3 行，**一个检查都没跑**。它和"跑了 11 道门、某道失败"的外部信号完全一样。
-
-**判据纪律：`exit 1` 至少要分两种——「跑了并失败」和「根本没跑」。** 门的汇总表是不是出现过，
-是区分二者最便宜的机械证据；只看退出码会把环境问题误记成回归。这与本册"漂移门要先分新增/修改/缺失"
-是同一类错误：**聚合信号被当成了具体结论。**
-
-钉定的 7.6.4 在 Codex 运行时缓存内，与 A-Acquire 记录中的 pinned runtime 是同一个：
-
-    ~/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe
-    301368 B / SHA-256 db6dd811…458f / 7.6.4
-
-用它跑同一条命令，全量门 11/11 PASS。需要 ≥7.5 的仓库脚本（`check.ps1` 及其调用链）一律用它，
-不要用默认 `pwsh`；同理，需要 `ConvertFrom-Json -DateKind String` 的解析路径也只能用它（见本册前文）。
+`scripts/check.ps1` 声明 `#Requires -Version 7.5`，本机默认 `pwsh` 是 7.4.x：PowerShell 在第一行之前拒绝，外部 exit `1`、
+一个检查都没跑，外部信号与"某道门失败"完全一样。**`exit 1` 至少分「跑了并失败」和「根本没跑」**，门汇总表是否出现是最便宜的
+区分证据。仓库脚本用项目钉定的 PowerShell 跑（现为 7.6.5，路径与命令见 [离线开发与验证](../../runbooks/离线开发与验证.md)）。
 
 ## 待办条目写的"必须解决"，先确认它描述的东西存在（2026-09-02）
 
-backlog §6.N 记着「语义意图开关打开后，非宏路径危险 `ui_action` 一律 `E_STALE_REF`，
-接任务 4/2 端到端前必须解决」。读码核实的结果是两处与原文不符：
+backlog 记着「语义意图开关打开后，危险 `ui_action` 一律 `E_STALE_REF`，必须解决」。几条 grep 核实：整套机制在 `app/` 里零实现
+（只存在于 spec 与那条 backlog），所以不是待修 bug 而是"别让实现继承的设计洞"；且"一律"过宽，只覆盖命中 `send_words` 的
+II 级点击。**接手他人写的待办，第一步是让它落到具体文件与行号上**，落不下去说明描述本身要先修。
 
-1. **整套机制零实现。** `resolveViaIntent`、`intentTtl`、`approvedAtMs`、`foregroundWaitBudget`、
-   证据重建三态在全仓 Kotlin 里都不存在；`resolveViaIntent` 只存在于那条 backlog 原文里。
-   只有 spec。所以它从来不是"待修的 bug"，而是"别让实现继承的设计洞"——两者要做的事完全不同。
-2. **描述范围过宽。** 「危险 `ui_action` 一律」实际只覆盖命中 `send_words` 的 II 级点击：
-   决定四规定只有 II 级走延后执行，而 `ui_action` 未命中词表按 fail-closed 归 I 级。
-   范围一收窄，原本二选一的两条出路就变成了可以按档位各取其一的合成解。
-
-这与本册另外两条是同一族错误——**转述过的信号被当成了具体结论**：
-`exit 1` 要分「跑了并失败 / 根本没跑」；catalog 漂移要分「新增 / 修改 / 缺失」；
-待办条目要分「已实现且有缺陷 / 只存在于设计里」。三者的代价都是按错误形态去修。
-
-**成本对比很值得记**：这次核实只花了几条 grep（`resolveViaIntent`、`intentTtl`、`approvedAtMs`
-是否出现在 `app/` 的 `.kt` 里），而如果按原文直接动手，会去改一个不存在的调用点。
-接手他人写的待办时，**第一步是让它落到具体文件与行号上**，落不下去就说明描述本身要先修。
-
-## 「最长函数」第四次量错：别再用 grep/awk 量 Kotlin（2026-09-05）
-
-本册此前记过一次「`callInternal` 179 全仓最长」是量错，STATUS 随后改成
-「`ConfirmOverlay.ask`（307）第一、`ToolRegistry.callInternal`（180）第二」。2026-09-05 重量，**两个数都不对**：
-
-| 函数 | 实测行数 | 旧说法 |
-|---|---:|---:|
-| `overlay/ConfirmOverlay.kt:45` `ask` | **365**（45–409） | 307 |
-| `tablet/TabletLayoutProbe.kt:145` `sanitizeFrame` | **354** | 未提及 |
-| `mcp/ToolRegistry.kt:526` `callInternal` | **78**（526–603） | 180 |
-
-`ConfirmOverlay` 那条可判定：全文 410 行、仅一个 indent-4 `fun`、其后仅一个 indent-4 闭合括号（409）。
-但**整体排名仍标注为未验证**——本轮用的是缩进匹配启发式，第一次尝试的括号计数 awk 甚至给出
-「`shouldExposeWindow` 1442 行」这种超过文件长度的结果。
-
-**结论不是「再量一次」，是换工具**：Kotlin 的花括号会出现在字符串、lambda、字符串模板 `${}` 里，
-行式脚本天然量不准。要动这条先上 detekt / ktlint 的函数长度指标（真语法树），
-否则第五次还会错。**这处已经烧掉四轮，值得记成「不许用 grep 量」而不是又一个数字。**
-
-**09-07 已完成工具修复**：`scripts/measure-kotlin.ps1` 使用锁定 SHA256 的 detekt 独立 JAR、
-真实 Kotlin PSI 与官方指标实现。当天 AST 复核 `ask` 的物理跨度为 365、`sanitizeFrame` 为 354、
-`callInternal` 为 78；前两者也是当次全 `.kt` 函数范围的最长两项。
-这次是可重复的 AST 结论，不沿用上表的启发式证据。最新排名应重新运行工具；
-输出包含文件清单、源码哈希和分析器哈希，分析前后漂移会拒绝成功报告。
-物理跨度、detekt 代码行和复杂度的定义见[指标说明](../../../scripts/lib/kotlin-metrics/README.md)。
+**同族错误——聚合/转述的信号被当成具体结论**：`exit 1` 要分跑了失败/根本没跑；catalog 漂移要分新增/修改/缺失；
+待办要分已实现有缺陷/只存在于设计里。代价都是按错误形态去修。
 
 ## 信任根不能放在别人会自更新的目录里（2026-09-05）
 
-本册前文写过「跑仓库脚本一律用钉定 7.6.4」，并给出了它在 Codex 运行时缓存里的路径。
-**那条建议的路径部分是错的**：2026-09-05 该缓存被 Codex 自行重装，7.6.4 变成 7.6.5，
-SHA 从 `db6dd811…458f` 变成 `362a356c…d139`，树从 983 文件缩到 658，本机不留 7.6.4 副本。
-缓存旁边躺着 7 个 09-04 的 `codex-runtime-install-*` 暂存目录，就是它自己换的痕迹。
+钉定的 PowerShell 原先放在 Codex 运行时缓存里，2026-09-05 被 Codex 自行重装换代（7.6.4→7.6.5、SHA 与文件树全变，旧版不留）。
+**判据写得再严，只要它指向第三方能随时替换的位置，就不是信任根，只是快照**——与"重装治不了新增文件"同族：手段作用不到成因上。
 
-**教训与 Git 那次同族**：Git 那次是"重装治不了多出来的文件"，这次是"钉定治不了会自更新的目录"——
-两次都是**手段作用不到成因上**。判据写得再严，只要它指向一个第三方能随时替换的位置，
-就不是信任根，只是一次快照。
-
-处置：把运行时**复制**到项目自控位置并冻结（`<repos-root>/_toolchain/powershell-7.6.5`），
-不重新下载——迁移前在原位复核 Authenticode，`pwsh.exe` `Valid`/Microsoft 签名、带时间戳，
-同树 517 个 `.exe`/`.dll` 非 `Valid` 者为 `0`，来源可信度足够，比重走一遍下载/验签阶梯更省也更稳。
-复制后**逐文件重算 SHA 比对**再冻结（不信任 `Copy-Item`），随后按与 Git 信任根同族规则编目。
-
-冻结值：`pwsh.exe` `362a356c…d139` / `7.6.5` / 658 文件 / 40 目录 / 256592846 B /
-catalog `sha256:7b68ced0…076d`。详见
-[钉定 PowerShell 迁出自更新缓存](../../runs/2026-09-05-钉定PowerShell迁出自更新缓存.md)。
-
-**选钉定位置时的判据**：这个路径由谁写？只要答案不是"只有本项目"，它就会漂。
-`~/.cache/**`、包管理器目录、IDE 自带运行时、`%TEMP%` 都不合格。
+- 处置：把运行时**复制**到项目自控位置（`<repos-root>/_toolchain/powershell-7.6.5`）并冻结；迁移前原位复核 Authenticode，
+  复制后逐文件重算 SHA 比对（不信任 `Copy-Item`），再编目。详见
+  [钉定 PowerShell 迁出自更新缓存](../../runs/2026-09-05-钉定PowerShell迁出自更新缓存.md)。
+- **选钉定位置的判据**：这个路径由谁写？只要不是"只有本项目"，它就会漂。`~/.cache/**`、包管理器目录、IDE 自带运行时、
+  `%TEMP%` 都不合格。
 
 ## 离线门也要验证自己消费的结果（2026-09-07）
 
-重新核对 09-05 的 C1b 红门发现，旧摘要「唯一因为 skipped 不等于 0」不符合代码：
-旧 gate 实际允许最多两项 skip，却把 `pwsh_version` 硬编码为 `7.6.4`。
-实际子套件在 `7.6.5` 下返回 `17 passed / 0 failed / 2 skipped`，因此版本契约先拒绝了合法报告；
-两个符号链接反例同时确实因缺少 Windows 特权未运行。**环境缺口和报告消费缺陷是两件事。**
-
-已把生产报告校验提取到 `scripts/lib/check-summary.ps1`：子进程版本必须等于启动它的父进程版本，
-仍严格验证单行 JSON、重复键、字段类型和计数等式；真实 skip 现在单独拒绝且直接提示所需能力。
-监督式 runner 同时拒绝缺失/重复分片、零用例、非零失败与覆盖数不齐。
-`scripts/tests/check-summary-offline.ps1` 直接调用这些生产函数，避免在 fixture 里另写一份 consumer。
-
-PowerShell 的另一个边界：在 `if` 和 `else` 之间误插普通语句，Parser 可能仍返回零错误，
-因为 `else` 被解析成普通命令；本轮独审在执行前发现并修复。**Parser0 不等于控制结构正确**，
-门脚本必须实际跑到汇总；静态复核可额外排除名为 `else` 的 `CommandAst`。
-
-## EncodedCommand 的进度也是 stderr 字节（2026-09-07）
-
-`6fbb157` build-only 的 helper exit 0、自报 passed，仍被 launcher 的非空 stderr 门正确拒绝；
-stderr 共 2,439,272 bytes，超过 1 MiB 捕获上限。只存 hash/计数而不保存有界原文，会失去失败归因能力，
-不能事后把整个流猜成无害进度。证据见[本轮记录](../../runs/2026-09-07-C1b-6fbb157-构建输出流失败.md)。
-
-固定 PowerShell 7.6.5 的无害替身复现：`-EncodedCommand` 下 `Write-Progress` 会产生 CLIXML stderr；
-最早设置 `$ProgressPreference='SilentlyContinue'` 只抑制进度，Write-Error 和 Console.Error 仍可见。
-因此应在源头关闭进度，保留空 stderr 与 overflow 门；不能仅凭 CLIXML 头、exit 0 或 helper 摘要放行。
-generic launcher/preflight JSON 含合法 `5.0` 阈值，不适用 helper summary 专属的“全部数字必须 Int64”规则；
-generic reader 应拒绝重复键并按各字段合同验证，helper 的 strict reader 保持原样。
+09-05 的红门摘要写"因为 skipped 不等于 0"，读代码才发现旧 gate 允许两项 skip，真正拒绝的是硬编码 `pwsh_version=7.6.4`
+——**环境缺口（缺符号链接特权）和报告消费缺陷是两件事**。现已把生产报告校验提到 `scripts/lib/check-summary.ps1`
+（子进程版本须等于父进程版本；严格校验单行 JSON、重复键、类型与计数等式；真实 skip 单独拒绝并提示所需能力；
+拒绝缺失/重复分片、零用例），`scripts/tests/check-summary-offline.ps1` 直接调用生产函数，不在 fixture 里另写一份 consumer。
+generic reader 与 helper 专属 strict reader 的数值规则不同（如合法的 `5.0` 阈值），按各自字段合同验证。

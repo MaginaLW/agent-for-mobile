@@ -1,224 +1,119 @@
 # Android 通用坑（版本级行为 + 工具链）
 
-> 来源：M0/M0.5 实测（2026-07-16/17，Android 16 环境）。厂商特有的坑在 [vivo-originos.md](vivo-originos.md) / [other-vendors.md](other-vendors.md)。
+> 来源：M0/M0.5 起的真机实测（主要为 vivo V2352A / Android 16，2026-07 至 08），另注设备与日期。厂商特有的坑在 [vivo-originos.md](vivo-originos.md) / [other-vendors.md](other-vendors.md)，微信特有的在 [../apps/wechat.md](../apps/wechat.md)。
+> 带 `#N` 的条目被代码注释、脚本和 spec 按编号引用，编号沿用历史、不连续，**不要重新编号**。
 
 ## Android 版本级行为
 
-- **系统状态验证不能信 settings 键**：`settings get global bluetooth_on` 返回 0 时蓝牙实际是开的（Android 16 实测）；`dumpsys bluetooth_manager` 才是真值。验证通道要用 dumpsys / 专用 API（真值源对照表见 [sys-cli.md §1](sys-cli.md)）。
-- **后台剪贴板写入受限**（Android 10+，16 实测拦截）：devicekit 1.2.4 的中文输入（写剪贴板+注入粘贴键）被拦，输入框出现的是剪贴板旧内容，可复现 3 次。纯 ASCII 正常。→ **M1 自带 IME 通道（输入法级注入），不依赖剪贴板戏法**；读剪贴板靠"默认 IME 豁免"。
+- **系统状态验证不能信 settings 键**：`settings get global bluetooth_on` 返回 0 时蓝牙实际是开的（Android 16 实测）；`dumpsys bluetooth_manager` 才是真值。验证通道用 dumpsys / 专用 API（真值源对照见 [sys-cli.md §1](sys-cli.md)）。
+- **后台剪贴板写入受限**（Android 10+，16 实测拦截）：devicekit「写剪贴板+注入粘贴键」的中文输入被拦，输入框出现剪贴板旧内容；纯 ASCII 正常。→ 输入走自有 IME 字面注入，不依赖剪贴板戏法；读剪贴板靠"默认 IME 豁免"。
 - Android 13+ 普通 app 无法编程开关蓝牙/WiFi（shell 位阶专属，见 [sys-cli.md](sys-cli.md)）。
-- 无障碍 `takeScreenshot`（API 30+）：单发极快 **32–37ms**（vivo V2352A/Android16 实测，远优于 500ms 判据）。连发（~400ms 间隔）触发**软节流**——第二次**不报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`，而是 `takeScreenshot` 延迟到 **~750ms** 后成功返回；冷却 ~2s 后回落常速（Spike S4 实测，未精确二分冷却边界）。**与常见文档所述「硬失败」不同**，OriginOS6 是拖延返回。网关 `E_RATE_LIMITED` 冷却窗口参考 ~800ms（或容忍单次 ~750ms 延迟，不必判失败）。**M1b 补充（2026-07-19）：更紧的连发（<300ms，OCR 融合 snapshot 紧跟点击校验）也会硬报 INTERVAL_TIME_SHORT**——软/硬两种形态都存在；网关内部视觉通道已吸收（等 ~900ms 重试一次），`screen_capture` 工具仍向大脑透出 E_RATE_LIMITED 语义。
+- **无障碍 `takeScreenshot`（API 30+）节流有软硬两种形态**（V2352A / Android 16）：单发 32–37ms；~400ms 间隔连发不报错而是**延迟到 ~750ms 才返回**，冷却 ~2s 回落；<300ms 的更紧连发会**硬报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`。网关内部视觉通道等 ~900ms 重试一次吸收；`screen_capture` 工具向大脑透出 `E_RATE_LIMITED`（冷却参考 ~800ms）。
+- **#22 Android 11+ `run-as` 读不了自己的 external files 目录，普通 `adb shell` 反而读得到**（Android 16，2026-07-26）：`run-as` 跑在 shell 的挂载命名空间里，对 `/sdcard/Android/data` 一律拒绝 app uid。**内部 `filesDir` 读写仍必须走 `run-as`（相对路径 `files/...`），external files 走普通 `adb shell`，两者不能混用一种写法。** 附带坑：`adb exec-out` 会把设备侧 stderr 一并写进重定向目标，`Permission denied` 会冒充成文件内容；拉取类命令不要图省事加 `-AllowFailure`。
 
-## 通知上不上锁屏：`CATEGORY_CALL` 是"申请"不是"授予"（2026-08-02 查阅 + 真机对照）
+## 通知锁屏资格
 
-批次 2「锁屏免解锁批准」连挂三轮的背景知识。**先记结论：一个 category 只是给系统的提示，
-拿不到对应的待遇；待遇由 Style + 权限 + 必备元素共同决定。**
+结论：**category 只是给系统的提示，拿不到对应待遇；待遇由 Style + 权限 + 必备元素共同决定。**（2026-08-02 查阅 + 真机对照；vivo 侧开关见 [vivo-originos.md](vivo-originos.md#通知与锁屏)）
 
-- **`setCategory(CATEGORY_CALL)` 单独使用不会得到通话级待遇。** 官方文档只把
-  「通知栏最高优先级排名 + 系统可转发到其他设备」授予 **`NotificationCompat.CallStyle`**，
-  不是授予 category。裸 category 是排序/策略的输入之一，**不是资格**。
-- **`CallStyle` 有强制按钮，与"批准/拒绝"语义天然冲突。** 来电必须是 Answer/Decline，
-  进行中必须是 Hang up，**系统自动配图标与文案、不支持自定义标签**。所以危险动作审批卡
-  **不能靠改用 CallStyle 来蹭待遇**——那会把"允许/拒绝"显示成"接听/拒接"。
-- **通话类通知的常规配方里带 `setFullScreenIntent()`**；而 Android 14+ 起
-  `USE_FULL_SCREEN_INTENT` 不再自动授予（只给通话/闹钟类应用）。**本项目已明示决定不声明它**
-  （用户 2026-08-01 拍板），所以这条路是主动关掉的——**于是 `category=call` 变成了一个
-  永远兑现不了的申请**。🔵 "裸 category 是否导致锁屏过滤"尚未实测，但它是当前最省事的
-  单变量实验：去掉 category 再跑一次。
-- 🔵 **Android 16 报道称会自动隐藏"已读过"的锁屏通知**，并在"较高风险场景"（未连 Wi-Fi、
-  近期未解锁）隐藏敏感内容。来源是媒体报道非官方文档，**未证实**。但它与本项目的观测形态
-  高度吻合：**用户是在解锁态看到通知、随后才锁屏的**——若"看过即隐藏"成立，我们测的一直是
-  一个被系统认定为已读的通知。**实验设计要区分「锁屏后才 post」与「post 后再锁屏」两种路径。**
+- **`setCategory(CATEGORY_CALL)` 单独使用不会得到通话级待遇**：官方只把"最高优先级排名 + 可转发"授予 `NotificationCompat.CallStyle`。
+- **`CallStyle` 强制 接听/拒接（或挂断）按钮，系统配文案、不可自定义**，与"允许/拒绝"语义冲突，审批卡不能靠它蹭待遇。
+- 通话类配方带 `setFullScreenIntent()`，而 Android 14+ `USE_FULL_SCREEN_INTENT` 不再自动授予；本项目已决定不声明它（2026-08-01），所以 `category=call` 是兑现不了的申请。🔵 裸 category 是否导致锁屏过滤未实测——最省事的单变量实验是去掉它重跑。
+- 🔵 Android 16 据媒体报道会自动隐藏"已读过"的锁屏通知、在高风险场景隐藏敏感内容（非官方，未证实）。实验要区分「锁屏后才 post」与「post 后再锁屏」。
+- **方法论**：判断"是不是本机/ROM 的问题"，在同一时刻同一块锁屏上找一条正常显示的对照通知（同时核 `zen_mode=0`）。一张截图就能排除"锁屏渲染坏了""被免打扰吞了"两类假设，剩下的差异必在两条通知的属性差集里。
 
-**方法论（这条比结论值钱）**：判定"是不是本机/本 ROM 的问题"，最快的办法是**在同一时刻的同一
-块锁屏上找一个正常显示的对照通知**。2026-08-02 实测：探针报我们的通知 `PRESENT` 的同一秒，
-锁屏截图上另一条 app 通知正常显示、`zen_mode=0` 已 adb 核过——**一次截图就排掉了"设备锁屏
-渲染坏了""被免打扰吞了"两整类假设**，剩下的差异必然在两条通知的属性差集里。
+## 无障碍窗口与前台身份
 
-## AccessibilityService 窗口身份（vivo/Android 16，2026-07-22）
+- **窗口事件不等于前台身份**（V2352A / Android 16，2026-07-22）：`TYPE_APPLICATION_OVERLAY` 也会发 `TYPE_WINDOW_STATE_CHANGED`，事件 package/class（如 `FrameLayout`）只描述事件窗口。必须用 `event.windowId` 归属到 windows 列表中 active 的 `TYPE_APPLICATION`，无 active 时才后备 focused `TYPE_APPLICATION`；overlay、IME、inactive 窗口事件忽略。事件早于 windows 列表更新时只暂存候选，等 `TYPE_WINDOWS_CHANGED` 复核后再发布。
+- **前台身份显式区分 `Known` / `Unknown`**：`Unknown` 时只读 R 可用于诊断，写入 W 与危险 D 必须 fail-closed。root 仅给出 package 的 fallback 不等于已验证窗口身份。
+- **#19 `Unknown` 必须自带原因**（2026-07-26）：三种成因——从未接受过窗口状态事件（服务冷启动）、当前无 active/focused 应用窗口、已接受身份的 windowId 与当前应用窗口不一致——在返回体里长得一样（微信 `root=null`，连 package 后备都是空串）。现已在 `ctx` 带 `foreground_reason`，`foreground_app` 扩成只读诊断（`selected_window_id`、`tracked_identity`、`windows[].root_package`、最近 24 条事件处置 `recent_events`）。**排查前台身份先读这两处，不要从点击/几何/OCR 方向猜。** 没有证据前不要动 tracker 判据：窗口列表瞬时取空（该有界重读）与 windowId 真换了（动候选发布规则）修法相反，后者正是"overlay 事件不得污染前台身份"的防线。
+- **冷启动自举身份**（2026-08-01）：身份从未建立时，把当前活动应用窗口自报的 root 包名固化为 package 级身份（`foreground_identity_source=bootstrap`）。约束：只在 `Unknown` 时生效、**不救 `WINDOW_ID_MISMATCH`**；`activityName` 留空，不拿 `window.title` 冒充；身份来源本身纳入确认前后硬相等，避免两边 activityName 都为空时"平凡相等"放行。背景：跑测脚本若在目标 App 已前台时跳过 `am start`，服务重启后没有窗口事件，身份永远拿不到。
+- **#21 自家确认卡必须 `FLAG_NOT_FOCUSABLE`**（2026-07-26）：可获焦的卡会抢走窗口焦点——App 窗口不再 active/focused → 确认后前台身份复核 `E_BLOCKED`；InputConnection 被拆掉重建 → IME 会话 id 换新 → `E_STALE_REF`。不可获焦窗口照样收触摸。**任何在被操作 App 处于关键状态时弹出的自家 UI，默认都该不可获焦。**
+- **自有 overlay 必须从执行面排除**：确认卡若进入 `windows/snapshot/ref`，Agent 可能经 `ui_action` 自确认。窗口遍历、ref 注册、动作解析统一拒绝网关自有窗口；只认按钮回调为真人决定源。
+- **遮挡判定（`hasBlockingOverlay`）两个实现坑**（2026-07-23）：① 状态栏/导航栏是常驻 `TYPE_SYSTEM` 窗口，与顶部探测带几何必相交，不排除就**任意时刻恒判有遮挡**；② 默认参数在耗时 OCR 之后才重新查询前台窗口 id，前台标志一抖就把 App 自己的主窗口当成浮层——要显式复用同一次快照已算好的 `fgWinId`。
 
-- `TYPE_APPLICATION_OVERLAY` 也会产生 `TYPE_WINDOW_STATE_CHANGED`；事件携带的 package/class（实测 class 为 `FrameLayout`）只描述事件窗口，不能直接当作当前前台身份。必须用 `event.windowId` 归属到 windows 列表中的 active `TYPE_APPLICATION`，没有 active 时才保守后备到 focused `TYPE_APPLICATION`；已知 overlay、IME 或 inactive 窗口事件直接忽略。
-- **防御性乱序场景（已有离线回归覆盖，尚无单独真机时序证据）**：事件若短暂早于 windows 列表更新，仅对尚未出现在列表中的 windowId 暂存候选，等 `TYPE_WINDOWS_CHANGED` 后复核归属再发布，不能把候选先写成前台。
-- 前台身份必须显式区分 `Known` / `Unknown`；root 仅给出 package 的 fallback 不等于已验证窗口身份。`Unknown` 时只读 R 可用于诊断，写入 W 与危险 D 动作必须 fail-closed。
-- **`Unknown` 必须自带原因，否则无法排查（2026-07-26）**：`foreground_known=false` 有三种完全不同的成因——从未接受过窗口状态事件（服务冷启动/重启）、当前列表里没有 active/focused 的 `TYPE_APPLICATION` 窗口、已接受身份的 windowId 与当前活动应用窗口不一致。三者在返回体里长得一模一样（微信这类 `root=null` 的应用窗口连 package-only 后备都是空串），只看 `app:""` 分不出来。现已在 `ctx` 加 `foreground_reason`，并把 `foreground_app` 扩成只读诊断（`selected_window_id`、`tracked_identity`、`windows[].root_package`、最近 24 条窗口事件处置记录 `recent_events`）。**排查前台身份问题从读这两处开始，不要从点击/几何/OCR 方向猜。**
+## App 屏蔽无障碍树与 IME 单命名空间降级
 
-## App 屏蔽无障碍树与 IME 单命名空间降级（微信，2026-07-25）
+- **#18 微信 ≥8.0.52 会话页对 a11y 树基本不透明，是架构级阻断而非调参问题**（2026-07-25）：`ui_snapshot` 的 a11y 元素恒为状态栏那十几项，标题/气泡/输入框 100% 来自 OCR，`findFocus(FOCUS_INPUT)` 取不到可用焦点节点；同时 IME 侧（激活、InputConnection、`focusedInputId`）全部正常。与"微信有意混淆 a11y 节点对抗自动化"的公开调研吻合。**与点击精度、OCR 质量、几何算法无关，不要往这三个方向排查。** 社区"把自家服务注册成 TalkBack 等白名单服务名"的绕法属冒充系统服务，违反铁律，不可用。诊断技巧：就绪等待的超时消息逐条列出缺哪几个条件，直接读它比加日志快。
+- **`window.root != null` 也不代表树可用**（PA2553 / Android 16，2026-08-26）：可返回 bounds 为 `[0,0,0,0]`、`childCount=0` 的 root 占位。记为"subtree 已遍历但语义 opaque"，root-handle、root→window 绑定、遍历完整性、语义可用性分开记录；零几何 root 永远不能成为 target 候选。
+- **对策：显式 IME 单命名空间降级链**（[design](../../specs/2026-07-25-IME单命名空间降级门-design.md)）：
+  - 身份来源写进值本身（`FocusIdentity(source = A11Y | IME_ONLY)`），降级必须显式；直接删 a11y 检查会让 `blank == blank` 恒真，绑定悄悄退化成无绑定。
+  - **能严则严**：`FocusIdentity.of()` 是唯一降级决策点；a11y 给得出合法节点就走严格链，a11y 有值但格式非法一律 fail-closed。
+  - 只有 a11y 各项**全部缺失**才算结构性缺失；一边有一边没有是错配，两条链都不放行。
+  - **降级是让步不是等价**：保留 IME 会话身份、输入长度/SHA-256/预览、OCR 读回、OCR 会话标题、包名、确认编号与真人核对；失去 a11y 节点身份与 bounds 及其几何保证。因此 OCR 读回是硬条件，读回不过不记输入证据、Enter 必被拦。无节点时读回区域退到与盲点探针同一几何。
+- **#43 焦点身份有两套合法命名空间，不能强行相等**：a11y producer 生成 `windowId|viewId|class|package|bounds`，IME 生成 `ime|<24hex>` session id。证据同时保存两套、分别复核；"统一成一个 id 再比较"会让合法宏必然 `E_STALE_REF`。节点 id 收敛到单一 producer（`FocusedInputIdentity`），契约测试用真实 producer 格式——测试桩把所有 id 设成同值会掩盖编码差异。也不要把 IME id 塞进 a11y 的 id 槽。
 
-- **微信 ≥8.0.52 对 a11y 树基本不透明**：会话页 `ui_snapshot` 的 a11y 元素恒为状态栏那 13 项，标题/气泡/输入框 100% 来自 OCR，`findFocus(FOCUS_INPUT)` 取不到焦点节点；同一时刻 IME 侧（激活、InputConnection、`focusedInputId`）三项全部正常。与网络调研"有意混淆 a11y 节点数据对抗自动化"吻合。**因此"a11y 可见的焦点可编辑节点"在此 App 上不可满足，与点击精度、OCR 质量、几何算法都无关**——不要再往这三个方向排查。
-- **`window.root != null` 也不能代表树可用（PA2553 / Android 16，2026-08-26）**：同一微信双窗口可返回非空 root handle，但 root bounds 为 `[0,0,0,0]`、`childCount=0`，没有正几何可见 descendant。这应表达为“平台暴露的 subtree 已完整遍历，但业务语义仍 opaque”，而不是 unreadable，也不是可用 `root_subtree`。合同必须正交记录 root-handle 状态、root→window binding、遍历完整性与 semantic usability；零几何 root 可以作为结构占位证据，永远不能成为 toolbar/input/target candidate。
-- **对策：显式的 IME 单命名空间降级链**（design：`docs/specs/2026-07-25-IME单命名空间降级门-design.md`）。要点：
-  - 身份来源写进值本身（`FocusIdentity(source = A11Y | IME_ONLY)`），**降级必须显式**。直接删掉 a11y 检查会让 `blank == blank` 恒真，绑定悄悄退化成"无绑定"。
-  - **能严则严**：`FocusIdentity.of()` 是唯一降级决策点，a11y 侧一旦给得出合法节点身份就必须走严格链；a11y 侧有值但格式非法（例如把 IME 会话 id 塞进 a11y 位）一律 fail-closed，既不接受也不降级。
-  - **一致缺失 vs 错配**：只有 `nodePresent/focused/editable/stage`（以及 bounds、input proof nodeId）**全部缺失**才算结构性缺失；一边有一边没有是错配，两条链都不给过。
-  - 两套命名空间**不合并比较**（knowledge #43 的老教训）：IME-only 是另一条独立链，不是"把 IME id 当 a11y id 用"。旧代码里 `focusedInputSnapshot` 在无节点时把 `ImeBridge.focusedInputId` 填进 a11y 的 `id` 槽，正是这种隐式混用——只是被 store 的格式断言意外挡住了，改造时先堵这个口。
-- **降级后的安全强度：确实有让步，不是等价替换。** 保留：IME 会话身份、输入长度/SHA-256/预览、**OCR 读回**、OCR 会话标题、包名、12 位确认编号、真人逐项核对并点击确认（两段式硬门不受影响）。失去：a11y 焦点节点身份与 bounds，**以及由 bounds 推出的"焦点确实是底部聊天输入框"这条几何保证**。IME-only 链下 OCR 读回是仅剩的"内容确实落框"机械证据，故设为硬性条件：读回未通过就不记输入证据，Enter 必被拦。
-- **无节点通道要有读回区域**：全树空时没有任何 bounds 可用，读回区域退到与盲点探针同一几何（`p0FocusProbeRegion`，锚定系统底部 inset）。此前 `typeTextNoNode` 在 `target == null` 时**完全跳过读回**，降级链会因此永远拿不到证据。
+## 自有零 UI IME
 
-## 自有零 UI IME 与 `ime_visible` 判据的冲突（2026-07-25 真机实锤）
+- **`ime_visible` / `keyboard_state.visible` 在自有 IME 下恒为 false**（2026-07-25）：`GatewayIme.onEvaluateInputViewShown()` 有意返回 false，永不创建 `TYPE_INPUT_METHOD` 窗口。拿它当"输入会话是活的"的代理，已准备目标就永远记录不成功，也不能用它"佐证键盘没弹起"。**教训：选活性/可见性代理指标时，先确认它在自家组件架构下可能为真。**
+- **替换判据**：① `ImeBridge.session()` 非空且 InputConnection 可用；② 会话 `EditorInfo.packageName` 等于前台包（需单独留存 `sessionPackage`）；③ 降级链不走"已聚焦"短路，必须亲手执行已校验的盲点，打字后 OCR 读回。**"聚焦前后 session id 必须变化"不成立**：微信输入框键盘收起后仍长期持有活连接，再点一次不触发 `onStartInput`。
+- **#23 `performEditorAction()` 返回 true 不代表 App 做了任何事**（2026-07-26）：只表示调用投递到了活着的输入连接。发送类危险动作的结果必须由后验决定，不能由"通道调用被受理"决定。
+  - 诊断问自己的 IME：R 级只读工具 `ime_editor_info` 读 `onStartInput` 收到的 `EditorInfo`（只出 imeOptions/inputType/action）。
+  - **选通道看 `IME_FLAG_NO_ENTER_ACTION` 与 actionCode，不看 multiLine**：单行框声明 `IME_ACTION_SEND` 时回车即发送，走 `performEditorAction(IME_ACTION_SEND)`；需要发裸按键时用 AOSP 输入法写法（`KeyCharacterMap.VIRTUAL_KEYBOARD` + `FLAG_SOFT_KEYBOARD|FLAG_KEEP_TOUCH_MODE`，带 downTime/eventTime）。微信实测见 [wechat.md](../apps/wechat.md)。
+  - 零 UI IME 下微信输入栏不渲染「发送」按钮，"点发送按钮"这条路不存在。
 
-- **`GatewayIme.onEvaluateInputViewShown()` 返回 false**（有意设计：注入通道不需要可见键盘，也避免键盘高度扰动布局），因此它**永远不创建 `TYPE_INPUT_METHOD` 窗口**。而 `ime_visible` 的定义就是 `windows.any { type == TYPE_INPUT_METHOD }` → **只要当前输入法是「执行网关」，`ime_visible` 恒为 false**（`keyboard_state.visible` 同源，三次真机诊断全程 false）。
-- 这条恒假判据当时被用在三处当"输入会话是活的"的代理，其中两处是既有代码：`withFreshPreparedTargetGuard` 的 fresh proof、其 `requireCurrent()` 终验、以及 P0 宏的降级就绪判据。后果是**已准备目标在自有 IME 下从来就记录不成功**——这是与"微信屏蔽 a11y 树"**相互独立的第二根因**，两者叠加才是 P0 长期卡死的全貌。
-- **替换判据（已实现）：用 IME 会话身份自证，三条**——①活性：`ImeBridge.session()` 非空且 InputConnection 可用（`onFinishInput` 会清空会话，所以为真即代表真有活会话）；②归属：会话的 `EditorInfo.packageName` 必须等于前台包（该包名原先被哈希进 `focusedInputId` 就取不回来了，需在 `ImeBridge` 单独留存 `sessionPackage`）；③**新鲜度**：聚焦动作前后 session id 必须变化（`onStartInput` 重新触发过）——这直接证明"这一次点击真的落在输入框上"，比"键盘弹起来了"更强，因为键盘可见根本不说明焦点在哪个框。
-- **教训**：给"活性/可见性"选代理指标时，先确认这个指标在**自家组件的架构下**是否可能为真。零 UI 组件天然不满足一切"窗口可见"类判据。
-- **"会话必须换新"也不成立**（同日实测的第二次踩空）：微信输入框在**键盘收起后仍长期持有焦点与活的 InputConnection**，对已聚焦的输入框再点一次不会重新触发 `onStartInput`，session id 自然不变。因此"聚焦动作前后 session id 必须变化"无法区分"点在了已聚焦的输入框上"（合法）与"点空了"（非法），只会把合法情形一起否掉。留下的判据是：会话归属 + **降级链永不走"已聚焦"短路（必须亲手执行那次已校验的盲点）** + 打字后输入栏 OCR 读回。
-- **`keyboard_state.visible` 在自有 IME 下不可用作诊断依据**：它与 `ime_visible` 同源，恒为 false。真机诊断里用它"佐证键盘没弹起"是空推理，别再据此下结论。
+## 残留焦点节点：给"节点可用"定判据后，所有取用路径一起改
 
-## 那个"残留焦点节点"会连累三处，别只堵一处（2026-07-26）
+微信会话页 `findFocus(FOCUS_INPUT)` 返回不 focused、不 editable、bounds 退化的残留节点，先后咬了四处，症状各不相同（2026-07-26 / 07-31）：
 
-微信会话页 `findFocus(FOCUS_INPUT)` 返回的残留节点（不 focused、不 editable、**bounds 退化**）在一天内连着咬了三处，且每处症状完全不同：
+1. **身份**：被当成 a11y 焦点身份，证据绑到打不进字的节点上。
+2. **就绪判据**：`nodePresent=true` 让"a11y 一致缺失"不成立，降级链进不去（改：`!nodePresent || (!editable && !focused)` 视为缺失）。
+3. **`type_text`**：走了节点通道，SET_TEXT 假成功，读回用退化 bounds 裁剪，ML Kit 报 `InputImage width and height should be at least 32!`。
+4. **`press_key`**：对残留节点调 `ACTION_IME_ENTER` **假成功返回 true**，`viaNode || ImeBridge.enter()` 短路，IME 通道永远走不到，表现为"消息发不出去"，烧了五轮真机。
 
-1. **身份**：被当成 a11y 焦点身份 → 证据绑到一个打不进字的节点上（改：`focusedInputSnapshot`/`FreshPreparedInputProof` 只在 `isEditable` 时产出节点 id 与几何）。
-2. **就绪判据**：`nodePresent=true` 让"a11y 一致缺失"不成立 → 降级链永远进不去（改：`a11yAbsent = !nodePresent || (!editable && !focused)`）。
-3. **输入路径**：`type_text` 在无 ref 时直接用 `focusedEditable()`，于是走了普通节点通道而不是无节点通道——SET_TEXT 打不进去，且**读回拿它的退化 bounds 去裁剪，把 ML Kit 喂出 `InputImage width and height should be at least 32!`**（改：同一把尺子 `refresh() && isEditable`，不满足就走无节点通道；读回再加一道 bounds<32 退到输入栏带的兜底）。
+现已统一到 `FocusedInputSnapshot.nodeUsableForAction`（只认 `IdentitySource.A11Y`）。**铁证形态**：同一序列里 `type_text` 报无节点通道、`press_key` 报节点通道——两个工具对同一件事判断矛盾，矛盾即真因。**方法论：修不动时先加可观测性（给危险动作返回值带上 `enter_channel`），别加假设。**
 
-**教训**：给"这个节点能不能用"定了新判据后，要把**所有**取用该节点的路径一起改，否则症状会在离判据最远的地方冒出来（这里是 OCR 报错）。
+## 危险动作后验
 
-### 第四处：`press_key` 的 a11y 通道（2026-07-31，烧了五轮真机才逮到）
+- **后验必须三态 `SENT / NOT_SENT / UNVERIFIED`，不能是布尔**：真没发出可以重来，判不了**绝不能重来**（可能已发出）。"判不了"并进成功是谎报，并进失败是诱导重试。UNVERIFIED 按 ok 返回但带 `verification_state` 与"只能只读复核"的下一步。
+- **后验失败时绝不换通道重试**：可能其实已发出，重试即重复发送。
+- **基线必须是已提交的确切文本**，不能是动作前那次 OCR 读回（每次噪声不同，contains 一抖就谎报成功）；也不能用截断过的 preview——超过 `PREVIEW_LIMIT=64` 时旧实现给 null，>64 字的消息一律误判失败（短 marker 测不到）。
+- 判据分层 a11y → OCR；a11y `readableText == null` 是"没属性可读"，必须降级而不是当成已清空。
+- **等 UI 变化用轮询到 deadline，别固定 sleep**：`sleep(600)` 改为 2s/250ms 轮询后，常见情况更快且慢场景不再假阴性。
 
-上面这条教训写下来之后，**漏掉的第四处又咬了一次，而且咬得最贵**。`press_key` 的 `viaNode` 直接对未过滤的 `findFocus(FOCUS_INPUT)` 节点调 `ACTION_IME_ENTER`：
+## ML Kit 中文 OCR
 
-- 残留节点**接受该动作并返回 true**（假成功，与 SET_TEXT 假成功同族）；
-- 于是 `viaNode || ImeBridge.enter()` 短路，**IME 通道永远走不到**；
-- 症状是"微信消息发不出去"——离"节点判据"这个真因极远，把排查引向了微信的回车开关、Enter 通道选择等一连串无关方向。
+（V2352A / Android 16，2026-07-19 起）
 
-**铁证长什么样**：同一次调用序列里 `type_text` 报 `ime_commit_ocr`（无节点通道）、`press_key` 报 `a11y_ime_enter`（节点通道）——**两个工具对同一件事给出互相矛盾的判断**。以后遇到"某个动作报成功但什么都没发生"，先并排看同序列各工具选了哪条通道，矛盾即真因。
+- **深色模式灰底灰字漏识 ~40%**，可跌破 `OcrEngine.recognize()` 内部 `MIN_CONF=0.5` 地板——连候选都不出现，下游阈值怎么调都够不着。已在 [OcrEngine.kt](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt) 做原图 + 灰度对比度拉伸图各识别一遍、IoU≥0.5 取高置信合并（真机证实微信会话标题从零候选升到 0.55~0.59）。`OcrEngine.kt` 无单测（依赖真实 Bitmap/ML Kit，未配 Robolectric），只能真机验证；效果不足先调 `CONTRAST_BOOST`。另有整屏缓存 2s TTL 重识给抖动翻盘机会。
+- **小裁剪图识别塌方**：372×147 裁剪返回 0 行。校验/读回类裁剪最小 ~620×220 并带上下文，小图 conf 阈值 0（靠位置稳定 + 相似度把关）；整屏融合维持 0.5。
+- **CJK 形近字/数字逐帧抖动**（搜索/搜素、0↔O、尾随多认一字如"文件传输助手8"）：识别类匹配一律"归一（全角/大小写/o→0）contains ∥ 位置稳定 + 字符袋相似度 ≥0.4"，**纯 `==` 会漏判**。两行长标签会拆成两行，查询用短子串。凡拿 marker 做机械判定都按 `OcrEngine.norm` 同口径归一。
+- **识别用途与点击用途的门槛必须分开**：判"当前在哪页"的识别可用 `MIN_RECOGNITION_OCR_CONFIDENCE=0.45` 与 contains；决定"点哪里"的点击目标保持 `MIN_ACTION_OCR_CONFIDENCE=0.65` 与严格匹配（见 [VisionTrustPolicy.kt](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/VisionTrustPolicy.kt)）。放宽识别层安全的前提是后续有独立、未被改动的点击时复核；点击目标识别不到时用流程规避（人工预置页面），不降门槛。迁移阈值时把同类函数**一次找全**——漏改一处会制造"流程规避也没用"的假象。写进确认证据链的识别值（如探针标题置信度）属设计取舍，改前征得项目所有者同意。
+- **危险词扫描只扫真实弹窗**：整页扫描会把 OCR 出来的聊天列表预览（"微信支付""转账"通知）当成弹窗内容恒判敏感；按 `element.source == "a11y"` 过滤（设计取舍，已获同意）。
+- **手势后主动失效 OCR 缓存**：事件静默 app（微信）点击/滑动后 revision 不动，不失效就读旧屏。
+- 冷加载 ~700ms 一次性；整屏 ~300–700ms 随文本密度。
+- **输入栏读回约束**（2026-07-26）：裁剪几何用截图位图自身尺寸，不用 `displayMetrics`；读回带要比盲点带高得多（输入文字基线落在系统 inset 之下，现取底边向上 260px），优先按已知焦点框几何裁、结果带 `regionSource`；判据"归一后包含"只能证明字落进去了，不能证明框里只有我们的字；读回失败分三态（异常 / 有几何无文字 / 有文字不匹配），别 `runCatching{}.getOrNull()` 吞成 null。
+- 🔵 `ocrScreen()` 按 `TYPE_INPUT_METHOD` 窗口顶边裁剪位图的逻辑对零 UI IME 的影响未专门验证。
 
-**方法论**：这五轮里真正起作用的不是猜通道，是**给危险动作的返回值加上"我走的哪条路"**（`enter_channel`）。加之前两轮失败信息一模一样，再跑十轮也只会看到同样的 `E_VERIFY_FAIL`；加之后一轮定位。**修不动的时候，先加可观测性，别加假设。**
+## 监督式真机跑测控制面
 
-## 输入栏 OCR 读回的两条实测约束（2026-07-26）
-
-- **裁剪几何必须用截图位图自身尺寸，不能用 `displayMetrics`**：裁剪发生在位图坐标系里，两者不保证相等。
-- **读回带要比盲点带高得多**：盲点带（`P0_PROBE_HEIGHT_PX=90`，底边=h−inset−10）只需要一个可点中心；而输入框文字基线实测落在系统 inset **之下**，用盲点带裁会读回 null。现按 `INPUT_BAR_READBACK_HEIGHT_PX=260` 从截图底边向上取。
-- **读回判据是"归一后包含"**，能证明"我们的字落进去了"，**不能证明"框里只有我们的字"**（实测读回 `")PO降级链诊断 ))PO降级链诊断 D"` 仍判通过）。Enter 门另有输入长度/SHA-256 与真人核对屏幕兜底，但这条局限要记住。
-- **读回失败必须区分三态**：抛异常 / 读到几何但无文字 / 读到文字但不匹配。早期 `runCatching{}.getOrNull()` 把异常吞成 null，直接多烧一轮诊断。
-- **那条底部带隐含三条假设**（竖屏、输入栏贴底、左右各留 6%），全是这台机器上微信会话页的样子。它只该是兜底：`ocrReadInputBarRegion(preferredBounds)` 现在优先按已知焦点框几何裁，回读结果带 `regionSource` 说明用的哪一种。IME-only 降级链里没有 bounds，仍走兜底带——这条改动救的是别的 app，不是微信。
-
-## 危险动作后验必须三态，不能是布尔（2026-07-26，离线实现）
-
-发送后验第一版是布尔 `sent`：判不出来就当"未发送"，抛 `E_VERIFY_FAIL` 且 `retryable=false`。三个坑一起来：
-
-1. **"判不了"被当成"没发出去"**。这两件事的正确下一步完全相反：真没发出去可以重来，判不了**绝不能重来**（可能已经发出，重试即重复发送）。旧实现的 fallback 文案写的正是"可能已发出，别重试"——说明当时就知道它是判不了，只是塞进了失败路径。
-2. **长文本必然误判**。基线取自 `InputCommitEvidence.preview`，而 preview 超过 `PREVIEW_LIMIT=64` 就截断加省略号，于是 `takeIf { length <= PREVIEW_LIMIT }` 给 null → "没有基线" → 判失败。**>64 字的消息即使真的发出去也一律报发送失败**。测试 marker 只有 18 字，恰好绕过，离线和真机都测不到。
-3. **只有 OCR 一条腿**。a11y 拿得到输入框文本时它更可靠（无长度上限、不吃屏幕几何），却没走。
-
-改法：`SendVerification` 三态 `SENT / NOT_SENT / UNVERIFIED`；UNVERIFIED 按 ok 返回但带 `verification_state` 与"只能只读复核"的下一步。判据分层 a11y→OCR，其中 **a11y 侧 `readableText == null` 必须降级而不是当成已清空**——null 是"没 text 属性可读"（微信屏蔽 a11y 树时正是如此），当成空就会造出假的发送成功。
-
-**通用教训**：危险动作的后验判据，"判不了"要有自己的一档。把它并进成功是谎报，并进失败是诱导重试——两边都错，而且错的方向不一样。
-
-## 固定 sleep 是假阴性的常见来源（2026-07-26）
-
-发送后验原本 `Thread.sleep(600)` 再读一次。UI 清空的时机随消息大小与网络抖动，睡死一个数就是在赌；赌输了读到"内容还在"，把成功的发送谎报成失败。改成轮询到 deadline（2s/250ms），任一轮判定已发送即刻返回——**平均更快**（常见情况 250ms 就返回），且慢场景不再误判。凡是"等 UI 变化"的地方都适用。
-
-## ML Kit 中文 OCR 实战（M1b 融合层，vivo V2352A/Android16，2026-07-19）
-
-- **深色模式灰底灰字漏识 ~40%**（微信搜索框/留言框占位符实锤；同屏正常对比度文本稳定命中）：临界对比度文本不可依赖单发识别。对策：整屏 OCR 缓存加 **2s TTL 重识**给抖动翻盘机会（revision 缓存对事件静默 app 会把单次漏识钉死）；关键锚点尽量选正常对比度文本。
-- **小裁剪图识别塌方**：372×147 裁剪返回 **0 行**（同区域整屏可识）；小图 conf 普遍偏低。→ 校验/读回类裁剪**最小 ~620×220** 且居中给上下文；此类小图用 **conf 阈值 0**（靠位置稳定 + 相似度把关），整屏融合维持 0.5 过滤内嵌图乱码。
-- **CJK 形近字逐帧抖动**：同一控件两次识别「搜索/搜素」互跳；图标偶被识成字符（放大镜→Q）时有时无；数字 0→O（S3 已知）。→ 匹配一律「归一（全角/大小写/o→0）contains ∥ 位置稳定（漂移≤1.2 行高）+ 字符袋相似度 ≥0.4」，纯 contains 会把自己人误判 STALE。
-- **两行长标签拆成两个 OCR 行**（「文件传输/助手」实锤）→ 查询用短子串（find「文件传输」而非全名）。
-- **手势后必须主动失效 OCR 缓存**：事件静默 app（微信）点击/滑动后 revision 不动，不失效就读旧屏。
-- bundled 中文 client 常驻进程：冷加载 ~700ms 一次性；整屏 ~300–700ms 随文本密度（列表页低、图文重页高）。
-- **深色模式灰底灰字漏识的直接对症修法：灰度化+对比度拉伸后再识别一遍，取更高置信度合并**（2026-07-24，[OcrEngine.kt](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt)）。此前只在下游（宏代码里）调阈值治标；真机实锤过某些实例的置信度直接跌破 `MIN_CONF=0.5` 这个 `OcrEngine.recognize()` 内部的基础过滤——阈值再怎么调也够不着连候选池都进不去的文字，只能从识别源头治本。做法：原图识别一遍、`ColorMatrix`（`setSaturation(0)`+围绕中灰点的对比度矩阵）增强后再识别一遍，按文字+位置重叠（IoU≥0.5）判定"同一处"，取置信度更高者合并，两遍互不覆盖只取优——不是替换原图识别，避免对本来就清晰的文字造成回退。**`OcrEngine.kt` 全仓库零单测**（依赖真实 `Bitmap`/ML Kit 推理，项目未配 Robolectric，`android.graphics.*` 在纯 JVM 单测下方法体是 stub 会直接抛异常），只能靠真机 dispatch 验证效果，效果未达预期时优先调 `CONTRAST_BOOST` 常量或改用自适应阈值/局部直方图均衡（比全局线性拉伸更贴近成因但实现和验证成本都更高）。
+- **确认状态可观察不等于可写**：debug runner 只用 `run-as` 写一次性 `test-control.json`（字段严格校验、不含 allowed/denied），PC 只读 `test-confirmation-state.json`；决定只来自手机按钮回调，不加"测试方便"的 decision 写接口。release 用 no-op 控制面。token、确认状态、截图不经 exported provider/网络接口；外部命令异常不得拼接 adb stdout。
+- **危险 Enter 绑定输入证据与业务目标**：`type_text` 后登记短 TTL 证据（预览、长度、SHA-256、焦点指纹），准备宏另存 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`，只沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 先使其失效；Enter 前后复核。audit 只记长度/哈希不落正文。
+- **同一确认要有机械关联键**：12 位 confirm ID 同时显示在卡片、写入 confirmation state、绑定该卡截图；不能靠"时间接近"配对。
+- **OCR ref 用前必须 fresh**：每个可变阶段强制新截图并递增视觉世代，按 capture revision、前台 windowId、置信度、bounds 校验；慢 OCR 返回后再原子复检才 perform。
+- **#20 确认卡截图可能拍不到卡本身**（2026-07-26，已修并真机闭合）：frame fence 只保证本进程帧提交，`takeScreenshot` 读的是合成结果，可能差一两个 vsync。对策：按卡的真实位置与底色核验截图，没拍到等 400ms 重拍、最多 4 次；仍拍不到照样落盘但标 `card_visible=false`，刻意不 fail-closed。排查跑测失败先读 `run-manifest.json` 的 `failure` 与 `legs[].verdict`，它和执行器 trace 最后一条错误经常不是同一件事。
+- **先只读诊断，再整套重跑**：`dispatch.ps1` 派只读 `ui_snapshot`/`screen_capture` 诊断（不需 Provision，二三十秒）确认真实状态；`screen_capture` 让子代理直接看图可独立验证截图管线是否陈旧。旧诊断数据（如已抓的 `dumpsys accessibility` 全量）常已含答案，先翻旧证据。多层叠加的失效先通读整条调用链再动手，别"改一处、重装、重跑"。
+- **离线全绿的 provision 首次接真机大概率还会炸**（2026-07-23 实测）：
+  - `run-as ... am start-foreground-service` 要显式 `--user 0`，否则以 USER_CURRENT 请求被 `INTERACT_ACROSS_USERS` 拒绝。
+  - PowerShell `ArgumentList` 传 `sh -c` 带通配符的命令时要内嵌单引号，否则 adb shell 侧丢引号。
+  - 重装 APK 后无障碍重绑异步（vivo 数秒到近百秒）；重写同值不触发重绑，须先写不同值再写回，然后按上限轮询。
+  - vivo `dumpsys accessibility` 只打印 `label=<应用名>` 不含组件名，匹配要接受 label。
+  - `cmd appops get <pkg> AUTO_START` 等不是真实 appops 名，任何设备都报 `Unknown operation string`；找不到真实可查 API 的探测宁可不做，别用恒失败的伪探测冒充硬门。
+  - Android 16 上 `am start -c LAUNCHER -p <pkg>` 隐式解析失败；先 `cmd package resolve-activity --brief` 拿组件名再 `-n` 启动。
+  - PowerShell `Mandatory` 数组参数拒绝空数组，可能拿到空集合的要加 `[AllowEmptyCollection()]`。
+  - app 侧非原子覆写的状态文件，PC 轮询可能读到半成品；瞬时不可解析按"未就绪"重试，由上层超时兜住持续损坏。
+  - 改 `app/gateway` 源码后必须重新 assemble 并让 provision 重装才生效，用 `dumpsys package <pkg>` 的 `lastUpdateTime` 核对。
 
 ## adb / uiautomator 工具链
 
-- **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类 app 正常）。截图+视觉定位兜底是刚需不是可选项。M1 自研 AccessibilityService 直读事件流可绕开 idle 等待——这是自研执行器的核心价值证据。
-- 软键盘弹出导致坐标错位（M0 两次误触的主因之一）。→ M1 需求：键盘状态感知、点击前二次校验（网关已内建）。
-- **mobile-mcp 截图是缩放图**（实测约 360×800），而 click 工具吃物理坐标（1260×2800）——直接按截图坐标点击必偏约 ×3.5（M0.5 复测实锤）。规程：先 `get_screen_size` 拿物理分辨率再换算；站规 v2 已写入。M1 网关坐标主权收归执行器侧，此坑架构性消灭。
-- 手机黑屏用 `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防靠「充电时屏幕不休眠」+ 临时关锁屏。
+- **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类正常）。截图+视觉兜底是刚需；自研 AccessibilityService 直读事件流可绕开 idle 等待。
+- 软键盘弹出导致坐标错位（M0 两次误触主因之一）→ 键盘状态感知 + 点击前二次校验（网关已内建）。
+- **mobile-mcp 截图是缩放图**（约 360×800），click 吃物理坐标（1260×2800），直接按截图坐标点必偏 ×3.5；先 `get_screen_size` 换算。网关坐标主权在执行器侧，无此问题。
+- 黑屏用 `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防靠「充电时屏幕不休眠」+ 临时关锁屏。
 
-## 批处理里调 Windows 命令必须写绝对路径——继承的 PATH 会把它换成别人（2026-07-26）
+## Windows 批处理与离线套件
 
-监督式 runner 离线套件曾整轮跑出 11/39，失败全是超时（`读取 gateway 审计游标 超时` / `runner 离线测试超时`），没有一条断言失败。**真因是假 adb 批处理里的一行：**
-
-```bat
-for /f %%C in ('find /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do ...
-```
-
-从 **Git Bash 环境**拉起 pwsh 时，PATH 里 `/usr/bin` 排在 `System32` 前面，`find` 解析成 **Unix find**。Unix find 把 `/v` 和 `/c` 当成**要搜索的目录**，而 `/c` 在 Git Bash 的挂载表里就是整个 C 盘——于是这一句递归扫 C 盘直到 30 秒超时被 kill。改成 `%SystemRoot%\System32\find.exe` 后，同一条用例 36s → 8.7s。
-
-**这个坑最贵的地方在于它伪装成别的东西**，我为此连续误诊两轮：
-
-1. **先怪机器负载**。证据看着很像：同一提交当天先 38/38、几小时后 11/38，且当时确实攒了常驻 daemon 和几十个残留目录。甚至做了"`git stash` 后在上一提交跑基线"的对照——基线同样大面积失败，于是**更加确信是机器**。其实那次基线也是从 Git Bash 拉起的，两边错在同一处。
-2. **再怪 stdin**。注意到"经 PowerShell 工具跑全过、经 Bash 工具跑必挂"，推断子进程继承了不给 EOF 的 stdin。把 stdin 显式重定向并关闭后毫无变化；`< /dev/null` 也毫无变化——才排除掉。
-
-**教训**：
-
-- **对照实验要变的是一个变量，不是一个提交。** "换提交跑基线"只能排除代码，排不掉环境；两次都从同一种壳里启动，等于两边带着同一个错误变量。真正定案的是**同一份代码换一种启动方式**跑（控制台 vs Git Bash 重定向）。
-- **"耗时几乎无方差"是挂死的指纹，不是负载的指纹。** 中位 34.8s / 最慢 35.4s ≈ 固定 30s 超时 + 真实耗时；负载抖动会拉出长尾。看见方差极小就该往"卡在某个固定超时上"想，别往"机器慢"想。
-- 批处理/脚本里凡是调 `find`、`sort`、`echo`、`date` 这类**与 Unix 同名的 Windows 命令**，一律写绝对路径。`findstr`、`type` 之类没有同名 Unix 版的相对安全，但同样建议钉死。
-
-顺带（与上面无关，但同轮踩到的真实脆弱性）：本套件 39 条各起一个 pwsh 子进程 + 一个临时仓库副本，单条 6–9 秒，整轮 6–9 分钟；`Invoke-FixtureRunner` 的墙钟预算原为 15 秒，余量偏薄，已放宽到 60 秒（**它是防挂死的保险，不是性能断言**）。被 kill 的跑测不会自清，残留目录攒着会真的拖慢机器：`scripts/check.ps1 -Clean` 一次清掉（停构建 daemon + 删残留 + 清日志）。
-
-**已知偶发（2026-07-26，未复现成功，未定位）**：`find` 修复之后仍见过一次单条失败——`错误输入文本或确认摘要不得判通过`，现象是 **`$result.Text` 整个为空**（子进程一个字都没输出），而当轮 fixture 耗时正常（中位 6.7s），所以**不是超时那一类**。此后 1 次全量 + 3 次单跑 + 又 1 次全量均为 39/39，没能复现。怀疑是子进程启动的偶发失败（那一轮恰好在 `check.ps1` 里紧接着 stop 掉两个构建 daemon 之后开跑），但无证据，别当结论。再遇到时先看 `$result.ExitCode` 与 stderr 是否也为空——若是，方向是进程创建而不是套件逻辑。
-
-## 监督式真机跑测控制面（2026-07-23，离线实现）
-
-- **确认状态可观察不等于确认可写**：debug runner 只用 `run-as` 写入一次性 `test-control.json`（run/leg/nonce/目标/过期时间/stale 开关），字段集合严格校验且不含 `allowed/denied`；PC 只读 `test-confirmation-state.json`。状态中的决定来自手机按钮回调，不能增加“测试方便”的 decision 写接口。release 必须使用 no-op 控制面且没有可用 stale 注入能力。
-- **`run-as` 是 debuggable 私有取证边界**：token、确认状态、app cache 截图都不经过 exported provider/网络接口。外部命令异常不得拼接 adb stdout；token 只短暂驻留内存，配置原子替换、结束恢复，截图拉取后校验 PNG 并清设备副本。
-- **自有 overlay 必须从执行面排除**：确认卡若进入 `windows/snapshot/ref`，Agent 可能通过 `ui_action` 机械自确认。窗口遍历、ref 注册和动作解析都要统一拒绝 gateway 自有窗口；仅把按钮回调作为真人决定源。
-- **危险 Enter 不能只绑定抽象焦点**：成功 `type_text` 后登记短 TTL 的输入证据，绑定预览、长度、SHA-256 与 focused-input 指纹（包含 view/class/bounds）。确认卡展示预览/长度/哈希/焦点位置，最终执行前再比较；audit 只记长度/哈希，不落正文。
-- **准备宏还要绑定业务目标，不只绑定输入**：宏成功后短时保存进程内 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`；只允许沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 都先使其失效。Enter 前后必须同时复核 label、包、焦点与 bounds，避免已进入“文件传输助手”的旧证据被其他导航复用。
-- **同一确认必须有机械关联键**：12 位 confirm ID 同时显示在卡片、写入只读 confirmation state，并绑定该卡截图文件；runner 校验同一 ID，不能靠“时间接近”猜测截图与 allowed 状态属于同一张卡。用户只读卡上的编号，不负责计算输入哈希。
-- **OCR ref 用前必须 fresh，不只是“缓存没过期”**：准备宏每个可变阶段先强制新截图并递增视觉世代，再按 capture revision、前台 windowId、置信度和 bounds 校验；resolve 可能触发慢 OCR，返回后还要快速原子复检再 perform。旧缓存或跨截图拼出的语义不能授权点击。
-- **焦点身份有两套合法命名空间，不能强行相等**：a11y 节点 producer 生成 `windowId|viewId|class|package|bounds`，IME InputConnection 生成 `ime|<24hex>` session id。预备目标证据必须同时保存两套并分别复核（节点 id 绑 UI 树/bounds，IME id 绑输入通道）；任何“统一成一个 id 再比较”的捷径会让真实合法宏必然 `E_STALE_REF`（fail-closed 误杀）。节点 id 生成要收敛到单一共享 producer（`FocusedInputIdentity`），并用真实 producer 格式写契约测试——测试桩把所有 id 手工设成同一个值会掩盖编码差异，离线全绿也发现不了（2026-07-23 规格复审实锤）。
-- **runner 离线套件必须在空闲机器上单独跑**：`p0-supervised-runner-offline.ps1` 的 fixture 用例对子 runner 有 `WaitForExit(15000)` 硬超时，与 gradle 全量编译或杀软扫描并发时子进程冷启动被拖垮，会成片报“runner 离线测试超时”的假失败（同机同代码：并发 28/32 → 空闲 32/32，2026-07-23 实锤）。判定套件结果前先确认无并发重负载；假超时重跑即可，不要当回归修。
-- **离线全绿的 provision 脚本首次接真机大概率还会炸；别把离线通过当真机通过**（2026-07-23 首次真机 P0 provision 实锤，连续踩 4 个坑，均只在真机才现形）：
-  1. `run-as ... am start-foreground-service -n <pkg>/.Service` 不显式给 `--user 0` 时，shell 以 user -2（USER_CURRENT）身份请求，被 `SecurityException: requires INTERACT_ACROSS_USERS[_FULL]` 拒绝——必须显式 `--user 0`。
-  2. PowerShell `ArgumentList` 传 `'sh','-c','rm -f a/b-*.json'` 时，通配符参数在 adb shell 侧丢了引号，变成裸 `rm` 收到多个 glob 展开参数报错；必须内嵌单引号 `"'rm -f a/b-*.json'"` 让 shell 侧重新加引号。
-  3. 重装 APK 后系统重绑无障碍服务是异步的（vivo 实测数秒到近百秒），单次探测必然与之竞态；`settings put secure enabled_accessibility_services <同值>` 不触发系统重新绑定——必须先写一个不同值（去掉本服务或整体 delete）强制系统解绑，再写回目标值触发重绑，之后按上限轮询而非单次探测。
-  4. vivo 的 `dumpsys accessibility` 绑定区段只打印 `Service[label=执行网关, ...]`，不含组件名，纯组件名字符串匹配在 vivo 上永远判失败；需要额外接受 `label=<manifest application label>` 匹配。
-  5. `cmd appops get <pkg> AUTO_START` / `BACKGROUND_START_ACTIVITY` 不是真实存在的 Android appops 操作名，任何设备上都会报 `Unknown operation string` 而非反映真实权限状态——这类“查询厂商专有权限”的探测如果找不到真实可查的系统 API，宁可不做，不要用会永远失败的伪探测冒充硬门（真实防护已有 deviceidle 白名单 + 每腿开始前强制重核无障碍绑定/输入法 + 全链路状态变化 fail-closed 兜底，2026-07-23 移除）。
-  6. 目标 Android 版本（本机 Android 16/API 36）的 `adb shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p <pkg>` 隐式包名解析直接报 "unable to resolve"，加 `--include-stopped-packages` 也无效；必须先 `cmd package resolve-activity --brief -c android.intent.category.LAUNCHER <pkg>` 拿到真实组件名，再用 `-n <component>` 显式启动。
-  7. PowerShell `[Parameter(Mandatory)][string[]]$X` / `[byte[]]$X` 对**零长度（非 null）数组**一样拒绝绑定（`Cannot bind argument ... because it is an empty array`），这是常见陷阱，不是 `$null` 检查能防住的；任何后续可能拿到空集合调用的 Mandatory 数组参数必须加 `[AllowEmptyCollection()]`（同文件里另几处早已这么写，本次是没写全）。本次咬人的两处：cleanup 阶段扫描空的证据文件列表、真机截图被拉空时的 PNG 校验。
-  8. `test-confirmation-state.json` 由 app 侧非原子写入（`pending → evidence_ready → allowed/denied/...` 多次覆写），PC 侧轮询 `cat` 有真实概率读到写入途中的半成品/截断内容；这类瞬时不可解析必须当“还没就绪”处理（等同文件不存在，返回 null 让下一次轮询重试），而不是直接当作永久性错误硬抛——调用方已有的确认超时兜底本来就能兜住“持续损坏”的情形，不会因此被静默放行。
-  9. `GatewayA11yService.snapshot()` 里 `hasBlockingOverlay(ws)`（[GatewayA11yService.kt:343](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt#L343)）用默认参数 `primaryId = applicationWindow()?.id`，在耗时的 OCR 融合**之后**才被求值，等于对系统窗口状态重新查询了一次，而不是复用同一次快照早前已经拿到的 `fgWinId`；若这段时间前台窗口的 active/focused 标志发生哪怕一瞬间的抖动，"排除前台窗口自身"这条判断就会失配，微信自己的主窗口被当成"遮挡自己的浮层"，`blocking_overlay` 误判为 true，导致 `p0_wechat_file_transfer_prepare` 在完全干净的聊天列表页也会 `E_BLOCKED("sensitive_entry")`（2026-07-23 真机首次执行准备宏即实锤）。诊断方法：派一个只读 `ui_snapshot()` 诊断任务比对 `foreground_window_id`/`blocking_overlay`/`fg_elements` 与真实手机画面。修法：显式传入同一次快照已经算好的 `fgWinId`，不要依赖会重新查询的默认参数——这个函数在另一处调用点（`readFreshActionState`）本来就是这么做的，唯独 `snapshot()` 里这一处没跟上。
-  10. `P0FocusProbeValidator.hasSensitiveOrBlockingSurface`（[P0WeChatPrepareMacro.kt:230](../../../app/gateway/src/debug/java/dev/magina/gateway/a11y/P0WeChatPrepareMacro.kt#L230)）原先对**整页全部元素**（含 OCR 融合出来的聊天列表预览文字）做危险词/取消-确认组合扫描；`DEFAULT_DANGER_WORDS` 含「支付」「转账」这类通用财务词，而「微信支付」官方入口和转账到期通知横幅在任何有真实使用记录的账号上近乎恒在——修好 9 号坑之后这道 `sensitive_entry` 门槛在真机上依然必错，因为触发源根本不是 `blocking_overlay`，是整页扫描把无关会话预览当成了当前弹窗内容。定位手段同上（只读 `ui_snapshot()` 诊断任务，比对真实 elements 数组的 `source` 字段）。修法：扫描前按 `element.source == "a11y"` 过滤——WeChat 聊天列表行本身 a11y 稀疏（`root=null`），可读文字几乎全部来自 OCR 融合，真实弹窗/系统对话框反而多为原生 a11y 节点，因此收窄到 a11y-only 既剔除了列表噪音，又不削弱对真实弹窗的检测。这两处（9、10）都是安全相关判据，修之前先用只读诊断任务实测拿到真实证据，不要凭猜测改；9 号是纯粹的实现 bug（两次查询语义应该一致却没对齐），10 号是设计取舍，改前征得了项目所有者同意再动手。
-  11. 修完 9、10 号坑后 `sensitive_entry` 在真机上还是必错——`hasBlockingOverlay` 本身有个更根本的缺陷：状态栏/导航栏是常驻的独立 `TYPE_SYSTEM` 窗口，状态栏满宽、y 落在 0..~系统栏高度，与探测用的 `titleBand`（y 4%~22%）在任意分辨率下都大概率几何相交（本设备 1260×2800 实测：状态栏 bounds=(0,0)-(1260,133)，titleBand=(315,112)-(945,616)，在 y=112~133 段确定相交）；函数只排除了 `primaryId`（前台 App 窗口）和 `TYPE_INPUT_METHOD`，没排除 `TYPE_SYSTEM`，导致这条判定在**任意前台 App、任意时刻**都恒为 true，跟 9 号的时序竞态无关，是从未在真机上跑过就没人发现的纯粹遗漏。定位手段：不需要新的诊断，早前为查 vivo 无障碍绑定标签抓的真实 `dumpsys accessibility` 全量转储（`a11yWindow[...type=TYPE_SYSTEM...bounds=Rect(0,0-1260,133)...]`）里已经有现成证据，回头翻旧诊断数据比重新跑诊断更快。修法：`hasBlockingOverlay` 的窗口排除条件里加一条 `window.type == AccessibilityWindowInfo.TYPE_SYSTEM`。9/10/11 三条都是安全相关判据但性质不同：9 是纯实现 bug（同一次快照两次查询语义没对齐），11 也是纯实现 bug（系统常驻窗口类型没排除，任何合理的人都会同意状态栏不该被当成遮挡对话框），两者改前不需要额外确认；10 是真正的设计取舍（整页扫描 vs 只扫真实弹窗的 a11y 节点），改前征得了项目所有者同意。三层坑叠在一起，任何一层不修，`sensitive_entry` 在真机上都过不去——这也是为什么“改一处、重装、重跑”的迭代法在这类多因失效上格外耗时，早知道有三层就该一次性通读整个 `hasSensitiveOrBlockingSurface`/`hasBlockingOverlay` 调用链再动手。
-  12. `sensitive_entry` 修完后（9/10/11 三层）下一关是 `unrecognized_entry`：`recognizedChatList = hasTopTitle(snapshot, "微信") && findSearchEntry(snapshot) != null` 恒假，两条各自原因不同——① 聊天列表顶部「微信」标题字号小、颜色浅，真机 OCR 置信度实测 0.51~0.61，低于全代码库唯一复用的 `MIN_ACTION_OCR_CONFIDENCE=0.65`；② 微信聊天列表的搜索入口是**纯图标、无 OCR 可读文字**（真机 47 个 OCR 元素里不存在任何「搜索」候选，不是置信度不够，是压根没有文字可识别），阈值再怎么调也补不上①和②不是同一类问题：①靠"引入更低的识别专用阈值"能修，②在当前 OCR-文字匹配架构下无法通过调阈值修，只能放弃把"能找到搜索图标"当作识别聊天列表的前提条件。诊断复用已抓到的真实 elements 原始 JSON（含各元素 `confidence`），不用再跑诊断。修法：新增 `MIN_RECOGNITION_OCR_CONFIDENCE=0.45`（[VisionTrustPolicy.kt](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/VisionTrustPolicy.kt)），只用于"当前是哪个页面"这类识别判据（如 `hasTopTitle`），不碰任何会被点击的目标；`recognizedChatList` 精简为只看标题。这个改动看似放宽了门槛，实则安全性不受影响——真正会被点击的目标（`findTargetConversation`/`findSearchEntry` 找到的搜索入口）在 `clickOrFail` 阶段仍会独立走 `P0StageRefActionValidator.find` 的 `MIN_ACTION_OCR_CONFIDENCE=0.65` 复核，找不到就在那一步 fail-closed（`E_NOT_FOUND`），只是失败阶段从"识别聊天列表"挪到了"定位搜索入口"，从不点击这条核心安全属性没变。改前顺着"识别→点击"两层独立校验的关系确认了这一点，不是拍脑袋放宽；这类"识别用途 vs 点击用途该不该共用同一阈值"的判断，判据是"后续是否有独立的、未被我改动的点击时复核"——有则识别层放宽是安全的，没有就不能碰。
-  13. 上述第 9~12 四条都在 `app/gateway/src/main`/`debug` 主源码里，不是 runner 脚本；改完必须重新 `assembleDebug`（+`assembleRelease`/单测按需）并让下一次 provision 重装 APK 才会生效——`adb shell dumpsys package <pkg> | grep lastUpdateTime` 可以核对新 APK 确实已经装上。PowerShell 侧的空数组/引号/竞态坑（本册前面几条）对这四条不适用，反之亦然。
-  14. 12 号坑修完，`recognizedChatList` 能识别聊天列表了，但真正要点击的目标依然卡壳：聊天列表里「文件传输助手」这一行文字实测 OCR 置信度约 0.51，搜索图标无文字可识别，两条路径都到不了 `MIN_ACTION_OCR_CONFIDENCE=0.65` 这道**点击级**门槛（`findTargetConversation`/`P0StageRefActionValidator.find`），`search_entry` 阶段 `E_NOT_FOUND` fail-closed（2026-07-23 真机实锤）。这里和 9/11（纯实现 bug）、12（识别用途可独立放宽）都不同：点击目标的置信度门槛就是防止点错东西的最后一道真实防线，不能再往下让——征得项目所有者同意后选择了不动代码，改成流程约束：跑测前用户手动把微信打开到「文件传输助手」会话页（宏能靠会话标题识别 `isConversationSurface`，这条路径 OCR 置信度足够），跳过依赖脆弱识别的自动搜索导航。见 [runbook §3.0](../../runbooks/P0-safety-hard-gate-smoke.md)。判断某个 OCR 置信度问题该走"代码放宽"还是"流程规避"，看它守的是"识别当前在哪"还是"决定点哪里"——后者出问题时，流程规避永远比降门槛更安全。
-  15. 14 号写下的"会话标题识别路径 OCR 置信度足够"是想当然：`hasTopTitle`（微信聊天列表标题）当时已经改用 `MIN_RECOGNITION_OCR_CONFIDENCE=0.45`，但语义完全同构、唯一调用方是 `isConversationSurface`、从不作点击 ref 的 `conversationTitle()` 却漏改，仍卡在 `trustedVisualEvidence`（即 `MIN_ACTION_OCR_CONFIDENCE=0.65`）——这才是"手动切到会话页验证过不能绕开"的真实原因：人工已经站在「文件传输助手」会话页，`isConversationSurface` 依然判 false（会话页标题实测同样只有 ~0.55），宏照样掉回搜索分支撞上 14 号那堵墙，制造了"同一处 OCR 漏识，流程规避也没用"的假象。2026-07-24 定位：这是纯粹的改动遗漏（该迁移到识别层的两处只改了一处），不是新的设计取舍，不需要重新征求同意——`conversationTitle()` 只用于"是否在会话页"这一布尔判断，从未进入任何点击链路，和 12 号 `hasTopTitle` 是同一类。修法：`conversationTitle()` 同样改用 `trustedForRecognition`；`findTargetConversation`（聊天列表行本身的点击目标）保持不动，14 号"点击级门槛不能再让"的决定继续有效，只是它保护的从来只是真正的点击目标，没打算覆盖这处纯识别函数。改前逐条比对了 `P0WeChatPrepareMacroTest.kt` 里所有涉及「文件传输助手」/TOOLBAR/置信度的用例（含最貌似相关的 `low-confidence OCR title blocks probe`），确认无一被打破——那条用例改动后仍会在 `P0FocusProbeValidator` 的门槛上以同一 `E_BLOCKED` 失败，只是失败阶段从 `unrecognized_entry` 挪到了 `focus_probe_validation`，测试只断言错误码不断言阶段。已用补装的本地 gradle 跑 `testDebugUnitTest`+`testReleaseUnitTest` 验证：Debug 170 + Release 93 = 263 tests 全绿，与改动前基线一致，`P0WeChatPrepareMacroTest` 单类 51/51；`assembleDebug` 也成功，人工推演与实测结果一致。本地构建工具链的补装过程见 [harness.md](../brain/harness.md)。
-  16. 15 号修完当天（2026-07-24）真机跑了 9 轮才把"卡在哪"彻底定位清楚，过程本身比结论更值得记：
-      - **`P0FocusProbeValidator` 的标题识别和 `conversationTitle` 是同一族但性质不同，不能照抄**：它同样只用于"证明在文件传输助手会话里"、从不是点击目标（真正盲点的是算好的固定底栏坐标），但它的 `titleConfidence` 会写进 `P0FocusProof`/`PreparedTargetEvidence`，是确认卡证据链的一部分——所以这处改成 `MIN_RECOGNITION_OCR_CONFIDENCE` 是征得项目所有者明确同意后才动的真设计取舍，不像 `conversationTitle` 那次是纯粹的改动遗漏。改完 `P0WeChatPrepareMacroTest.kt` 里 `low-confidence OCR title blocks probe`（原 confidence=0.64，正好是新门槛之上、旧门槛之下）语义变了——降到 0.3 保留"真正低到连识别都不该信"的原意，另加一条新用例锁定 0.64 现在会往下走到真正尝试盲点（不再在 `focus_probe_validation` 就 fail-closed）。
-      - **`scripts/lib/p0-device-provision.ps1` 的 `Start-P0TargetApp` 每一腿开始前无条件 `adb shell am start` 重启微信**，不检查是否已在前台——直接违背 runbook §3.0"人工预置状态、工具不碰微信"的设计初衷。修法：先查 `dumpsys activity activities` 的 `topResumedActivity`/`mResumedActivity` 是否已是目标包，是则跳过 relaunch。
-      - **人工"预聚焦输入框"这条路径撑不住 `-Provision` 的耗时**：`-Provision` 每次都是必须的（runner cleanup 会按设计把输入法恢复回用户原来的，不是遗漏),而 `-Provision`+子进程冷启动总共 20~30 秒，人工点一下输入框建立的焦点/IME 连接撑不了这么久,和点击时机无关——`findInput()` 反复实测确认空白输入框真的没有 a11y/OCR 锚点（同 D4）,不是"没找对方法"。
-      - **诊断技巧**：只读 `ui_snapshot()` 只能看 OCR/a11y 元素列表,看不出"截图是不是陈旧的"；派一个只读 `screen_capture()` 诊断任务、让子代理直接用视觉描述截图内容（不调用 ui_snapshot),能独立验证截图管线本身是否正确——本次用这招排除了"截图缓存陈旧"的怀疑（子代理看到的标题/气泡/输入框和用户描述完全一致),把范围收窄到"OCR 提取本身漏识了标题"。
-      - **真正根因比两处代码门槛更底层**：[`OcrEngine.kt`](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt) 的 `MIN_CONF=0.5f` 是 `OcrEngine.recognize()` 内部的基础过滤,在整屏 OCR 调用路径（`GatewayA11yService.ocrScreen()`,无 minConf 参数即用此默认值）里,任何置信度低于 0.5 的文字连候选元素都不会出现在 `ui_snapshot()` 结果里——这道地板在 `MIN_RECOGNITION_OCR_CONFIDENCE`（0.45）和 `MIN_ACTION_OCR_CONFIDENCE`（0.65）**之下**,宏代码层面的门槛调节完全够不着它。真机实测两次独立诊断都显示「文件传输助手」标题在 `ui_snapshot()` 里零候选（不是低置信度,是压根不存在),说明这次它的真实识别置信度大概率跌破了 0.5 这条地板,和本册开头记录的"深色模式灰底灰字漏识约 40%"是同一个已知、尚未解决的 P0 风险——不是本轮两处阈值改动能覆盖的层次。两处阈值改动本身仍是真实、已测试验证的修复（对 0.5~0.65 区间确有效,「微信」聊天列表标题那次即是实锤),只是没能解决今天这次卡在 0.5 以下的具体状况。
-      - 顺带留意但未确认是否相关：`ocrScreen()` 有一段按 `TYPE_INPUT_METHOD` 窗口顶边裁剪 OCR 位图的逻辑（"键盘弹出时只识键盘上方"),网关自身是无可见窗口的注入型 IME,这段裁剪对它的实际影响还没有专门验证过——如果后续排除 0.5 地板问题后空白输入框仍找不到锚点,这是下一个该查的点。
-  18. **微信会话页对无障碍树基本不透明——这是 P0 当前的架构级阻断，不是调参问题**（2026-07-25 真机连穿五关后确认）。当天按"失败阶段前移"逐关验证修了 5 处真缺陷（伽马校正让标题从零候选变可识别；`revision` 排除 `TYPE_SYSTEM` 事件；Android 侧标题门槛 0.65→识别级；`P0PreparedTargetRecorderValidator` 的 `==`→`contains`+门槛；盲点安全区改为锚定 inset），最终在**微信已确认停在会话页、输入栏文字模式、文本框空白**的理想状态下仍卡在 `focus_ready`。
-      - **诊断关键：`waitForReadyFocus` 的超时消息会逐条列出六个条件里缺哪几个，直接读它比加日志快得多。** 实测缺失项只有 a11y 四项（焦点节点/未 focused/非 editable/stage 不对），而 IME 三项（激活、InputConnection、focusedInputId）**全部正常**——输入法框架看得见焦点，无障碍 API 看不见。
-      - **佐证（回头翻当天所有快照即可，不必新跑）：每次 `ui_snapshot` 的 a11y 元素恒为状态栏那 13 项（时钟/通知/信号/电量），微信会话页的标题、气泡、输入框 100% 来自 OCR，无一 a11y 节点。** 与当天网络调研到的"微信 ≥8.0.52 有意混淆 AccessibilityService 节点数据以对抗自动化"（CSDN/博客园/知乎多源独立印证）吻合。2026-07-22 曾记录"聚焦后 `findFocus(FOCUS_INPUT)` 可取到 MMEditText"，与现状矛盾——需复核当时微信版本，可能是版本升级后新增的混淆。
-      - **因此宏要求的"a11y 可见的焦点可编辑节点"在此微信版本上不可满足**，与点击精度、OCR 置信度、区域几何统统无关；继续调这些参数不会有进展。而 [SafetyGate.kt:76](../../../app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt#L76) 按设计硬性要求 Enter 前同时具备 a11y 侧 `focusedInputId`+`bounds` 与 IME 侧 `imeSessionId`（knowledge #43 的双命名空间），a11y 侧结构性缺失 → `PreparedTargetEvidence` 无法形成 → 链路必断。**2026-07-22 那条"人工预聚焦 + 无 ref `type_text`"的老路也已被这道门有意堵死，属加固不是回退选项，不要试图绕。**
-      - **社区流传的绕过手法不可采用**：把自家无障碍服务注册成系统白名单服务名（如 `com.google.android.marvin.talkback.TalkBackService`）来躲混淆检查——这是冒充系统服务，有 ToS/封号风险，且白名单随时可变，与本项目"永不逆向、只走官方通道"的铁律相悖。
-      - **下一步是决策而非编码**：要么查明并合法解决 a11y 全盲，要么由项目所有者决定是否允许 Enter 门以"IME 侧身份 + 输入证据哈希 + OCR 侧会话标题"成链（这会削弱刻意设计的双命名空间复核，属真安全取舍，**不得顺手放宽**）。
-  19. **`foreground_known` 会在两次工具调用之间从 true 翻成 false，而当时的返回体不足以判因**（2026-07-26 Allow 腿真机实锤：`macro_run` ✅ → `type_text`（`committed+verified`）✅ → `press_key(enter)` ⛔ `E_BLOCKED「前台 APPLICATION 身份未知」`，中间只隔 5 次 revision 递增，未发送任何内容，确认卡从未弹出）。
-      - **为什么当时查不下去**：`resolveForeground` 判 Unknown 有三条互斥路径（从未接受过窗口状态事件 / 当前无 active·focused 的 `TYPE_APPLICATION` 窗口 / 已接受身份的 windowId 与当前活动应用窗口不一致），而三者在返回体里长得完全一样——微信的应用窗口 `root=null`，连 package-only 后备也是空串，失败那次只看得到 `app:"" / foreground_known:false`。这类"多因同象"的判据，**原因字段必须和结论同时产出**，否则每次复现都要再烧一次派单。
-      - 已补：`ctx` 增加 `foreground_reason`（失败的那次调用自带原因）；`foreground_app` 从两字段扩成只读诊断——`selected_window_id`、`tracked_identity`、`windows[]`（id/type/active/focused/**root_package**/bounds/title）、以及 tracker 侧最近 24 条窗口事件处置记录 `recent_events`（seq/时间/kind/decision/当时的窗口列表）。`windows[].root_package` 同时回答"服务冷启动能否直接从窗口自举身份"这个 13 号遗留问题——微信若真是 `root=null`，自举就拿不到包名，得另找真值源，不能靠猜。
-      - **没有证据前不要动 tracker 语义**：这次刻意只加诊断不改判据。翻车的两种可能（窗口列表瞬时取空 vs 应用窗口 id 真的换了却没等到可接受的事件）修法完全不同，前者该做有界重读，后者要动候选发布规则，而后者正是 D1 那道"overlay 事件不得污染前台身份"的防线所在，改错就是把安全门拆了。
-      - 取证方式：Allow/Stale 任务卡已加"前台身份取证例外"——任一工具返回 `foreground_known=false` 或该 `E_BLOCKED` 时，允许**额外只调一次** `foreground_app` 并把结果抄进「关键观察」，然后立即报失败，不得据此重试。
-  23. **`InputConnection.performEditorAction()` 返回 true 不代表 App 做了任何事**（2026-07-26 真机实锤）：它只表示这次调用被投递到了还活着的输入连接。微信不理会 `IME_ACTION_SEND` 时照样返回 true，于是 `ImeBridge.enter()` 里排在它后面的 `KEYCODE_ENTER` 兜底成了**永远走不到的死代码**，而 `press_key` 一路返回 `done:true`——确认卡也走完了，marker 却原封不动躺在输入框里，消息根本没发出去。
-      - **危险动作谎报成功比失败更糟**：发送/支付/删除这类动作的返回值必须由**后验**决定，不能由"通道调用被受理"决定。现在 Enter 前后各读一次输入栏 OCR，内容没消失就 `E_VERIFY_FAIL`。
-      - **后验失败时绝不换通道重试**：那时有可能其实已经发出去了，"再试一条通道"的代价是重复发送。这与站规"不得重试同一危险动作"是同一条原则在网关侧的落实。
-      - 顺带：零 UI IME 下微信输入栏右侧**不会出现 发送 按钮**（它只在键盘弹起时替换 ⊕），所以也不能指望"点发送按钮"这条现成路径凭空存在。
-      - **诊断办法：问我们自己的 IME，别猜。** `onStartInput` 收到的 `EditorInfo` 就是权威答案，已做成 R 级只读工具 `ime_editor_info`（只输出 imeOptions/inputType/action，不含 hintText/initialText 这类可能带内容的字段），零 token 直接问。本机实测微信聊天输入框：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行 TEXT|CAP_SENTENCES）、`no_enter_action=false`——**契约上两条路都该通**，所以失败原因不在契约。
-      - **两条 IME 路都验完了，微信都不发**（2026-07-26 21:41 真机）：`performEditorAction(IME_ACTION_SEND)` 与单行框上的 `KEYCODE_ENTER` 均无反应，尽管契约声明了 send、单行、未禁回车动作。合理推测是微信的发送处理绑在它自己的"键盘已弹起/文字模式"UI 状态机上（零 UI IME 下它连 发送 按钮都不渲染）。**结论：这台设备上，靠 IME 送回车发不出微信消息。**
-      - **后验基线必须是"已提交的确切文本"，不能是"动作前那次 OCR 读回"**：OCR 每次噪声不同（同一屏读出 `") POALLOW-…F20 ) POALLOW-…F2C"` 与 `"POALLOW-…F2C"`），拿噪声串做 contains，任何抖动都会被判成"内容已消失"，也就是**谎报发送成功**（自己踩过一次）。用输入证据里的 preview（长度未超 `PREVIEW_LIMIT` 时就是原文）当基线。
-      - **改法：按契约选通道，且只送一次。** 单行框直接送物理回车键事件（单行 `TextView` 会自己把回车转成它声明的 editor action，与真实键盘按 Enter 完全同一条路径，比我们代劳 `performEditorAction` 更可靠）；多行框回车是换行，才显式调 editor action。`KeyEvent` 要用带 downTime/eventTime 的完整构造函数，别用只有 action+code 的那个。
-  21. **自家确认卡是「可获焦 overlay」，它抢走窗口输入焦点会连累两处安全判据**（2026-07-26 真机先后各撞一次，同一病根）。`ConfirmOverlay` 原先只设了 `FLAG_NOT_TOUCH_MODAL`，窗口是可获焦的：
-      - 症状一：卡显示期间 App 窗口既非 `isActive` 也非 `isFocused`，`applicationWindow()` 取不到活动应用窗口 → 前台身份判 unknown → **确认后的第二次 `requireKnownForeground` 直接 `E_BLOCKED`**（人已经点了「允许本次」才翻车）。
-      - 症状二：被操作 App 的 InputConnection 被拆掉重建，**IME 会话 id 换新** → 确认后焦点身份复核 `E_STALE_REF`。降级链是 IME 单命名空间，身份就是这个 session id，等于整条链被自家的卡打断。
-      - 修法：给卡加 `FLAG_NOT_FOCUSABLE`。**不可获焦的窗口照样收得到触摸事件**，卡上两个按钮不受影响，而 App 的窗口焦点与 InputConnection 全程不动。另留了 `settledWindows()`（无活动应用窗口时有限重读 5×80ms）作兜底，只重读不放宽判据。
-      - 教训：**任何要在「被操作 App 正处于关键状态」时弹出的自家 UI，默认都该是不可获焦的**；否则它会以你想不到的方式改变你正要校验的那个状态。
-  22. **Android 11+ `run-as` 读不了自己的 external files 目录，普通 `adb shell` 反而读得到**（2026-07-26 本机 Android 16 实测）：`adb shell run-as <pkg> wc -l /sdcard/Android/data/<pkg>/files/...` → `Permission denied`；去掉 `run-as` 同一条命令正常返回。原因是 `run-as` 跑在 shell 的挂载命名空间里，那个视图对 `/sdcard/Android/data` 一律拒绝 app uid。**内部 `filesDir` 的读写仍必须走 `run-as`（相对路径 `files/...`），两者不能混用一种写法。**
-      - 这个坑在 harness 里藏得很深：`adb exec-out` 会把设备侧 stderr 一并写进重定向的目标文件，于是一行 `tail: ... Permission denied` 冒充成了审计内容，直到下游报"audit 包含非空但无法解析的 JSON 行"才暴露；而它此前一直藏在 ToolSearch 误杀（#20 那条）后面，因为 trace 审计先抛错，根本走不到读审计这一步。**拉取类命令不要图省事加 `-AllowFailure`。**
-  20. **确认卡截图拍不到卡本身——而这张 PNG 是监督式跑测唯一的现场证据**（2026-07-26 Allow 腿实锤，**当天已修复并真机验证闭合**：加了"按卡的真实位置与底色核实 + 最多 4 次重拍"之后，证据图里卡完整可见，含确认编号、目标会话、IME 会话、明文预览与两个禁用态按钮）。翻旧证据（`docs/runs/evidence/<run>/allow/confirmation.png`）直接看图即可确认：图里是完整的微信会话页、输入框里躺着本腿 marker，**没有任何卡的痕迹**；而同一次流程的 manifest 显示确认状态确实走到了 `allowed`，即人确实在卡上点了「允许本次」。
-      - **注意这条同时纠正了一个错误结论**：此前记为"确认卡从未弹出"。manifest 的 `screenshot` 字段 + 状态机只有真人决定才能推进到 `allowed`，两者都证明卡弹了、人也点了；`press_key` 的 `E_BLOCKED` 是**在真人允许之后**的上下文复核阶段才翻的车。排查这类问题先翻 `run-manifest.json` 的 `failure` 与 `legs[].verdict`，它和执行器 trace 里最后一条错误经常不是同一件事（那次 manifest 记的是 trace 审计失败，trace 里记的是 E_BLOCKED）。
-      - 已知不是这些原因：截图无缓存（`captureBitmap()` 每次都是新的 `takeScreenshot`）；也不是"卡还没画出来"这种低级时序错误（展示路径已有 `OnPreDrawListener` + `registerFrameCommitCallback` 的 frame fence，取证在 fence 之后）。剩下最可能的是 **frame commit 只保证本进程这一帧提交进渲染管线，SurfaceFlinger 合成/latch 还差一两个 vsync**，而 `takeScreenshot` 读的是合成结果。
-      - 对策（2026-07-26 落地，待真机验证）：按卡的真实屏幕位置与底色（`#F2222222`，只采左内边距那条竖带——文字与按钮都在 padding 之内）核一遍截图，没拍到就等 400ms 重拍，最多 4 次；仍拍不到**照样落盘但如实标 `card_visible=false`**，runner 当场红字警告并写进 manifest。**刻意不 fail-closed**：万一根因是"a11y 截图结构性看不见自家 overlay"，硬拒会让整套跑测再也跑不起来，而先测量一轮就能知道到底是不是。
-      - 附带待修：`Start-P0TargetApp` 改成"已在前台就跳过 `am start`"后有副作用——网关服务重启后再没有窗口状态事件触发，`ForegroundWindowTracker` 拿不到 activity 名，`foreground_known=false` 导致 W 级工具被拒；当时靠"人工回桌面、让脚本自己拉起微信"绕过。
-      - **已修（2026-08-01，待真机验证）**：`ForegroundWindowTracker.bootstrapFromWindow` 冷启动自举——身份从未建立过时，直接把当前活动应用窗口自报的 root 包名固化成身份。三条约束保证它只补缺失的那一次：只在 `Unknown` 时生效（**不救 `WINDOW_ID_MISMATCH`**，那是"窗口换了却没等到可接受事件"的真实信号，救它等于把这条判据抹掉）；只给 package 级身份、`activityName` 留空（窗口列表里没有 Activity 类名，拿 `window.title` 冒充会让确认前后的逐字段相等比较拿到一条**编造的**证据）；必须确有活动应用窗口且包名非空。失败方向安全：之后真切了窗口/换了 Activity，事件会以真实 activityName 覆盖，确认前后立刻不等 → `E_STALE_REF`。
-      - 自举身份**在 ctx / `foreground_app` 里带 `foreground_identity_source=bootstrap`，确认卡上写明"Activity 未知（服务重启后由窗口自举的包级身份）"**，并把身份来源本身纳入确认前后的硬相等（同 `IdentitySource`）——否则两边 activityName 都恰好为空时会"平凡相等"地放行。**"少一套证据时不得静默少展示一项"这条规矩，第三次在同一个安全门上生效。**
-  17. 16 号之后同一天（2026-07-24）又追了一整天，最终发现真正卡点不是置信度，是**字符串精确匹配**：
-      - **对比度增强真机证实有效**：[`OcrEngine.recognize()`](../../../app/gateway/src/main/java/dev/magina/gateway/ocr/OcrEngine.kt) 改成原图+灰度对比度拉伸图各识别一遍、按区域取更高置信度合并后，真机独立诊断证实「文件传输助手」标题从两次连续拿到"零候选"（完全不存在，不是低置信度）提升到能识别（0.55~0.59）——16 号定位的"跌破 0.5 地板"这个假说被这次真机结果正面验证。同时给宏顶层加了纯感知阶段（`unrecognized_entry`/`focus_probe_validation`，还没做任何点击/盲点之前）的有限次重试（`perceptionRetryAttempts`/`perceptionRetryDelayMs`），给 OCR 抖动翻盘机会；"故意不重试"只管点击/盲点之后，这两处新重试不受影响。
-      - **但真正反复卡住的不是置信度，是精确匹配**：真机诊断实锤 OCR 把标题识别成**"文件传输助手8"**——尾随多识别出一个字符，`confidence=0.51~0.53` 完全正常。`conversationTitle`/`P0FocusProbeValidator` 标题查找/`P0FixedQueryValidator` 的 `targetToolbarPresent` 守卫这三处当时都用严格 `normalized(text) == P0_FILE_TRANSFER_ASSISTANT`，"文件传输助手8" 永远不等于"文件传输助手"，置信度再怎么调、重试再多次都没用——这和 common.md 开头 CJK 匹配那条规矩（"归一+contains∥位置稳定+字符袋相似度，纯 contains 会误判 STALE 但纯 `==` 会漏判"）本就该覆盖这类场景，P0 宏这几处却一直用了更严格的 `==`。修法：三处改用 `contains`；**点击目标**（`findTargetConversation`/`isTargetLabel` 严格版、`P0StageRefActionValidator.find` 的 `TARGET_CONVERSATION` 分支）保持 `==` 不动——这几处是 14 号"点击安全防线"决定保护的对象，识别/守卫用途和点击用途在这里第二次证明必须分开处理，不能因为发现了新问题就顺手把点击目标也放宽。
-      - **即便如此，当天最终还是没能跑出一次完整到确认卡的真机结果**：这 5 处修复（含 15/16 号）逐条都用真机诊断单独验证过有效，178 个单测全绿，但端到端 smoke 反复卡在 `unrecognized_entry`/`focus_probe_validation`/`search_entry` 之间跳来跳去。排查排除了两个疑虑：① 截图缓存陈旧（`screen_capture` 视觉核对过，画面真实）；② 屏幕锁屏（`adb shell settings get global stay_on_while_plugged_in` = 7，且 `dumpsys power` 显示 `mWakefulness=Awake`，充电时三种电源都保持唤醒，不是锁屏问题）。剩下能确认的是两个概率性因素在叠加：OCR 抖动本身（即使装了重试，同一屏在很短时间内多次识别结果仍可能不同）+ 微信自己会在测试间隙把内部导航状态漂回聊天列表（不是 `Start-P0TargetApp` 的 `am start` 导致——已用 `dumpsys activity activities` 确认前台 Activity 全程没变，很可能是微信自身内存/空闲状态下的 fragment 栈重置，不受这几处代码或 adb 层面控制）。**诊断经验**：比起反复整套重跑 `run-p0-safety-smoke.ps1 -Provision`（每次装 APK+建 IME，几十秒起，还要现场人重新导航），先用 `dispatch.ps1 -Task "只读诊断..." -Executor gateway`（不需要 `-Provision`，几毛钱、二三十秒）确认当前真实状态再决定要不要整套重跑，今天这轮省了不少无效尝试。
+- **批处理里与 Unix 同名的 Windows 命令（`find`、`sort`、`echo`、`date`）一律写绝对路径**（2026-07-26）：从 Git Bash 拉起 pwsh 时 PATH 里 `/usr/bin` 在 `System32` 前，`find /v /c ""` 变成 Unix find，把 `/c` 当目录递归扫整个 C 盘直到超时。改 `%SystemRoot%\System32\find.exe` 后单条 36s → 8.7s。
+- **"耗时几乎无方差"是挂死的指纹，不是负载的指纹**：中位 34.8s / 最慢 35.4s ≈ 固定 30s 超时 + 真实耗时。看见方差极小先查"卡在哪个固定超时上"，别怪机器慢。
+- **对照实验要变一个变量，不是一个提交**：换提交跑基线只排除代码，两次都从同一种壳启动就带着同一个错误变量；定案靠同一份代码换启动方式跑。
+- 监督式 runner 离线套件（`p0-supervised-runner-offline.ps1`）对子进程冷启动敏感：与 gradle 全量编译、常驻 daemon 或杀软并发会成片假超时，判定结果前确认机器空闲（`scripts/check.ps1` 已在开跑前停 daemon；`check.ps1 -Clean` 清残留目录与日志）。fixture 墙钟预算是防挂死保险不是性能断言（已放宽到 60s）。
+- 已知偶发、未定位：单条用例子进程输出整个为空、耗时正常（非超时类）。再遇到先看 ExitCode 与 stderr 是否也为空，若是则查进程创建而非套件逻辑。

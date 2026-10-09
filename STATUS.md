@@ -4,7 +4,7 @@
 
 ## 一句话现状
 
-平板线卡在 T-L1/C1b：旧主机证据链已于 10-09 退役（用户确认），改用简单 runner，见 [C1b 规程](docs/runbooks/T-L1-tablet-c1b.md)。下一步：合入实现线的 C1b app 修复 → 用户就位 → 真机跑一次。手机验收（C 道）暂停，批次 4 停在 0/4。
+平板线卡在 T-L1/C1b：旧主机证据链已于 10-09 退役（用户确认），改用简单 runner，见 [C1b 规程](docs/runbooks/T-L1-tablet-c1b.md)。新 runner 与实现线 app 修复均已合入协调分支并通过全量门；下一步：用户就位 → 真机跑一次。手机验收（C 道）暂停，批次 4 停在 0/4。
 
 ## 需要用户做的
 
@@ -12,8 +12,8 @@
 
 ## 下一步
 
-- C1b：按 [backlog §4](docs/backlog.md)——新 runner 落地并过离线测试 → 合入实现线 app 修复（显示回退等）→ 用户就位 → 真机跑一次，验证显示回退与设备发现 → 通过后准备 T-L2。
-- R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；合入 C1b app 修复后协调分支同时含两者，是否搭车由 A 选候选时决定。
+- C1b：按 [backlog §4](docs/backlog.md)——（新 runner 与 app 修复已完成）用户就位 → 真机跑一次，验证显示回退与设备发现 → 通过后准备 T-L2。
+- R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；协调分支已同时含两者，是否搭车由 A 选候选时决定。
 
 ## 里程碑
 
@@ -37,4 +37,4 @@
 
 ## 代码分布
 
-协调分支 `codex/agent-workflow`（协调文档与 R1/R4/R5 等离线修复）和 C1b 实现线 `codex/c1b-host-evidence-20260930`（tip `cad7411`）尚未合并；app 差异只剩实现线的三项 C1b 探针修复。两条线的功能改动都没有合入 main；这期间 `origin/main`（`8bc0c87`）只收了 R6 文档闭包（PR #2–#4）。本地 `main` 与 `origin/main` 已分叉（本地多 1 个提交、少 3 个）。
+协调分支 `codex/agent-workflow`（协调文档与 R1/R4/R5 等离线修复）和 C1b 实现线 `codex/c1b-host-evidence-20260930`（tip `cad7411`）未整体合并，但实现线的 C1b 探针修复已取入协调分支（`cc74daf`），实现线不再有独有 app 改动。两条线的功能改动都没有合入 main；这期间 `origin/main`（`8bc0c87`）只收了 R6 文档闭包（PR #2–#4）。本地 `main` 与 `origin/main` 已分叉（本地多 1 个提交、少 3 个）。
