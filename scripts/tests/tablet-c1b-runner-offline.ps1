@@ -84,6 +84,10 @@ function Out-Control {
             version_name = '0.1.0'; version_code = 1; embedded_git_head = $head; build_challenge = 'offline-c1b-read-only-placeholder'; a11y_service_ready = $true }
     } | ConvertTo-Json -Depth 5 -Compress) + "`n")
 }
+if ($cmd -ceq 'shell pm path dev.magina.gateway') {
+    if ($scenario -ceq 'same_apk') { Out-Text "package:/data/app/fake/base.apk`n"; exit 0 } else { exit 1 }
+}
+if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") { Out-Text "$($env:FAKE_ADB_APK_SHA)  /data/app/fake/base.apk`n"; exit 0 }
 if ($cmd -match '^install -r -t ') { Out-Text "Performing Streamed Install`nSuccess`n"; exit 0 }
 if ($cmd -ceq 'shell settings get secure enabled_accessibility_services') {
     Out-Text $(if ($scenario -ceq 'a11y_off') { "null`n" } else { "dev.magina.gateway/.a11y.GatewayA11yService`n" }); exit 0
@@ -151,7 +155,7 @@ function New-T0Profile([string]$RunId) {
 function Invoke-Runner([string]$Name, [string]$Scenario, [string[]]$Extra = @()) {
     $state = Join-Path $Temp "state-$Name"; [void](New-Item -ItemType Directory -Path $state)
     $runId = "t-$Name"
-    $env:FAKE_ADB_STATE = $state; $env:FAKE_ADB_SCENARIO = $Scenario; $env:FAKE_ADB_FIXTURE = $Fixture; $env:FAKE_ADB_HEAD = $Head
+    $env:FAKE_ADB_STATE = $state; $env:FAKE_ADB_SCENARIO = $Scenario; $env:FAKE_ADB_FIXTURE = $Fixture; $env:FAKE_ADB_HEAD = $Head; $env:FAKE_ADB_APK_SHA = $ApkSha.Substring(7)
     $output = & $Pwsh -NoProfile -NonInteractive -File (Join-Path $Sandbox 'scripts\run-tablet-c1b.ps1') -AdbPath $FakeAdb -TestOnlyAdbIsScript `
         -SkipBuild -ApkPath $FakeApk -RunId $runId -TestOnlyT0ProfilePath (New-T0Profile $runId) @Extra 2>&1
     $exit = $LASTEXITCODE
@@ -194,6 +198,12 @@ try {
         Assert-True (@($r.Log | Where-Object { $_ -match 'exec-in content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 写入/result 读取次数不符'
         Assert-NoForbiddenAdb $r
     }
+    Test-Case 'same-apk-skips-install' {
+        $r = Invoke-Runner 'sameapk' 'same_apk'
+        Assert-True ($r.Exit -eq 0 -and $r.Run.install_skipped) "exit=$($r.Exit) $($r.Output)"
+        Assert-True (-not ($r.Log -match '^-s \S+ install ')) '设备上已是同一 APK 时不应重装'
+        Assert-NoForbiddenAdb $r
+    }
     Test-Case 'multi-device-rejected' {
         $r = Invoke-Runner 'multi' 'multi'
         Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.failure_reason -match '恰好一台') "exit=$($r.Exit) $($r.Output)"
@@ -232,7 +242,7 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
-    foreach ($name in 'FAKE_ADB_STATE', 'FAKE_ADB_SCENARIO', 'FAKE_ADB_FIXTURE', 'FAKE_ADB_HEAD') { Remove-Item "env:$name" -ErrorAction SilentlyContinue }
+    foreach ($name in 'FAKE_ADB_STATE', 'FAKE_ADB_SCENARIO', 'FAKE_ADB_FIXTURE', 'FAKE_ADB_HEAD', 'FAKE_ADB_APK_SHA') { Remove-Item "env:$name" -ErrorAction SilentlyContinue }
 }
 
 Write-Host "tablet-c1b runner offline: $($script:Passed) passed, $($script:Failed) failed"

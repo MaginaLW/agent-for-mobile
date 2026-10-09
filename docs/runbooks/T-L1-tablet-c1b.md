@@ -24,7 +24,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 ```
 
 流程：检查工作树 → 取与派单共用的全局设备锁 → 确认恰好一台设备 → Gradle 构建 `:tablet-c1b-probe:assembleDebug`
-→ `adb install -r -t`（不卸载）→ 检查无障碍服务 → `run-tablet-intake` 生成 T0-L v5
+→ `adb install -r -t`（不卸载；设备上已是同一 APK 时跳过，因为重装会让系统解绑无障碍服务，需在设置里关闭再打开「平板 C1b 只读探针」）→ 检查无障碍服务 → `run-tablet-intake` 生成 T0-L v5
 → 经 ContentProvider 写 T0、读 `c1`、宿主等待至少 900 ms、读 `c2`、读 result。
 
 - 从 `c1` 起整段采集不超过 15 秒；`c1`、`c2` 各读一次，不补拍。

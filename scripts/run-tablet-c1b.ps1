@@ -217,15 +217,25 @@ try {
     $script:Run.apk_sha256 = Get-Sha256Bytes ([IO.File]::ReadAllBytes($ApkPath))
 
     Set-Stage 'installed'
-    $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 180 -AllowFailure
-    if ($install.ExitCode -ne 0 -or $install.Text -notmatch '(?m)^Success') { throw "adb install 失败：$($install.Text.Trim()) $($install.Stderr.Trim())" }
+    # 重装会让系统解绑无障碍服务；设备上已是同一 APK（sha256 相同）时跳过安装。
+    $script:Run.install_skipped = $false
+    $installedPath = ((Invoke-Adb @('shell', 'pm', 'path', $script:PackageName) -AllowFailure).Text -split "`r?`n" |
+        Where-Object { $_ -match '^package:(.+\.apk)\s*$' } | Select-Object -First 1) -replace '^package:', '' -replace '\s+$', ''
+    if ($installedPath) {
+        $remoteSha = ((Invoke-Adb @('shell', 'sha256sum', "'$installedPath'") -AllowFailure).Text -split '\s+')[0]
+        if ($remoteSha -and ('sha256:' + $remoteSha.ToLowerInvariant()) -ceq $script:Run.apk_sha256) { $script:Run.install_skipped = $true }
+    }
+    if (-not $script:Run.install_skipped) {
+        $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 180 -AllowFailure
+        if ($install.ExitCode -ne 0 -or $install.Text -notmatch '(?m)^Success') { throw "adb install 失败：$($install.Text.Trim()) $($install.Stderr.Trim())" }
+    }
 
     Set-Stage 'a11y_checked'
     $enabled = (Invoke-Adb @('shell', 'settings', 'get', 'secure', 'enabled_accessibility_services')).Text
     $a11y = Test-TL1C1aA11yReady -EnabledText $enabled -BoundText ''
     if (-not $a11y.Enabled) {
         Write-Host '需要用户操作：请在平板上开启无障碍服务后重新运行（本脚本不修改设置）：'
-        Write-Host '  设置 → 无障碍 →（已下载的应用/已安装的服务）→「执行网关」→ 打开并确认授权。'
+        Write-Host '  设置 → 无障碍 →（已下载的应用/已安装的服务）→「平板 C1b 只读探针」→ 打开并确认授权。'
         throw [C1bNeedsUser]::new('无障碍服务 dev.magina.gateway/.a11y.GatewayA11yService 未启用。')
     }
     $boundWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -234,7 +244,7 @@ try {
         if ($bound.Ready) { break }
         Start-Sleep -Milliseconds 1000
     } while ($boundWatch.Elapsed.TotalSeconds -lt 30)
-    if (-not $bound.Ready) { throw [C1bNeedsUser]::new('无障碍已启用但服务未绑定：请在设置中关闭再打开「执行网关」后重试。') }
+    if (-not $bound.Ready) { throw [C1bNeedsUser]::new('无障碍已启用但服务未绑定：请在设置中关闭再打开「平板 C1b 只读探针」后重试。') }
 
     Set-Stage 't0_captured'
     $t0Source = Join-Path $runDir 'tablet-profile.json'
