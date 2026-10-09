@@ -1,44 +1,12 @@
 # Android 平板知识册
 
-> 当前状态：🔵 PA2553 日常横屏为当前平板基线。T0-L schema v5 clean producer
-> `4ca32b131007df58f7752c5ee9b2d049cb1cd54e`（42/42、coverage 41/41、独审 0/0/0）已在 r3 真机正确
-> fail-closed，并以 main `a7940d5` 合入；r3 evidence 为 `bd64ea5`。T-L1 v2 diagnostic-only 契约/gate
-> 已合 main `589421a`；隔离只读 producer 基线固定为 `b5769df7baba075fda47aec17f249a5caa124b92`。
-> fixed SHA `2635fc9f5eb229340870b0cdd599cefad97a9b91` 的首次真机 C1a 已冻结失败；修复后的 fixed SHA
-> `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已由唯一 run `tl1-c1a-20260826t125127z-354a7b4b0ed5`
-> 建立 trusted origin/read-only sidecar。真实诊断仍 blocked；app 未合 main，`runtime_evidence`/layout/
-> 微信/editor/T-L1/P0/execution 仍未放行。A3/C1b 第一批 pure-a11y 合同、producer 与受控 runner 已完成。
-> 2026-08-29 private-ADB 修复工作树的专项离线结果为 observation 49/49、coverage 89/89、host coverage
-> 29/29；build-env 27/27、artifact 32/32、ADB provenance 6/6、private ADB 22/22、T0 sidecar 7/7、
-> aapt2 15/15、readonly 74/74、新 attempt-failure schema/cross-binding 51/51。七场景 synthetic host E2E 通过，fake
-> ADB 222（214 valid + 8 rejected；start/status/kill/device 8/7/4/195，另观测 exit 7）、runner process 9、
-> fake Gradle 8、fake signer 12、repository inputs 42；synthetic E2E 内 real ADB/JDK/Gradle executions 0。
-> 另行 real isolated
-> host build smoke 已完整退出 0（JDK/GradleMain 1、ApkSignerTool 1、real ADB 0、inputs 41），独立复审
-> P0/P1/P2=0；它只属于此前 41-input 候选，不得写成当前 42-input smoke，也不构成 fixed-SHA C1b
-> build/install/runner 或平板取证。随后 fixed SHA
-> `87ac7b45e79bf658ca6e56b697a24f52fdf7381b` 的唯一授权 run 在 private ADB ready guard exit 1；同轮
-> isolated ADB 六次同签名崩溃，尚未设备发现、安装或采集，未重试且 cleanup 无残留。后续离线复核已
-> 高置信归因为 numeric listen host 触发 ADB FATAL，并实现 bounded/hash diagnostic 与 run_id 前 root-level
-> attempt failure record；该归因不是旧 run 持久化的直接证据。当前汇总 gate 与独立复审已通过，42-input 候选固定为
-> `77473af5223d76b00bf4dbbf33cf44090fde635c`；该 SHA 的一次 real isolated host build smoke 又在 artifact proof
-> strict JSON reader [冻结失败](../../runs/2026-08-29-T-L1-C1b-42-input-real-build-smoke失败.md)：GradleMain `1`，
-> ApkSigner/AAPT2/ADB/设备/install/采集 `0`，retry `0`，契约内 runtime/build residue 为 `0`。根因是 one-shot helper 漏载 validator；
-> 该 SHA 不得进入设备授权。新 fixed SHA `8882add6116ebd3cca547d865f9d142bbbcac1a4` 已修正 load set；其唯一
-> build-only smoke 为 [helper-pass / launcher-verifier-fail](../../runs/2026-08-29-T-L1-C1b-8882add-real-build-smoke失败.md)：
-> GradleMain `1`、ApkSigner `1`、aapt2 `4`，ADB/设备/install/capture `0`、cleanup 全绿、residue `0`；但默认
-> `ConvertFrom-Json` 把 quoted ISO string 提升为 `DateTime`，外层 strict verifier exit `1`。整体未闭合，
-> 后续 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的唯一 launcher 又在 helper 前因 Mandatory 空集合参数
-> 绑定失败并[冻结](../../runs/2026-08-30-T-L1-C1b-83121df-real-build-smoke失败.md)：launcher start/exit `1/1`、
-> retry `0`，helper/verifier/build/ADB/设备 `0`。下一 clean HEAD `21d29866a428f49e6ea79fe7fedc56f6cf42e16e`
-> 的 r7 read-only preflight 已闭合；其授权 smoke 又因启动前既有 module build output 在 Gradle 前 fail-closed，
-> Gradle/ADB/设备/install 均 `0`。旧 build 树已可恢复隔离，但 launcher 还暴露 active-count cast 与 failed-summary
-> 消费顺序缺陷，详见 [冻结记录](../../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与
-> [C1b runbook](../../runbooks/T-L1-tablet-layout-c1b-v1.md)。修复后的 `690693ae4113a91f7590457a888b56e93b6e200b`
-> r11 preflight 闭合，但唯一 smoke 又被宿主预存 `adb.exe` / TCP/5037 listener 在 Gradle 前拒绝；launcher 的
-> optional string null→empty 绑定随后误拒 summary SHA 并遮蔽 helper primary。build/设备/install/采集仍为 `0`，
-> 四件失败证据与新待办已[冻结](../../runs/2026-08-31-T-L1-C1b-690693a-real-build-smoke失败.md)。
-> 旧 C1a/C1b 授权均不可复用，宿主 ADB 环境归零和新 preflight 闭合前仍不得再申请 build-only 或设备授权。
+> 当前状态：🔵 PA2553 日常横屏为当前平板基线，进展见 [STATUS](../../../STATUS.md)。T0-L schema v5 clean producer
+> `4ca32b131007df58f7752c5ee9b2d049cb1cd54e` 已在真机正确 fail-closed，并以 main `a7940d5` 合入。
+> T-L1 v2 diagnostic-only 契约/gate 已合 main `589421a`；C1a fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25`
+> 建立了 trusted origin/read-only，但真实诊断仍 blocked，layout/微信/editor/T-L1/P0/execution 未放行。
+> C1b 的 pure-a11y 合同与 producer 已完成；08-28 起的主机证据链（private ADB、受控构建、one-shot 等）
+> 约 20 余个候选均未到设备验收，已于 2026-10-09 退役，改用 [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)
+> 的简单 runner。下文带日期的 C1b 主机条目是该链的历史经验，逐轮记录见 `docs/runs/`。
 
 ## 当前能力边界
 
@@ -189,7 +157,7 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
   未命中内容 hash，也不冒充 toolbar title。direct input focus 只有 refresh、focused/editable/visible/enabled、
   微信 owner、正几何、windowId 与唯一 focused application window 全部一致时才可记 `editor_known`；仍不得
   选择 conversation/target。只有 window focus 时记 `window_only`，不报成 editor 冲突。
-- 第一批未来 fresh C1b sidecar 最多提升可信来源、微信 window ownership、root projection、双 application
+- 第一批 C1b 运行最多观察到微信 window ownership、root projection、双 application
   window topology 与 hidden IME；navigation/conversation/target/regions/layout/微信布局/editor/P0/execution
   一律 false/unsupported。若 fresh C1b 仍 opaque，下一步另审 pane/window-bound 视觉通道，不关闭 vivo
   “应用多窗”，也不回退整屏 OCR/坐标猜测。
@@ -306,8 +274,8 @@ T0-L **尚未机械证明** font scale、实体键盘、system-bar/taskbar/cutou
 3. **T-L1 C1a/C1b 只读 producer**：clean-port C1a 已在 `4b96f89...` 建立可信 origin/read-only，并真实
    观察到 vivo 同 App 双 OS window，但七项诊断 blocker 使 T-L1 保持 blocked。C1b 第一批只验证 window
    inventory/owner、root binding/subtree、run-local root projection、focus inventory 与 hidden IME；它不寻找
-   navigation/conversation/target，不证明 toolbar/title-node，也不划分 message/input regions。即使 fresh C1b
-   sidecar 将 origin/ownership/root projection/topology/IME 置真，layout/T-L1/P0/execution 仍称 blocked/
+   navigation/conversation/target，不证明 toolbar/title-node，也不划分 message/input regions。即使 C1b 运行观察到
+   ownership/root projection/topology/IME，layout/T-L1/P0/execution 仍称 blocked/
    unsupported。若 pure-a11y 仍 opaque，下一步另审 window/pane-bound 视觉合同；不得把目标语义塞回本合同，
    也不得关闭 vivo“应用多窗”或退回整屏坐标猜测。
 4. **T-L2** 才实现危险链：每腿 fresh layout proof；prepare/type/确认/Enter/发送后验/teardown 传播同一

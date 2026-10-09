@@ -357,6 +357,8 @@ execution` 早就把它钉住了，其中 `confirmerCalls == 0` 正是"卡从未
 
 ## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
 
+> 该主机证据链已于 2026-10-09 退役（现行见 [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)）；本节及后续 C1b 条目保留为 PowerShell 与宿主边界经验。
+
 “命令参数是受控的”还不足以证明宿主执行闭包。C1b 把固定 HEAD 的 implementation/build inputs 收敛为
 恰好 41 个普通文件（新增 private ADB server module），按相对路径 ordinal 排序、逐文件 hash，再动态重算
 `catalog_sha256`；fixture 只能描述结构，不能把预填 catalog 当成目标 HEAD 的事实。Oracle JDK、Gradle、

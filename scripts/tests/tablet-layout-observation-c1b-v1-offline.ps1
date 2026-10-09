@@ -12,7 +12,6 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repoRoot 'scripts\lib\tablet-layout-observation-c1b-v1-offline-gate.ps1')
 . (Join-Path $repoRoot 'scripts\lib\tablet-layout-c1a.ps1')
-. (Join-Path $repoRoot 'scripts\lib\tablet-layout-c1b.ps1')
 
 $fixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-observation\c1b-v1\real-shape-topology-only.json'
 $buildEnvironmentFixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-c1b-build-environment.json'
@@ -464,7 +463,8 @@ try {
     )){$implementationHashes[$name]=$hash}
     $buildEnvironment=Get-Content -LiteralPath $buildEnvironmentFixturePath -Raw | ConvertFrom-Json -Depth 100 -DateKind String
     $buildEnvironment.repository_inputs.file_count=[long]$implementationHashes.Count
-    $buildEnvironment.repository_inputs.catalog_sha256=Get-TL1C1bImplementationCatalogSha256 $implementationHashes
+    # 旧 C1b 主机链 catalog 计算已退役；sidecar schema 只约束 hash 形态，此处用合成 hash。
+    $buildEnvironment.repository_inputs.catalog_sha256='sha256:' + ('c' * 64)
     $at=[DateTimeOffset]::UtcNow.UtcDateTime.ToString($script:TL1C1BV1TimestampFormat,[Globalization.CultureInfo]::InvariantCulture)
     $sidecar = [ordered]@{
         schema='tablet-layout-c1b-sidecar/v1'; run_id='tl1-c1b-sidecar-fixture'

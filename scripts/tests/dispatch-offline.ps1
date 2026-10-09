@@ -1924,7 +1924,7 @@ session_id: offline
         foreach ($productionCaller in @(
             (Join-Path $SourceRepoRoot 'scripts\dispatch.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\run-p0-safety-smoke.ps1'),
-            (Join-Path $SourceRepoRoot 'scripts\run-tablet-layout-c1b.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\run-tablet-c1b.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\tablet-layout-c1a-t0-adb-sidecar.ps1')
         )) {
             Assert-NotMatches (Get-Content -LiteralPath $productionCaller -Raw) `

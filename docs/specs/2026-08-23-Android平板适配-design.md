@@ -1,7 +1,7 @@
 # Android 平板适配设计
 
 - 日期：2026-08-23
-- 状态：方向已批准；PA2553 原生横屏应用多窗优先；T0-L v5 已真机正确 fail-closed；T-L1 v2/C1a 历史与证据冻结，fixed SHA `4b96f89a6622eb8b5fe04bd249571c7d77936b25` 已完成唯一 C1a trusted origin/read-only 取证但 diagnostic blocked。C1b 五次历史 one-shot 均已冻结且不可复用：`87ac7b4` private-ADB fail、`77473af` helper-load fail、`8882add` helper-pass/outer-verifier fail、`83121df` pre-helper Mandatory 空集合 fail，以及 `21d2986` preflight-pass/pre-Gradle environment fail。最后一轮因既有 module build output 在 Gradle 前 fail-closed，build/ADB/设备/install 均为 `0`；旧树已可恢复隔离，下一候选还须修 launcher active-count cast 与 failed-summary failure truth，并把 build-output absence 纳入 preflight。详见 [冻结记录](../runs/2026-08-30-T-L1-C1b-21d2986-real-build-smoke失败.md) 与 [C1b runbook](../runbooks/T-L1-tablet-layout-c1b-v1.md)。C1b install/设备采集与 T-L2 均未放行
+- 状态：方向已批准；PA2553 原生横屏应用多窗优先。当前进展与卡点见 [STATUS](../../STATUS.md)；C1b 现行运行见 [C1b 规程](../runbooks/T-L1-tablet-c1b.md)。
 - 决策人：Magina（用户）
 
 ## 1. 决定与目标
@@ -95,8 +95,8 @@ T0-L 的 `p0_capability` 永远是 `unsupported`，固定原因至少包含 `wec
    window/pane 的 toolbar/title、不是另一窗同名会话行；随后才能在同一 target window + pane 内机械分出
    toolbar、message viewport 与 input region。若 pure-a11y 仍 opaque，下一步应评审 pane/window-bound
    视觉通道，而不是关闭 vivo“应用多窗”或回退整屏坐标猜测。
-5. C1a observation 固定 `runtime_evidence=false`。当前 C1b fresh fixed-SHA runner/sidecar 最多可把可信来源、
-   微信 window ownership、root projection、双 application-window topology、hidden IME 等机械结论置真；
+5. C1a observation 固定 `runtime_evidence=false`。C1b runner 最多可观察到（observed）微信 window ownership、
+   root projection、双 application-window topology、hidden IME 等机械结论，来源由 `run.json` 记录；
    navigation/conversation/target/region、`layout_accepted`、`wechat_layout_verified`、
    `editor_action_ready`、P0 与 execution 仍固定 false/unsupported。
 6. 只保存 run-local label、平台 window type code、bounds、计数、固定 match state 与 reason；不持久化 raw
@@ -170,6 +170,9 @@ attempts 2、escaped child/listener/side-effect 0、正常 cleanup 无残留。�
 build smoke 与 P0/P1/P2=0 独立复审仅属历史基线；不能用来声称当前 42-input 候选的 smoke，也不构成
 fixed-SHA C1b build/install/runner 或平板取证。当前汇总 gate 与独审已另行闭合。
 
+**上段的宿主专项计数（42-input、private ADB、host E2E 等）与以下两段是已退役主机证据链的历史**（2026-10-09 退役，最后提交 `7a3b069`）；现行运行见
+[C1b 规程](../runbooks/T-L1-tablet-c1b.md)。
+
 C1b 受控构建把固定 HEAD 的 implementation/build inputs 收敛为 42 个普通文件（含 private ADB server
 module 与 attempt-failure schema），并以动态重算的
 `catalog_sha256` 绑定 exact bytes；专用 probe 同轮构建 Debug 与 Release，并以 artifact proof 绑定 APK、
@@ -210,9 +213,8 @@ launcher 将 quoted ISO string 自动提升为 `DateTime` 后又要求 string，
 仍不能进入设备授权。`14e33c7/c4e4266` 随后已闭合 lexical-type 保形解析与 actual outer verifier 离线回归；
 `83121df4c0b00a142fd71d7bc09bb4d9263b9b97` 的第四次 one-shot 又在 helper 前因 Mandatory 空集合绑定失败并冻结。
 `21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 r7 read-only preflight 随后闭合，但第五次授权 smoke 因启动前
-既有 module build output 在 Gradle 前 fail-closed，Gradle/ADB/设备均为 `0`；旧树已可恢复隔离。下一候选须先修
-launcher failure truth、补 module-output absence preflight，再固定新 SHA 与授权；只有整体通过，才能另取 C1b
-build/install/两帧授权。旧 C1a 与五次已消费的 C1b 授权均不能复用。
+既有 module build output 在 Gradle 前 fail-closed，Gradle/ADB/设备均为 `0`；旧树已可恢复隔离。此后各轮仍未到
+设备，主机链于 2026-10-09 退役。
 
 ### T-L2 · 横屏 P0
 
@@ -262,9 +264,8 @@ vivo 同 App 原生应用多窗已是 T-L1/T-L2 主线，不放到本阶段后�
    `21d29866a428f49e6ea79fe7fedc56f6cf42e16e` 的 r7 read-only preflight 随后闭合，但第五次 smoke 因既有 module
    build output 在 Gradle 前 fail-closed，build/ADB/设备均未触达；旧树已可恢复隔离，同 SHA 不重跑。
    第一批只验 window/root projection 与拓扑，不把 opaque root 解释成 navigation/conversation；即使可信来源和
-   topology 成立，T-L1 语义布局与 P0 仍未通过。下一候选须修 launcher failure truth、补 module-output absence
-   preflight，固定新 SHA 并另取 real smoke 授权；整体通过后才可申请 C1b build/install/只读授权。旧 C1a 与五次
-   已消费的 C1b 授权都不可复用。
+   topology 成立，T-L1 语义布局与 P0 仍未通过。以上主机链轮次为历史；2026-10-09 起改用简单 runner，见
+   [C1b 规程](../runbooks/T-L1-tablet-c1b.md)。
 5. **A4**：实现 T-L2 pane-aware 策略；全量 gate 与独审通过后固定精确 SHA。
 6. **C2 危险腿**：唯一 build/install/runner；任何一腿失败整轮冻结。通过后才按协议合 main。
 
@@ -338,4 +339,4 @@ ApkSigner/AAPT2/ADB/设备/install/采集 `0`、retry `0`、契约内 runtime/bu
 `14e33c7/c4e4266` 已闭合 lexical-type 保形解析与实际 verifier 回归；`83121df4c0b00a142fd71d7bc09bb4d9263b9b97`
 的第四次 one-shot 又在 helper 前因 Mandatory 空集合绑定失败并冻结。`21d2986` r7 preflight 已闭合，第五次 smoke
 则因启动前既有 module build output 在 Gradle 前 fail-closed，且 launcher sidecar 遮蔽 helper primary；旧 build 树已
-可恢复隔离。下一候选须修 failure truth、补 build-output absence preflight，再固定新 SHA 与授权；旧授权不可复用。
+可恢复隔离。以上为已退役主机链的历史计数；现行 C1b 运行见 [C1b 规程](../runbooks/T-L1-tablet-c1b.md)。

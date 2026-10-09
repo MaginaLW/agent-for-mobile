@@ -28,10 +28,8 @@
 
 observation validator 不能仅靠 observation 与 caller 字符串相等自证来源；它的 `runtime_origin_verified`、
 `runtime_evidence` 及所有 `*_verified` 在本层恒为 false。trusted-runtime 入口最多输出
-`runtime_binding_inputs_match=true` 这一非证明性的 binding fact。最终 runtime origin 只能由后续独立
-sidecar/runner 对 fixed HEAD 的 42-file catalog（含 private ADB server module 与 attempt-failure schema）、受控 build environment、
-private ADB server、专用 Debug/Release artifact proof、APK、observation、validation、T0、fresh install 与只读
-计数完成强闭环后产生。
+`runtime_binding_inputs_match=true` 这一非证明性的 binding fact。运行来源由 runner 的 `run.json` 记录
+（HEAD、设备、APK、T0 与时序），见 [C1b 规程](../runbooks/T-L1-tablet-c1b.md)；它不改写本层任何 false 结论。
 
 `upstream_t0` 保留 T0 v5 的 `readiness_reasons` 与 `p0_unsupported_reasons`，后者至少包含
 `wechat_layout_unverified` 和 `tablet_landscape_p0_unimplemented`。这些字段只传递 probe-only 阻断归因，
@@ -57,8 +55,7 @@ system、accessibility overlay、split-screen divider、magnification overlay �
 inventory 不完整：`window_inventory_observed`、ownership/root projection/topology observed 与
 `ime_hidden_observed` 必须全部为 false，并产生 `window_type_invalid` 与 `ime_inventory_invalid`。
 同样，`windows_truncated=true` 表示 window 清单不完整；即使持久 IME tuple 恰为 hidden 形态，也必须产生
-`window_inventory_truncated` 与 `ime_inventory_invalid`，并令 `ime_hidden_observed=false`。后续 sidecar 的
-`ime_hidden_verified` 与 observed 对称绑定，因此也不可能单独置 true。
+`window_inventory_truncated` 与 `ime_inventory_invalid`，并令 `ime_hidden_observed=false`。
 
 ## 4. title、focus 与 IME
 
@@ -93,7 +90,7 @@ visible/enabled 全真、package 与 window id exact、positive bounds 全部成
 已知、未截断的 window-type inventory、无 IME window、`mode=none`、无 bounds/editor binding。
 每帧 `ime.capture_token` 还必须与同帧 `capture.token` exact 相等；closed schema、producer assembler 与
 consumer validator 必须各自独立校验。错绑统一视为 `ime_inventory_invalid`，不能产生
-`ime_hidden_observed`，后续 sidecar 也不能将其提升为 `ime_hidden_verified`。
+`ime_hidden_observed`。
 
 ## 5. 禁止的推断
 
@@ -118,14 +115,12 @@ observation validator 分开输出：
 - `runtime_binding_inputs_match`（仅比较固定输入，不是 attestation）
 
 本层 `runtime_origin_verified/runtime_evidence`、ownership/root projection/topology/IME 的全部 `*_verified`
-恒为 false。后续独立 sidecar validator 才可按 `runtime_origin_verified && 对应 observed` 机械形成最终 verified。
+恒为 false。旧主机链的 success sidecar 已退役，不再产生 verified；读结论时用 observed 值，并以 `run.json` 核对来源。
 
 navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 在本版恒为 false/unsupported。
 
 公共 observation offline gate 固定为 49/49 cases、89/89 required coverage；machine summary 的 closed
 schema 必须拒绝旧 48/86 计数、删减 case/coverage 或错绑 IME token 的摘要。
-当前宿主离线修复候选新增 run promotion 前的 private-ADB attempt-failure 诊断，但不改变本 observation schema、
-49/49 cases、89/89 coverage 或任何 false/unsupported 结论；该 attempt 记录也不能充当 observation/runtime evidence。
 
 ## 7. 隐私与采集纪律
 

@@ -24,20 +24,15 @@
 
 ## 4. 当前工作与验收批次
 
-### C1b 恢复（T-L1）
+### C1b（T-L1）
 
-术语：r12、r13 指第 12、13 个 C1b 固定候选；pair/r14 是 preflight 工件的渲染修订名，不是轮次；Probe 是只验证 UAC 提权后持有管理员令牌的探针；Drive 是唯一一次 BuildOnly launcher 执行；once 是一次性尝试标记，写入即消耗；Ready 指主机侧准入完成、等待设备；R3 是设备发现证据消费链。
+旧主机证据链已退役（最后提交 `7a3b069`），改用 [C1b 规程](runbooks/T-L1-tablet-c1b.md)的简单 runner：HEAD 固定、设备锁、构建安装、两帧只读采集，一次调用一次采集。
 
-阶段代号（不同于平板 spec 里的 A0–A4 步骤）：A1 输入与独立性审计；A2 全量门；A3 exact 工件、pair/r14 与唯一 Preflight；A4 一次 BuildOnly 与读回封存；A5 设备入口源码的发布与审查，以及主机合同与 Ready。代号不代表执行先后，r13 起的实际顺序是：全量门(A2) → A1 → 生成源码审查 → pair/r14 与唯一 Preflight(A3) → A5 源码发布与角色审查 → Probe → 一次 BuildOnly 与读回(A4) → 主机合同与 Ready(A5)。**唯一 Preflight 即冻结点**：之后只做源码发布与审查，不再跑 Gradle/check 或普通 Git。细节见 [C1b 规程](runbooks/T-L1-tablet-layout-c1b-v1.md)；Drive 之后的 Readback、RawArchive、HostContract、Binding、Prefix、Ready、R3 定义见 [C1b 主机证据链](runbooks/T-L1-c1b-host-evidence.md)。
-
-- [ ] 1. 宿主 ADB 清零：用户确认可以结束 PC Suite 手机助手/同步会话后，被动核定 `adb.exe` 与 TCP 5037 listener 都为零；BuildOnly 启动前再核一次。不自动终止 PC Suite。
-- [ ] 2. 新候选：从维护源 `cad74113a9f957edf8acc327fc0717e6979d3800` 建新的 clean clone，固定完整 SHA，按上面的顺序重跑到 A5 源码发布与角色审查为止。
-- [ ] 3. 主机阶段：Probe（现场点 UAC，证明管理员令牌）→ 用户针对该完整 SHA 和 launcher hash 明确授权一次 BuildOnly → Drive（同样需要 UAC）→ 独立 Readback → RawArchive → HostContract。r13 `8d808b1` 与 r12 `6587adf` 的 once 不删除，同 SHA 不重跑，旧运行事实不移植；下游 Readback、Archive、Contract、A5 finish、Terminal、R3 的 SOURCE 材料须随新候选重绑并重审。
-- [ ] 4. 设备阶段：Binding → Prefix → Ready；Ready 后取得新的现场确认，并由用户针对该 SHA 明确授权一次真机 build/install/只读采集（旧授权不复用），再做只读采集 → Terminal → R3 Read → 一次 Freeze，同时验证显示回退与设备发现。发送/支付/删除仍走手机可见的两段式确认。
-
-C1b 的继续条件只有现行规程与 R3 消费链；其他审查项不新增开跑门。
-
-运行记录见 [C1b goal 与正式证据闭合](runs/2026-09-30-C1b-goal与正式证据闭合.md)。
+- [ ] a. 新 runner `scripts/run-tablet-c1b.ps1` 落地并通过离线测试（A）。
+- [ ] b. 将实现线 `codex/c1b-host-evidence-20260930` 的 C1b app 修复合入协调分支（A）：采集失败分类 `ec2782b`、只读制品清单 `b362639`、无 display 上下文的默认显示回退 `a878d12`；见下表“两线合并”。
+- [ ] c. 用户就位：如有冲突，结束占用 TCP 5037 的 PC Suite 会话；平板现场就位；开启探针无障碍服务。
+- [ ] d. 按 §7.3 报就位、得开跑令后，真机跑一次 C1b，验证显示回退与设备发现。
+- [ ] e. 通过后进入 T-L2 准备。
 
 ### 开放项
 
@@ -48,7 +43,7 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 | R1 PC CONFIRM 真人确认边界 | 离线修复 `da37f3d`（53/53）：mobile `-Confirm` 在副作用前阻断 | 在含该修复的固定候选上真机验证阻断，gateway 手机确认卡保留 | 需真机；需用户现场 |
 | R5 intent_send 落地验证 | 离线实现 `7814fac`，Debug/Release 各 7 个 JVM 用例 | 真机覆盖“启动无异常但目标没到前台”，应返回 `E_VERIFY_FAIL`；通过后才按受测版本发布 | 需真机 |
 | 语义意图生产接线 | 基础模块 `48f8dd8`；SafetyGate、Android 证据安装、严格执行链、handler 次数证明未做 | C 队列清空后接线，只接受可见 ConfirmOverlay 的允许回调，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) | 需真机 |
-| 两线合并 | R1/R5 修复只在协调分支；C1b 的 app/runner 修复只在实现线 `cad7411`（Readback reader 等部分 host 工具已根整合到协调分支，如 `568e826`）；没有同时含 R1/R5 与完整 C1b 修复的候选 | 按 §3，C 队列未清前不新增批次：R1/R5 要么在两线合并后随后续 C1b 候选搭车，要么等队列清空后另开批次，选候选时由 A 决定。不新增 C1b 开跑门，C1b 仍按上文从 `cad7411` 建候选 | A 决定 |
+| 两线合并 | 已核实（`git diff --stat HEAD cad7411 -- app`、`git log HEAD..cad7411 -- app`）：app 差异只剩 C1b 探针修复 `ec2782b`、`b362639`、`a878d12`，只在实现线 `cad7411`；R1/R5 的 app 与 dispatch 内容已由 `7b2f394` 等价并入实现线，两线在这部分一致 | C1b 真机运行前先把这三项 app 修复合入协调分支（§4 b）；之后协调分支同时含 R1/R5 与 C1b 修复，是否搭车由 A 选候选时决定 | A |
 | 受测功能合入 main | R1/R5/C1b 等功能改动均未合入 main | 按 §7.2 只合验过的 SHA | 依赖真机验收 |
 | M1b 占位工具实现 | 静态标注已完成，见 [能力现状](knowledge/android/m1b-capabilities.md) | 有需求时分别安排实现及通道、失败路径验收 | 按需 |
 
@@ -84,9 +79,10 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 - 语义意图基础模块（`48f8dd8`）
 - 主机双流采集（`e014bab`）
 - C1b 设备发现分阶段诊断（`1be3e4b`）
-- R3 离线消费链（`7c55116`、`e0fcbb2`；设备部分随 C1b）
+- R3 离线消费链（`7c55116`、`e0fcbb2`；随 C1b 主机链退役）
 - Readback 日志流 reader 修复（含于 `8d808b1`）
 - 候选生成链迁入维护源（09-27 审查 P3 项；`68776e4`、`da56671`、`64c6e81`）：按原完成标准判定关闭（r13 已用它完成生成、源码审查、pair/r14 与 Preflight），2026-10-09 由 A 确认
+- C1b 旧主机证据链退役（2026-10-09，用户确认；最后提交 `7a3b069`），改用 [C1b 规程](runbooks/T-L1-tablet-c1b.md)
 
 ## 5. 待验收队列（C）
 
@@ -95,11 +91,11 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 | **手机批次 4** | `67ef56cc8289b34d09843701d7b83986a206ad0e`（`codex/batch4-precheck-unify`） | 语义意图下的 Allow/Stale/Deny/Reentry 四腿；暂停，0/4，未判定，未合 main；不自行重跑，不计入平板失败 |
 | **T0-L 入场** | `4ca32b1`，已合 main `a7940d5` | 入场取证完成；fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | `4b96f89` | origin/read-only 成立；diagnostic blocked，七项 blocker 保留；T-L1 未通过，转 C1b。见 [C1a 记录](runs/2026-08-26-T-L1-C1a只读取证成功.md) |
-| **T-L1 / C1b** | 最后候选 r13 `8d808b1d0b5fbdea0a8108ec26cbffec1c804586`（frozen_failed） | 唯一 Drive 因宿主 ADB 边界非空（`adb.exe` 或 TCP 5037 listener 不为零）而失败，失败时占用者未知，未到构建；同 SHA 不重跑，恢复见 §4。09-13 后无设备轮；`a878d12` 识别 0 台、`c43652a` display unsupported，根因未知 |
+| **T-L1 / C1b** | 未固定；新流程以运行时 HEAD 为 `producer_commit_sha` | 旧主机链已退役（最后候选 r13 `8d808b1` 未到构建）；按 §4 前置后真机跑一次简单 runner。09-13 后无设备轮；`a878d12` 识别 0 台、`c43652a` display unsupported，根因未知，本次运行一并验证 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 与 §4 前置；手机安全门不放宽 |
 
 当前 install/设备/采集/navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 均未放行。
-本文件的进度记录不构成运行许可；只读 preflight、build-only 或 C1a 的许可不得扩大为 C1b 采集。
+本文件的进度记录不构成运行许可；C1a 的许可不得扩大为 C1b 采集，C1b 每次真机运行仍按 §7.3 取得开跑令。
 
 ## 6. 待决策项与有效决定（A 直接 ask）
 
@@ -107,9 +103,9 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 
 只有用户能做的主机与现场动作也登记在这里。
 
-- [ ] 结束 PC Suite 手机助手/同步会话，释放 `adb.exe` 与 TCP 5037。10-01 起按用户要求保留，现在是否仍在运行未知；不结束，§4 第 1 步无法开始。
-- [ ] 新候选 Probe 时在现场点 UAC；Probe 证明管理员令牌后，针对该完整 SHA 和 launcher hash 明确授权一次 BuildOnly，Drive 时再点 UAC。r12 首次 Probe 曾报“操作已被用户取消”，原因未知。
-- [ ] Ready 成立后重新确认平板现场（USB 唯一设备、横屏微信应用多窗、键盘隐藏），并针对该 SHA 明确授权一次真机 build/install/只读采集。09-30 的陈述与旧授权都不复用。
+- [ ] 如 PC Suite 手机助手占用 TCP 5037 且与 runner 的 adb 冲突，由用户结束该会话（10-01 起按用户要求保留，现状未知）。runner 不终止外部进程。
+- [ ] 开启 C1b 探针的无障碍服务；未开启时 runner exit 2 等用户处理，不改设置。
+- [ ] 平板现场就位（USB 唯一设备、横屏微信应用多窗、键盘隐藏），看过就位报告后对本次运行给出开跑令（§7.3）。09-30 的陈述与旧授权都不复用。
 - 设计问题：当前无。答复后的结论写入对应 spec；已替代的决定保留替代指针，不重复送审。
 
 ### 有效决定
@@ -123,7 +119,7 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 | 语义意图时钟 | decisionTimeout 90s、intentTtl 360s、II 级 foregroundWaitBudget 300s、I 级 wait 0；证据 TTL 120s。批准时间不可刷新，失败不复活。见 [语义意图 spec](specs/2026-08-02-语义意图审批-design.md) |
 | PC 输入不是真人批准（R1） | 可编程终端输入（Read-Host / CONFIRM）不能当危险动作的真人批准；mobile 危险恢复须有独立人控确认，否则阻断。见 [执行 harness spec §5.2–§5.3](specs/2026-07-17-执行harness-design.md) |
 | intent_send 落地语义（R5） | 指定目标时落地失败返回 `E_VERIFY_FAIL`；未指定目标如实报告“已分派、未验证”。见 [M1 网关设计](specs/2026-07-17-M1执行网关-design.md) |
-| 宿主 ADB 边界 | Preflight 与 BuildOnly 启动前都被动确认 `adb.exe` 与 TCP 5037 listener 为零；不自动终止外部进程。见 [C1b 规程](runbooks/T-L1-tablet-layout-c1b-v1.md) 第 8 步 |
+| 宿主 ADB 边界 | runner 不自动终止外部进程；PC Suite 等占用 5037 并造成冲突时由用户处理。旧“`adb.exe` 与 5037 listener 必须为零”的门随主机链退役。见 [C1b 规程](runbooks/T-L1-tablet-c1b.md) |
 
 ### 6.N 非宏危险动作的目标证据
 
@@ -143,7 +139,6 @@ I 级 ui_action 不进延后执行，保留 ref/text/description/bounds/source �
 
 检查入口见 [离线开发与验证](runbooks/离线开发与验证.md)。
 
-- **冻结规程优先**：全量门在冻结前完成；C1b preflight 冻结后不再跑 Gradle/check。需要修复就形成新候选，不复用旧轮 one-shot。
 - 改变真机行为的提交：A 报完整 SHA → C 验固定构建 → 通过后只合**验过的 SHA**，不合带后续未验改动的分支 tip。失败则保留改动与运行证据，A 修复成新候选。
 - 纯文档改动验证后可独立整合；所在分支祖先夹带未验代码时，只合文档提交。
 - 协调文档版本与被测代码 SHA 分别记录。

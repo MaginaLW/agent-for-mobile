@@ -107,10 +107,10 @@ try{
 }finally{$sidecarProcess.Dispose()}
 $sidecarSummary=@($sidecarLog-split'\r?\n'|Where-Object{$_-cne''})|Select-Object -Last 1
 if($sidecarExit-ne0-or$sidecarSummary-cne
-    'tablet-layout-c1a T0 adb sidecar offline: 7 passed, 0 failed, real adb/JDK/Gradle executions=0'){
+    'tablet-layout-c1a T0 adb sidecar offline: 4 passed, 0 failed, real adb/JDK/Gradle executions=0'){
     throw "C1a T0 adb sidecar offline suite 失败或 summary 欺骗：$sidecarSummary"
 }
-$sidecarPassed=7L
+$sidecarPassed=4L
 $start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=$PwshPath;$start.WorkingDirectory=$RepoRoot
 $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardInput=$true
 $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
@@ -163,4 +163,4 @@ try{
         $published.runtime_evidence-ne$false-or$published.execution_grant-ne$false){throw 'gate summary 写后读回复核失败。'}
 }
 finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}}
-Write-Host "tablet T-L1 C1a offline gate：$($gate.passed)/$($gate.cases) cases，$($gate.coverage_passed)/$($gate.required_coverage) coverage，T0 sidecar=$sidecarPassed/7，self=$selfPassed/3"
+Write-Host "tablet T-L1 C1a offline gate：$($gate.passed)/$($gate.cases) cases，$($gate.coverage_passed)/$($gate.required_coverage) coverage，T0 sidecar=$sidecarPassed/4，self=$selfPassed/3"

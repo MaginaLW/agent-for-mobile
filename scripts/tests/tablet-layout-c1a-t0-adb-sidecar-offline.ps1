@@ -11,7 +11,6 @@ $RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $SidecarPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1a-t0-adb-sidecar.ps1'
 $IntakeLibraryPath = Join-Path $RepoRoot 'scripts\lib\tablet-intake.ps1'
 $DispatchLibraryPath = Join-Path $RepoRoot 'scripts\lib\dispatch-lock.ps1'
-$PrivateAdbLibraryPath = Join-Path $RepoRoot 'scripts\lib\tablet-layout-c1b-adb-server.ps1'
 $PwshPath = (Get-Process -Id $PID).Path
 $TestRoot = Join-Path ([IO.Path]::GetTempPath()) `
     ('tablet-layout-c1a-t0-adb-sidecar-' + [guid]::NewGuid().ToString('N'))
@@ -21,8 +20,6 @@ $script:Passed = 0
 $script:Failed = 0
 $script:Invocation = 0
 $deviceLease = $null
-
-. $PrivateAdbLibraryPath
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -103,7 +100,6 @@ function Invoke-TestSidecar {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments,
         [switch]$IncludeSocket,
-        [switch]$DisablePrivateJob,
         [AllowNull()][AllowEmptyString()][string]$Socket
     )
 
@@ -159,53 +155,6 @@ function Invoke-TestSidecar {
     $start.Environment.Clear()
     foreach ($entry in $environment.GetEnumerator()) {
         $start.Environment[[string]$entry.Key] = [string]$entry.Value
-    }
-
-    if ($IncludeSocket -and -not $DisablePrivateJob) {
-        $job = $null
-        $startedProcess = $null
-        $stdout = [IO.MemoryStream]::new()
-        $stderr = [IO.MemoryStream]::new()
-        try {
-            $job = [TL1C1bPrivateAdbNative]::CreateKillOnCloseJob(2, $clientJobName)
-            $startedProcess = [TL1C1bPrivateAdbNative]::StartInJob(
-                $PwshPath,
-                [string[]]@($start.ArgumentList),
-                (ConvertTo-TL1C1bPrivateAdbEnvironmentEntries $environment),
-                $job)
-            Assert-True ([TL1C1bPrivateAdbNative]::IsProcessAssigned(
-                $job, $startedProcess.Process.Handle)) `
-                'synthetic sidecar root 未 creation-time 加入 client Job。'
-            $startedProcess.StandardInput.Dispose()
-            $stdoutTask = $startedProcess.StandardOutput.CopyToAsync($stdout)
-            $stderrTask = $startedProcess.StandardError.CopyToAsync($stderr)
-            if (-not $startedProcess.Process.WaitForExit(20000)) {
-                throw 'synthetic T0 adb sidecar 超时。'
-            }
-            if (-not $stdoutTask.Wait(2000) -or -not $stderrTask.Wait(2000)) {
-                throw 'synthetic T0 adb sidecar 输出 drain 超时。'
-            }
-            $stdoutBytes = $stdout.ToArray()
-            $stderrBytes = $stderr.ToArray()
-            try {
-                return [pscustomobject][ordered]@{
-                    ExitCode = $startedProcess.Process.ExitCode
-                    Stdout = [Text.UTF8Encoding]::new($false, $true).GetString($stdoutBytes)
-                    Stderr = [Text.UTF8Encoding]::new($false, $true).GetString($stderrBytes)
-                    CallRoot = $callRoot
-                    ParentEnvironment = $environment
-                    Executed = Test-Path -LiteralPath (Join-Path $callRoot 'invocation.txt') -PathType Leaf
-                }
-            } finally {
-                if ($stdoutBytes.Length) { [Array]::Clear($stdoutBytes,0,$stdoutBytes.Length) }
-                if ($stderrBytes.Length) { [Array]::Clear($stderrBytes,0,$stderrBytes.Length) }
-            }
-        } finally {
-            if ($null -ne $job) { $job.Dispose() }
-            if ($null -ne $startedProcess) { $startedProcess.Dispose() }
-            $stdout.Dispose()
-            $stderr.Dispose()
-        }
     }
 
     $process = [Diagnostics.Process]::new()
@@ -291,39 +240,12 @@ function Get-DispatchGlobalLockPath {
         -Owner 'tablet-layout-c1a-t0-adb-sidecar-offline' -LeaseToken ''
     $readOnlyArguments = [string[]](Get-TabletAdbArguments -Name prop_brand -Serial 'FAKE123')
 
-    Test-Case '合法 loopback 高端口同时绑定 argv 与 child environment' {
-        $socket = 'tcp:127.0.0.1:55001'
-        $result = Invoke-TestSidecar -Arguments $readOnlyArguments -IncludeSocket -Socket $socket
-        Assert-Equal $result.ExitCode 0 '合法 ADB_SERVER_SOCKET 调用失败'
-        Assert-Equal $result.Stdout 'fixture-output' 'fake adb stdout 漂移'
-        Assert-Equal $result.Stderr '' '合法 ADB_SERVER_SOCKET 产生 stderr'
-        Assert-True $result.Executed '合法 ADB_SERVER_SOCKET 未执行 synthetic fake adb'
-        $actualArguments = [string[]][IO.File]::ReadAllLines(
-            (Join-Path $result.CallRoot 'argv.txt'), [Text.UTF8Encoding]::new($false, $true))
-        Assert-Sequence $actualArguments (@('-H','127.0.0.1','-P','55001') + $readOnlyArguments) `
-            'ADB server selector 未精确前置于原只读 argv'
-        Assert-FakeEnvironment -Result $result -ExpectedSocket $socket
-    }
-
     Test-Case 'private socket 未 creation-time 加入命名 client Job 时 fail closed' {
         $result = Invoke-TestSidecar -Arguments $readOnlyArguments -IncludeSocket `
-            -Socket 'tcp:127.0.0.1:55003' -DisablePrivateJob
+            -Socket 'tcp:127.0.0.1:55003'
         Assert-Equal $result.ExitCode 97 '未加入 private client Job 的 sidecar 未失败'
         Assert-True (-not $result.Executed) 'Job proof 失败后仍启动 synthetic fake adb'
         Assert-True ($result.Stderr -match 'private client Job') 'Job proof 拒绝原因不明确'
-    }
-
-    Test-Case '动态端口闭区间两端均保持 canonical 十进制' {
-        foreach ($port in @(49152,65535)) {
-            $socket = "tcp:127.0.0.1:$port"
-            $result = Invoke-TestSidecar -Arguments $readOnlyArguments -IncludeSocket -Socket $socket
-            Assert-Equal $result.ExitCode 0 "边界端口 $port 被拒绝"
-            $actualArguments = [string[]][IO.File]::ReadAllLines(
-                (Join-Path $result.CallRoot 'argv.txt'), [Text.UTF8Encoding]::new($false, $true))
-            Assert-Sequence $actualArguments (@('-H','127.0.0.1','-P',[string]$port) + $readOnlyArguments) `
-                "边界端口 $port argv 漂移"
-            Assert-FakeEnvironment -Result $result -ExpectedSocket $socket
-        }
     }
 
     Test-Case '未设置 socket 保持 C1a 原 argv 与无 socket 环境' {
@@ -333,18 +255,6 @@ function Get-DispatchGlobalLockPath {
             (Join-Path $result.CallRoot 'argv.txt'), [Text.UTF8Encoding]::new($false, $true))
         Assert-Sequence $actualArguments $readOnlyArguments '无 socket 时擅自添加 adb server selector'
         Assert-FakeEnvironment -Result $result
-    }
-
-    Test-Case '缓存 devices 接受合法 socket 但绝不启动 adb' {
-        $result = Invoke-TestSidecar -Arguments @('devices') -IncludeSocket `
-            -Socket 'tcp:127.0.0.1:55002'
-        Assert-Equal $result.ExitCode 0 '缓存 devices 调用失败'
-        Assert-Equal $result.Stdout "List of devices attached`r`nFAKE123`tdevice`r`n" `
-            '缓存 devices 输出漂移'
-        Assert-Equal $result.Stderr '' '缓存 devices 产生 stderr'
-        Assert-True (-not $result.Executed) '缓存 devices 启动了 synthetic fake adb'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $result.CallRoot 'argv.txt'))) `
-            '缓存 devices 留下了 fake adb argv'
     }
 
     Test-Case '格式、host 与默认 5037 全部在 adb 前拒绝' {
