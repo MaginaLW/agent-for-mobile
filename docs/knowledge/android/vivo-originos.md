@@ -17,7 +17,7 @@
 - **后台 overlay 被静默拦截**（2026-07-18）：`SYSTEM_ALERT_WINDOW` ≠「后台弹出界面」权限；网关在后台时 `addView(TYPE_APPLICATION_OVERLAY)` 不抛异常但不显示，确认卡弹不出。✅ 授「后台弹出界面」后，微信前台时确认卡正常弹出（2026-07-22）。
 - **充电胶囊/灵动岛是带文本的大 a11y 悬浮节点**，罩住屏幕上部——OCR 融合去重按「内容相同」判重，不能按「bbox 包含」判。
 
-- **无启动入口的应用开不了无障碍**（2026-10-09，PA2553 / Android 16 实测）：adb 安装、无 launcher activity 的探针在系统里带 vivo 专有 `vHidden=1`；设置里打开开关会弹 i管家「该应用请求监控和控制设备」，选“允许”后 1 秒内仍被移出 `enabled_accessibility_services`、从未绑定；`settings put` 写入同样几秒后被撤，`appops ACCESS_RESTRICTED_SETTINGS allow` 无效，i管家里没有放行入口。对策：给应用保留一个只显示说明的 MAIN/LAUNCHER 启动页（🔵 修复后的真机结果见 C1b 运行记录）。
+- **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，就绪以应用自报为准。详见 [运行记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
 
 ## 深链 / Intent
 

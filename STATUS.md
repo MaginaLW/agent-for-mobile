@@ -4,7 +4,7 @@
 
 ## 一句话现状
 
-平板线卡在 T-L1/C1b：旧主机证据链已于 10-09 退役（用户确认），改用简单 runner，见 [C1b 规程](docs/runbooks/T-L1-tablet-c1b.md)。新 runner 与实现线 app 修复均已合入协调分支并通过全量门；下一步：用户就位 → 真机跑一次。手机验收（C 道）暂停，批次 4 停在 0/4。
+平板线卡在 T-L1/C1b：旧主机证据链已于 10-09 退役（用户确认），改用简单 runner，见 [C1b 规程](docs/runbooks/T-L1-tablet-c1b.md)。新 runner 已在真机走通到就绪前，但探针无障碍服务每次开启后数秒内被 vivo 安全中心撤销，采集未执行（[记录](docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)）；下一步待用户选择解阻方式。手机验收（C 道）暂停，批次 4 停在 0/4。
 
 ## 需要用户做的
 
@@ -12,7 +12,7 @@
 
 ## 下一步
 
-- C1b：按 [backlog §4](docs/backlog.md)——（新 runner 与 app 修复已完成）用户就位 → 真机跑一次，验证显示回退与设备发现 → 通过后准备 T-L2。
+- C1b：按 [backlog §4](docs/backlog.md)——阻塞于 vivo 安全中心撤销探针无障碍服务；可选方向见 backlog §4 C1b 待办 d。
 - R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；协调分支已同时含两者，是否搭车由 A 选候选时决定。
 
 ## 里程碑
@@ -21,7 +21,7 @@
 |---|---|
 | M0 mobile-mcp 真机验收 | 完成（2026-07-16，4.5/5） |
 | M1 自研网关 | 已在历史手机上跑通。P0 两段式硬门未闭合：批次 1–3 已验收；现行链路下 Allow、Stale 尚未独立真机验收（见 [P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md)）；语义意图四腿（批次 4）暂停 0/4 |
-| M1-T 平板适配 | T0-L 完成；C1a origin/read-only 成立，但 T-L1 未通过；C1b 待新 runner 真机运行；T-L2 未入队 |
+| M1-T 平板适配 | T0-L 完成；C1a origin/read-only 成立，但 T-L1 未通过；C1b 真机受 vivo 安全中心阻塞；T-L2 未入队 |
 | M2 大脑迁到手机 | 未开始 |
 | M3 宏、入口与技能包 | 未开始 |
 
