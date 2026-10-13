@@ -1,5 +1,7 @@
 # T-L1 C1b 42-input real isolated host build smoke 失败冻结
 
+> **源码索引**：下文源码链接指向本轮候选 `2a4ccdb82783046c987689bb28d5d89000f4284d` 的文件，供定位当前实现；它们不复现历史行号、缺陷或执行输入。历史日期、候选、原始证据及验收结论保持原范围，当前修复状态见 STATUS/backlog。
+
 - 日期：2026-08-29
 - 分支：`codex/security-hardening`
 - 目标 clean SHA：`77473af5223d76b00bf4dbbf33cf44090fde635c`
@@ -35,12 +37,12 @@ GradleMain 调用恰好一次并返回到 artifact guard/proof 校验阶段；De
 运行结束后另行做了纯 PowerShell、无 JDK/Gradle/ADB/设备的离线复现；这些复现不属于下节三份 frozen
 运行证据。根因闭合到一次性 helper 的加载集合遗漏 observation validator：
 
-- [`tablet-layout-c1b.ps1`](../../scripts/lib/tablet-layout-c1b.ps1) 的
+- [`tablet-layout-c1b.ps1`](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/scripts/lib/tablet-layout-c1b.ps1) 的
   `ConvertFrom-TL1C1bClosedJson` 会调用 `Find-TL1C1BV1DuplicateJsonProperty` 与
   `Find-TL1C1BV1InvalidNumber`；
 - 两个 walker 定义在
-  [`tablet-layout-observation-c1b-v1-validator.ps1`](../../scripts/lib/tablet-layout-observation-c1b-v1-validator.ps1)；
-- 正式 [`run-tablet-layout-c1b.ps1`](../../scripts/run-tablet-layout-c1b.ps1) 按
+  [`tablet-layout-observation-c1b-v1-validator.ps1`](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/scripts/lib/tablet-layout-observation-c1b-v1-validator.ps1)；
+- 正式 [`run-tablet-layout-c1b.ps1`](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/scripts/run-tablet-layout-c1b.ps1) 按
   `C1a -> validator -> C1b` 加载；本轮 exact helper `f6e79d4586ed3ef7801a19a428e3fe843db44e116b5920d05583b4174632baba`
   held/pinned 了 C1a、C1b、artifact、AAPT2、build 与 runner，但只 dot-source C1a、C1b、artifact、AAPT2 与
   build，没有 held/pinned 或 dot-source validator；runner 没有被加载或执行；

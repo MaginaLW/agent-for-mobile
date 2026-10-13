@@ -1,5 +1,7 @@
 # 工序分流历史归档（截至 2026-09-07）
 
+> **源码索引**：下文源码链接指向本轮候选 `2a4ccdb82783046c987689bb28d5d89000f4284d` 的文件，供定位当前实现；它们不复现历史行号、缺陷或执行输入。历史日期、候选、原始证据及验收结论保持原范围，当前修复状态见 STATUS/backlog。
+
 > 本文保存重整前的 backlog 历史，来源为提交 `463304c`。除本机 Git 根路径改成占位符外，原记录保留以便追溯。
 > **本文是历史证据，不是现行工作指令或运行授权。** 只按具体问题读取；当前流程与待办见 [backlog](backlog.md)，当前候选摘要见 [STATUS](../STATUS.md)。
 > 旧文中的“待拍板”“下一步”“四条均有效”只反映其写入时点，不能恢复旧决定、重复提问或重跑冻结候选。
@@ -84,7 +86,7 @@ A 道优先做**能减少 C 道**的项。这是让并行真正生效的唯一�
 ### 批次 2 · 通知栏审批（单独一批）
 
 把危险确认从「盯着屏幕 60 秒」降成「锁屏上点一下」。并联
-[ConfirmOverlay.ask()](../app/gateway/src/main/java/dev/magina/gateway/overlay/ConfirmOverlay.kt)，
+[ConfirmOverlay.ask()](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/app/gateway/src/main/java/dev/magina/gateway/overlay/ConfirmOverlay.kt)，
 带 Allow / Deny action button 的通知（full-screen intent）。
 
 **不与任何其他碰确认路径的改动同批**，且三腿都要验——它改的是安全门本身。
@@ -204,7 +206,7 @@ Deny 带外验证：腿末经 runner 自己的 adb 通道截屏/OCR 比对，不
 
 - ~~`ToolRegistry.callInternal` 拆解~~ **旧描述已过时**：上下文/执行辅助函数已有拆分。现已使用
   `scripts/measure-kotlin.ps1` 的真实 Kotlin PSI 重量；不要再用行式脚本推断函数边界或排名。
-  工具与指标口径见[说明](../scripts/lib/kotlin-metrics/README.md)，报告保存在忽略的 `.checks/kotlin-metrics/`。
+  工具与指标口径见[说明](https://github.com/MaginaLW/agent-for-mobile/blob/2a4ccdb82783046c987689bb28d5d89000f4284d/scripts/lib/kotlin-metrics/README.md)，报告保存在忽略的 `.checks/kotlin-metrics/`。
 - **套件提速已有分片与负载自适应**：09-07 首轮监督式 runner 86 条、3 片合计 134s；
   后续优化按日志耗时归因认领具体项，不再把没有验收标准的“提速”作为未完成任务。
 - ~~`dispatch.ps1 -Confirm` 收口~~ **已完成离线修复**（`7c0a5ba`）：拒绝重复/畸形头部和空消费标记、
