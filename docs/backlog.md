@@ -28,10 +28,10 @@
 
 旧主机证据链已退役（最后提交 `7a3b069`），改用 [C1b 规程](runbooks/T-L1-tablet-c1b.md)的简单 runner：HEAD 固定、设备锁、构建安装、两帧只读采集，一次调用一次采集。
 
-- [x] a. 新 runner `scripts/run-tablet-c1b.ps1` 落地并通过离线测试（`d015da3`，全量门 13/13）。
-- [x] b. 实现线 C1b app 修复已合入协调分支（`cc74daf`，含 Android 全量构建与测试）：采集失败分类 `ec2782b`、只读制品清单 `b362639`、无 display 上下文的默认显示回退 `a878d12`；见下表“两线合并”。
+- [x] a. 新 runner `scripts/run-tablet-c1b.ps1` 落地并通过脚本检查（`d015da3`，`check.ps1 -SkipGradle` 12 项 PASS，Android 未验证）。
+- [x] b. 实现线 C1b app 修复已合入协调分支（`cc74daf`，全量门 13/13 PASS，含 Android 构建与测试）：采集失败分类 `ec2782b`、只读制品清单 `b362639`、无 display 上下文的默认显示回退 `a878d12`；见下表“两线合并”。
 - [ ] c. 用户就位：如有冲突，结束占用 TCP 5037 的 PC Suite 会话；平板现场就位；开启探针无障碍服务。
-- [ ] d. 按 §7.3 报就位、得开跑令后，真机跑一次 C1b，验证显示回退与设备发现。**10-09 阻塞**：探针无障碍服务每次开启后数秒内被 vivo 安全中心撤销，已试 7 种做法均无效（[记录](runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)）。候选方向（待用户选择）：联系 vivo 客服 95033 询问开发调试的放行方式；换一台非 vivo 或策略较松的平板；评估经 vivo 应用商店分发。
+- [ ] d. 解阻后按 §7.3 报就位、得新一轮开跑令，完成 C1b 采集并验证显示回退。**10-09 首次尝试已发现唯一设备并完成构建、安装，但采集未执行**：探针无障碍服务每次开启后数秒内被 vivo 安全中心撤销，已试 7 种做法均无效（[记录](runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)）。候选方向（待用户选择）：联系 vivo 客服 95033 询问开发调试的放行方式；换一台非 vivo 或策略较松的平板；评估经 vivo 应用商店分发。
 - [ ] e. 通过后进入 T-L2 准备。
 
 ### 开放项
@@ -91,10 +91,10 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 | **手机批次 4** | `67ef56cc8289b34d09843701d7b83986a206ad0e`（`codex/batch4-precheck-unify`） | 语义意图下的 Allow/Stale/Deny/Reentry 四腿；暂停，0/4，未判定，未合 main；不自行重跑，不计入平板失败 |
 | **T0-L 入场** | `4ca32b1`，已合 main `a7940d5` | 入场取证完成；fail-closed 不等于设备 ready，不放行 T-L1/P0 |
 | **T-L1 / C1a** | `4b96f89` | origin/read-only 成立；diagnostic blocked，七项 blocker 保留；T-L1 未通过，转 C1b。见 [C1a 记录](runs/2026-08-26-T-L1-C1a只读取证成功.md) |
-| **T-L1 / C1b** | 未固定；新流程以运行时 HEAD 为 `producer_commit_sha` | 旧主机链已退役（最后候选 r13 `8d808b1` 未到构建）；按 §4 前置后真机跑一次简单 runner。09-13 后无设备轮；`a878d12` 识别 0 台、`c43652a` display unsupported，根因未知，本次运行一并验证 |
+| **T-L1 / C1b** | 新一轮未固定；运行时完整 HEAD 记为 `commit_sha`，APK 内嵌构建 SHA 记为 `producer_commit_sha`，身份约束见 [C1b 规程](runbooks/T-L1-tablet-c1b.md) | 10-09 新 runner 已发现唯一设备并完成构建、安装，采集被 vivo 撤销无障碍权限阻塞；解阻后按 §4、§7.3 开新一轮。旧 `a878d12` 识别 0 台、`c43652a` display unsupported 的根因仍未知，显示回退未获真机验证 |
 | **T-L2 横屏 P0 四腿** | 未固定 | 未入队，依赖 T-L1 与 §4 前置；手机安全门不放宽 |
 
-当前 install/设备/采集/navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 均未放行。
+10-09 的设备前置、构建与安装只证明该次尝试走到就绪前；采集未执行，T-L1 未通过，navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 均未放行。
 本文件的进度记录不构成运行许可；C1a 的许可不得扩大为 C1b 采集，C1b 每次真机运行仍按 §7.3 取得开跑令。
 
 ## 6. 待决策项与有效决定（A 直接 ask）

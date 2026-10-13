@@ -234,29 +234,26 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 |---|---|
 | 放宽 `requireKnownForeground` | 直接拆掉 D1，反对 |
 | keyguard 视作"前台被遮住"而非"未知" | 需新概念，且放宽批准时/执行时前台的硬相等 |
-| 审批对象上移到语义意图，批准后重走严格链 | 不放宽证据，backlog 记的正解；需另起 spec 与实现 |
+| 审批对象上移到语义意图，批准后重走严格链 | 已有[语义意图设计](../../specs/2026-08-02-语义意图审批-design.md)与离线基础模块；生产接线未完成 |
 | 目标缩到"屏幕亮着但没盯着" | 零安全代价，但偏离原诉求 |
 
-第二道障碍：确认卡是 `TYPE_APPLICATION_OVERLAY`，**不显示在 keyguard 之上**，锁屏审批只能靠通知。
+第二道障碍：确认卡是 `TYPE_APPLICATION_OVERLAY`，**不显示在 keyguard 之上**。当时考虑过通知审批；2026-08-28 已撤销通知批准，现行批准只来自可见 `ConfirmOverlay`，不恢复锁屏通知批准。
 另：`category=call` 换不到通话级待遇（那属于 `CallStyle`，其按钮强制为接听/拒接，套不进允许/拒绝），已去掉；
 紧急度由通道 `IMPORTANCE_HIGH` 提供。
 
 ## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
 
 > 旧 C1b 主机证据链已于 2026-10-09 退役，现行入口 `scripts/run-tablet-c1b.ps1`，规程见
-> [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)。旧主机链细节见 git 提交 7a3b069 前的历史。下面只留对新流程仍有用的通用教训。
+> [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)。旧主机链细节用 `git show 7a3b069:docs/runbooks/T-L1-tablet-layout-c1b-v1.md` 查看。下面是可复用教训，不恢复旧主机门。
 
-- **success 最后发布**：先暂存并完成全部验证，再关闭 server/guard、释放 device lease；任何 cleanup 失败都不得留下 success。
-  这样"成功"同时证明没有残留。
-- **产物存在不等于证明已被接受**（2026-08-29）：Gradle 出了 APK 而 proof reader fail-closed，就必须冻结，不能拿临时产物继续。
+- **success 最后发布**：旧链将验证与 cleanup 一起纳入最终结果；读任何 runner 的成功摘要前，核对它实际覆盖的验证与清理，不由产物存在推断没有残留。
+- **产物存在不等于完成验证**（2026-08-29）：Gradle 出了 APK 不代表采集通过；现行 runner 还要验证 observation 与本次 HEAD、APK、T0、run_id 的绑定。
 - **fail-closed 不等于 failure observable**：早期失败（标识分配之前）也要有独立、已脱敏的失败记录，保留 phase 与 primary；
   记录写失败只能是 secondary，不得遮蔽 primary；cleanup 后出错也不能因"结果已发布"而吞掉失败记录。
 - **失败消费顺序 primary-first**：子进程已发布结构化 failed summary 时，先读它的 primary/原因，再把 exit/stderr 作并列证据；
   validation 与 cleanup 时刻的快照分开，cleanup 成功不能覆盖失败瞬间；区分 absent / not_checked / rejected。
-- **执行期的前置门，preflight 必须同等覆盖**：执行期"已存在即拒绝"的输出目录、"default ADB 进程/5037 listener 必须为零"、
-  完整宿主树 pin，都要在授权前以同一规则只读检查，否则一次性授权会耗在环境门上。被动检查不运行 adb、不自动 kill 未知进程；
-  snapshot 不可用与非零同样 fail closed。
-- **一次性授权失败后冻结，不自动重试**；环境后来恢复也不复活旧授权，须重新形成候选与 preflight。
+- **就位检查覆盖本次运行前置**：现行流程按规程检查 HEAD、唯一设备、APK 与无障碍服务，报就位后取得本次开跑令；未知字段不能当通过。旧 default ADB/5037 必须为零、完整宿主树 pin 与 once 前置均已退役；runner 不自动终止外部进程。
+- **失败不自动重试**：旧授权不复用；修复或用户处理前置后，重新报就位并取得本次开跑令，用新 run_id 启动一次采集。
 - **ADB 私有 server listen 必须写 `-L tcp:localhost:<port>`**（2026-08-29 源码复核：`tcp_host_is_local()` 只认空 host 或字面
   `localhost`，写 `127.0.0.1` 会 `LOG(FATAL)`、WER 表现为 `0xc0000409`）；client `-H/-P` 与 `ADB_SERVER_SOCKET` 仍可用 numeric
   `127.0.0.1`。与 USB 无关，不要加 `ADB_USB_LEGACY=1`。

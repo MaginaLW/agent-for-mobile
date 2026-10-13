@@ -20,7 +20,7 @@
 |---|---|---|
 | M0 | mobile-mcp 真机跑通 5 个验收任务 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)） |
 | M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 网关已在历史手机上跑通，部分工具仍是占位（见[能力现状](docs/knowledge/android/m1b-capabilities.md)）；P0 安全硬门未闭合 |
-| M1-T | Android 平板横屏基线（T0-L 入场 → T-L1 只读证据 → T-L2 横屏 P0） | 🟡 T0-L 完成；T-L1 未通过；C1b 改用简单 runner，待真机运行 |
+| M1-T | Android 平板横屏基线（T0-L 入场 → T-L1 只读证据 → T-L2 横屏 P0） | 🟡 T0-L 完成；T-L1 未通过；C1b 简单 runner 已在 [10-09 真机尝试](docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)中走通构建、安装，采集被 vivo 撤销无障碍权限阻塞 |
 | M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ 未开始 |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ 未开始 |
 
