@@ -13,7 +13,7 @@
 ## 下一步
 
 - C1b：按 [backlog §4](docs/backlog.md)——阻塞于 vivo 安全中心撤销探针无障碍服务；可选方向见 backlog §4 C1b 待办 d。
-- R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；协调分支已同时含两者，是否搭车由 A 选候选时决定。
+- R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；本地 main 已同时含两者，是否搭车由 A 选候选时决定。
 
 ## 里程碑
 
@@ -37,4 +37,4 @@
 
 ## 代码分布
 
-协调分支 `codex/agent-workflow`（协调文档与 R1/R4/R5 等离线修复）和 C1b 实现线 `codex/c1b-host-evidence-20260930`（tip `cad7411`）未整体合并，但实现线的 C1b 探针修复已取入协调分支（`cc74daf`），实现线不再有独有 app 改动。两条线的功能改动都没有合入 main；这期间 `origin/main`（`8bc0c87`）只收了 R6 文档闭包（PR #2–#4）。本地 `main` 与 `origin/main` 已分叉（本地多 1 个提交、少 3 个）。
+2026-10-13 按用户本次“合入”指令，本地 main 已整合协调分支 `codex/agent-workflow@bb3deb0`（含去复杂度收尾及 R1/R4/R5/C1b），并保留刷新确认的 `origin/main@8bc0c87` 文档历史；全量离线门 13/13 通过，尚未推送。C1b 实现线的 app 修复已于 `cc74daf` 取入，`cad7411` 不再有独有 app 改动。R1/R5/C1b 仍未完成真机验收，手机批次 4 候选未合入；本次源码整合不放行设备运行。见[本地主线整合记录](docs/runs/2026-10-13-本地主线整合.md)。
