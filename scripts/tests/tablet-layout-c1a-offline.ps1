@@ -96,6 +96,7 @@ $state=$env:TABLET_C1A_FAKE_STATE
 $actualArgs = @($args)
 $line=($actualArgs | ConvertTo-Json -Compress)
 Add-Content -LiteralPath (Join-Path $state 'adb-argv.jsonl') -Value $line -Encoding utf8
+Set-Content -LiteralPath (Join-Path $state 'adb-server-socket.txt') -Value ([string]$env:ADB_SERVER_SOCKET) -NoNewline
 $joined=$actualArgs -join [char]31
 if($joined -ceq 'devices'){
  $override=Join-Path $state 'devices.txt'
@@ -350,6 +351,66 @@ try {
         $ignored = & git -C $RepoRoot check-ignore --no-index -- 'app/.kotlin/sessions/c1a-probe' 2>$null
         Assert-True ($LASTEXITCODE -eq 0 -and $ignored.Trim() -ceq 'app/.kotlin/sessions/c1a-probe') `
             'Gradle .kotlin cache 未由正式 ignore policy 收口'
+    }
+
+    Test-Case '退役 private socket 在所有 C1a ADB 入口直接拒绝' @('argv_allowlist') {
+        $fake = New-FakeTools
+        foreach ($socket in @('tcp:127.0.0.1:55003', 'tcp:localhost:55003', 'tcp:127.0.0.1:65536', '')) {
+            $processEnvironment = @{ ADB_SERVER_SOCKET=$socket; TABLET_C1A_FAKE_STATE=$fake.State; TABLET_C1A_FAKE_PWSH=$PwshPath }
+            foreach ($invoke in @(
+                { Get-TL1C1aSingleDevice $fake.Adb -ProcessEnvironment $processEnvironment -ClearEnvironment },
+                { Invoke-TL1C1aAdb $fake.Adb 'FAKE123' fingerprint -ProcessEnvironment $processEnvironment -ClearEnvironment },
+                { Get-TL1C1aInstalledApkHostSha256 $fake.Adb 'FAKE123' '/data/app/fixture/base.apk' -ProcessEnvironment $processEnvironment -ClearEnvironment },
+                { Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' -ProcessEnvironment $processEnvironment -ClearEnvironment }
+            )) {
+                $failure = $null
+                try { [void](& $invoke) } catch { $failure=$_.Exception.Message }
+                Assert-True ($null -ne $failure -and $failure -match '私有 ADB 端点已退役') `
+                    "C1a 未直接拒绝退役端点：<$socket> ($failure)"
+            }
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fake.State 'adb-argv.jsonl'))) `
+            'C1a 退役端点被拒绝后仍执行 fake adb'
+    }
+
+    Test-Case '继承 private socket 拒绝，清空环境后仍允许默认 ADB' @('argv_allowlist') {
+        $fake = New-FakeTools
+        $priorSocket=[Environment]::GetEnvironmentVariable('ADB_SERVER_SOCKET',[EnvironmentVariableTarget]::Process)
+        $priorState=$env:TABLET_C1A_FAKE_STATE
+        try {
+            [Environment]::SetEnvironmentVariable('ADB_SERVER_SOCKET','tcp:127.0.0.1:55003',[EnvironmentVariableTarget]::Process)
+            $env:TABLET_C1A_FAKE_STATE=$fake.State
+            foreach ($processEnvironment in @($null,@{})) {
+                foreach ($invoke in @(
+                    { Get-TL1C1aSingleDevice $fake.Adb -ProcessEnvironment $processEnvironment },
+                    { Invoke-TL1C1aAdb $fake.Adb 'FAKE123' fingerprint -ProcessEnvironment $processEnvironment },
+                    { Get-TL1C1aInstalledApkHostSha256 $fake.Adb 'FAKE123' '/data/app/fixture/base.apk' -ProcessEnvironment $processEnvironment },
+                    { Wait-TL1C1aA11yReady $fake.Adb 'FAKE123' -ProcessEnvironment $processEnvironment }
+                )) {
+                    $failure=$null
+                    try { [void](& $invoke) } catch { $failure=$_.Exception.Message }
+                    Assert-True ($null -ne $failure -and $failure -match '私有 ADB 端点已退役') `
+                        "C1a 未拒绝继承的退役端点 ($failure)"
+                }
+            }
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $fake.State 'adb-argv.jsonl'))) `
+                '拒绝继承端点后仍执行 fake adb'
+            $safeEnvironment=@{
+                TABLET_C1A_FAKE_STATE=$fake.State; TABLET_C1A_FAKE_PWSH=$PwshPath
+                SYSTEMROOT=$env:SYSTEMROOT; WINDIR=$env:WINDIR; PATH=$env:PATH; TEMP=$env:TEMP; TMP=$env:TMP
+            }
+            Assert-Equal (Get-TL1C1aSingleDevice $fake.Adb -ProcessEnvironment $safeEnvironment -ClearEnvironment) `
+                'FAKE123' '清空继承环境后默认设备发现被误拒绝'
+            Assert-Equal ([IO.File]::ReadAllText((Join-Path $fake.State 'adb-server-socket.txt'))) `
+                '' '清空环境后仍将父 private socket 传给 fake adb'
+            $actualArgs=@(Get-Content -LiteralPath (Join-Path $fake.State 'adb-argv.jsonl') -Raw | ConvertFrom-Json)
+            Assert-Equal @($actualArgs).Count 1 '默认设备发现擅自添加端点 selector'
+            Assert-Equal $actualArgs[0] 'devices' '清空环境后默认 argv 漂移'
+        }
+        finally {
+            $env:ADB_SERVER_SOCKET=$priorSocket
+            $env:TABLET_C1A_FAKE_STATE=$priorState
+        }
     }
 
     Test-Case 'fake adb 精确 content 协议、stdin 与统一 nonce' @(

@@ -8,41 +8,6 @@ Set-StrictMode -Version 3.0
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
 
-if ($null -eq ('TL1C1bT0ClientJobNative' -as [type])) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-
-public static class TL1C1bT0ClientJobNative {
-    private const uint JOB_OBJECT_QUERY = 0x0004;
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr OpenJobObjectW(uint access, bool inheritHandle, string name);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool IsProcessInJob(
-        IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    public static bool IsInNamedJob(string name, IntPtr process) {
-        if (String.IsNullOrEmpty(name) || process == IntPtr.Zero) return false;
-        IntPtr job = OpenJobObjectW(JOB_OBJECT_QUERY, false, name);
-        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-        try {
-            bool result;
-            if (!IsProcessInJob(process, job, out result)) {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-            return result;
-        } finally { CloseHandle(job); }
-    }
-}
-'@
-}
-
 $deviceLease = $null
 $exitCode = 97
 $failure = $null
@@ -65,36 +30,8 @@ try {
     }
     $adbServerSocket = [Environment]::GetEnvironmentVariable(
         'ADB_SERVER_SOCKET', [EnvironmentVariableTarget]::Process)
-    $adbServerPort = $null
-    $clientJobName = $null
     if ($null -ne $adbServerSocket) {
-        $socketMatch = [regex]::Match(
-            $adbServerSocket, '\Atcp:127\.0\.0\.1:([0-9]{5})\z',
-            [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-        if (-not $socketMatch.Success) {
-            throw 'ADB_SERVER_SOCKET 必须是 exact tcp:127.0.0.1:<49152..65535>。'
-        }
-        $parsedPort = 0
-        if (-not [int]::TryParse(
-            $socketMatch.Groups[1].Value,
-            [Globalization.NumberStyles]::None,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [ref]$parsedPort) -or $parsedPort -lt 49152 -or $parsedPort -gt 65535) {
-            throw 'ADB_SERVER_SOCKET 端口必须位于 49152..65535。'
-        }
-        $adbServerPort = $parsedPort
-        $clientJobName = [Environment]::GetEnvironmentVariable(
-            'TL1_C1B_CLIENT_JOB_NAME', [EnvironmentVariableTarget]::Process)
-        $rootInClientJob = $false
-        if ($clientJobName -cmatch '^Local\\TL1C1bClient-[0-9a-f]{32}$') {
-            try {
-                $rootInClientJob = [TL1C1bT0ClientJobNative]::IsInNamedJob(
-                    $clientJobName, (Get-Process -Id $PID).Handle)
-            } catch { $rootInClientJob = $false }
-        }
-        if (-not $rootInClientJob) {
-            throw 'T0 adb sidecar 未绑定 private client Job。'
-        }
+        throw 'C1b 私有 ADB 端点已退役；T0 adb sidecar 不接受 ADB_SERVER_SOCKET。'
     }
     . $intakeLibrary
     . $dispatchLibrary
@@ -131,8 +68,6 @@ try {
         foreach($name in @(
             'SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','PATH','TEMP','TMP',
             'USERPROFILE','HOME','ANDROID_SDK_ROOT','ANDROID_HOME',
-            'ADB_SERVER_SOCKET',
-            'TL1_C1B_E2E_STATE','TL1_C1B_E2E_SCENARIO',
             'TABLET_C1A_FAKE_STATE','TABLET_C1A_FAKE_PWSH','TABLET_C1A_FAKE_QUERY_STDERR'
         )){
             $value=[Environment]::GetEnvironmentVariable($name,[EnvironmentVariableTarget]::Process)
@@ -140,12 +75,6 @@ try {
         }
         $start.Environment.Clear()
         foreach($entry in $adbEnvironment.GetEnumerator()){$start.Environment[$entry.Key]=$entry.Value}
-        if ($null -ne $adbServerPort) {
-            foreach ($argument in @('-H','127.0.0.1','-P',
-                $adbServerPort.ToString([Globalization.CultureInfo]::InvariantCulture))) {
-                $start.ArgumentList.Add($argument)
-            }
-        }
         foreach ($argument in $AdbArgs) { $start.ArgumentList.Add($argument) }
         $process = [Diagnostics.Process]::new()
         $process.StartInfo = $start
@@ -155,16 +84,6 @@ try {
         try {
             if (-not $process.Start()) { throw 'T0 adb sidecar 无法启动真实 adb。' }
             $started = $true
-            if ($null -ne $adbServerPort) {
-                $childInClientJob = $false
-                try {
-                    $childInClientJob = [TL1C1bT0ClientJobNative]::IsInNamedJob(
-                        $clientJobName, $process.Handle)
-                } catch { $childInClientJob = $false }
-                if (-not $childInClientJob) {
-                    throw 'T0 adb child 未继承 private client Job。'
-                }
-            }
             $process.StandardInput.Close()
             $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
             $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderr)

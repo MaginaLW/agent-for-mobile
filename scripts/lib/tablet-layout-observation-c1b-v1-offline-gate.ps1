@@ -38,7 +38,6 @@ $script:TL1C1BV1OfflineCaseDefinitions = @(
     [pscustomobject]@{ case_id='runtime_origin_mismatch'; coverage_ids=[string[]]@('runtime_origin_mismatch') },
     [pscustomobject]@{ case_id='trusted_runtime_fixed_title_hash'; coverage_ids=[string[]]@('trusted_runtime_fixed_title_hash') },
     [pscustomobject]@{ case_id='orphan_node_safe_lookup'; coverage_ids=[string[]]@('orphan_node_safe_lookup') },
-    [pscustomobject]@{ case_id='sidecar_closed'; coverage_ids=[string[]]@('sidecar_closed','zero_action_counts','sidecar_symmetric_claim_binding') },
     [pscustomobject]@{ case_id='extra_application'; coverage_ids=[string[]]@('extra_application','exact_two_application_required') },
     [pscustomobject]@{ case_id='extra_display'; coverage_ids=[string[]]@('extra_display') },
     [pscustomobject]@{ case_id='unknown_display'; coverage_ids=[string[]]@('unknown_display','no_default_display_inference') },
@@ -59,7 +58,7 @@ $script:TL1C1BV1OfflineCaseDefinitions = @(
     [pscustomobject]@{ case_id='static_read_only_forbidden_scan'; coverage_ids=[string[]]@('static_read_only_forbidden_scan','direct_focus_cross_layer_requirement') },
     [pscustomobject]@{ case_id='unknown_window_type'; coverage_ids=[string[]]@('unknown_window_type','unknown_type_code_zero_and_unmapped','unknown_type_blocks_topology_and_hidden_ime') },
     [pscustomobject]@{ case_id='incomplete_subtree_focus_unknown'; coverage_ids=[string[]]@('incomplete_subtree_focus_unknown','root_and_subtree_completeness_required','persisted_focus_topology_complete','focus_root_count_and_declared_node_count_required','focus_root_binding_and_geometry_required') },
-    [pscustomobject]@{ case_id='truncated_window_inventory'; coverage_ids=[string[]]@('truncated_window_inventory','windows_truncated_blocks_hidden_ime','truncated_inventory_blocks_sidecar_ime_verification') },
+    [pscustomobject]@{ case_id='truncated_window_inventory'; coverage_ids=[string[]]@('truncated_window_inventory','windows_truncated_blocks_hidden_ime') },
     [pscustomobject]@{ case_id='ime_capture_token_binding'; coverage_ids=[string[]]@('ime_capture_token_binding','ime_capture_token_schema_exact','ime_capture_token_mismatch_blocks_hidden_ime') }
 )
 

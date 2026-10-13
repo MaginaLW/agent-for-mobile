@@ -119,8 +119,9 @@ observation validator 分开输出：
 
 navigation/conversation/target/regions/layout/微信/editor/action/P0/execution 在本版恒为 false/unsupported。
 
-公共 observation offline gate 固定为 49/49 cases、89/89 required coverage；machine summary 的 closed
-schema 必须拒绝旧 48/86 计数、删减 case/coverage 或错绑 IME token 的摘要。
+公共 observation offline gate 固定为 48/48 cases、85/85 required coverage。旧主机链退役后，仅删除其
+sidecar schema 专属用例及 4 项 coverage；有效 observation 检查全部保留。machine summary 的 closed
+schema 必须拒绝旧 49/89、48/86 计数、删减有效 case/coverage 或错绑 IME token 的摘要。
 
 ## 7. 隐私与采集纪律
 

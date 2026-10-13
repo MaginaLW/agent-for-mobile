@@ -436,59 +436,25 @@ function Write-TL1C1aJsonAtomic {
     finally { if ($bytes.Length -gt 0) { [Array]::Clear($bytes, 0, $bytes.Length) } }
 }
 
-function Get-TL1C1aAdbClientArguments {
-    param([AllowNull()][hashtable]$ProcessEnvironment)
-
-    if ($null -eq $ProcessEnvironment -or
-        -not $ProcessEnvironment.ContainsKey('ADB_SERVER_SOCKET')) {
-        return [string[]]@()
+function Assert-TL1C1aDefaultAdbEndpoint {
+    param([AllowNull()][hashtable]$ProcessEnvironment, [switch]$ClearEnvironment)
+    if (($null -ne $ProcessEnvironment -and $ProcessEnvironment.ContainsKey('ADB_SERVER_SOCKET')) -or
+        (-not $ClearEnvironment -and $null -ne [Environment]::GetEnvironmentVariable(
+            'ADB_SERVER_SOCKET', [EnvironmentVariableTarget]::Process))) {
+        throw 'C1b 私有 ADB 端点已退役；C1a 不接受 ADB_SERVER_SOCKET。'
     }
-    $socket = [string]$ProcessEnvironment['ADB_SERVER_SOCKET']
-    $match = [regex]::Match(
-        $socket,
-        '\Atcp:127\.0\.0\.1:([0-9]{5})\z',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-    $port = 0
-    if (-not $match.Success -or
-        -not [int]::TryParse(
-            $match.Groups[1].Value,
-            [Globalization.NumberStyles]::None,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [ref]$port) -or
-        $port -lt 49152 -or $port -gt 65535 -or
-        $socket -cne "tcp:127.0.0.1:$port") {
-        throw 'ADB_SERVER_SOCKET 必须是 exact tcp:127.0.0.1:<49152..65535>。'
-    }
-    return [string[]]@(
-        '-H', '127.0.0.1',
-        '-P', $port.ToString([Globalization.CultureInfo]::InvariantCulture))
 }
 
 function Get-TL1C1aSingleDevice {
     param(
         [Parameter(Mandatory)][string]$AdbPath,
         [hashtable]$ProcessEnvironment,
-        [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [switch]$ClearEnvironment
     )
-    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
-    if (@($clientArguments).Count -ne 0) {
-        if ($null -eq $PrivateAdbServerGuard) {
-            throw 'private ADB endpoint 必须提供 server Guard。'
-        }
-        $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
-            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
-            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-            -TimeoutSec 30 -ClientKind Adb
-    } else {
-        if ($null -ne $PrivateAdbServerGuard) {
-            throw 'server Guard 不得绑定非 private ADB endpoint。'
-        }
-        $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('devices')) -Operation '唯一设备发现' `
-            -Environment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
-    }
+    Assert-TL1C1aDefaultAdbEndpoint $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
+    $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
+        -Arguments @('devices') -Operation '唯一设备发现' `
+        -Environment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
     $rows = [Collections.Generic.List[object]]::new()
     $headerSeen = $false
     foreach ($line in ($result.Text -split "`r?`n")) {
@@ -579,8 +545,7 @@ function Invoke-TL1C1aAdb {
         [int]$TimeoutSec = 30,
         [switch]$AllowFailure,
         [hashtable]$ProcessEnvironment,
-        [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [switch]$ClearEnvironment
     )
     $contentNames = @('content_t0','content_status','content_c1','content_c2','content_result','content_abort')
     $contentUriArgument = if ($contentNames -ccontains $Name) {
@@ -606,27 +571,12 @@ function Invoke-TL1C1aAdb {
     }
     if ($Name -eq 'install' -and (-not [IO.Path]::IsPathFullyQualified($Value) -or
         -not (Test-Path -LiteralPath $Value -PathType Leaf))) { throw '安装 APK 路径必须是存在的绝对文件。' }
-    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
-    if (@($clientArguments).Count -ne 0) {
-        if ($null -eq $PrivateAdbServerGuard) {
-            throw 'private ADB endpoint 必须提供 server Guard。'
-        }
-        $result = Invoke-TL1C1bPrivateAdbGuardedProcess `
-            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('-s',$Serial) + $tail) `
-            -Operation "C1a adb/$Name" -InputBytes $InputBytes `
-            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-            -TimeoutSec $TimeoutSec -AllowFailure:$AllowFailure -ClientKind Adb
-    } else {
-        if ($null -ne $PrivateAdbServerGuard) {
-            throw 'server Guard 不得绑定非 private ADB endpoint。'
-        }
-        $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('-s',$Serial) + $tail) `
-            -Operation "C1a adb/$Name" -InputBytes $InputBytes -TimeoutSec $TimeoutSec `
-            -AllowFailure:$AllowFailure -Environment $ProcessEnvironment `
-            -ClearEnvironment:$ClearEnvironment
-    }
+    Assert-TL1C1aDefaultAdbEndpoint $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
+    $result = Invoke-TL1C1aProcess -FilePath $AdbPath `
+        -Arguments (@('-s',$Serial) + $tail) `
+        -Operation "C1a adb/$Name" -InputBytes $InputBytes -TimeoutSec $TimeoutSec `
+        -AllowFailure:$AllowFailure -Environment $ProcessEnvironment `
+        -ClearEnvironment:$ClearEnvironment
     if ($contentNames -ccontains $Name -and $result.Stderr.Length -ne 0) {
         throw "C1a adb/$Name stderr 必须 exact empty。"
     }
@@ -856,31 +806,11 @@ function Get-TL1C1aInstalledApkHostSha256 {
         [Parameter(Mandatory)][string]$RemotePath,
         [ValidateRange(1,300)][int]$TimeoutSec = 180,
         [hashtable]$ProcessEnvironment,
-        [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [switch]$ClearEnvironment
     )
     [void](Assert-TL1C1aInstalledApkRemotePath $RemotePath)
     if ($Serial -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$') { throw 'installed APK serial 格式不安全。' }
-    $clientArguments = Get-TL1C1aAdbClientArguments $ProcessEnvironment
-    if (@($clientArguments).Count -ne 0) {
-        if ($null -eq $PrivateAdbServerGuard) {
-            throw 'private ADB endpoint 必须提供 server Guard。'
-        }
-        $guarded = Invoke-TL1C1bPrivateAdbGuardedProcess `
-            -Guard $PrivateAdbServerGuard -FilePath $AdbPath `
-            -Arguments ($clientArguments + @('-s',$Serial,'exec-out','cat',$RemotePath)) `
-            -Operation 'installed base.apk 流式读取' `
-            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-            -TimeoutSec $TimeoutSec -OutputMode Sha256 `
-            -MaximumOutputBytes $script:TL1C1aMaximumInstalledApkBytes -ClientKind Adb
-        if ($guarded.Stderr.Length -ne 0 -or $guarded.ByteCount -lt 1) {
-            throw 'installed base.apk 流式读取失败。'
-        }
-        return [string]$guarded.Sha256
-    }
-    if ($null -ne $PrivateAdbServerGuard) {
-        throw 'server Guard 不得绑定非 private ADB endpoint。'
-    }
+    Assert-TL1C1aDefaultAdbEndpoint $ProcessEnvironment -ClearEnvironment:$ClearEnvironment
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $AdbPath
     $start.UseShellExecute = $false
@@ -888,7 +818,7 @@ function Get-TL1C1aInstalledApkHostSha256 {
     $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in @($clientArguments + @('-s',$Serial,'exec-out','cat',$RemotePath))) {
+    foreach ($argument in @('-s',$Serial,'exec-out','cat',$RemotePath)) {
         $start.ArgumentList.Add($argument)
     }
     if($ClearEnvironment){$start.Environment.Clear()}
@@ -1063,12 +993,10 @@ function Wait-TL1C1aA11yReady {
         [ValidateRange(1,45)][int]$MaximumWaitSec = 45,
         [ValidateRange(50,1000)][int]$PollIntervalMs = 1000,
         [hashtable]$ProcessEnvironment,
-        [switch]$ClearEnvironment,
-        [AllowNull()]$PrivateAdbServerGuard
+        [switch]$ClearEnvironment
     )
     $enabledText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_enabled `
-        -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-        -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
+        -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment).Text
     $enabledState = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText ''
     if (-not $enabledState.Enabled) {
         return [pscustomobject]@{ Enabled=$false; Bound=$false; Ready=$false; Attempts=0; WaitMs=0L }
@@ -1078,8 +1006,7 @@ function Wait-TL1C1aA11yReady {
     while ($true) {
         $attempts++
         $boundText = (Invoke-TL1C1aAdb $AdbPath $Serial a11y_bound `
-            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment `
-            -PrivateAdbServerGuard $PrivateAdbServerGuard).Text
+            -ProcessEnvironment $ProcessEnvironment -ClearEnvironment:$ClearEnvironment).Text
         $state = Test-TL1C1aA11yReady -EnabledText $enabledText -BoundText $boundText
         if ($state.Ready -or $watch.Elapsed.TotalSeconds -ge $MaximumWaitSec) {
             return [pscustomobject]@{

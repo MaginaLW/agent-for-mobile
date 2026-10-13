@@ -69,10 +69,7 @@ function Read-FakeEnvironment([string]$CallRoot) {
 }
 
 function Assert-FakeEnvironment {
-    param(
-        [Parameter(Mandatory)]$Result,
-        [AllowNull()][string]$ExpectedSocket
-    )
+    param([Parameter(Mandatory)]$Result)
 
     $actual = Read-FakeEnvironment $Result.CallRoot
     $expectedNames = [Collections.Generic.List[string]]::new()
@@ -80,7 +77,6 @@ function Assert-FakeEnvironment {
         'SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','PATH','TEMP','TMP',
         'USERPROFILE','HOME','ANDROID_SDK_ROOT','ANDROID_HOME','TABLET_C1A_FAKE_STATE'
     )) { $expectedNames.Add($name) }
-    if ($PSBoundParameters.ContainsKey('ExpectedSocket')) { $expectedNames.Add('ADB_SERVER_SOCKET') }
     Assert-Equal $actual.Count $expectedNames.Count 'fake adb 子进程环境键集合漂移'
     foreach ($name in $expectedNames) {
         Assert-True $actual.Contains($name) "fake adb 子进程缺少环境键：$name。"
@@ -90,7 +86,7 @@ function Assert-FakeEnvironment {
     foreach ($forbidden in @(
         'SHOULD_NOT_PASS','AGENT_MOBILE_DEVICE_LOCK_LEASE','TL1_C1A_REAL_ADB_PATH',
         'TL1_C1A_BOUND_SERIAL','TL1_C1A_T0_LIBRARY_PATH','TL1_C1A_DISPATCH_LOCK_LIBRARY',
-        'TL1_C1B_CLIENT_JOB_NAME'
+        'ADB_SERVER_SOCKET','TL1_C1B_CLIENT_JOB_NAME','TL1_C1B_E2E_STATE','TL1_C1B_E2E_SCENARIO'
     )) {
         Assert-True (-not $actual.Contains($forbidden)) "fake adb 子进程泄漏控制环境：$forbidden。"
     }
@@ -132,12 +128,12 @@ function Invoke-TestSidecar {
         TL1_C1A_DISPATCH_LOCK_LIBRARY = $TestDispatchLibraryPath
         AGENT_MOBILE_DEVICE_LOCK_LEASE = [string]$deviceLease.LeaseToken
         SHOULD_NOT_PASS = 'forbidden-environment-value'
+        TL1_C1B_CLIENT_JOB_NAME = 'retired-client-job'
+        TL1_C1B_E2E_STATE = 'retired-e2e-state'
+        TL1_C1B_E2E_SCENARIO = 'retired-e2e-scenario'
     }
-    $clientJobName = $null
     if ($IncludeSocket) {
         $environment['ADB_SERVER_SOCKET'] = $Socket
-        $clientJobName = 'Local\TL1C1bClient-' + [guid]::NewGuid().ToString('N')
-        $environment['TL1_C1B_CLIENT_JOB_NAME'] = $clientJobName
     }
 
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -240,12 +236,12 @@ function Get-DispatchGlobalLockPath {
         -Owner 'tablet-layout-c1a-t0-adb-sidecar-offline' -LeaseToken ''
     $readOnlyArguments = [string[]](Get-TabletAdbArguments -Name prop_brand -Serial 'FAKE123')
 
-    Test-Case 'private socket 未 creation-time 加入命名 client Job 时 fail closed' {
+    Test-Case '退役的合法 private socket 在 adb 前直接拒绝' {
         $result = Invoke-TestSidecar -Arguments $readOnlyArguments -IncludeSocket `
             -Socket 'tcp:127.0.0.1:55003'
-        Assert-Equal $result.ExitCode 97 '未加入 private client Job 的 sidecar 未失败'
-        Assert-True (-not $result.Executed) 'Job proof 失败后仍启动 synthetic fake adb'
-        Assert-True ($result.Stderr -match 'private client Job') 'Job proof 拒绝原因不明确'
+        Assert-Equal $result.ExitCode 97 '退役的 private socket 未失败'
+        Assert-True (-not $result.Executed) '退役端点被拒绝后仍启动 synthetic fake adb'
+        Assert-True ($result.Stderr -match '私有 ADB 端点已退役') '退役端点拒绝原因不明确'
     }
 
     Test-Case '未设置 socket 保持 C1a 原 argv 与无 socket 环境' {

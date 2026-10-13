@@ -40,6 +40,17 @@ foreach ($relative in @(
     [void](New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force)
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target
 }
+# 在测试副本中注入释放后的失败，确保真实锁仍被释放；生产库不增加测试开关。
+Add-Content -LiteralPath (Join-Path $Sandbox 'scripts/lib/dispatch-lock.ps1') -Value @'
+$script:OfflineCloseDispatchLockLease = ${function:Close-DispatchLockLease}
+function Close-DispatchLockLease {
+    param($Lease)
+    $closed = & $script:OfflineCloseDispatchLockLease -Lease $Lease
+    if ($env:FAKE_ADB_SCENARIO -in @('cleanup_fail', 'drift_cleanup_fail')) { throw 'fake lease cleanup failure' }
+    if ($env:FAKE_ADB_SCENARIO -ceq 'cleanup_false') { return $false }
+    return $closed
+}
+'@
 [IO.File]::WriteAllText((Join-Path $Sandbox '.gitignore'), "docs/runs/evidence/`n")
 & git init -q $Sandbox
 Invoke-Git @('add', '-A') | Out-Null
@@ -128,7 +139,7 @@ switch -regex ($path) {
     '^status/' {
         if ($session.state -ceq 'capturing_c1') {
             $session.state = 'ready_c2'; $session.inflight = $null; $session.committed = @('c1')
-            if ($scenario -ceq 'drift') { $session.generation = 2 }
+            if ($scenario -in @('drift', 'drift_cleanup_fail')) { $session.generation = 2 }
         } elseif ($session.state -ceq 'capturing_c2') { $session.state = 'complete'; $session.inflight = $null; $session.committed = @('c1', 'c2') }
         Save; Out-Control; break
     }
@@ -145,6 +156,9 @@ switch -regex ($path) {
         $o.upstream_t0.artifact_sha256 = $session.t0_sha; $o.upstream_t0.captured_at = $session.t0_at
         $o.frames[0].captured_at = $now.AddMilliseconds(-1200).ToString($fmt); $o.frames[1].captured_at = $now.AddMilliseconds(-200).ToString($fmt)
         $o.captured_at = $o.frames[1].captured_at
+        if ($scenario -ceq 'run_json_fail') {
+            [void](New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot "repo/docs/runs/evidence/$($session.run_id)/tablet-layout-c1b/run.json"))
+        }
         Out-Text ($o | ConvertTo-Json -Depth 100 -Compress); break
     }
     default { exit 1 }
@@ -177,8 +191,8 @@ function Invoke-Runner([string]$Name, [string]$Scenario, [string[]]$Extra = @())
     $logPath = Join-Path $state 'adb.log'
     return [pscustomobject]@{
         Exit = $exit; Output = ($output -join "`n"); Evidence = $evidence; RunId = $runId
-        RunRaw = if (Test-Path -LiteralPath $runJsonPath) { Get-Content -Raw -LiteralPath $runJsonPath } else { '' }
-        Run = if (Test-Path -LiteralPath $runJsonPath) { Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json -DateKind String } else { $null }
+        RunRaw = if (Test-Path -LiteralPath $runJsonPath -PathType Leaf) { Get-Content -Raw -LiteralPath $runJsonPath } else { '' }
+        Run = if (Test-Path -LiteralPath $runJsonPath -PathType Leaf) { Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json -DateKind String } else { $null }
         Log = [string[]]@(if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath })
     }
 }
@@ -250,6 +264,29 @@ try {
     Test-Case 'vivo-dumpsys-hides-bound-uses-provider' {
         $r = Invoke-Runner 'vivo' 'vivo_hidden_bound'
         Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+    }
+    Test-Case 'lease-cleanup-failure-is-not-success' {
+        $r = Invoke-Runner 'cleanup' 'cleanup_fail'
+        Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.exit_code -eq 1) "exit=$($r.Exit) $($r.Output)"
+        Assert-True ($r.Run.failure_reason -match '设备锁释放失败' -and $r.Output -match 'fake lease cleanup failure') '清理失败未记录'
+        Assert-True (@($r.Log | Where-Object { $_ -match '/capture/c1/' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/capture/c2/' }).Count -eq 1) '清理失败后重试了采集'
+        Assert-NoForbiddenAdb $r
+    }
+    Test-Case 'cleanup-failure-preserves-primary' {
+        $r = Invoke-Runner 'primarycleanup' 'drift_cleanup_fail'
+        Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '漂移' -and $r.Output -match 'fake lease cleanup failure') "exit=$($r.Exit) $($r.Output)"
+        Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq 'aborted') '原采集失败未终止会话'
+    }
+    Test-Case 'lease-cleanup-incomplete-is-not-success' {
+        $r = Invoke-Runner 'cleanupfalse' 'cleanup_false'
+        Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.failure_reason -match '租约清理未完成') "exit=$($r.Exit) $($r.Output)"
+        Assert-NoForbiddenAdb $r
+    }
+    Test-Case 'run-json-write-failure-is-not-success' {
+        $r = Invoke-Runner 'record' 'run_json_fail'
+        Assert-True ($r.Exit -eq 1 -and $null -eq $r.Run -and $r.Output -match 'run.json 写入失败' -and $r.Output -match 'outcome=failed exit=1') "exit=$($r.Exit) $($r.Output)"
+        Assert-True (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json') -PathType Leaf) '已采集的 observation 被丢弃'
+        Assert-NoForbiddenAdb $r
     }
     Test-Case 'dirty-tree-rejected' {
         $dirty = Join-Path $Sandbox 'dirty.txt'; [IO.File]::WriteAllText($dirty, 'x')

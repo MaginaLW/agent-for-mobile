@@ -24,17 +24,17 @@
     "suite": { "const": "tablet-layout-observation/c1b-v1" },
     "status": { "const": "passed" },
     "test_exit_code": { "const": 0 },
-    "total_cases": { "const": 49 },
-    "passed_cases": { "const": 49 },
+    "total_cases": { "const": 48 },
+    "passed_cases": { "const": 48 },
     "failed_cases": { "const": 0 },
-    "required_coverage_count": { "const": 89 },
-    "covered_required_count": { "const": 89 },
+    "required_coverage_count": { "const": 85 },
+    "covered_required_count": { "const": 85 },
     "coverage_ids": {
-      "type": "array", "minItems": 89, "maxItems": 89, "uniqueItems": true,
+      "type": "array", "minItems": 85, "maxItems": 85, "uniqueItems": true,
       "items": { "$ref": "#/$defs/safeId" }
     },
     "cases": {
-      "type": "array", "minItems": 49, "maxItems": 49,
+      "type": "array", "minItems": 48, "maxItems": 48,
       "items": { "$ref": "#/$defs/case" }
     },
     "cross_layer_requirements": {

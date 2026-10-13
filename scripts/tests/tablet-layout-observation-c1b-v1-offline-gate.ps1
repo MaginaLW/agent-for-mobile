@@ -36,11 +36,11 @@ function New-C1BGateCompleteSummary {
 try{
     [void][IO.Directory]::CreateDirectory($testRoot)
 
-    Test-C1BGateCase 'exact 49-case/89-coverage summary passes' {
+    Test-C1BGateCase 'exact 48-case/85-coverage summary passes' {
         $id='gate-'+[guid]::NewGuid().ToString('N')
         $result=Test-TL1C1BV1OfflineSummaryObject (New-C1BGateCompleteSummary $id) $id
         Assert-C1BGate $result.accepted 'complete summary rejected'
-        Assert-C1BGate ($result.total_cases -eq 49 -and $result.covered_required_count -eq 89) 'exact counts lost'
+        Assert-C1BGate ($result.total_cases -eq 48 -and $result.covered_required_count -eq 85) 'exact counts lost'
         Assert-C1BGate (-not $result.runtime_evidence -and -not $result.layout_accepted -and
             $result.p0_capability -ceq 'unsupported' -and -not $result.execution_grant) 'safety envelope promoted'
     }

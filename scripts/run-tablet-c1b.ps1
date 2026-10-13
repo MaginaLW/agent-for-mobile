@@ -364,7 +364,17 @@ catch {
     [Console]::Error.WriteLine("tablet C1b 采集失败（$($script:Run.stage)）：$($_.Exception.Message)")
 }
 finally {
-    if ($null -ne $lease) { try { [void](Close-DispatchLockLease -Lease $lease) } catch { } }
+    if ($null -ne $lease) {
+        try {
+            if (-not (Close-DispatchLockLease -Lease $lease)) { throw '设备租约清理未完成（仍有持有者或元数据不匹配）。' }
+        }
+        catch {
+            $cleanupFailure = "设备锁释放失败：$($_.Exception.Message)"
+            if ([string]::IsNullOrEmpty($script:Run.failure_reason)) { $script:Run.failure_reason = $cleanupFailure }
+            $script:Run.outcome = 'failed'; $exitCode = 1
+            [Console]::Error.WriteLine($cleanupFailure)
+        }
+    }
     $script:Run.exit_code = $exitCode
     $script:Run.timestamps['finished_at'] = Get-Utc
     if ($null -ne $evidenceDir) {
@@ -374,7 +384,10 @@ finally {
             if ($script:SelectedSerial -and $json.Contains($script:SelectedSerial)) { $json = $json.Replace($script:SelectedSerial, '<serial>') }
             [IO.File]::WriteAllText((Join-Path $evidenceDir 'run.json'), $json + "`n", [Text.UTF8Encoding]::new($false))
             Write-Host "tablet C1b 证据目录：$evidenceDir"
-        } catch { [Console]::Error.WriteLine("run.json 写入失败：$($_.Exception.Message)") }
+        } catch {
+            $script:Run.outcome = 'failed'; $exitCode = 1; $script:Run.exit_code = 1
+            [Console]::Error.WriteLine("run.json 写入失败：$($_.Exception.Message)")
+        }
     }
     Write-Host "tablet C1b outcome=$($script:Run.outcome) exit=$exitCode run_id=$($script:Run.run_id)"
 }

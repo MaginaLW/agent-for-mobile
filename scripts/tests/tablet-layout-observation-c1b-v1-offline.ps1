@@ -11,10 +11,8 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repoRoot 'scripts\lib\tablet-layout-observation-c1b-v1-offline-gate.ps1')
-. (Join-Path $repoRoot 'scripts\lib\tablet-layout-c1a.ps1')
 
 $fixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-observation\c1b-v1\real-shape-topology-only.json'
-$buildEnvironmentFixturePath = Join-Path $PSScriptRoot 'fixtures\tablet-layout-c1b-build-environment.json'
 $baseRaw = [IO.File]::ReadAllText($fixturePath, [Text.UTF8Encoding]::new($false, $true))
 $tempRoot = [IO.Directory]::CreateTempSubdirectory('tl1c1bv1-offline-')
 $script:CaseCount = 0
@@ -451,62 +449,7 @@ try {
     Assert-C1B (-not ($orphanResult.reason_codes -ccontains 'validation_exception')) 'orphan node caused validation exception'
     Complete-C1BCase @('orphan_node_safe_lookup')
 
-    # 27. sidecar schema 也是 closed，并机械钉零 screenshot/OCR/action。
-    $sidecarSchema = Join-Path $repoRoot 'docs\contracts\tablet-layout-c1b-sidecar-v1.schema.json'
-    $hash = 'sha256:' + ('a' * 64)
-    $implementationHashes=[ordered]@{};foreach($name in @(
-        'runner_sha256','c1b_library_sha256','c1b_read_only_library_sha256','c1b_artifact_proof_library_sha256','c1b_aapt2_library_sha256','c1b_build_environment_library_sha256','c1b_adb_server_library_sha256','dispatch_lock_library_sha256','c1a_low_level_library_sha256',
-        't0_runner_sha256','t0_library_sha256','t0_adb_sidecar_cmd_sha256','t0_adb_sidecar_script_sha256','validator_sha256','native_path_validator_sha256',
-        'observation_schema_sha256','sidecar_schema_sha256','attempt_failure_schema_sha256','artifact_proof_schema_sha256','android_layout_probe_sha256','android_layout_probe_model_sha256','android_model_sha256','android_probe_sha256','android_source_sha256',
-        'android_provider_sha256','android_protocol_sha256','android_coordinator_sha256','android_controller_sha256','android_context_sha256','android_pending_registry_sha256',
-        'app_build_gradle_sha256','app_settings_gradle_sha256','app_gradle_properties_sha256','app_gradlew_bat_sha256','app_gradle_wrapper_jar_sha256','app_gradle_wrapper_properties_sha256','app_gradle_verification_metadata_sha256','probe_build_gradle_sha256','probe_manifest_sha256','probe_service_sha256','probe_a11y_config_sha256','probe_strings_sha256'
-    )){$implementationHashes[$name]=$hash}
-    $buildEnvironment=Get-Content -LiteralPath $buildEnvironmentFixturePath -Raw | ConvertFrom-Json -Depth 100 -DateKind String
-    $buildEnvironment.repository_inputs.file_count=[long]$implementationHashes.Count
-    # 旧 C1b 主机链 catalog 计算已退役；sidecar schema 只约束 hash 形态，此处用合成 hash。
-    $buildEnvironment.repository_inputs.catalog_sha256='sha256:' + ('c' * 64)
-    $at=[DateTimeOffset]::UtcNow.UtcDateTime.ToString($script:TL1C1BV1TimestampFormat,[Globalization.CultureInfo]::InvariantCulture)
-    $sidecar = [ordered]@{
-        schema='tablet-layout-c1b-sidecar/v1'; run_id='tl1-c1b-sidecar-fixture'
-        completed_at_utc=$at;expected_commit_sha=('b'*40);capture_scope='pure_a11y';provenance_strategy='clean_content_provider_independently_attested';static_read_only_policy_version='tl1-c1b-read-only/v2';implementation_hashes=$implementationHashes
-        build_environment=$buildEnvironment
-        transport=[ordered]@{trust_root='android_sdk_platform_tools';canonical_relative_path='platform-tools/adb.exe';sdk_roots_equal=$true;executable_sha256_before=$hash;executable_sha256_after=$hash;version_output_sha256_before=$hash;version_output_sha256_after=$hash;signature_status='Valid';signature_subject='CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US';signature_certificate_sha256_before=$hash;signature_certificate_sha256_after=$hash;protocol_version='1.0.41';package_version='36.0.0-13206524';installed_as_canonical=$true;server_schema='tablet-layout-c1b-private-adb-server/v1';server_mode='private_nodaemon';server_socket='tcp:127.0.0.1:55001';server_executable_sha256=$hash;job_kill_on_close=$true;listener_pid_verified=$true;server_status_executable_path_verified=$true;server_ready_verified=$true;server_cleanup_verified=$true;private_kill_server_requested=$true;graceful_exit_verified=$true;job_fallback_used=$false;port_rebind_verified=$true;default_server_used=$false}
-        apk=[ordered]@{fresh_build=$true;install_attempt_count=1;uninstall_count=0;automatic_retry_count=0;local_sha256_before=$hash;local_sha256_after=$hash;installed_base_apk_path_hash_before=$hash;installed_base_apk_path_hash_after=$hash;installed_base_apk_sha256_before=$hash;installed_base_apk_sha256_after=$hash;signer_certificate_sha256=$hash;package_name_before='dev.magina.gateway';package_name_after='dev.magina.gateway';version_name_before='1.0';version_name_after='1.0';version_code_before=1;version_code_after=1}
-        device=[ordered]@{serial_hash_before=$hash;serial_hash_after=$hash;fingerprint_hash_before=$hash;fingerprint_hash_after=$hash;boot_id_hash_before=$hash;boot_id_hash_after=$hash;unique_device_before_after=$true}
-        upstream_t0=[ordered]@{producer_commit_sha='4ca32b131007df58f7752c5ee9b2d049cb1cd54e';original_relative_path='docs/runs/evidence/tl1-c1b-sidecar-fixture/tablet-profile.json';original_sha256=$hash;original_byte_count=10;original_crlf_count=1;original_bytes_forwarded=$true;exec_in_write_count=1;device_binding_verified=$true}
-        provider=[ordered]@{authority='dev.magina.gateway.tablet.c1b';protocol_version='1';package_name='dev.magina.gateway';version_name='1.0';version_code=1;embedded_git_head=('b'*40);build_challenge_hash=$hash;expected_title_hash='sha256:5d3510ec998c991305fcede15b32be9ea1c4061d82ab15a3994a38faa243311c';producer_artifact_sha256=$hash;a11y_service_ready=$true;control_transcript_sha256=$hash;endpoint_set_sha256=$hash}
-        capture=[ordered]@{generation=1;c1_requested_at_utc=$at;c1_committed_at_utc=$at;c2_requested_at_utc=$at;c2_committed_at_utc=$at;host_wait_ms=900;total_span_ms=1000;status_poll_count=1;c1_requests_accepted=1;c2_requests_accepted=1;result_read_count=1;recapture_count=0}
-        artifacts=[ordered]@{upstream_t0=[ordered]@{relative_path='upstream-t0-v5.json';sha256=$hash};observation=[ordered]@{relative_path='tablet-layout-observation-c1b-v1.json';sha256=$hash};validation=[ordered]@{relative_path='tablet-layout-observation-validation-c1b-v1.json';sha256=$hash};artifact_proof=[ordered]@{relative_path='tablet-c1b-read-only-artifact-proof-v1.json';sha256=$hash};debug_apk=[ordered]@{relative_path='tablet-c1b-probe-debug.apk';sha256=$hash};release_apk=[ordered]@{relative_path='tablet-c1b-probe-release-unsigned.apk';sha256=$hash};debug_merged_manifest=[ordered]@{relative_path='tablet-c1b-probe-debug-merged-AndroidManifest.xml';sha256=$hash};release_merged_manifest=[ordered]@{relative_path='tablet-c1b-probe-release-merged-AndroidManifest.xml';sha256=$hash}}
-        read_only_counts=[ordered]@{
-            a11y_frame_capture_count=2; recapture_count=0; display_screenshot_call_count=0
-            window_screenshot_call_count=0; ocr_invocation_count=0; action_call_count=0
-            gesture_call_count=0; input_call_count=0; settings_mutation_count=0
-            target_app_start_count=0; mcp_call_count=0; dispatch_call_count=0
-        }
-        read_only_proof=[ordered]@{schema='tablet-layout-c1b-read-only-proof/v1';policy_version='tl1-c1b-read-only/v2';artifact_module=':tablet-c1b-probe';artifact_proof_relative_path='app/tablet-c1b-probe/build/reports/tablet-c1b-read-only-artifact-proof.json';artifact_proof_sha256=$hash;runner_ast_sha256=$hash;t0_runner_ast_sha256=$hash;t0_library_ast_sha256=$hash;host_forbidden_command_count=0;axml_parser=[ordered]@{schema='tablet-layout-c1b-aapt2-trust/v1';trust_root='android_sdk_build_tools';build_tools_version='35.0.0';canonical_relative_path='build-tools/35.0.0/aapt2.exe';sdk_roots_equal=$true;executable_sha256='sha256:cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564';signature_status='Valid';signature_subject='CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US';signature_certificate_sha256='sha256:7d3d117664f121e592ef897973ef9c159150e3d736326e9cd2755f71e0febc0c'};packaged_axml_exact_verified=$true;dependency_artifact_catalog_sha256=$hash;debug_apk_sha256=$hash;debug_merged_manifest_sha256=$hash;debug_packaged_manifest_sha256=$hash;debug_packaged_manifest_axml_dump_sha256=$hash;debug_packaged_a11y_axml_dump_sha256=$hash;debug_dex_entry_count=6;debug_dex_sha256=$hash;debug_dex_catalog_sha256=$hash;release_apk_sha256=$hash;release_merged_manifest_sha256=$hash;release_packaged_manifest_sha256=$hash;release_packaged_manifest_axml_dump_sha256=$hash;release_packaged_a11y_axml_dump_sha256=$hash;release_dex_entry_count=1;release_dex_sha256=$hash;release_dex_catalog_sha256=$hash;artifact_forbidden_match_count=0;manifest_mutating_capability_count=0;manifest_extra_component_count=0;dependency_allowlist_verified=$true}
-        attestations=[ordered]@{full_clean_head_verified=$true;implementation_hashes_verified=$true;origin_binding_verified=$true;probe_entrypoint_read_only=$true;dedicated_read_only_artifact_verified=$true;host_read_only_ast_verified=$true;observation_schema_valid=$true;artifact_hashes_recomputed=$true}
-        claims=[ordered]@{
-            runtime_origin_verified=$true; runtime_evidence=$true
-            wechat_window_ownership_observed=$true; wechat_window_ownership_verified=$true
-            window_root_projection_observed=$true; window_root_projection_verified=$true
-            application_window_topology_observed=$true; application_window_topology_verified=$true
-            ime_hidden_observed=$true; ime_hidden_verified=$true;semantic_tree_usable=$true
-            navigation_pane_verified=$false;conversation_pane_verified=$false;target_conversation_verified=$false;target_regions_verified=$false;layout_accepted=$false
-            wechat_layout_verified=$false; editor_action_ready=$false; p0_capability='unsupported'; execution_grant=$false
-        }
-        cleanup=[ordered]@{ required=$false; status='not_required';abort_attempt_count=0 }
-    }
-    $sidecarRaw = $sidecar | ConvertTo-Json -Depth 20
-    Assert-C1B ($sidecarRaw | Test-Json -SchemaFile $sidecarSchema -ErrorAction Stop) 'valid sidecar rejected'
-    $sidecar.read_only_counts.ocr_invocation_count = 1
-    Assert-C1B (-not (($sidecar | ConvertTo-Json -Depth 20) | Test-Json -SchemaFile $sidecarSchema -ErrorAction SilentlyContinue)) 'sidecar allowed OCR count'
-    $sidecar.read_only_counts.ocr_invocation_count = 0
-    $sidecar.claims.ime_hidden_verified = $false
-    Assert-C1B (-not (($sidecar | ConvertTo-Json -Depth 20) | Test-Json -SchemaFile $sidecarSchema -ErrorAction SilentlyContinue)) `
-        'sidecar allowed observed/verified claim mismatch'
-    Complete-C1BCase @('sidecar_closed','zero_action_counts','sidecar_symmetric_claim_binding')
-
-    # 28. 第三个 application window 必须阻断 exact-two topology，即使它自己的 root projection 完整。
+    # 27. 第三个 application window 必须阻断 exact-two topology，即使它自己的 root projection 完整。
     $extraApplication = Copy-C1BBaseDocument
     foreach ($frame in $extraApplication.frames) {
         $newWindow = Copy-C1BValue (@($frame.a11y_windows | Where-Object window_label -CEQ 'aw1')[0])
@@ -527,7 +470,7 @@ try {
         -not $extraApplicationResult.wechat_window_ownership_observed) 'third application retained exact-two claims'
     Complete-C1BCase @('extra_application','exact_two_application_required')
 
-    # 29. 任一额外 display id 出现在 inventory 即 fail closed。
+    # 28. 任一额外 display id 出现在 inventory 即 fail closed。
     $extraDisplay = Copy-C1BBaseDocument
     foreach ($frame in $extraDisplay.frames) {
         @($frame.a11y_windows | Where-Object window_label -CEQ 'aw5')[0].display_id = 1
@@ -538,7 +481,7 @@ try {
     Assert-C1B (-not $extraDisplayResult.window_inventory_observed) 'extra display retained window inventory claim'
     Complete-C1BCase @('extra_display')
 
-    # 30. producer 可诚实表达 unknown display，但不能因此猜 display 0 或 landscape。
+    # 29. producer 可诚实表达 unknown display，但不能因此猜 display 0 或 landscape。
     $unknownDisplay = Copy-C1BBaseDocument
     foreach ($frame in $unknownDisplay.frames) {
         $frame.display.display_id_status = 'unknown'; $frame.display.display_id = $null
@@ -551,7 +494,7 @@ try {
     Assert-C1B (-not $unknownDisplayResult.application_window_topology_observed) 'unknown display retained topology'
     Complete-C1BCase @('unknown_display','no_default_display_inference')
 
-    # 31. subtree read_error 与 complete opaque 必须区分。
+    # 30. subtree read_error 与 complete opaque 必须区分。
     $readError = Copy-C1BBaseDocument
     foreach ($frame in $readError.frames) {
         $subtree = @($frame.a11y_windows | Where-Object window_label -CEQ 'aw1')[0].subtree_capture
@@ -564,7 +507,7 @@ try {
     Assert-C1B (-not $readErrorResult.semantic_tree_usable) 'read-error subtree became usable'
     Complete-C1BCase @('subtree_read_error')
 
-    # 32. window title over_budget/read_error 都只形成诊断阻断，不能 fallback 选 target。
+    # 31. window title over_budget/read_error 都只形成诊断阻断，不能 fallback 选 target。
     $titleFailures = Copy-C1BBaseDocument
     foreach ($frame in $titleFailures.frames) {
         @($frame.a11y_windows | Where-Object window_label -CEQ 'aw1')[0].expected_window_title_match = 'over_budget'
@@ -577,7 +520,7 @@ try {
         -not $titleFailuresResult.layout_accepted) 'failed title probe selected target'
     Complete-C1BCase @('title_over_budget','title_read_error','title_failure_no_fallback')
 
-    # 33. visible IME 可被只读 inventory 表达，但 hidden 与 action claim 均须 false。
+    # 32. visible IME 可被只读 inventory 表达，但 hidden 与 action claim 均须 false。
     $visibleIme = Copy-C1BBaseDocument
     foreach ($frame in $visibleIme.frames) {
         $imeWindow = @($frame.a11y_windows | Where-Object window_label -CEQ 'aw5')[0]
@@ -593,7 +536,7 @@ try {
         -not $visibleImeResult.editor_action_ready) 'visible IME promoted hidden/action claim'
     Complete-C1BCase @('visible_ime','visible_ime_no_action')
 
-    # 34. frame 2 更换 run-local window label 必须同时进入 identity 与 semantic drift。
+    # 33. frame 2 更换 run-local window label 必须同时进入 identity 与 semantic drift。
     $identityReplacement = Copy-C1BBaseDocument
     $replacementWindow = @($identityReplacement.frames[1].a11y_windows | Where-Object window_label -CEQ 'aw2')[0]
     $replacementWindow.window_label = 'aw6'
@@ -610,7 +553,7 @@ try {
     Assert-C1B (-not $identityReplacementResult.application_window_topology_observed) 'identity replacement retained topology'
     Complete-C1BCase @('window_label_replacement','identity_replacement_blocks_topology')
 
-    # 35. WMS wN→a11y awN crosswalk 不能作为 observation 字段潜入。
+    # 34. WMS wN→a11y awN crosswalk 不能作为 observation 字段潜入。
     $wmsCrosswalk = Copy-C1BBaseDocument
     $wmsCrosswalk.frames[0].a11y_windows[0] | Add-Member -NotePropertyName wms_window_label -NotePropertyValue 'w1'
     $wmsCrosswalkResult = Invoke-C1BFixture $wmsCrosswalk 'illegal-wms-crosswalk'
@@ -618,7 +561,7 @@ try {
     Assert-C1B (-not $wmsCrosswalkResult.fixture_contract_valid) 'WMS crosswalk field passed closed schema'
     Complete-C1BCase @('wms_crosswalk_rejected')
 
-    # 36. future capture 是 consumer-owned，但必须撤销本轮 topology claim。
+    # 35. future capture 是 consumer-owned，但必须撤销本轮 topology claim。
     $future = Copy-C1BBaseDocument
     $futureNow = [DateTimeOffset]::UtcNow
     Set-C1BFreshTimes $future $futureNow
@@ -633,7 +576,7 @@ try {
     Assert-C1B (-not $futureResult.application_window_topology_observed) 'future evidence retained topology claim'
     Complete-C1BCase @('capture_in_future','future_blocks_topology')
 
-    # 37. producer 漏报一个可重算 intrinsic reason 必须 fail closed。
+    # 36. producer 漏报一个可重算 intrinsic reason 必须 fail closed。
     $missingReason = Copy-C1BBaseDocument
     foreach ($frame in $missingReason.frames) {
         @($frame.a11y_windows | Where-Object window_label -CEQ 'aw1')[0].expected_window_title_match = 'read_error'
@@ -643,7 +586,7 @@ try {
     Assert-C1B (-not $missingReasonResult.fixture_contract_valid) 'missing declared reason passed contract'
     Complete-C1BCase @('declared_reason_missing')
 
-    # 38. producer 多报不存在的 reason 同样是 status/reason mismatch。
+    # 37. producer 多报不存在的 reason 同样是 status/reason mismatch。
     $extraReason = Copy-C1BBaseDocument
     Add-C1BDeclaredReason $extraReason 'window_count_not_two'
     $extraReasonResult = Invoke-C1BFixture $extraReason 'declared-reason-extra'
@@ -651,14 +594,14 @@ try {
     Assert-C1B (-not $extraReasonResult.fixture_contract_valid) 'extra declared reason passed contract'
     Complete-C1BCase @('declared_reason_extra','declared_status_mismatch')
 
-    # 39. diagnostic_status 的非 blocked 值在 semantic consumer 前即由 closed schema 拒绝。
+    # 38. diagnostic_status 的非 blocked 值在 semantic consumer 前即由 closed schema 拒绝。
     $badStatus = Copy-C1BBaseDocument
     $badStatus.diagnostic_status = 'observed'
     $badStatusResult = Invoke-C1BFixture $badStatus 'diagnostic-status-observed'
     Assert-C1BCode $badStatusResult 'json_schema_validation_failed'
     Complete-C1BCase @('diagnostic_status_closed')
 
-    # 40. 受控根外路径必须在任何读取前拒绝。
+    # 39. 受控根外路径必须在任何读取前拒绝。
     $traversalResult = Test-TabletLayoutObservationC1BV1File -Path '..\outside.json' `
         -EvidenceRoot $tempRoot.FullName -FixtureMode -ValidationNowUtc ([DateTimeOffset]::UtcNow)
     Assert-C1BCode $traversalResult 'runtime_producer_unavailable'
@@ -666,7 +609,7 @@ try {
         'controlled-path traversal was not rejected before read'
     Complete-C1BCase @('controlled_path_traversal')
 
-    # 41. evidence root 内的 reparse hop 也不能绕过受控路径边界。
+    # 40. evidence root 内的 reparse hop 也不能绕过受控路径边界。
     $realDirectory = Join-Path $tempRoot.FullName 'reparse-real'
     $linkDirectory = Join-Path $tempRoot.FullName 'reparse-link'
     [void][IO.Directory]::CreateDirectory($realDirectory)
@@ -690,7 +633,7 @@ try {
     }
     Complete-C1BCase @('controlled_path_reparse')
 
-    # 42. C1b 必须完整复用并 closed-validate T0 v5 readiness/P0 阻断归因。
+    # 41. C1b 必须完整复用并 closed-validate T0 v5 readiness/P0 阻断归因。
     $missingT0Reasons = Copy-C1BBaseDocument
     $missingT0Reasons.upstream_t0.PSObject.Properties.Remove('readiness_reasons')
     $missingT0ReasonsResult = Invoke-C1BFixture $missingT0Reasons 't0-readiness-reasons-missing'
@@ -703,14 +646,14 @@ try {
     Assert-C1BCode $missingT0P0ReasonResult 'json_schema_validation_failed'
     Complete-C1BCase @('upstream_t0_v5_reasons_closed','upstream_t0_required_p0_reasons')
 
-    # 43. provenance version 固定为 c1b-v1。
+    # 42. provenance version 固定为 c1b-v1。
     $badVersion = Copy-C1BBaseDocument
     $badVersion.provenance.version = 'c1b-v2'
     $badVersionResult = Invoke-C1BFixture $badVersion 'provenance-version-mismatch'
     Assert-C1BCode $badVersionResult 'json_schema_validation_failed'
     Complete-C1BCase @('provenance_version_fixed')
 
-    # 44. v2 冻结不仅靠 schema 拒绝，还逐文件钉住 Git blob OID。
+    # 43. v2 冻结不仅靠 schema 拒绝，还逐文件钉住 Git blob OID。
     $v2BlobManifest = @(
         [pscustomobject]@{ Oid='12930c9e4e041773263b3ddc02fc85462f4c6168'; Path='docs/contracts/tablet-layout-observation-v2.md' },
         [pscustomobject]@{ Oid='c12062b86ba9a9a112199209618757767ec4890b'; Path='docs/contracts/tablet-layout-observation-v2.schema.json' },
@@ -730,7 +673,7 @@ try {
     }
     Complete-C1BCase @('v2_blob_oid_freeze')
 
-    # 45. executable C1b consumer/gate 只读；direct focus producer 前提被明确留作 Kotlin 跨层 requirement。
+    # 44. executable C1b consumer/gate 只读；direct focus producer 前提被明确留作 Kotlin 跨层 requirement。
     $productionScripts = @(
         'scripts/lib/tablet-layout-observation-c1b-v1-validator.ps1',
         'scripts/lib/tablet-layout-observation-c1b-v1-offline-gate.ps1',
@@ -753,7 +696,7 @@ try {
         'direct focus Kotlin cross-layer requirement is not explicit'
     Complete-C1BCase @('static_read_only_forbidden_scan','direct_focus_cross_layer_requirement')
 
-    # 46. code=0 与未映射 code 都可诚实保留为 unknown，但不能保留 topology/hidden-IME/focus 结论。
+    # 45. code=0 与未映射 code 都可诚实保留为 unknown，但不能保留 topology/hidden-IME/focus 结论。
     foreach ($unknownTypeCode in @(0, 42)) {
         $unknownType = Copy-C1BBaseDocument
         foreach ($frame in $unknownType.frames) {
@@ -776,7 +719,7 @@ try {
     }
     Complete-C1BCase @('unknown_window_type','unknown_type_code_zero_and_unmapped','unknown_type_blocks_topology_and_hidden_ime')
 
-    # 47. application root/subtree 的任一 completeness 条件缺失时只能落 unknown focus；不得降级 absent/window_only。
+    # 46. application root/subtree 的任一 completeness 条件缺失时只能落 unknown focus；不得降级 absent/window_only。
     $focusCompletenessVariants = @(
         [pscustomobject]@{ Name='subtree-status'; Reasons=@('subtree_capture_incomplete'); Mutate={ param($frame,$window) $window.subtree_capture.status = 'truncated' } },
         [pscustomobject]@{ Name='root-child-null'; Reasons=@('subtree_capture_incomplete'); Mutate={ param($frame,$window) $window.subtree_capture.root_child_count = $null } },
@@ -843,7 +786,7 @@ try {
         'focus_root_binding_and_geometry_required'
     )
 
-    # 48. 截断的 window 清单不能仅凭 hidden-shaped IME tuple 声称 hidden，sidecar 也不能单独抬高 verified。
+    # 47. 截断的 window 清单不能仅凭 hidden-shaped IME tuple 声称 hidden。
     $truncatedWindows = Copy-C1BBaseDocument
     foreach ($frame in $truncatedWindows.frames) { $frame.windows_truncated = $true }
     Set-C1BFocusUnknown $truncatedWindows
@@ -857,18 +800,11 @@ try {
         -not $truncatedWindowsResult.application_window_topology_observed -and
         -not $truncatedWindowsResult.ime_hidden_observed -and
         -not $truncatedWindowsResult.ime_hidden_verified) 'truncated window inventory retained IME/topology claims'
-    $forgedTruncatedSidecar = Copy-C1BValue $sidecar
-    $forgedTruncatedSidecar.claims.ime_hidden_observed = $false
-    $forgedTruncatedSidecar.claims.ime_hidden_verified = $true
-    Assert-C1B (-not (($forgedTruncatedSidecar | ConvertTo-Json -Depth 20) |
-        Test-Json -SchemaFile $sidecarSchema -ErrorAction SilentlyContinue)) `
-        'sidecar allowed verified hidden IME over false observation'
     Complete-C1BCase @(
-        'truncated_window_inventory','windows_truncated_blocks_hidden_ime',
-        'truncated_inventory_blocks_sidecar_ime_verification'
+        'truncated_window_inventory','windows_truncated_blocks_hidden_ime'
     )
 
-    # 49. IME sample 必须 exact 绑定同帧 capture token；schema 与 validator 各自 fail-closed。
+    # 48. IME sample 必须 exact 绑定同帧 capture token；schema 与 validator 各自 fail-closed。
     $mismatchedImeToken = Copy-C1BBaseDocument
     $mismatchedImeToken.frames[0].ime.capture_token = 'c2'
     $mismatchedImeTokenResult = Invoke-C1BFixture $mismatchedImeToken 'ime-capture-token-mismatch'
