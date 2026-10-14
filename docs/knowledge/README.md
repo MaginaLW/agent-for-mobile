@@ -7,7 +7,7 @@
 | 遇到什么情况 | 载入 |
 |---|---|
 | Android 平板接入、姿态/大屏/多窗/任务栏/浮动 IME | [android/tablet.md](android/tablet.md) |
-| 历史 vivo 手机真机操作 | [android/vivo-originos.md](android/vivo-originos.md) |
+| vivo / OriginOS 权限、安全策略或历史手机真机操作 | [android/vivo-originos.md](android/vivo-originos.md)（含 PA2553 无障碍撤销调研） |
 | Android 版本级行为疑问（剪贴板/开关权限/a11y/截图节流）、adb/uiautomator 工具链坑 | [android/common.md](android/common.md) |
 | 判断网关 M1b 工具当前可用性、占位返回与后续验收范围 | [android/m1b-capabilities.md](android/m1b-capabilities.md)（2026-09-27 源码静态核对） |
 | 要用系统命令（dumpsys/cmd/svc/am/pm/settings）、Shizuku、IME 切换 | [android/sys-cli.md](android/sys-cli.md)（🔵 多为查阅未实测） |

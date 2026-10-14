@@ -17,7 +17,15 @@
 - **后台 overlay 被静默拦截**（2026-07-18）：`SYSTEM_ALERT_WINDOW` ≠「后台弹出界面」权限；网关在后台时 `addView(TYPE_APPLICATION_OVERLAY)` 不抛异常但不显示，确认卡弹不出。✅ 授「后台弹出界面」后，微信前台时确认卡正常弹出（2026-07-22）。
 - **充电胶囊/灵动岛是带文本的大 a11y 悬浮节点**，罩住屏幕上部——OCR 融合去重按「内容相同」判重，不能按「bbox 包含」判。
 
-- **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，就绪以应用自报为准。详见 [运行记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
+- **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，当次记录以应用自报判断就绪，但不足以证明持续绑定。详见 [运行记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
+
+## 官方资料与客服咨询（2026-10-14，🔵 未实测）
+
+- [vivo 受限设置 FAQ](https://www.vivo.com.cn/service/questions/all?categoryId=170&questionId=1836)解释侧载应用的高敏权限限制和机主解除流程，但没有解释“解除后数秒内又被关闭”。[Android 16 CDD](https://source.android.com/docs/compatibility/16/android-16-cdd)覆盖本地文件安装；[PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller#PACKAGE_SOURCE_LOCAL_FILE)将 `packageSource=3` 定义为本地文件，release 签名也不会改变来源类别。
+- `com.vivo.safecenter` 的设置改写记录支持系统侧撤销，具体触发策略仍未知；不能直接认定是 ECM、某个安全开关或省电杀进程。探针 `a11y_service_ready` 只来自进程内实例，不独立证明持续绑定。
+- 官方机器人对“无障碍自动关闭”建议检查系统更新；另称脚本辅助类 App 可能因使用特殊权限被判风险，但未确认探针被判风险或撤销原因。人工入口显示服务时间 8:00–22:00，本轮未获人工答复。通用建议不等于已验证解法。
+- 官方开发支持有 [开发者助手](https://developers.vivo.com/support/)的 Security / 系统适配分类及 [应用安全检测平台](https://developers.vivo.com/product/d/appSecurity)。本轮未提交工单、上传 APK 或发邮件；检测通过、商店上架是否影响 ROM 放行尚未知。
+- 证据边界、来源、客服脱敏摘要和下次简短问法见 [10-14 调研记录](../../runs/2026-10-14-C1b-vivo无障碍权限阻塞调研.md)。真机事实仍截至 10-09，不反复开启权限或自动重跑。
 
 ## 深链 / Intent
 
