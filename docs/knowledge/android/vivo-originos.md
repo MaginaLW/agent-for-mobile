@@ -19,7 +19,7 @@
 
 - **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，当次记录以应用自报判断就绪，但不足以证明持续绑定。详见 [运行记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
 
-## 官方资料与客服咨询（2026-10-14，🔵 未实测）
+## 官方资料与客服咨询（2026-10-14–15，🔵 未新增设备实测）
 
 - [vivo 受限设置 FAQ](https://www.vivo.com.cn/service/questions/all?categoryId=170&questionId=1836)解释侧载应用的高敏权限限制和机主解除流程，但没有解释“解除后数秒内又被关闭”。[Android 16 CDD](https://source.android.com/docs/compatibility/16/android-16-cdd)覆盖本地文件安装；[PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller#PACKAGE_SOURCE_LOCAL_FILE)将 `packageSource=3` 定义为本地文件，release 签名也不会改变来源类别。
 - `com.vivo.safecenter` 的设置改写记录支持系统侧撤销，具体触发策略仍未知；不能直接认定是 ECM、某个安全开关或省电杀进程。探针 `a11y_service_ready` 只来自进程内实例，不独立证明持续绑定。
@@ -27,6 +27,8 @@
 - 官方开发支持有 [开发者助手](https://developers.vivo.com/support/)的 Security / 系统适配分类及 [应用安全检测平台](https://developers.vivo.com/product/d/appSecurity)。本轮未提交工单、上传 APK 或发邮件；检测通过、商店上架是否影响 ROM 放行尚未知。
 - 证据边界、来源、客服脱敏摘要和下次简短问法见 [10-14 调研记录](../../runs/2026-10-14-C1b-vivo无障碍权限阻塞调研.md)。真机事实仍截至 10-09，不反复开启权限或自动重跑。
 - [10-14 深入调研](../../runs/2026-10-14-C1b-vivo无障碍权限深入调研.md)增加官方运行时安全说明、Android 16 独立绑定 AppOp 与列表裁剪、历史系统缺陷、近似病例和开发支持材料边界。用户提供的 Pad5 固件为 `DPD2437C_A_16.1.10.1.W10.V000L1`，未作本轮设备读取；上述机制在该固件的适用性仍待人工和新证据核实。
+- 10-15 普通售后人工已咨询：认为可能是软件与系统不兼容，表示未收到当前固件相关反馈，没有确认规则、已知缺陷或修复版本。建议从[开放平台](https://dev.vivo.com.cn/home)页底“小v客服”联系开发者支持，可先描述型号、版本和现象；未确认未上架应用的自测/误判复核流程、团队归属或静态检测报告对 ROM 放行的影响。
+- 用户已完成单独的开发者客服登录，但 18:38 转人工时明确提示仅在工作日 09:00–12:00、14:00–18:00 服务；机器人未给出技术流程。开发者人工尚未接待，未提交日志/APK/设备标识。见[本轮答复与证据边界](../../runs/2026-10-15-C1b-vivo人工客服答复.md)；无新增设备事实或已验证解法。
 
 ## 深链 / Intent
 
