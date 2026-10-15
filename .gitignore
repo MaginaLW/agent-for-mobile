@@ -26,3 +26,4 @@ configs/gateway-mcp.json.restore-*.tmp
 
 # scripts/check.ps1 的落盘日志
 .checks/
+/toolchain/
