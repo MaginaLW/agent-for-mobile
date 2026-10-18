@@ -346,7 +346,7 @@ Invoke-Check '凭据扫描' {
     & git -C $RepoRoot check-ignore -q -- 'configs/gateway-mcp.json'
     if ($LASTEXITCODE -ne 0) { $issues.Add('configs/gateway-mcp.json 未被 gitignore 覆盖。') }
 
-    # 网关 token 是 32 位裸 hex。当前仓库零命中，任何新命中都要人看一眼。
+    # 网关 token 是 32 位裸 hex。除下方精确公开 URL 的文档 ID 位置外，命中一律阻断。
     #
     # --untracked 不能省：git grep 默认只搜已跟踪文件，于是新写的文件要等**提交之后**才被扫到。
     # 2026-07-27 实锤：BearerAuthGuardTest 里的假 token 恰好是 32 位十六进制，批次 D 跑 check
@@ -355,18 +355,56 @@ Invoke-Check '凭据扫描' {
     # 工作树搜已跟踪和未跟踪文件，index 另搜下一次提交会带走的版本。
     # 注意这仍然只是**提交前跑一下**的人工闸门，不是强制拦截——仓库没有装 git hook，
     # 谁不跑 check.ps1 就绕过了。真要拦住提交得配 pre-commit hook（未做）。
+    # 仅记录 10-14 已在浏览器核对正文的四条公开文档链接；保留原始引用。
+    # 按命中位置识别文档 ID，不豁免整行、文件、域名或同一个 ID 的其他用法。
+    $reviewedPublicUrls = @(
+        'https://developers.vivo.com/doc/d/7e7e3a6fe5c24a3cb175259e03ade6c9'
+        'https://developers.vivo.com/doc/d/866218ac92f9437d86a7da059e6183bd'
+        'https://developers.vivo.com/doc/d/a74d0ce7896bd3a9a143691aecfe2fa9'
+        'https://developers.vivo.com/doc/d/b086bd7df65f408c8708d29d9500d678'
+    )
+    $publicUrlPattern = '(?:^|[\s(<''"])(?<url>' +
+        (($reviewedPublicUrls | ForEach-Object { [regex]::Escape($_) }) -join '|') +
+        ')(?=$|[\s)>''"])'
     foreach ($view in @(
         @{ Scope = '工作树'; Mode = '--untracked' },
         @{ Scope = 'index'; Mode = '--cached' }
     )) {
-        # -l 只返回路径，避免原先 -n 把疑似凭据所在整行写进控制台和日志。
-        $paths = @(& git -C $RepoRoot grep -lIE $view.Mode '\b[0-9a-f]{32}\b' -- . 2>$null)
+        # 候选仍由 Git 枚举；NUL 分隔保留含空格及非 ASCII 的路径，原文不写日志。
+        $rawPaths = @(& git -C $RepoRoot -c core.quotepath=false grep -zlIE $view.Mode '\b[0-9a-f]{32}\b' -- . 2>$null)
         if ($LASTEXITCODE -notin @(0, 1)) { throw "$($view.Scope)：git grep 执行失败。" }
-        foreach ($path in $paths) { $issues.Add("$($view.Scope)：${path}：32 位裸 hex") }
+        $paths = ($rawPaths -join "`n").Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
+        foreach ($path in $paths) {
+            try {
+                if ($view.Mode -ceq '--cached') {
+                    $lines = @(& git -C $RepoRoot show (':' + $path) 2>$null)
+                    if ($LASTEXITCODE -ne 0) { throw 'index read failed' }
+                    $content = $lines -join "`n"
+                } else {
+                    $content = [IO.File]::ReadAllText((Join-Path $RepoRoot $path), [Text.UTF8Encoding]::new($false, $true))
+                }
+                $publicIdOffsets = [Collections.Generic.HashSet[int]]::new()
+                foreach ($urlMatch in [regex]::Matches($content, $publicUrlPattern)) {
+                    $url = $urlMatch.Groups['url']
+                    [void]$publicIdOffsets.Add($url.Index + $url.Length - 32)
+                }
+                # ASCII 词边界保守覆盖 Git 的候选，不因 .NET 的 Unicode \b 漏掉额外命中。
+                $matches = [regex]::Matches($content, '(?<![0-9A-Za-z_])[0-9a-f]{32}(?![0-9A-Za-z_])')
+                if ($matches.Count -eq 0) { throw 'candidate parse mismatch' }
+                foreach ($match in $matches) {
+                    if (-not $publicIdOffsets.Contains($match.Index)) {
+                        $issues.Add("$($view.Scope)：${path}：32 位裸 hex")
+                        break
+                    }
+                }
+            } catch {
+                throw "$($view.Scope)：${path}：凭据候选读取失败。"
+            }
+        }
     }
 
     if ($issues.Count -gt 0) { throw ($issues -join "`n  ") }
-    'gateway-mcp.json 未入库且被忽略；无 32 位裸 hex 命中'
+    'gateway-mcp.json 未入库且被忽略；无未经复核的 32 位裸 hex 命中'
 }
 
 Write-Host "`n================ 汇总 ================"

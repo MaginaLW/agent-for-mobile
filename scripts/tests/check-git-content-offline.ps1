@@ -41,6 +41,13 @@ New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 $fixtureCount = 0
 $passed = 0
 $token = ('a1b2c3d4' * 4)
+$gitCommand = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+$reviewedPublicUrls = @(
+    'https://developers.vivo.com/doc/d/7e7e3a6fe5c24a3cb175259e03ade6c9'
+    'https://developers.vivo.com/doc/d/866218ac92f9437d86a7da059e6183bd'
+    'https://developers.vivo.com/doc/d/a74d0ce7896bd3a9a143691aecfe2fa9'
+    'https://developers.vivo.com/doc/d/b086bd7df65f408c8708d29d9500d678'
+)
 
 function Invoke-FixtureGit([string[]]$Arguments) {
     $null = & git -C $script:RepoRoot @Arguments 2>&1
@@ -163,6 +170,95 @@ try {
         Set-FixtureFile 'configs/gateway-mcp.json' "{}`n"
         Invoke-FixtureGit @('add', '-f', '--', 'configs/gateway-mcp.json')
         Assert-FailsWith $credentialCheck 'configs/gateway-mcp.json 被 git 跟踪。'
+    }
+    foreach ($publicUrl in $reviewedPublicUrls) {
+        Test-Case 'reviewed public URL in worktree and index' {
+            Set-FixtureFile 'tracked.txt' "[公开文档]($publicUrl)`n"
+            Invoke-FixtureGit @('add', '--', 'tracked.txt')
+            Assert-Passes $credentialCheck
+        }
+    }
+    $publicUrl = $reviewedPublicUrls[0]
+    $publicId = $publicUrl.Substring($publicUrl.LastIndexOf('/') + 1)
+    Test-Case 'untracked reviewed public URL' {
+        Set-FixtureFile 'new.txt' "<$publicUrl>`n"
+        Assert-Passes $credentialCheck
+    }
+    Test-Case 'reviewed URL with ordinary full SHA' {
+        Set-FixtureFile 'tracked.txt' "$publicUrl`n$('b' * 40)`n"
+        Assert-Passes $credentialCheck
+    }
+    foreach ($scenario in @(
+        @{ Name='token before URL'; Content="$token $publicUrl`n" },
+        @{ Name='token after URL'; Content="$publicUrl $token`n" },
+        @{ Name='token in Markdown label'; Content="[$token]($publicUrl)`n" },
+        @{ Name='token in Markdown title'; Content="[文档]($publicUrl `"$token`")`n" },
+        @{ Name='token on another line'; Content="$publicUrl`n$token`n" },
+        @{ Name='same public ID outside URL'; Content="$publicUrl $publicId`n" },
+        @{ Name='bare public ID'; Content="$publicId`n" },
+        @{ Name='another document ID'; Content="https://developers.vivo.com/doc/d/$token`n" },
+        @{ Name='lookalike host'; Content="$($publicUrl.Replace('developers.vivo.com', 'developers.vivo.com.evil.invalid'))`n" },
+        @{ Name='HTTP URL'; Content="$($publicUrl.Replace('https:', 'http:'))`n" },
+        @{ Name='different path'; Content="$($publicUrl.Replace('/doc/d/', '/doc/x/'))`n" },
+        @{ Name='extra path'; Content="$publicUrl/other`n" },
+        @{ Name='query'; Content="${publicUrl}?x=1`n" },
+        @{ Name='fragment'; Content="$publicUrl#other`n" },
+        @{ Name='token in query'; Content="${publicUrl}?token=$token`n" },
+        @{ Name='embedded URL'; Content="https://example.invalid/?next=$publicUrl`n" },
+        @{ Name='Chinese token adjacency'; Content="$publicUrl`n中${token}文`n" },
+        @{ Name='accented token adjacency'; Content="$publicUrl`né${token}é`n" }
+    )) {
+        Test-Case $scenario.Name {
+            Set-FixtureFile 'tracked.txt' $scenario.Content
+            Assert-FailsWith $credentialCheck '工作树：tracked.txt：32 位裸 hex' 'index：'
+        }
+    }
+    Test-Case 'underscore remains part of a word' {
+        Set-FixtureFile 'tracked.txt' "$publicUrl`n_${token}_`n"
+        Assert-Passes $credentialCheck
+    }
+    Test-Case 'reviewed URL in worktree cannot hide staged token' {
+        Set-FixtureFile 'tracked.txt' "$publicUrl $token`n"
+        Invoke-FixtureGit @('add', '--', 'tracked.txt')
+        Set-FixtureFile 'tracked.txt' "$publicUrl`n"
+        Assert-FailsWith $credentialCheck 'index：tracked.txt：32 位裸 hex' '工作树：'
+    }
+    Test-Case 'reviewed URL in index cannot hide worktree token' {
+        Set-FixtureFile 'tracked.txt' "$publicUrl`n"
+        Invoke-FixtureGit @('add', '--', 'tracked.txt')
+        Set-FixtureFile 'tracked.txt' "$publicUrl $token`n"
+        Assert-FailsWith $credentialCheck '工作树：tracked.txt：32 位裸 hex' 'index：'
+    }
+    Test-Case 'candidate read failure stays closed' {
+        [byte[]]$invalidUtf8 = [Text.Encoding]::ASCII.GetBytes("$publicUrl`n") + [byte[]]@(255)
+        [IO.File]::WriteAllBytes((Join-Path $script:RepoRoot 'tracked.txt'), $invalidUtf8)
+        Assert-FailsWith $credentialCheck '工作树：tracked.txt：凭据候选读取失败。'
+    }
+    Test-Case 'index blob read failure stays closed' {
+        Set-FixtureFile 'tracked.txt' "$publicUrl`n"
+        Invoke-FixtureGit @('add', '--', 'tracked.txt')
+        function git {
+            if ($args -contains 'show') { $global:LASTEXITCODE = 1; return }
+            & $gitCommand @args
+        }
+        Assert-FailsWith $credentialCheck 'index：tracked.txt：凭据候选读取失败。'
+    }
+    Test-Case 'Git candidate enumeration failure stays closed' {
+        function git {
+            if ($args -contains 'grep') { $global:LASTEXITCODE = 2; return }
+            & $gitCommand @args
+        }
+        Assert-FailsWith $credentialCheck '工作树：git grep 执行失败。'
+    }
+    Test-Case 'candidate parse mismatch stays closed' {
+        function git {
+            if ($args -contains 'grep') {
+                $global:LASTEXITCODE = 0
+                return ('tracked.txt' + [char]0)
+            }
+            & $gitCommand @args
+        }
+        Assert-FailsWith $credentialCheck '工作树：tracked.txt：凭据候选读取失败。'
     }
     Write-Host "check git content offline: $passed passed, 0 failed"
 }
