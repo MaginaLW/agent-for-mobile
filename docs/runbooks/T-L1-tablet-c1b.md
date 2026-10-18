@@ -59,6 +59,7 @@ pure-a11y 仍 opaque 时，下一步另审 window/pane 视觉合同，不关闭�
 ## 与 C1a、T-L2 的关系
 
 C1a（[v2 规程](T-L1-tablet-layout-observation-v2.md)）已成立 origin/read-only，但 diagnostic blocked。
+v2 规程按冻结合同保留历史快照，其中“app 未合 main”是当时状态；当前源码整合状态见 [STATUS](../../STATUS.md)。
 C1b 只补拓扑诊断，通过也不等于 T-L1 布局通过；进入 T-L2 横屏 P0 的条件见 [backlog §4](../backlog.md)。
 
 ## 旧主机链已退役

@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-10-16（真机事实截至 10-09）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
+> 更新 2026-10-18（真机事实截至 10-09）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
 
 ## 一句话现状
 
@@ -14,6 +14,7 @@
 
 - C1b：Chrome 连接恢复后，在开发者人工时段继续问未上架应用的自测/误判复核入口、受理团队及检测报告与 ROM 判断的关系。本次访问前置失败，没有新答复或受理；仍按 [backlog §4](docs/backlog.md)保留真机阻塞。
 - R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）离线已完成，只剩真机验收；本地 main 已同时含两者，是否搭车由 A 选候选时决定。
+- 去复杂度：旧 v2 冻结原文已恢复、专项门通过；统一门另被现有文档 URL 的 32 位 ID 扫描命中阻断，修复与计划留在 `codex/decomplexity-followup`，尚未合 main。旧协调指针已回收；后续先处理扫描命中，再按组整理历史分支，见 [分支盘点与计划](docs/runs/2026-10-18-去复杂度与分支盘点.md)。
 
 ## 里程碑
 

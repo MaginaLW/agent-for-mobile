@@ -175,7 +175,7 @@ pwsh -NoProfile -File scripts/check-tablet-layout-c1a-offline.ps1
 A 修复的标准全门已通过：C1a 15/15、required coverage 46/46、self 3/3，Debug 377/377、Release 261/261、
 dispatch 28/28、runner 82/82、T-L1 24/24；assembleDebug、release absence、凭据扫描全绿，独立终审
 P0/P1=0。`4b96f89...` 的真机结果只把 C1a origin/read-only 从候选变成已取证；T-L1 仍因七项真实
-diagnostic blocker 未通过，当时 app 未合 main；当前源码整合状态见 [STATUS](../../STATUS.md)。
+diagnostic blocker 未通过，app 未合 main。
 
 完整协议见 [`tablet-layout-c1a/v1`](../contracts/tablet-layout-c1a-v1.md)。
 
