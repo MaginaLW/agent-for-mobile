@@ -74,19 +74,20 @@ Gradle daemon 与 **Kotlin 编译 daemon** 是两个进程，`gradlew --stop` �
 后者照样常驻吃内存，得单独点名。
 #>
 function Get-DevEnvBuildDaemon {
-    Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction Stop |
         Where-Object { $_.CommandLine -match 'GradleDaemon|KotlinCompileDaemon|kotlin-daemon-embeddable' }
 }
 
 <#
 停掉常驻构建 daemon：每个占 1GB 上下，正是把这台机器压过阈值的那部分。
 
-**默认只动本仓库的 daemon**。`gradlew --stop` 本身就是按 gradle 用户目录/项目定向的；
+`gradlew --stop` 按 Gradle 用户目录及版本作用于共享 daemon，并不按项目隔离；
 而按命令行匹配去 `Stop-Process -Force` 是全机行为——`GradleDaemon` 出现在这台机器上
 **每一个** Gradle daemon 的命令行里，`kotlin-daemon-embeddable` 更宽（任何 Kotlin 构建的
 classpath 上都有）。若此时 Android Studio 正在给别的项目跑构建，就会被连坐杀掉。
 
-所以强杀改为显式 opt-in（`-Aggressive`），且只有 check.ps1 的 -Clean 会用。
+所以常规检查使用 --no-daemon，不调用本函数；只有显式 check.ps1 -Clean 会用。
+强杀仍需显式 opt-in（`-Aggressive`）。
 #>
 function Stop-DevEnvGradleDaemon {
     param(
@@ -107,21 +108,31 @@ function Stop-DevEnvGradleDaemon {
         Start-Sleep -Milliseconds 500
     }
     $after = @(Get-DevEnvBuildDaemon).Count
-    $scope = if ($Aggressive) { '本机全部构建 daemon' } else { '本仓库 gradle daemon' }
+    $scope = if ($Aggressive) { '本机全部构建 daemon' } else { '同用户目录与版本的 gradle daemon' }
     return "$scope $before → $after"
 }
 
 <# 一行机器快照，跑长套件前打一眼；数字异常时人能立刻知道该先清场。 #>
 function Get-DevEnvSnapshot {
-    $free = [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
+    # 环境信息只用于提示和选择并行度；受限宿主没有 CIM 时仍应能执行离线断言。
+    $free = $null
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        if ($null -ne $os -and $null -ne $os.FreePhysicalMemory) {
+            $free = [int]($os.FreePhysicalMemory / 1024)
+        }
+    } catch { }
     $stale = @(Get-DevEnvStaleFixture).Count
-    $daemons = @(Get-DevEnvBuildDaemon).Count
+    $daemons = $null
+    try { $daemons = @(Get-DevEnvBuildDaemon).Count } catch { }
+    $memoryText = if ($null -eq $free) { '未知（CIM 不可用）' } else { "${free}MB" }
+    $daemonText = if ($null -eq $daemons) { '未知（CIM 不可用）' } else { "$daemons" }
     return [pscustomobject]@{
         FreeMemoryMb = $free
         StaleFixtures = $stale
         BuildDaemons = $daemons
-        Text = "可用内存 ${free}MB · 残留跑测目录 $stale · 构建 daemon $daemons"
+        Text = "可用内存 $memoryText · 残留跑测目录 $stale · 构建 daemon $daemonText"
         # 阈值凭 2026-07-26 那轮实测定：3GB 可用内存 + 大量残留时整轮成片假超时。
-        Healthy = ($free -ge 4096 -and $stale -le 5)
+        Healthy = ($null -ne $free -and $free -ge 4096 -and $stale -le 5)
     }
 }

@@ -10,13 +10,12 @@ diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚�
 任一项失败即非零退出。
 
 用法：
-  scripts/check.ps1              # 全量（含 gradle，首次冷跑几分钟）
+  scripts/check.ps1              # 全量（含 gradle；依赖须已缓存，缺失时报错）
   scripts/check.ps1 -SkipGradle  # 只跑脚本与仓库侧（改文档/PowerShell 时够用）
   scripts/check.ps1 -Clean       # 只清场：停 gradle daemon、删残留跑测目录与旧日志，不跑校验
 
 执行顺序有意为之：先跑秒级的便宜检查（快失败），再 gradle，最慢的监督式 runner 套件放最后，
-并在它开跑前停掉 gradle daemon 释放内存——那套件对进程启动延迟极敏感，daemon 常驻会把它压出
-成片的假超时（2026-07-26 实测，详见 docs/knowledge/android/common.md）。
+Gradle 使用一次性 daemon 和进程内 Kotlin 编译，构建后释放本轮内存，不停止共享的构建 daemon。
 
 长输出一律先落盘再尾读（见 docs/runbooks/离线开发与验证.md 排障）：完整日志在 .checks/（已 gitignore），失败时只把关键行打到屏幕。
 #>
@@ -154,8 +153,7 @@ Write-Host "日志：$LogDir" -ForegroundColor DarkGray
 $startSnapshot = Get-DevEnvSnapshot
 Write-Host "机器：$($startSnapshot.Text)`n" -ForegroundColor DarkGray
 if (-not $startSnapshot.Healthy) {
-    Write-Host '提示：本机负载偏高。监督式 runner 套件对进程启动延迟极敏感，可能出现与代码无关的成片超时；' -ForegroundColor Yellow
-    Write-Host '      先跑 scripts/check.ps1 -Clean 清场更稳。' -ForegroundColor Yellow
+    Write-Host '提示：环境信息不完整或负担偏高；可用内存未知时默认顺序运行监督式 runner。' -ForegroundColor Yellow
     Write-Host ''
 }
 
@@ -181,6 +179,13 @@ Invoke-Check '离线检查结果契约' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\check-summary-offline.ps1')
     ) | Out-Null
     Get-LastMeaningfulLine (Join-Path $LogDir 'check-summary-offline.log')
+}
+
+Invoke-Check '离线环境与构建隔离' {
+    Invoke-Logged -LogName 'dev-env-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dev-env-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'dev-env-offline.log')
 }
 
 Invoke-Check '平板只读 intake 无设备离线门' {
@@ -253,19 +258,16 @@ else {
             ':tablet-c1b-probe:testDebugUnitTest', ':tablet-c1b-probe:testReleaseUnitTest',
             ':tablet-c1b-probe:lintDebug', ':tablet-c1b-probe:lintRelease',
             ':tablet-c1b-probe:verifyTabletC1bReadOnlyArtifact',
+            '--offline', '--no-daemon', '-Pkotlin.compiler.execution.strategy=in-process',
             '--dependency-verification=strict', '--console=plain'
         ) | Out-Null
         'gateway/probe testDebug + testRelease + lintDebug/lintRelease + assembleDebug/assembleRelease + release absence/artifact proof'
     }
 }
 
-# —— 最慢的一项放最后，且先把 gradle daemon 占的内存还回来 ——
+# —— 最慢的一项放最后，Gradle 一次性构建已退出 ——
 
 Invoke-Check '监督式 runner 离线测试' {
-    # daemon 每个占 1GB 上下；这套件几十条各起一个子进程，内存紧张时会更容易出问题。
-    # 这里**不加 -Aggressive**：常规校验不该去动其它项目的构建 daemon。
-    if (-not $SkipGradle) { Stop-DevEnvGradleDaemon -RepoRoot $RepoRoot | Out-Null }
-
     # 分片并行。这套件的墙钟 97% 花在互不相干的 runner 子进程里，分片是最后一个大杠杆。
     # **机器不健康就退回顺序跑**：这套件的失败率是机器状态的函数（dev-env.ps1 开头那段实测），
     # 在已经紧张的机器上再乘 3，等于亲手制造它最擅长伪装的那种"成片假超时"。

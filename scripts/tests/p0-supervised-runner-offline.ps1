@@ -56,7 +56,7 @@ if ($staleSweep.Removed -gt 0 -or $staleSweep.Failed.Count -gt 0) {
 $envSnapshot = Get-DevEnvSnapshot
 Write-Host "机器状态：$($envSnapshot.Text)" -ForegroundColor DarkGray
 if (-not $envSnapshot.Healthy) {
-    Write-Host '提示：残留目录偏多或可用内存偏低，建议先跑 scripts/check.ps1 -Clean 清场。' -ForegroundColor Yellow
+    Write-Host '提示：环境信息不完整、残留目录偏多或可用内存偏低；测试失败时请保留日志核查。' -ForegroundColor Yellow
 }
 
 function Assert-True([bool]$Condition, [string]$Because) {
