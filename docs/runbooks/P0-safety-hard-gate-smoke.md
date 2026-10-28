@@ -151,6 +151,8 @@ ADB 仅用于设备发现、安装与权限、进程/服务、IME、端口转发
 
 runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和单腿记录；检查没有 `.pause.md`、没有 `-Confirm`、没有第二次危险调用。确认状态从 app 私有文件只读获取，截图经 `run-as` 拉取并校验 PNG；token、Authorization 和私密配置不得进入 stdout、stderr、manifest、trace 或跑测 Markdown。
 
+**审计来源已知缺口**：当前 runner 在读取审计游标失败或内容异常时会默认为第 0 行，且未将危险调用响应的 `audit_id` 与审计行 ID 比对。离线反例表明旧审计可因此被误认作本腿记录；单靠 audit ID 也不能排除网关重启后编号重用。游标与审计来源无法可信证明时不得判通过，不以 `passed` 代替证据。截图读取失败或终态缺失时，动作也可能已发生，保留证据、停止本轮，不重试或换路。
+
 预期语义：
 
 | 腿 | 真人决定 | dispatch / safety | 发送后置条件 |
