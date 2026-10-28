@@ -104,46 +104,22 @@ Allow 与 Stale 两腿都执行相同步骤：
 
 输入长度、SHA-256、focused-input ID 与 bounds，以及确认卡/只读状态是否绑定同一 confirm ID，都由 runner 机械验证；用户无需对照或计算。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
 
-### 3.2 批次 2 · 通知栏审批验收单（2026-08-02 收窄后）
+### 3.2 通知与确认来源的现行边界
 
-批次 2 的目标从「锁屏上点一下」**收窄为「屏幕亮着但人没盯着」**：通知带 Allow/Deny 按钮可用、
-用户不在网关/微信界面里也点得到、点了能真的把决定送进网关。收窄的理由与被移出的两条见
-[通知栏审批布局 spec](../specs/2026-08-01-通知栏审批布局-design.md) §5.4，一句话是：
-**锁屏审批与 D1「身份必须归属到活动 APPLICATION 窗口」结构性冲突，压根走不到弹通知那一步**。
+**通知批准已于 2026-08-28 撤销。** 通知只可用于拒绝或查看全部证据；危险动作的允许只能由
+用户在完成绘制与取证门的可见 `ConfirmOverlay` 上作出。本规程的 Allow 与 Stale 按 §3.1 在
+确认卡上点击，Deny 在确认卡上点击拒绝。不要以通知、heads-up 浮窗或 PC 输入替代卡上允许。
+安全失败即终态，不重弹、不转第二腿、不重试同一危险动作。
 
-审批通知与确认卡是**并联**的，同一次确认两条通道都在，先点的赢。所以这两条判据不需要额外
-步骤，只是**换一个地方点**。
+`confirmation_channel` 来自 app 私有状态文件中的 `decided_via`，runner 只读转记：`overlay` 是
+卡上决定，`notification` 是通知上的决定，`unknown` 是来源未取得。它是来源记录，不应把
+通知拒绝、未知来源或历史通知批准视为现行 Allow / Stale 的批准证据。
+通知出现情况可参考 manifest 的 `approval_notification`，但不能据此证明允许已由真人作出。
 
-| 判据 | 挂在哪条腿 | 用户怎么做 | 预期（manifest） |
-|---|---|---|---|
-| **1a · 可达且送达** | **Stale** | runner 提示后**切到别的 App**（浏览器/设置皆可，**不要锁屏**），在通知里点「允许本次」 | 该腿照常通过：`safety_code=E_STALE_REF`，且 `confirmation_channel=notification` |
-| **1b · 能真的放行** | **Allow** | 微信留在前台，人别盯着屏幕；等 heads-up 浮窗弹出来，**直接在浮窗上点**「允许本次」 | 该腿照常通过（全套 Allow 判据），且 `confirmation_channel=notification` |
-| **2 · 无 FSI 依赖** | 三腿 | 无 | APK 未声明该权限、通知 `fullscreenIntent=null`、三腿都到位 |
-| **3 · 连续两次 stale 后停下** | — | 无 | **永远记「未触达」**（决定四已作废，见 spec §5.3）——那是如实的 |
-
-`confirmation_channel` 是**机械证据**，来自 app 私有状态文件里的 `decided_via`，runner 只读转记：
-`notification` = 决定确实从通知那条通道进来的；`overlay` = 人其实点的是悬浮卡，**这一条判据就
-是未触达，如实记，不算通过**；`unknown` = 装的是不带该字段的旧 APK。
-
-**四条防误判，现场按这个判，别临场发挥：**
-
-1. **不要为了"看看锁屏上有没有"去锁屏。** 锁屏后目标 App 不再是活动应用窗口，危险动作在
-   `SafetyGate.requireKnownForeground` 就被 `E_BLOCKED` 挡住——**早于 `policy.assess`，所以卡和
-   通知都不会出现**。看不到通知**不是通知的缺陷**，是硬门按设计工作。这条已移出批次 2，不验。
-2. **1a 那腿人在别的 App 里点了允许，动作照样不会执行**，这是**预期**：确认前后前台包不一致，
-   硬门判 `E_STALE_REF`——与 Stale 腿本来要证明的是同一件事。1a 要证的只是「决定送到了网关」，
-   证据就是 `confirmation_channel=notification`。**不要因此重跑，也不要记成缺陷。**
-3. **1b 请在 heads-up 浮窗上点，不要下拉通知栏。** 通知栏展开时它自己获焦，App 窗口既非
-   active 也非 focused，而确认后复核只容忍约 320ms 的窗口沉降（`FOREGROUND_SETTLE_ATTEMPTS`
-   5×80ms）——**预计会以 `E_BLOCKED`（前台 APPLICATION 身份未知）结束**。
-   **这一条是推断，尚未实测**：同一机制 2026-07-26 在悬浮卡上实锤过（可获焦的 overlay 抢走焦点
-   → 前台被判 unknown，所以卡才必须 `FLAG_NOT_FOCUSABLE`），通知栏是同一类窗口。
-   万一 heads-up 已经消失、只能下拉着点，**照点不误，然后对着 manifest 的 `safety_code` 定案**：
-   `E_BLOCKED` 说明推断成立，如实记下「批次 2 的兑现窗口 = heads-up 的存活时长」；`OK`/`E_STALE_REF`
-   说明推断错了，那是好消息，同样如实记。**两种结果都不许改判据、不许重跑凑绿。**
-4. **通知没弹出来 ≠ 通知功能坏了。** runner 在卡与通知都就位、正等真人决定的那个窗口里会抓一份
-   `dumpsys notification` 进 manifest 的 `approval_notification`（`found`/`flags`/`ongoing`/
-   `visibility`/与同机其它 App 通知的差集）。先看这份 dump 再下结论。
+批次 2 的通知允许和锁屏方案是历史结论，不适用于现行链路；详情见
+[通知栏审批布局 spec](../specs/2026-08-01-通知栏审批布局-design.md) 和
+[backlog 的批次 2 历史](../backlog.md#批次-1--2--3--已验收的手机历史)。现行 Allow、Stale
+尚未独立真机验收。
 
 ## 4. 真实业务路径与 ADB 边界
 
@@ -179,7 +155,7 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 
 | 腿 | 真人决定 | dispatch / safety | 发送后置条件 |
 |---|---|---|---|
-| Allow | 允许本次 | success | marker 唯一命中，危险调用恰好一次，且 `press_key` 报 `sent_verified=true` |
+| Allow | 允许本次 | success | 危险调用恰好一次；`ui_find` 的 marker 查询和命中与本腿一致，且命中合法消息区；网关后验字段按下文判定 |
 | Stale | 允许本次 | fail / `E_STALE_REF` | debug hook 后零发送、零 gateway 续调 |
 | Deny | **拒绝** | fail / `E_BLOCKED` | 零 gateway 续调（含只读复核），且 `sent_verified` 不得为 true |
 
@@ -197,9 +173,11 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 
 **第一次跑请对着 manifest 的 `deny_out_of_band` 看一眼**：`ocr` 字段是 `windows-media-ocr` 还是 `unavailable`，`input_box_marker` 是不是 `present`。本机实测系统 OCR 会把 `P0` 读成 `PO`（marker 归一已含 O→0），且会把 marker 切成多个词（判据已先按行拼词再比对）——这两条都覆盖过，但真机截图的字号与背景与合成图不同，第一次要确认能读出来。
 
-Allow 腿要同时满足两套独立判据：网关侧后验判「内容离开了输入框」（`sent_verified`），runner 侧 `ui_find` 判「内容出现在了会话消息区」。只成立一条说明两套判据打架，判失败。
+Allow 腿以网关 `ui_find` 返回的 marker 命中及其消息区位置作为正向证据，并检查 `press_key` 的网关后验是否与之矛盾。`ui_find` 由被测网关提供，不是带外独立观察；它与 `press_key` 的后验是两项不同检查，不能表述成两套独立证据。`sent_verified=true` 并非本腿必需条件。
 
-网关侧后验是三态的：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，报失败会诱导重试，而重试发送的代价是重复发送；此时信封里带 `verification_state=unverified` 和"只能只读复核"的下一步。**runner 侧只禁矛盾，不强求网关自证**：`not_sent` 与 ui_find 在消息区命中 marker 直接打架，判失败；`unverified` 只黄字提示、照常按 ui_find 那条正证据判通过。理由是微信屏蔽 a11y 树后后验只剩 OCR 腿，而**发送成功后输入栏本来就是空的**，OCR 常常一个字都读不到——那种情况下 `unverified` 是物理上正确的结论，要求它必须 `sent` 会让 P0 因"拿不到证据"而永远过不了。只有**字段整个缺失**（旧 APK 不报）才判失败。
+网关侧后验设计为三态：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，重试发送可能造成重复发送；此时信封带 `verification_state=unverified` 和只能只读复核的下一步。当前 main 的 runner 对 Allow 拒绝 `not_sent` 和缺失或空值；`unverified` 会提示未能自证发送，并继续按 `ui_find` 及其他判据判断。因而 `unverified` 不必然使本腿失败，也不能单靠它断言消息已发送。
+
+**已知判定缺口**：当前 runner 也会将其他非空状态当作未能自证并继续；协议外状态不能作为验收通过证据，应冻结并报告。离线修复候选尚未合入 main，不能把该候选行为当作当前行为。
 
 > 这段 2026-08-01 更正过一次：原文写的是「`unverified` 与旧 APK 不报该字段一样判失败」，停在 07-27 那次复查**之前**——那次复查的结论恰恰是此前写反了。runner 的行为始终与 STATUS 记的设计意图一致，是本文档没跟着改。**文档把错误行为钉成预期，与用例把错误行为钉成预期是同一族风险。**
 
