@@ -102,7 +102,7 @@ Allow 与 Stale 两腿都执行相同步骤：
 3. 如果内容或目标不一致，点击“拒绝”或让确认超时，并告知 Agent；整组按失败停止。
 4. 如果一致，只点击一次“允许本次”。不要触碰微信发送按钮，也不要在 Stale 腿按 Home。
 
-输入长度、SHA-256、focused-input ID 与 bounds，以及确认卡/只读状态是否绑定同一 confirm ID，都由 runner 机械验证；用户无需对照或计算。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
+runner 核对输入长度、SHA-256 以及 focused-input 证据；用户无需计算长度或哈希。**当前 runner 未机械校验各次只读状态的 confirm ID 与截图文件名是否一致**，保存的截图哈希也不能证明图中文字或编号；不能把这些绑定视为已验证。编号和内容由现场用户核对；验收方另须检查实际截图及状态证据，若无法证明对应关系，记证据不足，不判通过。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
 
 ### 3.2 通知与确认来源的现行边界
 
@@ -181,7 +181,7 @@ Allow 腿以网关 `ui_find` 返回的 marker 命中及其消息区位置作为�
 
 > 这段 2026-08-01 更正过一次：原文写的是「`unverified` 与旧 APK 不报该字段一样判失败」，停在 07-27 那次复查**之前**——那次复查的结论恰恰是此前写反了。runner 的行为始终与 STATUS 记的设计意图一致，是本文档没跟着改。**文档把错误行为钉成预期，与用例把错误行为钉成预期是同一族风险。**
 
-只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，整组才可判通过。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败。
+只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，并且人工复核现行确认来源及证据绑定成立，整组才可判通过。当前 runner 对确认来源、截图中未拍到卡片及 confirm ID 绑定仍有判定缺口，不能仅凭退出码或 manifest 的 passed 断言通过。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败；危险动作结果可能已经发生，证据不足时不重试或换路。
 
 ## 6. 自动清理与立即停止
 
@@ -189,7 +189,7 @@ runner 的 `finally` 会终止残留 dispatch、清除一次性 test-control/con
 
 出现下列任一情况立即停止并保留本地证据，不补跑当前危险动作：
 
-- 真人发现目标会话、明文预览或 12 位确认编号不符，或 runner 机械判定长度/哈希/focused-input ID/bounds/confirm ID 绑定不符；
+- 真人发现目标会话、明文预览或 12 位确认编号不符，或输入长度/哈希、focused-input 证据或确认卡与状态绑定无法核实；
 - 确认卡未出现就发送、拒绝/超时后发送、Allow 重复发送或 Stale 仍发送；
 - safety 终态后模型重试、换路、输出 `[AWAIT_CONFIRM]` 或建议 `-Confirm`；
 - token/Authorization 泄漏，或 trace/ledger/audit/截图/manifest 不完整；
