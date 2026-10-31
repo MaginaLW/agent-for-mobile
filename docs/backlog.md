@@ -43,6 +43,7 @@ R1–R6 编号来自 [09-27 项目审查](runs/2026-09-27-项目审查与待办.
 |---|---|---|---|
 | R1 PC CONFIRM 真人确认边界 | 离线修复 `da37f3d`（53/53）：mobile `-Confirm` 在副作用前阻断 | 在含该修复的固定候选上真机验证阻断，gateway 手机确认卡保留 | 需真机；需用户现场 |
 | R5 intent_send 落地验证 | 离线实现 `7814fac`，Debug/Release 各 7 个 JVM 用例 | 真机覆盖“启动无异常但目标没到前台”，应返回 `E_VERIFY_FAIL`；通过后才按受测版本发布 | 需真机 |
+| 安全验收离线候选 | `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae`，隔离分支 `codex/safety-offline-validation`；11-01 完整门 14/14，派单 65/65、runner 154/154，见[补验记录](runs/2026-11-01-安全验收候选离线补验.md) | 已完成最新 SHA 离线补验；后续按现有队列核定受测范围与真机证据，不新增批次、不提前合入 | 仍需真机；需现场与本轮开跑令 |
 | 语义意图生产接线 | 基础模块 `48f8dd8`；SafetyGate、Android 证据安装、严格执行链、handler 次数证明未做 | C 队列清空后接线，只接受可见 ConfirmOverlay 的允许回调，见 [spec §5](specs/2026-08-02-语义意图审批-design.md) | 需真机 |
 | 两线源码整合 | C1b 探针修复已于 `cc74daf` 取入协调线，现已随 R1/R5 整合到本地 main；实现线 `cad7411` 不再有独有 app 改动 | R1/R5 是否随 C1b 真机运行搭车，按 §3 配额由 A 决定；仍须固定受测构建 | A |
 | M1b 占位工具实现 | 静态标注已完成，见 [能力现状](knowledge/android/m1b-capabilities.md) | 有需求时分别安排实现及通道、失败路径验收 | 按需 |
