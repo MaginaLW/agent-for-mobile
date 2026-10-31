@@ -18,6 +18,7 @@
 | 找深链（所有 app + 系统，含 🔵 候选区） | [apps/deeplinks.md](apps/deeplinks.md) |
 | 算成本账 / 额度容量 | [brain/cost.md](brain/cost.md) |
 | 大脑侧链路（headless/挂载/两段式） | [brain/harness.md](brain/harness.md) |
+| 参考 Mika 的任务闭环、知识组织与评测；比较后台屏架构 | [brain/mika.md](brain/mika.md)（2026-11-01 固定 SHA 查阅，🔵 未实测） |
 | 涉及 iOS / 苹果 | [ios/README.md](ios/README.md)（非目标边界，勿重复调研） |
 
 ## 目录结构与归档规则
@@ -27,7 +28,7 @@ knowledge/
 ├─ android/          # 安卓阵营：common · tablet(当前平板基线) · vivo-originos(历史手机基线) · m1b-capabilities · other-vendors · sys-cli
 ├─ ios/              # 苹果阵营：边界占位
 ├─ apps/             # 每 app 一册（wechat/xiaohongshu/jd/…）+ deeplinks 注册表
-└─ brain/            # 大脑侧：cost(成本校准) · harness(链路坑)
+└─ brain/            # 大脑侧：cost(成本校准) · harness(链路坑) · mika(外部项目参考)
 ```
 
 1. **新坑归档**：先问"这是谁的坑"——Android 版本的进 `android/common.md`；ROM 特有的进对应厂商册；app 特有的进对应 app 册；成本/链路的进 `brain/`。跨类就拆开各归各家，别写成流水账。

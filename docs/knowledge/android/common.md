@@ -11,6 +11,18 @@
 - **无障碍 `takeScreenshot`（API 30+）节流有软硬两种形态**（V2352A / Android 16）：单发 32–37ms；~400ms 间隔连发不报错而是**延迟到 ~750ms 才返回**，冷却 ~2s 回落；<300ms 的更紧连发会**硬报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`。网关内部视觉通道等 ~900ms 重试一次吸收；`screen_capture` 工具向大脑透出 `E_RATE_LIMITED`（冷却参考 ~800ms）。
 - **#22 Android 11+ `run-as` 读不了自己的 external files 目录，普通 `adb shell` 反而读得到**（Android 16，2026-07-26）：`run-as` 跑在 shell 的挂载命名空间里，对 `/sdcard/Android/data` 一律拒绝 app uid。**内部 `filesDir` 读写仍必须走 `run-as`（相对路径 `files/...`），external files 走普通 `adb shell`，两者不能混用一种写法。** 附带坑：`adb exec-out` 会把设备侧 stderr 一并写进重定向目标，`Permission denied` 会冒充成文件内容；拉取类命令不要图省事加 `-AllowFailure`。
 
+## Mika 独立后台屏参考
+
+🔵 未实测。
+
+**适用条件**：研究任务在后台操作、用户继续使用主屏的架构；不用于解释当前 vivo 撤销无障碍问题。
+
+**查见的做法**：2026-11-01 固定 Mika SHA `daa6efab22ee88444bbe5de295897f23cf09b1fd` 核对：[ShellService.createDisplay/displayFlags](https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/cap/phone/shell/ShellService.kt#L980-L989) 由 shell 身份助手创建虚拟屏，Android 14 起组合独立焦点和禁止抢主屏焦点的标志；自身建屏范围外的启动被拒绝。还设置显示级 IME 策略，涉及隐藏接口及系统权限，不能理解为普通无障碍 App 无权限即可实现。
+
+**本项目建议**：未来若明确要求后台屏，需单独验证 App 启动归属、a11y 读屏、输入焦点/IME、系统弹窗溢出、接管及 ConfirmOverlay 所在屏。当前 [TabletLayoutProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt) 和 [TabletC1bProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt) 阻断多 display，不为试用放宽门禁；主屏原生多窗与独立 display 是两种拓扑。
+
+**验证依据与边界**：仅上游源码/README 与本地探针静态对照，无 PA2553 / OriginOS / Android 16 兼容实测。Mika 也依赖无障碍，不能推出可绕开当前 ROM 撤销。完整比较见 [Mika 参考](../brain/mika.md)。
+
 ## 通知锁屏资格
 
 结论：**category 只是给系统的提示，拿不到对应待遇；待遇由 Style + 权限 + 必备元素共同决定。**（2026-08-02 查阅 + 真机对照；vivo 侧开关见 [vivo-originos.md](vivo-originos.md#通知与锁屏)）
