@@ -12,7 +12,7 @@
 
 ## 下一步
 
-- Mika 参考调研已于 11-01 归档：[任务闭环、知识与评测](docs/knowledge/brain/mika.md)、[后台屏边界](docs/knowledge/android/common.md#mika-独立后台屏参考)。仅公开资料与源码查阅，未实测；后续有具体需求再采用，不新增真机批次，当前 C1b 与安全验收优先。
+- Mika 参考调研与阻塞重评已于 11-01 归档：[任务闭环、知识与评测](docs/knowledge/brain/mika.md)、[后台屏边界](docs/knowledge/android/common.md#mika-独立后台屏参考)。详细推进见[解阻执行计划](docs/specs/2026-11-01-Mika借鉴与阻塞解阻-design.md)：权限归因、现有验收准备、window/pane 视觉证据需求三路离线并行；本轮仅制定计划，未执行后续工作包。仅查阅未实测，不新增真机批次；C1b 权限解阻不直接放行 P0，仍须核定设备与布局适用性。
 - C1b：在开发者人工时段确认登录后，继续问未上架应用的自测/误判复核入口、受理团队及检测报告与 ROM 判断的关系。10-28 没有新答复或受理；验收准备及可能的探针签名冲突见[本轮记录](docs/runs/2026-10-28-C1b客服跟进与验收准备.md)，仍按 [backlog §4](docs/backlog.md)保留真机阻塞。
 - R1（PC CONFIRM 真人确认边界）和 R5（intent_send 落地验证）实现已完成离线检查，均待真机验收；R5 的现场反例和独立证据方案尚未确定，见[验收准备](docs/runs/2026-10-28-C1b客服跟进与验收准备.md)。main 已包含两者，是否搭车由 A 选候选时决定。
 - 安全验收离线候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 已于 11-01 完成最新 SHA 的完整离线门：14 PASS / 0 FAIL / 0 SKIP，派单 65/65、台账 7/7、监督式 runner 154/154，含 Android 单测、Lint、构建及产物检查。候选保存在 `codex/safety-offline-validation`，未合 main、未推送、未真机验收；不构成新增批次或运行许可。见[本轮补验](docs/runs/2026-11-01-安全验收候选离线补验.md)，历史失败和修复见[10-28 记录](docs/runs/2026-10-28-安全验收离线修复.md)。
