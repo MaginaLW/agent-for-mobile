@@ -10,7 +10,7 @@ T-L1 C1b 平板 pure-a11y 布局观测的简单 runner（替代旧固定候选�
 只读边界（App 代码不变，本脚本只做下列 adb 动作）：
 * adb devices；adb -s <serial> install -r -t <apk>（不卸载）；
 * shell settings get secure enabled_accessibility_services；shell dumpsys accessibility；
-* exec-in content write（仅 C1b t0 URI）；shell content read（仅 C1b status/capture/result/abort URI）；
+* shell -T content write（仅 C1b t0 URI，无 PTY）；shell content read（仅 C1b status/capture/result/abort URI）；
 * 另调用只读的 scripts/run-tablet-intake.ps1。
 不调用 input/tap/swipe/am start/settings put/uninstall/screencap，不修改任何设备设置；
 无障碍未开启时只打印开启步骤并以 2 退出。
@@ -102,7 +102,7 @@ function New-C1bUri([string]$Endpoint) {
     if ($Endpoint -ceq 't0') {
         $uri += "&title_hash=$TitleHash&producer_commit_sha=$($script:Run.producer_commit_sha)&producer_artifact_sha256=$($script:Run.apk_sha256)"
     }
-    # 设备端 adbd 以 sh -c 解释 shell/exec-in 命令，URI 中的 & 必须整体单引号包裹。
+    # adb shell（包括 -T）把 argv 连接为远端命令，URI 中的 & 须整体单引号包裹。
     if ($uri -match "['\s%+]") { throw 'C1b URI 含非法字符。' }
     return "'$uri'"
 }
@@ -300,8 +300,12 @@ try {
 
     Set-Stage 't0_written'
     $sessionStarted = $true
-    $write = Invoke-Adb @('exec-in', 'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0Bytes
-    if ($write.Bytes.Length -or $write.Stderr.Trim().Length) { throw "T0 write 返回了意外输出：$($write.Text.Trim()) $($write.Stderr.Trim())" }
+    # -T 强制无 PTY，stdin EOF 后仍读取远端 stdout/stderr/exit；不支持 shell protocol 时失败，不回退。
+    $write = Invoke-Adb @('shell', '-T', 'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0Bytes
+    # content 的异常可能只写 stderr 而仍 exit 0；不落盘可能回显 URI/nonce 的原文。
+    if ($write.Bytes.Length -or -not [string]::IsNullOrEmpty($write.Stderr)) {
+        throw "T0 write 返回了意外输出（stdout=$($write.Bytes.Length) bytes，stderr=$([Text.Encoding]::UTF8.GetByteCount($write.Stderr)) bytes）。"
+    }
     $start = Read-C1bControl 'status'
     if ($start.state -cne 'ready_c1' -or [long]$start.generation -lt 1) { throw "T0 写入后状态应为 ready_c1，实际 $($start.state)/$($start.reason_code)。" }
     $script:Run.capture.generation = [long]$start.generation
