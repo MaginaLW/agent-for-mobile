@@ -265,6 +265,8 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 - **会话判读**：provider 忽略 start 返回再 complete pending，可能丢掉 session_busy；controller 已记 consumed、尚未发布 active 时 begin 抛异常，也能使 rejectStart/status/abort 最终只有 session_not_found。原始 CLI 写入结束或 abort absent 都不证明接收字节完整、会话从未存在或清理完成。
 - **验证依据与限制**：[本轮核定](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)保存真实 helper HostSmoke，以及现有编译 controller/pending 的正常、busy、begin 异常三条零设备复现；只有后两条同真机签名，实际真机根因未定。真实 T0 的 factory 接受与 host stdin 等字节送达，只覆盖本地边界，未覆盖 ADB/adbd/provider 接收。
 
+- **信息保留修复（11-01，离线）**：最近一次精确 key 的 ABSENT 启动拒绝仅用单槽保留，status/capture/result/abort 仍优先同 key 的实际 active/终态；下一 start、rejectStart、shutdown 清旧槽，不缓存成功或消费 busy 身份。有效 T0 后 begin 的 Exception 单独收口 failed/start_failed（gen0/empty tuple），Error 不吞；provider/pending 不改。两个旧实现真实红例分别定位 busy 原因丢失和 begin 异常丢失；最终候选及验证见[离线修复](../../runs/2026-11-01-C1b启动拒绝信息保留离线修复.md)，只证明这些路径可观测，不证明 51fe 真机根因。
+
 ### 存量诊断的空结果先核时钟与覆盖（2026-11-01）
 
 - **适用条件**：用主机 UTC 故障窗过滤 Android crash buffer。先核定目标包的 user0 UID 和独占映射，原文仅内存处理，落盘只留异常类、允许的栈符号及有界退出元数据，不保存日志正文、消息、线程名或内容指纹。
