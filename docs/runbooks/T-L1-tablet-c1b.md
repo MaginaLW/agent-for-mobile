@@ -40,7 +40,7 @@ T0 通过 `adb shell -T content write --uri '<URI>'` 接收原始 stdin，禁用
 
 - `upstream-t0-v5.json`：本次 T0 原始字节。
 - `tablet-layout-observation-c1b-v1.json`：经现有 c1b-v1 validator 校验。
-- `run.json`：HEAD、设备、APK、时序与结果摘要。
+- `run.json`：HEAD、设备、APK、时序与结果摘要。`result_diagnostic` 初始为 null；只在结果字节数、UTF-8 及 serial/nonce 隐私检查通过后，记录结果原始字节数、SHA-256 和首个失败锚点的固定字段名（JSON/结构无效分别为 `json`/`structure`）。未通过锚点检查的 observation 不落盘，也不保留失配值；返回 control 时记 `schema` 失败。摘要不证明来源有效、采集通过或 provider 会话已清理。
 
 ## 结果解读
 

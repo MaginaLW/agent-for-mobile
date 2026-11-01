@@ -188,10 +188,30 @@ switch -regex ($path) {
         $o.upstream_t0.artifact_sha256 = $session.t0_sha; $o.upstream_t0.captured_at = $session.t0_at
         $o.frames[0].captured_at = $now.AddMilliseconds(-1200).ToString($fmt); $o.frames[1].captured_at = $now.AddMilliseconds(-200).ToString($fmt)
         $o.captured_at = $o.frames[1].captured_at
+        switch ($scenario) {
+            'bad_schema' { $o.schema = 'untrusted-schema' }
+            'bad_run_id' { $o.run_id = 'other-run' }
+            'bad_title' { $o.expected_title_hash = 'sha256:' + ('d' * 64) }
+            'bad_kind' { $o.provenance.kind = 'offline_fixture' }
+            'bad_commit' { $o.provenance.producer_commit_sha = '0' * 40 }
+            'bad_t0_source' { $o.upstream_t0.source_kind = 'offline_fixture' }
+            'bad_t0_run' { $o.upstream_t0.run_id = 'other-t0-run' }
+            'bad_t0_artifact' { $o.upstream_t0.artifact_sha256 = 'sha256:' + ('d' * 64) }
+            'bad_t0_commit' { $o.upstream_t0.producer_commit_sha = '0' * 40 }
+            'bad_t0_time' { $o.upstream_t0.captured_at = '2020-01-01T00:00:00.0000000Z' }
+            'result_missing' { $o.PSObject.Properties.Remove('upstream_t0') }
+            'result_serial' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue 'FAKESERIAL01' }
+            'result_nonce' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue $session.nonce }
+        }
         if ($scenario -ceq 'run_json_fail') {
             [void](New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot "repo/docs/runs/evidence/$($session.run_id)/tablet-layout-c1b/run.json"))
         }
-        Out-Text ($o | ConvertTo-Json -Depth 100 -Compress); break
+        if ($scenario -ceq 'result_control') { Out-Control; break }
+        $raw = if ($scenario -ceq 'result_invalid_json') { '{"untrusted":"DO_NOT_RETAIN_RESULT_VALUE"' } else { $o | ConvertTo-Json -Depth 100 -Compress }
+        [IO.File]::WriteAllText((Join-Path $state 'result-response.bin'), $raw, [Text.UTF8Encoding]::new($false))
+        # The real controller consumes an observation before returning its bytes to the host.
+        $session = $null; Save
+        Out-Text $raw; break
     }
     default { exit 1 }
 }
@@ -254,6 +274,8 @@ try {
         $observation = Get-Content -Raw -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json') | ConvertFrom-Json -DateKind String
         Assert-True ($observation.provenance.producer_commit_sha -ceq $Head -and $observation.upstream_t0.artifact_sha256 -ceq $r.Run.t0_sha256) 'observation 锚点错误'
         Assert-True ($r.Run.validation.fixture_contract_valid -and $r.Run.validation.runtime_binding_inputs_match) 'validator 未通过'
+        $response = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
+        Assert-True ($r.Run.result_diagnostic.bytes -eq $response.Length -and $r.Run.result_diagnostic.sha256 -ceq $r.Run.observation_sha256 -and $null -eq $r.Run.result_diagnostic.binding_failure) '成功结果摘要错误'
         Assert-True (@($r.Log | Where-Object { $_ -match 'shell -T content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 应通过无 PTY 的 shell 写入一次，result 读取一次'
         Assert-True ([Linq.Enumerable]::SequenceEqual($t0Copy, [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin')))) '远端 stdin 字节与 T0 不同'
         Assert-NoForbiddenAdb $r
@@ -269,6 +291,7 @@ try {
             Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq $abortState) '写入可能已发生，须保留原 abort 尝试'
             Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}' -and $r.Output -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') '远端输出泄漏到错误记录'
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '写失败不应生成 observation'
+            Assert-True ($null -eq $r.Run.result_diagnostic) '未读 result 时不应产生摘要'
             Assert-NoForbiddenAdb $r
         }
     }
@@ -318,10 +341,36 @@ try {
         Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq 'aborted' -and ($r.Log -match '/abort/')) 'abort 未尝试'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '失败时不应写 observation'
     }
-    Test-Case 'observation-anchor-mismatch-fails' {
-        $r = Invoke-Runner 'anchor' 'bad_anchor'
-        Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '锚点') "exit=$($r.Exit) $($r.Output)"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '锚点不符时不应写 observation'
+    foreach ($case in @(
+        @('bad_schema', 'schema'), @('bad_run_id', 'run_id'), @('bad_title', 'expected_title_hash'),
+        @('bad_kind', 'provenance.kind'), @('bad_commit', 'provenance.producer_commit_sha'),
+        @('bad_anchor', 'provenance.producer_artifact_sha256'), @('bad_t0_source', 'upstream_t0.source_kind'),
+        @('bad_t0_run', 'upstream_t0.run_id'), @('bad_t0_artifact', 'upstream_t0.artifact_sha256'),
+        @('bad_t0_commit', 'upstream_t0.producer_commit_sha'), @('bad_t0_time', 'upstream_t0.captured_at'),
+        @('result_missing', 'structure'), @('result_invalid_json', 'json'), @('result_control', 'schema')
+    )) {
+        Test-Case "result-diagnostic-$($case[0])" {
+            $r = Invoke-Runner $case[0] $case[0]
+            Assert-True ($r.Exit -eq 1 -and $r.Run.stage -ceq 'result_read') "exit=$($r.Exit) $($r.Output)"
+            Assert-True ($r.Run.result_diagnostic.binding_failure -ceq $case[1]) '未准确记录闭合失败字段'
+            if ($case[0] -cne 'result_control') {
+                $raw = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
+                $sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($raw)).ToLowerInvariant()
+                Assert-True ($r.Run.result_diagnostic.bytes -eq $raw.Length -and $r.Run.result_diagnostic.sha256 -ceq $sha) '失败结果摘要不匹配原始字节'
+                Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq 'absent') '真实 result 消费后 abort 应 absent，不证明清理'
+            }
+            Assert-True (@($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) '失败后重复读取 result'
+            Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}|DO_NOT_RETAIN_RESULT_VALUE' -and $r.Output -notmatch 'DO_NOT_RETAIN_RESULT_VALUE') '结果原文泄漏'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '锚点不符时不应写 observation'
+            Assert-NoForbiddenAdb $r
+        }
+    }
+    foreach ($scenario in @('result_serial', 'result_nonce')) {
+        Test-Case "$scenario-before-diagnostic" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '原始 serial 或 nonce' -and $null -eq $r.Run.result_diagnostic) '隐私门之前不应保存摘要'
+            Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') 'run.json 泄漏标识'
+        }
     }
     Test-Case 'stale-apk-head-mismatch-fails' {
         $r = Invoke-Runner 'stale' 'stale_apk'

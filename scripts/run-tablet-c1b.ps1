@@ -168,7 +168,7 @@ function Set-Stage([string]$Name) { $script:Run.stage = $Name; $script:Run.times
 $script:Run = [ordered]@{
     schema = 'tablet-c1b-run/v1'; run_id = $null; outcome = 'failed'; exit_code = 1; failure_reason = $null; stage = 'init'
     commit_sha = $null; producer_commit_sha = $null; apk_sha256 = $null; apk_built = (-not $SkipBuild); serial_sha256 = $null
-    t0_sha256 = $null; observation_sha256 = $null
+    t0_sha256 = $null; observation_sha256 = $null; result_diagnostic = $null
     timestamps = [ordered]@{ started_at = Get-Utc }
     capture = [ordered]@{ generation = $null; host_wait_ms = $null; total_span_ms = $null; status_polls = 0; content_reads = 0 }
     abort = [ordered]@{ attempted = $false; state = $null; reason_code = $null }
@@ -337,16 +337,30 @@ try {
     if ($observationBytes.Length -notin 1..1048576) { throw 'observation 字节数越界。' }
     $observationRaw = [Text.UTF8Encoding]::new($false, $true).GetString($observationBytes)
     if ($observationRaw.Contains($script:SelectedSerial) -or $observationRaw.Contains($script:Nonce)) { throw 'observation 含原始 serial 或 nonce。' }
-    $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String
-    if ($observation.schema -cne 'tablet-layout-observation/c1b-v1' -or $observation.run_id -cne $RunId -or
-        $observation.expected_title_hash -cne $TitleHash -or $observation.provenance.kind -cne 'gateway_runtime_probe' -or
-        $observation.provenance.producer_commit_sha -cne $script:Run.producer_commit_sha -or
-        $observation.provenance.producer_artifact_sha256 -cne $script:Run.apk_sha256 -or
-        $observation.upstream_t0.source_kind -cne 'trusted_runtime' -or $observation.upstream_t0.run_id -cne $RunId -or
-        $observation.upstream_t0.artifact_sha256 -cne $script:Run.t0_sha256 -or
-        $observation.upstream_t0.producer_commit_sha -cne $T0ProducerSha -or
-        $observation.upstream_t0.captured_at -cne $t0.captured_at_utc) {
-        throw 'observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致。'
+    $script:Run.result_diagnostic = [ordered]@{
+        bytes = $observationBytes.Length; sha256 = Get-Sha256Bytes $observationBytes; binding_failure = $null
+    }
+    try { $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String }
+    catch { $script:Run.result_diagnostic.binding_failure = 'json'; throw 'observation JSON 无效。' }
+    # 与原复合条件保持同一短路顺序；只记录固定字段名，不保留失配值或未通过绑定检查的 observation。
+    try {
+        $bindingFailure = if ($null -eq $observation -or $observation -isnot [pscustomobject] -or
+            $null -eq $observation.PSObject.Properties['schema'] -or $observation.schema -cne 'tablet-layout-observation/c1b-v1') { 'schema' }
+        elseif ($observation.run_id -cne $RunId) { 'run_id' }
+        elseif ($observation.expected_title_hash -cne $TitleHash) { 'expected_title_hash' }
+        elseif ($observation.provenance.kind -cne 'gateway_runtime_probe') { 'provenance.kind' }
+        elseif ($observation.provenance.producer_commit_sha -cne $script:Run.producer_commit_sha) { 'provenance.producer_commit_sha' }
+        elseif ($observation.provenance.producer_artifact_sha256 -cne $script:Run.apk_sha256) { 'provenance.producer_artifact_sha256' }
+        elseif ($observation.upstream_t0.source_kind -cne 'trusted_runtime') { 'upstream_t0.source_kind' }
+        elseif ($observation.upstream_t0.run_id -cne $RunId) { 'upstream_t0.run_id' }
+        elseif ($observation.upstream_t0.artifact_sha256 -cne $script:Run.t0_sha256) { 'upstream_t0.artifact_sha256' }
+        elseif ($observation.upstream_t0.producer_commit_sha -cne $T0ProducerSha) { 'upstream_t0.producer_commit_sha' }
+        elseif ($observation.upstream_t0.captured_at -cne $t0.captured_at_utc) { 'upstream_t0.captured_at' }
+        else { $null }
+    } catch { $bindingFailure = 'structure' }
+    $script:Run.result_diagnostic.binding_failure = $bindingFailure
+    if ($null -ne $bindingFailure) {
+        throw "observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致（$bindingFailure）。"
     }
     $sessionConsumed = $true
     $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v1.json'
