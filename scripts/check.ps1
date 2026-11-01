@@ -216,6 +216,17 @@ Invoke-Check '平板双窗 T-L1 C1b pure-a11y 离线门' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-c1b-v1-offline-gate.log')
 }
 
+Invoke-Check 'C1b inventory 结果合同离线' {
+    Invoke-Logged -LogName 'tablet-c1b-inventory-result-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-c1b-inventory-result-offline.ps1')
+    ) | Out-Null
+    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-c1b-inventory-result-offline.log')
+    if ($summary -cnotmatch '^tablet-c1b inventory result offline: \d+ passed, 0 failed$') {
+        throw "C1b inventory 结果测试汇总不符：$summary"
+    }
+    $summary
+}
+
 Invoke-Check 'C1b runner 离线' {
     Invoke-Logged -LogName 'tablet-c1b-runner-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-c1b-runner-offline.ps1')

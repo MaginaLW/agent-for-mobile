@@ -254,9 +254,32 @@ class TabletC1bRuntimeControllerTest {
         assertEquals(C1bProtocolState.COMPLETE, controller.status(KEY).state)
 
         val result = controller.result(KEY) as C1bRuntimeResult.Observation
-        val json = JSONObject(result.json)
+        val envelope = JSONObject(result.json)
+        assertEquals(setOf("schema", "observation_json", "inventory_frames"), envelope.keys().asSequence().toSet())
+        assertEquals(TABLET_C1B_INVENTORY_RESULT_SCHEMA, envelope.getString("schema"))
+        val json = JSONObject(envelope.getString("observation_json"))
         assertEquals(TABLET_C1B_SCHEMA, json.getString("schema"))
         assertEquals(2, json.getJSONArray("frames").length())
+        val request = TrustedRuntimeContextFactory.create(
+            runId = ENVELOPE.key.runId,
+            expectedTitleHash = ENVELOPE.titleHash,
+            c1bProducerCommitSha = ENVELOPE.producerCommitSha,
+            c1bProducerArtifactSha256 = ENVELOPE.producerArtifactSha256,
+            upstreamT0RawUtf8 = t0Raw(),
+        )
+        val oldJson = TabletC1bAssembler().assemble(request,
+            listOf(frame("c1", ENVELOPE.titleHash), frame("c2", ENVELOPE.titleHash))).toJson().toString()
+        assertEquals(oldJson, envelope.getString("observation_json"))
+        val inventories = envelope.getJSONArray("inventory_frames")
+        assertEquals(2, inventories.length())
+        listOf("c1", "c2").forEachIndexed { index, token ->
+            val inventory = inventories.getJSONObject(index)
+            assertEquals("capture-$token", inventory.getString("capture_id"))
+            assertEquals(token, inventory.getString("capture_token"))
+            assertEquals(2, inventory.getInt("input_count"))
+            assertEquals(2, inventory.getInt("saved_count"))
+            assertEquals(0, inventory.getInt("dropped_count"))
+        }
         assertFalse(result.toString().contains(result.json))
         val consumed = controller.result(KEY) as C1bRuntimeResult.Control
         assertEquals(C1bProtocolState.ABSENT, consumed.value.state)
@@ -264,6 +287,34 @@ class TabletC1bRuntimeControllerTest {
         assertReadControls(controller, KEY, "session_not_found")
         controller.shutdown()
         current = null
+    }
+
+    @Test
+    fun missingOrMismatchedInventoryCannotBecomeAResultOrTriggerRecapture() {
+        listOf<(C1bRawFrame) -> C1bRawFrame>(
+            { it.copy(inventory = null) },
+            { it.copy(inventory = C1bWindowInventory(1, 16, 1, C1B_INVENTORY_FIRST_STOPS.associateWith { 0 })) },
+        ).forEach { mutation ->
+            val worker = QueuedWorker()
+            val service = FakeService("service")
+            var calls = 0
+            val controller = controller(worker, { service }) { _, _, token, hash ->
+                calls++
+                val raw = frame(token, hash)
+                if (token == "c2") mutation(raw) else raw
+            }
+            controller.start(ENVELOPE, t0Raw())
+            controller.capture(KEY, "c1")
+            worker.runNext()
+            controller.capture(KEY, "c2")
+            worker.runNext()
+            assertEquals(C1bProtocolState.FAILED, controller.status(KEY).state)
+            assertTrue(controller.result(KEY) is C1bRuntimeResult.Control)
+            controller.capture(KEY, "c2")
+            assertEquals(2, calls)
+            assertEquals(0, worker.size)
+            controller.shutdown()
+        }
     }
 
     @Test
@@ -482,6 +533,7 @@ class TabletC1bRuntimeControllerTest {
                 "an2" to C1bNodeIdentityToken("r"),
             ),
             diagnosticCodes = emptySet(),
+            inventory = C1bWindowInventory(2, 16, 2, C1B_INVENTORY_FIRST_STOPS.associateWith { 0 }),
         )
     }
 

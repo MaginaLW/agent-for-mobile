@@ -125,11 +125,12 @@ internal class TabletC1bProbe(
         val display = c1bCaptureStage(C1bCaptureFailureStage.DISPLAY) { port.display() }
         val windowsAttempt = attempt { port.windows().toList() }
         val allHandles = windowsAttempt.value.orEmpty()
+        val firstStopCounts = C1B_INVENTORY_FIRST_STOPS.associateWith { 0 }.toMutableMap()
         var windowsTruncated = !windowsAttempt.succeeded || allHandles.size > limits.maximumWindows
         if (!windowsAttempt.succeeded) diagnosticCodes += "window_inventory_truncated"
 
         val states = allHandles.take(limits.maximumWindows).mapIndexedNotNull { index, handle ->
-            captureWindowShell(index + 1, handle, display, request.expectedTitleHash, diagnosticCodes)
+            captureWindowShell(index + 1, handle, display, request.expectedTitleHash, diagnosticCodes, firstStopCounts)
                 ?: null.also { windowsTruncated = true }
         }
         val applicationStates = states.filter { it.type == "application" }
@@ -212,6 +213,12 @@ internal class TabletC1bProbe(
                 }.map { metadata -> metadata.nodeLabel to metadata.identity }
             }.toMap(),
             diagnosticCodes = diagnosticCodes,
+            inventory = C1bWindowInventory(
+                inputCount = allHandles.size.takeIf { windowsAttempt.succeeded },
+                maximumWindows = limits.maximumWindows,
+                savedCount = states.size,
+                firstStopCounts = firstStopCounts,
+            ),
         )
     }
 
@@ -221,52 +228,51 @@ internal class TabletC1bProbe(
         display: C1bDisplayRead,
         expectedTitleHash: String,
         frameCodes: MutableSet<String>,
+        firstStopCounts: MutableMap<String, Int>,
     ): MutableWindowState? {
+        fun reject(code: String): MutableWindowState? {
+            frameCodes += code
+            firstStopCounts[code] = firstStopCounts.getValue(code) + 1
+            return null
+        }
         val platformTypeAttempt = attempt { port.platformTypeCode(handle) }
         val platformTypeCode = platformTypeAttempt.value
         if (!platformTypeAttempt.succeeded || platformTypeCode == null || platformTypeCode !in 0..255) {
-            frameCodes += if (platformTypeAttempt.succeeded) "window_type_invalid" else "window_type_read_failed"
-            return null
+            return reject(if (platformTypeAttempt.succeeded) "window_type_invalid" else "window_type_read_failed")
         }
         val displayAttempt = attempt { port.windowDisplayId(handle) }
         val windowDisplayId = displayAttempt.value
         if (!displayAttempt.succeeded || windowDisplayId == null || windowDisplayId !in 0..16) {
-            frameCodes += if (displayAttempt.succeeded) "window_display_invalid" else "window_display_read_failed"
-            return null
+            return reject(if (displayAttempt.succeeded) "window_display_invalid" else "window_display_read_failed")
         }
         val layerAttempt = attempt { port.windowLayer(handle) }
         val windowLayer = layerAttempt.value
         if (!layerAttempt.succeeded || windowLayer == null || windowLayer !in -32_768..32_767) {
-            frameCodes += if (layerAttempt.succeeded) "window_layer_invalid" else "window_layer_read_failed"
-            return null
+            return reject(if (layerAttempt.succeeded) "window_layer_invalid" else "window_layer_read_failed")
         }
         val touchableAttempt = attempt { port.windowTouchableBounds(handle) }
         val touchableBounds = touchableAttempt.value
         if (!touchableAttempt.succeeded || touchableBounds?.isSchemaBounded == false) {
-            frameCodes += if (touchableAttempt.succeeded) {
+            return reject(if (touchableAttempt.succeeded) {
                 "window_touchable_bounds_invalid"
             } else {
                 "window_touchable_bounds_read_failed"
-            }
-            return null
+            })
         }
         val activeAttempt = attempt { port.windowActive(handle) }
         val windowActive = activeAttempt.value
         if (!activeAttempt.succeeded || windowActive == null) {
-            frameCodes += "window_active_read_failed"
-            return null
+            return reject("window_active_read_failed")
         }
         val focusAttempt = attempt { port.windowFocused(handle) }
         val windowFocused = focusAttempt.value
         if (!focusAttempt.succeeded || windowFocused == null) {
-            frameCodes += "window_focus_read_failed"
-            return null
+            return reject("window_focus_read_failed")
         }
         val windowIdAttempt = attempt { port.windowId(handle) }
         val rawWindowId = windowIdAttempt.value
         if (!windowIdAttempt.succeeded || rawWindowId == null || !c1bIsDefinedWindowId(rawWindowId)) {
-            frameCodes += if (windowIdAttempt.succeeded) "window_id_invalid" else "window_id_read_failed"
-            return null
+            return reject(if (windowIdAttempt.succeeded) "window_id_invalid" else "window_id_read_failed")
         }
         val state = MutableWindowState(provisionalIndex, handle, limits.maximumNodesPerWindow)
         state.rawWindowId = rawWindowId

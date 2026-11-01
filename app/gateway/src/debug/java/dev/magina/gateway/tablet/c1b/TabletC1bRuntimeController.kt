@@ -1,6 +1,8 @@
 package dev.magina.gateway.tablet.c1b
 
 import java.nio.charset.StandardCharsets
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal fun interface C1bRuntimeFrameCapture<S : Any> {
     fun capture(
@@ -75,7 +77,17 @@ internal class TabletC1bRuntimeController<S : Any>(
         },
         assembler = C1bFrameAssembler { c1, c2 ->
             require(c1.request == c2.request) { "C1b assembly context changed between frames" }
-            val json = observationAssembler.assemble(c1.request, listOf(c1.frame, c2.frame)).toJson().toString()
+            val frames = listOf(c1.frame, c2.frame)
+            val observationJson = observationAssembler.assemble(c1.request, frames).toJson().toString()
+            val inventories = JSONArray()
+            frames.forEach { frame ->
+                inventories.put(requireNotNull(frame.inventory) { "C1b inventory missing" }.toJson(frame))
+            }
+            val json = JSONObject()
+                .put("schema", TABLET_C1B_INVENTORY_RESULT_SCHEMA)
+                .put("observation_json", observationJson)
+                .put("inventory_frames", inventories)
+                .toString()
             val bytes = json.toByteArray(StandardCharsets.UTF_8)
             try {
                 require(bytes.size <= TABLET_C1B_MAX_OUTPUT_BYTES) { "C1b output exceeds limit" }

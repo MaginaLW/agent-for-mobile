@@ -8,6 +8,64 @@ import java.time.Instant
 
 internal const val TABLET_C1B_SCHEMA = "tablet-layout-observation/c1b-v1"
 internal const val TABLET_C1B_MODE = "c1b_pure_a11y_diagnostic"
+internal const val TABLET_C1B_INVENTORY_RESULT_SCHEMA = "tablet-c1b-inventory-result/v1"
+
+/** Only the existing shell short-circuit boundaries; not later tree/geometry failures. */
+internal val C1B_INVENTORY_FIRST_STOPS = listOf(
+    "window_type_read_failed", "window_type_invalid",
+    "window_display_read_failed", "window_display_invalid",
+    "window_layer_read_failed", "window_layer_invalid",
+    "window_touchable_bounds_read_failed", "window_touchable_bounds_invalid",
+    "window_active_read_failed", "window_focus_read_failed",
+    "window_id_read_failed", "window_id_invalid",
+)
+
+/** Counts come from the existing enumeration and first-stop branches, never from persisted v1 inference. */
+internal class C1bWindowInventory(
+    val inputCount: Int?,
+    val maximumWindows: Int,
+    val savedCount: Int,
+    firstStopCounts: Map<String, Int>,
+) {
+    val firstStopCounts: Map<String, Int> = firstStopCounts.toMap()
+    val attemptedCount: Int = inputCount?.coerceAtMost(maximumWindows) ?: 0
+    val droppedCount: Int = attemptedCount - savedCount
+    val unattemptedCount: Int? = inputCount?.minus(attemptedCount)
+
+    init {
+        require(maximumWindows in 1..16 && (inputCount == null || inputCount >= 0)) {
+            "C1b inventory range invalid"
+        }
+        require(savedCount in 0..attemptedCount && this.firstStopCounts.keys == C1B_INVENTORY_FIRST_STOPS.toSet()) {
+            "C1b inventory shape invalid"
+        }
+        require(this.firstStopCounts.values.all { it in 0..maximumWindows } &&
+            this.firstStopCounts.values.sumOf(Int::toLong) == droppedCount.toLong()
+        ) { "C1b inventory counts invalid" }
+    }
+
+    fun toJson(frame: C1bRawFrame): JSONObject {
+        require(savedCount == frame.windows.size &&
+            frame.windowsTruncated == (inputCount == null || unattemptedCount != 0 || droppedCount > 0)
+        ) { "C1b inventory frame mismatch" }
+        val stops = JSONObject()
+        C1B_INVENTORY_FIRST_STOPS.forEach { stops.put(it, firstStopCounts.getValue(it)) }
+        return JSONObject()
+            .put("capture_id", frame.captureId)
+            .put("capture_token", frame.capture.token)
+            .put("enumeration_status", if (inputCount == null) "failed" else "complete")
+            .put("count_status", if (inputCount == null) "unavailable" else "exact")
+            .put("maximum_windows", maximumWindows)
+            .put("input_count", inputCount ?: JSONObject.NULL)
+            .put("unattempted_count", unattemptedCount ?: JSONObject.NULL)
+            .put("attempted_count", attemptedCount)
+            .put("saved_count", savedCount)
+            .put("dropped_count", droppedCount)
+            .put("first_stop_counts", stops)
+    }
+
+    override fun toString(): String = "C1bWindowInventory(counts=<bounded>)"
+}
 
 /** Pure-value, in-memory identity used only for duplicate defense and two-frame run-local relabeling. */
 /**
@@ -310,6 +368,7 @@ internal data class C1bRawFrame(
     internal val windowIdentityTokens: Map<String, Int>,
     internal val nodeIdentityTokens: Map<String, C1bNodeIdentityToken>,
     internal val diagnosticCodes: Set<String>,
+    internal val inventory: C1bWindowInventory? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("capture_id", captureId)

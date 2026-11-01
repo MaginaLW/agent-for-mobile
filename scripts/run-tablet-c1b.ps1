@@ -49,6 +49,7 @@ $Pwsh = (Get-Process -Id $PID).Path
 . (Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1')
 . (Join-Path $PSScriptRoot 'lib\tablet-layout-c1a.ps1')
 . (Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v1-validator.ps1')
+. (Join-Path $PSScriptRoot 'lib\tablet-c1b-inventory-result.ps1')
 
 class C1bNeedsUser : Exception { C1bNeedsUser([string]$m) : base($m) {} }
 
@@ -165,10 +166,31 @@ function Wait-C1bState([string]$Target, [Diagnostics.Stopwatch]$Watch) {
 
 function Set-Stage([string]$Name) { $script:Run.stage = $Name; $script:Run.timestamps[$Name] = Get-Utc }
 
+# Inspect decoded keys and values, not only their JSON spelling: Unicode escapes must not hide
+# private identifiers in either the observation or the new diagnostic section before persistence.
+function Test-C1bContainsPrivateIdentity($Value) {
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [string]) {
+        return $Value.Contains($script:SelectedSerial) -or $Value.Contains($script:Nonce)
+    }
+    if ($Value -is [pscustomobject]) {
+        foreach ($property in $Value.PSObject.Properties) {
+            if ((Test-C1bContainsPrivateIdentity $property.Name) -or (Test-C1bContainsPrivateIdentity $property.Value)) {
+                return $true
+            }
+        }
+    } elseif ($Value -is [Collections.IEnumerable]) {
+        foreach ($item in $Value) { if (Test-C1bContainsPrivateIdentity $item) { return $true } }
+    }
+    return $false
+}
+
 $script:Run = [ordered]@{
-    schema = 'tablet-c1b-run/v1'; run_id = $null; outcome = 'failed'; exit_code = 1; failure_reason = $null; stage = 'init'
+    schema = 'tablet-c1b-run/v2'; run_id = $null; outcome = 'failed'; exit_code = 1; failure_reason = $null; stage = 'init'
     commit_sha = $null; producer_commit_sha = $null; apk_sha256 = $null; apk_built = (-not $SkipBuild); serial_sha256 = $null
     t0_sha256 = $null; observation_sha256 = $null; result_diagnostic = $null
+    result_schema = $null; result_envelope_sha256 = $null
+    inventory_validation = [ordered]@{ status = 'not_run'; reason_codes = @() }
     timestamps = [ordered]@{ started_at = Get-Utc }
     capture = [ordered]@{ generation = $null; host_wait_ms = $null; total_span_ms = $null; status_polls = 0; content_reads = 0 }
     abort = [ordered]@{ attempted = $false; state = $null; reason_code = $null }
@@ -336,15 +358,26 @@ try {
 
     Set-Stage 'result_read'
     $result = Invoke-Adb @('shell', 'content', 'read', '--uri', (New-C1bUri 'result')) -TimeoutSec 60
-    $observationBytes = $result.Bytes
-    if ($observationBytes.Length -notin 1..1048576) { throw 'observation 字节数越界。' }
-    $observationRaw = [Text.UTF8Encoding]::new($false, $true).GetString($observationBytes)
-    if ($observationRaw.Contains($script:SelectedSerial) -or $observationRaw.Contains($script:Nonce)) { throw 'observation 含原始 serial 或 nonce。' }
+    $envelopeBytes = $result.Bytes
+    # Strict decoding happens before any untrusted body is retained.
+    $parsedResult = ConvertFrom-C1bInventoryResult -Bytes $envelopeBytes
+    if (-not $parsedResult.Valid) {
+        $script:Run.inventory_validation = [ordered]@{ status = 'failed'; reason_codes = @($parsedResult.ReasonCode) }
+        throw "C1b inventory result 拒绝（$($parsedResult.ReasonCode)）。"
+    }
+    $observationBytes = $parsedResult.ObservationBytes
+    $observationRaw = $parsedResult.ObservationRaw
+    if ($observationRaw.Contains($script:SelectedSerial) -or $observationRaw.Contains($script:Nonce) -or
+        (Test-C1bContainsPrivateIdentity $parsedResult.Observation) -or
+        (Test-C1bContainsPrivateIdentity $parsedResult.InventoryFrames)) {
+        throw 'C1b result 含原始 serial 或 nonce。'
+    }
+    $script:Run.result_schema = 'tablet-c1b-inventory-result/v1'
+    $script:Run.result_envelope_sha256 = Get-Sha256Bytes $envelopeBytes
     $script:Run.result_diagnostic = [ordered]@{
         bytes = $observationBytes.Length; sha256 = Get-Sha256Bytes $observationBytes; binding_failure = $null
     }
-    try { $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String }
-    catch { $script:Run.result_diagnostic.binding_failure = 'json'; throw 'observation JSON 无效。' }
+    $observation = $parsedResult.Observation
     # 与原复合条件保持同一短路顺序；只记录固定字段名，不保留失配值或未通过绑定检查的 observation。
     try {
         $bindingFailure = if ($null -eq $observation -or $observation -isnot [pscustomobject] -or
@@ -363,12 +396,20 @@ try {
     } catch { $bindingFailure = 'structure' }
     $script:Run.result_diagnostic.binding_failure = $bindingFailure
     if ($null -ne $bindingFailure) {
+        $script:Run.inventory_validation = [ordered]@{ status = 'failed'; reason_codes = @('run_binding_mismatch') }
         throw "observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致（$bindingFailure）。"
     }
     $sessionConsumed = $true
     $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v1.json'
     [IO.File]::WriteAllBytes($observationPath, $observationBytes)
     $script:Run.observation_sha256 = Get-Sha256Bytes $observationBytes
+    [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'tablet-c1b-inventory-result-v1.json'), $envelopeBytes)
+
+    $inventory = Test-C1bInventoryCounts -Result $parsedResult
+    if (-not $inventory.Valid) {
+        $script:Run.inventory_validation = [ordered]@{ status = 'failed'; reason_codes = @($inventory.ReasonCode) }
+        throw "C1b inventory result 拒绝（$($inventory.ReasonCode)）。"
+    }
 
     Set-Stage 'validated'
     $validation = Test-TabletLayoutObservationC1BV1TrustedRuntimeFile -Path $observationPath -EvidenceRoot $evidenceDir `
@@ -381,8 +422,10 @@ try {
         semantic_tree_usable = [bool]$validation.semantic_tree_usable
     }
     if (-not $validation.fixture_contract_valid -or -not $validation.runtime_binding_inputs_match) {
+        $script:Run.inventory_validation = [ordered]@{ status = 'failed'; reason_codes = @('observation_invalid') }
         throw "observation validator 未通过：$(@($validation.reason_codes) -join ',')"
     }
+    $script:Run.inventory_validation = [ordered]@{ status = 'passed'; reason_codes = @() }
     $script:Run.outcome = 'passed'; $exitCode = 0
 }
 catch {

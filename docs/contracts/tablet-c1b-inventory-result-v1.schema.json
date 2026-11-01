@@ -1,0 +1,290 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-for-mobile.invalid/contracts/tablet-c1b-inventory-result-v1.schema.json",
+  "title": "C1b inventory diagnostic result v1",
+  "description": "Diagnostic envelope only. Strict UTF-8, Unicode, duplicate-key, integer-token, byte-limit, count conservation and inner observation validation are additionally enforced by the consumer. No layout/action grant.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "observation_json",
+    "inventory_frames"
+  ],
+  "properties": {
+    "schema": {
+      "const": "tablet-c1b-inventory-result/v1"
+    },
+    "observation_json": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1048576
+    },
+    "inventory_frames": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/definitions/frame"
+      }
+    }
+  },
+  "definitions": {
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "capture_token",
+        "enumeration_status",
+        "count_status",
+        "maximum_windows",
+        "input_count",
+        "unattempted_count",
+        "attempted_count",
+        "saved_count",
+        "dropped_count",
+        "first_stop_counts"
+      ],
+      "properties": {
+        "capture_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$"
+        },
+        "capture_token": {
+          "enum": [
+            "c1",
+            "c2"
+          ]
+        },
+        "enumeration_status": {
+          "enum": [
+            "complete",
+            "failed"
+          ]
+        },
+        "count_status": {
+          "enum": [
+            "exact",
+            "unavailable",
+            "overflow"
+          ]
+        },
+        "maximum_windows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "input_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "unattempted_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "attempted_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "saved_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "dropped_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "first_stop_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "window_type_read_failed",
+            "window_type_invalid",
+            "window_display_read_failed",
+            "window_display_invalid",
+            "window_layer_read_failed",
+            "window_layer_invalid",
+            "window_touchable_bounds_read_failed",
+            "window_touchable_bounds_invalid",
+            "window_active_read_failed",
+            "window_focus_read_failed",
+            "window_id_read_failed",
+            "window_id_invalid"
+          ],
+          "properties": {
+            "window_type_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_type_invalid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_display_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_display_invalid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_layer_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_layer_invalid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_touchable_bounds_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_touchable_bounds_invalid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_active_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_focus_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_id_read_failed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "window_id_invalid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "enumeration_status": {
+              "const": "complete"
+            },
+            "count_status": {
+              "const": "exact"
+            },
+            "input_count": {
+              "type": "integer"
+            },
+            "unattempted_count": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "properties": {
+            "enumeration_status": {
+              "const": "failed"
+            },
+            "count_status": {
+              "const": "unavailable"
+            },
+            "input_count": {
+              "type": "null"
+            },
+            "unattempted_count": {
+              "type": "null"
+            },
+            "attempted_count": {
+              "const": 0
+            },
+            "saved_count": {
+              "const": 0
+            },
+            "dropped_count": {
+              "const": 0
+            },
+            "first_stop_counts": {
+              "properties": {
+                "window_type_read_failed": {
+                  "const": 0
+                },
+                "window_type_invalid": {
+                  "const": 0
+                },
+                "window_display_read_failed": {
+                  "const": 0
+                },
+                "window_display_invalid": {
+                  "const": 0
+                },
+                "window_layer_read_failed": {
+                  "const": 0
+                },
+                "window_layer_invalid": {
+                  "const": 0
+                },
+                "window_touchable_bounds_read_failed": {
+                  "const": 0
+                },
+                "window_touchable_bounds_invalid": {
+                  "const": 0
+                },
+                "window_active_read_failed": {
+                  "const": 0
+                },
+                "window_focus_read_failed": {
+                  "const": 0
+                },
+                "window_id_read_failed": {
+                  "const": 0
+                },
+                "window_id_invalid": {
+                  "const": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "enumeration_status": {
+              "const": "complete"
+            },
+            "count_status": {
+              "const": "overflow"
+            },
+            "input_count": {
+              "type": "null"
+            },
+            "unattempted_count": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

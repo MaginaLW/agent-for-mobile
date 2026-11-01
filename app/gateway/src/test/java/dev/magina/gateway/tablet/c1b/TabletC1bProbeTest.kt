@@ -14,6 +14,108 @@ import java.time.Instant
 
 class TabletC1bProbeTest {
     @Test
+    fun inventoryCountsEveryFirstStopWithoutReadingPastIt() {
+        val stages = listOf("type", "display", "layer", "touchable_bounds", "active", "focus", "id")
+        stages.forEachIndexed { index, stage ->
+            val port = RecordingShellPort(FakePort(windowList = listOf(window(9, null))), stage)
+            val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
+            val inventory = requireNotNull(frame.inventory)
+            assertEquals(stages.take(index + 1), port.reads)
+            assertEquals(1, port.enumerations)
+            assertEquals(1, inventory.inputCount)
+            assertEquals(1, inventory.attemptedCount)
+            assertEquals(0, inventory.savedCount)
+            assertEquals(1, inventory.droppedCount)
+            assertEquals(0, inventory.unattemptedCount)
+            assertEquals(1, inventory.firstStopCounts.getValue("window_${stage}_read_failed"))
+            assertEquals(1, inventory.firstStopCounts.values.sum())
+            assertFalse(inventory.toJson(frame).toString().contains("private"))
+        }
+        val badWindows = listOf(
+            "type" to FakeWindow(9, 256, root = null, title = null),
+            "display" to FakeWindow(9, 1, displayId = 17, root = null, title = null),
+            "layer" to FakeWindow(9, 1, layer = 32768, root = null, title = null),
+            "touchable_bounds" to FakeWindow(9, 1, touchableBounds = C1bRect(0, 0, 40000, 2), root = null, title = null),
+            "id" to FakeWindow(-1, 1, root = null, title = null),
+        )
+        badWindows.forEach { (stage, badWindow) ->
+            val port = RecordingShellPort(FakePort(windowList = listOf(badWindow)))
+            val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
+            val inventory = requireNotNull(frame.inventory)
+            assertEquals(stages.take(stages.indexOf(stage) + 1), port.reads)
+            assertEquals(1, inventory.firstStopCounts.getValue("window_${stage}_invalid"))
+            assertEquals(1, inventory.droppedCount)
+            assertEquals(1, inventory.firstStopCounts.values.sum())
+        }
+    }
+
+    @Test
+    fun inventoryDistinguishesEnumerationFailureEmptyAndBudgetWithoutAdditionalReads() {
+        val empty = RecordingShellPort(FakePort(windowList = emptyList()))
+        val emptyFrame = TabletC1bProbe(empty, now = { FIRST_AT }).capture(request())
+        val failed = object : TabletC1bReadPort by empty {
+            override fun windows(): List<C1bWindowHandle> = error("private enumeration")
+        }
+        val failedFrame = TabletC1bProbe(failed, now = { FIRST_AT }).capture(request())
+        val emptyJson = requireNotNull(emptyFrame.inventory).toJson(emptyFrame)
+        val failedJson = requireNotNull(failedFrame.inventory).toJson(failedFrame)
+        assertEquals("complete", emptyJson.getString("enumeration_status"))
+        assertEquals(0, emptyJson.getInt("input_count"))
+        assertFalse(emptyFrame.windowsTruncated)
+        assertEquals("failed", failedJson.getString("enumeration_status"))
+        assertEquals("unavailable", failedJson.getString("count_status"))
+        assertTrue(failedJson.isNull("input_count"))
+        assertTrue(failedJson.isNull("unattempted_count"))
+        assertEquals(0, failedJson.getInt("attempted_count"))
+        assertTrue(failedFrame.windowsTruncated)
+
+        val handles = (1..17).map { index ->
+            FakeWindow(index, if (index <= 12) 256 else 3, root = null, title = null)
+        }
+        val budgetPort = RecordingShellPort(FakePort(windowList = handles))
+        val budgetFrame = TabletC1bProbe(budgetPort, now = { FIRST_AT }).capture(request())
+        val inventory = requireNotNull(budgetFrame.inventory)
+        assertEquals(17, inventory.inputCount)
+        assertEquals(16, inventory.attemptedCount)
+        assertEquals(4, inventory.savedCount)
+        assertEquals(12, inventory.droppedCount)
+        assertEquals(1, inventory.unattemptedCount)
+        assertEquals(12, inventory.firstStopCounts.getValue("window_type_invalid"))
+        assertEquals(16, budgetPort.reads.count { it == "type" })
+        assertEquals(1, budgetPort.enumerations)
+        assertTrue(budgetFrame.windowsTruncated)
+    }
+
+    @Test
+    fun inventoryDoesNotChangeV1OrCountRetainedShellFailuresAsDrops() {
+        val retained = FakeWindow(9, 99, displayId = 1, bounds = C1bRect(0, 0, 40000, 2),
+            touchableBounds = null, root = null, title = null)
+        val port = RecordingShellPort(FakePort(windowList = listOf(retained)))
+        val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
+        val inventory = requireNotNull(frame.inventory)
+        assertEquals(1, inventory.savedCount)
+        assertEquals(0, inventory.droppedCount)
+        assertEquals(0, inventory.firstStopCounts.values.sum())
+        assertEquals("unknown", frame.windows.single().type)
+        assertNull(frame.windows.single().bounds)
+        assertFalse(frame.windowsTruncated)
+        assertEquals(C1bFocusStatus.UNKNOWN, frame.focus.status)
+        assertEquals(listOf("type", "display", "layer", "touchable_bounds", "active", "focus", "id", "bounds", "root"), port.reads)
+        assertEquals(frame.copy(inventory = null).toJson().toString(), frame.toJson().toString())
+        assertFalse(frame.toJson().has("inventory"))
+        assertThrows(IllegalArgumentException::class.java) {
+            inventory.toJson(frame.copy(windowsTruncated = true))
+        }
+        listOf("bounds", "title", "root").forEach { stage ->
+            val broken = RecordingShellPort(FakePort(windowList = listOf(window(9, null))), stage)
+            val brokenFrame = TabletC1bProbe(broken, now = { FIRST_AT }).capture(request())
+            assertEquals(1, requireNotNull(brokenFrame.inventory).savedCount)
+            assertEquals(0, requireNotNull(brokenFrame.inventory).droppedCount)
+            assertFalse(brokenFrame.windowsTruncated)
+        }
+    }
+
+    @Test
     fun captureFailureStagesKeepOnlyClosedTypesAndNeverRetainSourceExceptions() {
         val secret = "private-title /private/content/path"
         val hostile = object : Exception() {
@@ -1446,6 +1548,31 @@ class TabletC1bProbeTest {
 
         private val C1bWindowHandle.fake: FakeWindow get() = this as FakeWindow
         private val C1bNodeHandle.fake: FakeNode get() = this as FakeNode
+    }
+
+    private class RecordingShellPort(
+        private val delegate: TabletC1bReadPort,
+        private val failAt: String? = null,
+    ) : TabletC1bReadPort by delegate {
+        val reads = mutableListOf<String>()
+        var enumerations = 0
+        private fun <T> read(stage: String, block: () -> T): T {
+            reads += stage
+            if (stage == failAt) error("private read detail")
+            return block()
+        }
+        override fun windows(): List<C1bWindowHandle> { enumerations++; return delegate.windows() }
+        override fun platformTypeCode(window: C1bWindowHandle): Int = read("type") { delegate.platformTypeCode(window) }
+        override fun windowDisplayId(window: C1bWindowHandle): Int = read("display") { delegate.windowDisplayId(window) }
+        override fun windowLayer(window: C1bWindowHandle): Int = read("layer") { delegate.windowLayer(window) }
+        override fun windowTouchableBounds(window: C1bWindowHandle): C1bRect? = read("touchable_bounds") { delegate.windowTouchableBounds(window) }
+        override fun windowActive(window: C1bWindowHandle): Boolean = read("active") { delegate.windowActive(window) }
+        override fun windowFocused(window: C1bWindowHandle): Boolean = read("focus") { delegate.windowFocused(window) }
+        override fun windowId(window: C1bWindowHandle): Int = read("id") { delegate.windowId(window) }
+        override fun windowBounds(window: C1bWindowHandle): C1bRect? = read("bounds") { delegate.windowBounds(window) }
+        override fun windowExpectedTitleMatch(window: C1bWindowHandle, expectedTitleHash: String): C1bTitleMatchStatus =
+            read("title") { delegate.windowExpectedTitleMatch(window, expectedTitleHash) }
+        override fun root(window: C1bWindowHandle): C1bNodeHandle? = read("root") { delegate.root(window) }
     }
 
     private companion object {

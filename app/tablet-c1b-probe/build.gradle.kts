@@ -165,6 +165,7 @@ private val allowedAppDescriptorRoots = sortedSetOf(
     "dev/magina/gateway/tablet/c1b/C1bProtocolState",
     "dev/magina/gateway/tablet/c1b/C1bProvenance",
     "dev/magina/gateway/tablet/c1b/C1bRawFrame",
+    "dev/magina/gateway/tablet/c1b/C1bWindowInventory",
     "dev/magina/gateway/tablet/c1b/C1bReadSnapshot",
     "dev/magina/gateway/tablet/c1b/C1bReadState",
     "dev/magina/gateway/tablet/c1b/C1bReadWorker",

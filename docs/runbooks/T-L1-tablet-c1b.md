@@ -36,11 +36,16 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 ## 产物
 
+当前隔离诊断实现使用 `tablet-c1b-inventory-result/v1` 结果封套与 `tablet-c1b-run/v2` 收据（[实现状态](../runs/2026-11-01-窗口清单诊断离线实现.md)）。尚未真机验收，不据此开跑；历史固定 ccc8cce 的裸 v1 结果和收据仍按原版本解释，不转换、不补计数。新 runner 拒绝裸 v1，旧 runner 不兼容新封套，不能混用 APK/runner。
+
 `docs/runs/evidence/<run_id>/tablet-layout-c1b/`：
 
 - `upstream-t0-v5.json`：本次 T0 原始字节。
-- `tablet-layout-observation-c1b-v1.json`：经现有 c1b-v1 validator 校验。
-- `run.json`：HEAD、设备、APK、时序与结果摘要。`result_diagnostic` 初始为 null；只在结果字节数、UTF-8 及 serial/nonce 隐私检查通过后，记录结果原始字节数、SHA-256 和首个失败锚点的固定字段名（JSON/结构无效分别为 `json`/`structure`）。未通过锚点检查的 observation 不落盘，也不保留失配值；返回 control 时记 `schema` 失败。摘要不证明来源有效、采集通过或 provider 会话已清理。
+- `tablet-c1b-inventory-result-v1.json`：新结果封套原始字节，包含 observation 原文和两帧首次停止诊断；仅在内层 run/构建/T0 绑定通过后保存。
+- `tablet-layout-observation-c1b-v1.json`：封套中 observation 原文的严格 UTF-8 字节，经现有 c1b-v1 validator 校验；不重排 JSON，不改变冻结 schema 或结论。
+- `run.json`：HEAD、设备、APK、时序与结果摘要。新收据的 `result_schema`、`result_envelope_sha256` 指外层；`observation_sha256` 与 `result_diagnostic` 仍指内层原文及原绑定失败字段，不能互换。`inventory_validation` 记录未运行/失败/通过及闭合原因。未通过绑定的 payload 不落盘、不保留失配值；绑定后计数失败保留已有证据且本轮失败，不重采。摘要不证明 provider 已清理或 T-L1 通过。
+
+归档时同时保存上列四份文件（失败轮只收集实际生成者），在 manifest 中分别记录封套和 observation 原字节哈希，并核对解封后的内层字节与 observation 文件完全一致。不得只归档诊断摘要或把封套哈希写入 observation_sha256；旧 run/v1 归档不要求不存在的新文件。
 
 ## 结果解读
 
