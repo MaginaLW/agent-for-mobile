@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-01（ccc8cce 采集契约通过；后续 window/pane 视觉合同设计评审完成，来源与实施准入仍阻塞，T-L1 未通过）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
+> 更新 2026-11-02（未接线窗口采集生命周期离线阶段完成；真实图像来源与实施准入仍阻塞，T-L1 未通过）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
 
 ## 一句话现状
 
@@ -12,7 +12,7 @@
 
 ## 下一步
 
-- 新阶段在 `codex/window-capture-lifecycle` 实施未接线 debug [单次窗口采集生命周期](docs/runs/2026-11-01-窗口采集生命周期离线实现.md)。23 项新测试、gateway Debug 单测/Lint、release 与 C1b APK 隔离定向门已通过，完整门待跑。范围仅为 API 34 请求、关联、终态和 buffer 释放的离线验证；不进入 Provider/MCP/Activity 或新的真机队列。诊断 `597ca8b` 的验收仍独立，部署还需核公开签名兼容，旧一次性凭据许可不复用。
+- `codex/window-capture-lifecycle` 已完成未接线 debug [单次窗口采集生命周期](docs/runs/2026-11-01-窗口采集生命周期离线实现.md)，代码固定 `4166360bf247470744c7bcd5436b4049e0c63084`。前轮完整门 15/15；最终 P2 修复后 29 项专项和全部 Android 门补验通过，四套单测 1229 项零失败/跳过，proof SHA 匹配，隔离检查通过。API 34 请求只做服务引用关联、终态及幂等关闭尝试，不进入 Provider/MCP/Activity/C1b APK 或新的真机队列。下一步核定诊断 `597ca8b` 的部署签名/验收顺序及真实图像最小取证范围；当前 debug 证书与历史证书不同、release 未签名，旧凭据许可不复用。
 
 - 隔离分支 `codex/c1b-inventory-diagnostics` 已完成[窗口清单诊断离线实现](docs/runs/2026-11-01-窗口清单诊断离线实现.md)：probe→controller→runner→归档全链与独立审查完成，完整门 15 PASS / 0 FAIL / 0 SKIP，封套 65/65、runner 72/72、Android 单测 1200 项及 Lint/构建/产物检查通过。范围仅为已有读取的计数和诊断传输，不新增 getter/截图/OCR/运行卡，不合 main。下一步仍是来源核验范围审查与队列核定；视觉 pane/几何/同代准入未满足，T-L1 未通过。
 
