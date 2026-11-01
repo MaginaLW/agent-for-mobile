@@ -99,9 +99,22 @@ function Get-Provider {
         version_name = '0.1.0'; version_code = 1; embedded_git_head = $head; build_challenge = 'offline-c1b-read-only-placeholder'; a11y_service_ready = $true }
 }
 if ($cmd -ceq 'shell pm path dev.magina.gateway') {
-    if ($scenario -ceq 'same_apk') { Out-Text "package:/data/app/fake/base.apk`n"; exit 0 } else { exit 1 }
+    if ($scenario -ceq 'installed_missing') { exit 0 }
+    if ($scenario -in @('same_apk', 'installed_mismatch', 'installed_pm_failure', 'installed_pm_stderr', 'installed_pm_whitespace_stderr', 'installed_sha_failure', 'installed_sha_stderr')) {
+        Out-Text "package:/data/app/fake/base.apk`n"
+        if ($scenario -ceq 'installed_pm_failure') { exit 1 }
+        if ($scenario -ceq 'installed_pm_stderr') { [Console]::Error.WriteLine('fake pm read failure') }
+        if ($scenario -ceq 'installed_pm_whitespace_stderr') { [Console]::Error.Write(' ') }
+        exit 0
+    } else { exit 1 }
 }
-if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") { Out-Text "$($env:FAKE_ADB_APK_SHA)  /data/app/fake/base.apk`n"; exit 0 }
+if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") {
+    $sha = if ($scenario -ceq 'installed_mismatch') { '0' * 64 } else { $env:FAKE_ADB_APK_SHA }
+    Out-Text "$sha  /data/app/fake/base.apk`n"
+    if ($scenario -ceq 'installed_sha_failure') { exit 1 }
+    if ($scenario -ceq 'installed_sha_stderr') { [Console]::Error.WriteLine('fake sha read failure') }
+    exit 0
+}
 if ($cmd -match '^install -r -t ') { Out-Text "Performing Streamed Install`nSuccess`n"; exit 0 }
 if ($cmd -ceq 'shell settings get secure enabled_accessibility_services') {
     Out-Text $(if ($scenario -ceq 'a11y_off') { "null`n" } else { "dev.magina.gateway/.a11y.GatewayA11yService`n" }); exit 0
@@ -230,6 +243,25 @@ try {
         Assert-True ($r.Exit -eq 0 -and $r.Run.install_skipped) "exit=$($r.Exit) $($r.Output)"
         Assert-True (-not ($r.Log -match '^-s \S+ install ')) '设备上已是同一 APK 时不应重装'
         Assert-NoForbiddenAdb $r
+    }
+    Test-Case 'required-installed-apk-match-skips-install' {
+        $r = Invoke-Runner 'requiredsameapk' 'same_apk' @('-RequireInstalledApkMatch')
+        Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed' -and $r.Run.install_skipped) "exit=$($r.Exit) $($r.Output)"
+        Assert-True (-not ($r.Log -match '^-s \S+ install ')) '要求现装匹配时不应安装'
+        Assert-True (@($r.Log | Where-Object { $_ -match 'shell pm path ' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match 'shell sha256sum ' }).Count -eq 1) '现装匹配检查不应重试'
+        Assert-NoForbiddenAdb $r
+    }
+    foreach ($scenario in @('installed_missing', 'installed_mismatch', 'installed_pm_failure', 'installed_pm_stderr', 'installed_pm_whitespace_stderr', 'installed_sha_failure', 'installed_sha_stderr')) {
+        Test-Case "required-$scenario-stops-before-install" {
+            $r = Invoke-Runner "required-$scenario" $scenario @('-RequireInstalledApkMatch')
+            $reason = if ($scenario -like 'installed_pm_*') { 'pm path 读取失败' } elseif ($scenario -like 'installed_sha_*') { 'sha256sum 读取失败' } else { '未确认已安装探针 APK' }
+            Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.failure_reason -match [regex]::Escape($reason)) "exit=$($r.Exit) $($r.Output)"
+            Assert-True (-not ($r.Log -match '^-s \S+ install |content|settings|dumpsys') -and -not $r.Run.abort.attempted) '匹配未确认时应在安装、权限检查和 provider 访问前停止'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'shell pm path ' }).Count -eq 1) 'pm path 不应重试'
+            $expectedShaReads = if ($scenario -eq 'installed_missing' -or $scenario -like 'installed_pm_*') { 0 } else { 1 }
+            Assert-True (@($r.Log | Where-Object { $_ -match 'shell sha256sum ' }).Count -eq $expectedShaReads) 'SHA 读取次数不符'
+            Assert-NoForbiddenAdb $r
+        }
     }
     Test-Case 'multi-device-rejected' {
         $r = Invoke-Runner 'multi' 'multi'

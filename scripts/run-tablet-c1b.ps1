@@ -3,8 +3,9 @@
 T-L1 C1b 平板 pure-a11y 布局观测的简单 runner（替代旧固定候选主机链）。
 
 一次调用 = 一次采集，不自动重试；换新 run_id 再次调用即可，不再有 once 标记。
-流程：clean HEAD → 全局设备锁 → 单设备 → （可选）Gradle 构建探针 → install -r -t →
+流程：clean HEAD → 全局设备锁 → 单设备 → （可选）Gradle 构建探针 → 校验现装 APK →
 只读检查无障碍已启用并绑定 → T0-L v5 intake → C1b content 协议 → 证据落盘 → validator。
+现装 APK 相同则跳过安装；默认未匹配时 install -r -t，-RequireInstalledApkMatch 未确认相同即停。
 
 只读边界（App 代码不变，本脚本只做下列 adb 动作）：
 * adb devices；adb -s <serial> install -r -t <apk>（不卸载）；
@@ -24,6 +25,7 @@ param(
     [string]$Serial,
     [string]$ApkPath,
     [switch]$SkipBuild,
+    [switch]$RequireInstalledApkMatch,
     [string]$RunId,
     # 仅离线测试：用给定 T0 画像代替真实 intake；生产调用不得传。
     [string]$TestOnlyT0ProfilePath,
@@ -230,11 +232,22 @@ try {
     Set-Stage 'installed'
     # 重装会让系统解绑无障碍服务；设备上已是同一 APK（sha256 相同）时跳过安装。
     $script:Run.install_skipped = $false
-    $installedPath = ((Invoke-Adb @('shell', 'pm', 'path', $script:PackageName) -AllowFailure).Text -split "`r?`n" |
+    $installedPackage = Invoke-Adb @('shell', 'pm', 'path', $script:PackageName) -AllowFailure
+    if ($RequireInstalledApkMatch -and ($installedPackage.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($installedPackage.Stderr))) {
+        throw '-RequireInstalledApkMatch：pm path 读取失败，拒绝安装探针。'
+    }
+    $installedPath = ($installedPackage.Text -split "`r?`n" |
         Where-Object { $_ -match '^package:(.+\.apk)\s*$' } | Select-Object -First 1) -replace '^package:', '' -replace '\s+$', ''
     if ($installedPath) {
-        $remoteSha = ((Invoke-Adb @('shell', 'sha256sum', "'$installedPath'") -AllowFailure).Text -split '\s+')[0]
+        $installedSha = Invoke-Adb @('shell', 'sha256sum', "'$installedPath'") -AllowFailure
+        if ($RequireInstalledApkMatch -and ($installedSha.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($installedSha.Stderr))) {
+            throw '-RequireInstalledApkMatch：sha256sum 读取失败，拒绝安装探针。'
+        }
+        $remoteSha = ($installedSha.Text -split '\s+')[0]
         if ($remoteSha -and ('sha256:' + $remoteSha.ToLowerInvariant()) -ceq $script:Run.apk_sha256) { $script:Run.install_skipped = $true }
+    }
+    if ($RequireInstalledApkMatch -and -not $script:Run.install_skipped) {
+        throw '-RequireInstalledApkMatch：未确认已安装探针 APK 与本地 SHA-256 相同，拒绝安装探针。'
     }
     if (-not $script:Run.install_skipped) {
         $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 180 -AllowFailure

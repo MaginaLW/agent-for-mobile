@@ -20,7 +20,7 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 ```powershell
 pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径> `
-  [-Serial <serial>] [-ApkPath <已构建 APK>] [-SkipBuild] [-RunId <id>]
+  [-Serial <serial>] [-ApkPath <已构建 APK>] [-SkipBuild] [-RequireInstalledApkMatch] [-RunId <id>]
 ```
 
 流程：检查工作树 → 取与派单共用的全局设备锁 → 确认恰好一台设备 → Gradle 构建 `:tablet-c1b-probe:assembleDebug`
@@ -30,6 +30,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 - 从 `c1` 起整段采集不超过 15 秒；`c1`、`c2` 各读一次，不补拍。
 - 一次调用只采一次，不自动重试。每个新运行使用新 run_id，并重新满足就位与开跑条件；已有证据目录不得覆盖。
 - 探针模块的 Gradle 构建检查保证 APK 只含只读代码；`-SkipBuild`/`-ApkPath` 只用于满足上述构建身份约束的 APK。
+- 保留当前已就绪的探针时，另传 `-RequireInstalledApkMatch`：只有已安装 APK 的 SHA-256 与本地 APK 相同才跳过安装并继续；缺包、路径或哈希读取失败、不匹配均在安装前失败并保留本轮 `run.json`，不覆盖安装。未传此参数时沿用原有安装行为。
 
 ## 产物
 
