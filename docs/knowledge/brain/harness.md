@@ -313,6 +313,12 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 - **有效做法**：本轮将已有 Gradle 缓存的 `caches/modules-2` 与 `wrapper/dists` 复制到区内 `.checks/gradle-home`，只对检查子进程设置 `GRADLE_USER_HOME`、`TEMP/TMP`（`.checks/t`）及 JDK/SDK 路径；保留项目原有 `--offline`、`--no-daemon`、进程内 Kotlin 编译和严格依赖校验。缓存副本可复用，不复制全局 Gradle 配置或凭据。
 - **验证依据**：固定候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 的完整门实际退出 0、14/14 通过，Android 219 个任务成功。此结论只证明本轮已有依赖足够，不保证任意缓存或缺失依赖也可离线构建。命令、日志和收据见[补验记录](../../runs/2026-11-01-安全验收候选离线补验.md)。
 
+### 同名应用命令可能返回多个程序（2026-11-01，纯宿主验证）
+
+- **适用条件**：PowerShell 用 `Get-Command <name> -CommandType Application` 的 `.Source` 作为单个原生程序路径。本机 Git 和 Node 各返回两个结果；不能假定查询只返回一个。
+- **有效做法**：保留 PATH 优先顺序，显式 `Select-Object -First 1 -ExpandProperty Source`，再传给进程启动器。一次性设备任务前，用相同函数做不接触设备的最小宿主检查；语法检查、解析器样例和静态审查不覆盖进程启动。
+- **验证依据**：[恢复观察续记](../../runs/2026-11-01-C1b底层源码与安全中心静态归因.md#7-恢复观察准备与宿主失败同日续记)的原轮在设备命令 0 条时失败；隔离原函数复现数组被合为无效程序路径。仅改单一路径选择后，固定 HEAD/clean 和 Node v24.20.0 查询成功，修订源码的纯宿主检查再次通过。没有执行修订观察入口或 ADB，不证明设备观察通过。
+
 ### Git Schannel 的凭据环境差异（2026-11-01，只读查询验证）
 
 - **适用条件**：受限执行环境中 Git HTTPS 查询报 `AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)`，而目标远端已核实。这个信号不能直接判为远端凭据过期。
