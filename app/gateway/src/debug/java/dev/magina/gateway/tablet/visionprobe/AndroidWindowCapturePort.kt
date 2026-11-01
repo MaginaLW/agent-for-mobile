@@ -37,31 +37,11 @@ internal class AndroidWindowCapturePort(
             executor,
             object : AccessibilityService.TakeScreenshotCallback {
                 override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
-                    val hardwareBuffer = try {
-                        requireNotNull(result.hardwareBuffer)
-                    } catch (_: Exception) {
-                        callback.onFailure(WindowCaptureFailure.INVALID_METADATA)
-                        return
-                    }
-                    val owned = try {
-                        AndroidWindowCaptureBuffer(hardwareBuffer, result.timestamp)
-                    } catch (_: Exception) {
-                        val reason = try {
-                            hardwareBuffer.close()
-                            WindowCaptureFailure.INVALID_METADATA
-                        } catch (_: Exception) {
-                            WindowCaptureFailure.BUFFER_CLOSE_FAILED
-                        }
-                        callback.onFailure(reason)
-                        return
-                    } catch (failure: Throwable) {
-                        try {
-                            hardwareBuffer.close()
-                        } catch (closeFailure: Throwable) {
-                            if (closeFailure !== failure) failure.addSuppressed(closeFailure)
-                        }
-                        throw failure
-                    }
+                    val owned = prepareWindowCaptureBuffer(
+                        callback,
+                        acquire = { requireNotNull(result.hardwareBuffer) },
+                        wrap = { AndroidWindowCaptureBuffer(it, result.timestamp) },
+                    ) ?: return
                     var deliveryFailure: Throwable? = null
                     try {
                         // The callback borrows metadata only and closes before notification. The adapter's
@@ -99,6 +79,56 @@ internal class AndroidWindowCapturePort(
     }
 
     override fun toString(): String = "AndroidWindowCapturePort(<unwired>)"
+}
+
+/** Actual pre-handoff path shared with JVM tests; an executor may catch its Error and keep running. */
+internal fun <T : AutoCloseable> prepareWindowCaptureBuffer(
+    callback: WindowCaptureCallback,
+    acquire: () -> T,
+    wrap: (T) -> WindowCaptureBuffer,
+): WindowCaptureBuffer? {
+    val resource = try {
+        acquire()
+    } catch (_: Exception) {
+        callback.onFailure(WindowCaptureFailure.INVALID_METADATA)
+        return null
+    } catch (failure: Error) {
+        failWindowCaptureSetupBeforeRethrow(callback, failure)
+    }
+    return try {
+        wrap(resource)
+    } catch (_: Exception) {
+        val reason = try {
+            resource.close()
+            WindowCaptureFailure.INVALID_METADATA
+        } catch (_: Exception) {
+            WindowCaptureFailure.BUFFER_CLOSE_FAILED
+        } catch (failure: Error) {
+            failWindowCaptureSetupBeforeRethrow(callback, failure)
+        }
+        callback.onFailure(reason)
+        null
+    } catch (failure: Error) {
+        failWindowCaptureSetupBeforeRethrow(callback, failure) { resource.close() }
+    }
+}
+
+private fun failWindowCaptureSetupBeforeRethrow(
+    callback: WindowCaptureCallback,
+    failure: Error,
+    release: (() -> Unit)? = null,
+): Nothing {
+    try {
+        release?.invoke()
+    } catch (cleanupFailure: Throwable) {
+        if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+    }
+    try {
+        callback.onFailure(WindowCaptureFailure.CAPTURE_ERROR)
+    } catch (notificationFailure: Throwable) {
+        if (notificationFailure !== failure) failure.addSuppressed(notificationFailure)
+    }
+    throw failure
 }
 
 /** Pixel data never leaves this wrapper; only primitive metadata is available to the debug lifecycle. */
