@@ -65,11 +65,19 @@
 - producer 的 fail-closed 条件必须能由 consumer 从持久化字段重算；只在内存里记失败而 wire 结论不变，会造成
   跨层错位。
 
+## window/pane 视觉证据来源（2026-11-01，静态查阅）
+
+- **适用条件与做法**：pure-a11y root 完整但 opaque，准备视觉路线时先查实际产生者。现有默认 display 截图返回 Bitmap，未携带 native window 身份或截图结果时间戳；fresh generation、a11y revision、相同 bounds 与裁图 offset 均不能单独证明 window/pane 同代绑定。确认 overlay 也推进全局 revision，不能直接用该值替代视觉 layout epoch；预期 IME/insets 变化仍使旧链失效，旧批准不复活。
+- **inventory 归因边界**：当前内部 diagnosticCodes 不序列化。固定默认上限 16 且 relabel 不删窗的生产链下，CCC 每帧 4 条且 truncated 可条件推知至少一次必要字段 shell rejection；不能确定具体字段、异常/坏值、丢弃数或是否同时超限，更不能认定 getter/ROM/probe 缺陷。后续有界分类只能扩展可解释性，不放宽 topology/IME 门。
+- **验证依据**：两路只读源码核查、存量 CCC observation 与独立设计审查，详见[评审记录](../../runs/2026-11-01-平板视觉合同评审.md)和[合同设计](../../specs/2026-11-01-平板window-pane视觉证据合同-design.md)。本轮无设备/截图/OCR；可信图像来源、geometry/epoch、TTL/同步误差仍未证实，不据此实施或开跑。
+
 ## Windows / ADB 宿主坑
 
-- **普通 `adb shell` stdin 不是 byte-exact 通道**（2026-08-26 实测）：Windows 上会把 CRLF 归一为 LF，
-  导致上游 hash 不匹配。写原始 bytes 改用 `adb exec-in content write` 的 binary stdin 并传 raw canonical URI；
-  只读 content endpoint 仍可走 `adb shell` 加远端 POSIX 引号。修复后真机已验证 bytes 一致。
+- **原始 stdin 的字节风险**：08-26 曾用 `exec-in content write` 验证当时的 binary stdin 链路，属于历史版本经验，
+  不作为当前 C1b 写入建议。11-01 当前固定 CCC 已真机验证原 T0 单行 ASCII Base64 → `shell -T` 的远端
+  `pipefail`/`toybox base64 -d`/`content write` 链路与原字节哈希匹配；解码/写入任一失败或任意输出仍停止，
+  不回退 exec-in/PTY。详见[当前规程](../../runbooks/T-L1-tablet-c1b.md)及[harness 字节边界](../brain/harness.md)；
+  成功仅覆盖本轮，不反推旧失败唯一原因或任何环境都可用。
 - **`adb -L` listen 只认 `localhost`**（2026-08-29 离线归因）：`adb -L tcp:127.0.0.1:<port> server nodaemon`
   会落入 unsupported hostname 并 `LOG(FATAL)`，Windows 上表现为 adb 进程秒退、WER 记录 `0xc0000409`。
   listen 用 `tcp:localhost:<port>`；client `-H/-P` 可继续用 numeric `127.0.0.1`。

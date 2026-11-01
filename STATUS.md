@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-01（ccc8cce 单次真机采集契约与原 T0 字节绑定通过；窗口清单不完整、微信树 opaque，T-L1 仍阻塞）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
+> 更新 2026-11-01（ccc8cce 采集契约通过；后续 window/pane 视觉合同设计评审完成，来源与实施准入仍阻塞，T-L1 未通过）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 `docs/runs/`。精简前全文用 `git show aa126dd:STATUS.md` 查看，更早历史见[状态归档](docs/status-archive.md)。
 
 ## 一句话现状
 
@@ -13,7 +13,7 @@
 ## 下一步
 
 - Mika 借鉴[解阻执行计划](docs/specs/2026-11-01-Mika借鉴与阻塞解阻-design.md)任务 0–6 已完成离线交付，任务 7 本轮采集、归档和三层判读已完成：合同有效、拓扑未成立、树语义不可用；不等于 T-L1 通过。任务 8 内 R1 已受控验收，R5/P0 未启动；不新增 R5 任务卡，手机暂停/平板布局门禁仍保留。
-- C1b：受测 ccc8cce 的原字节传输及诊断实现已整合 main，定向 50/50、完整离线门 14 PASS / 0 FAIL / 0 SKIP，本轮真机采集契约通过。下一步用现有[需求稿](docs/specs/2026-08-23-Android平板适配-design.md#后续视觉合同的离线准备)开展正式 window/pane 视觉合同评审，并核定不完整窗口清单所需证据；四条已存窗口不代表原始输入总数，不能猜改 probe。当前不实现视觉 producer/schema/生产接线、不采新截图/OCR、不新增运行批次，不扩 R5/P0/T-L2。
+- C1b：受测 ccc8cce 的原字节传输及诊断实现已整合推送 main，定向 50/50、完整离线门 14 PASS / 0 FAIL / 0 SKIP、真机采集契约通过。后续[视觉合同设计与评审](docs/specs/2026-11-01-平板window-pane视觉证据合同-design.md)已完成：现有 Bitmap/revision 不证明 window/pane 来源，TTL/geometry/epoch 等仍缺依据。下一步核定真实图像绑定来源与最小 inventory 诊断设计，见[评审记录](docs/runs/2026-11-01-平板视觉合同评审.md)；不猜改 probe，不实施 producer/schema/生产接线、不采新截图/OCR、不新增运行批次，不扩 R5/P0/T-L2。
 - R1 已在固定 `425e60ae7416af6a49597d9625b33cda569cd6c7` 完成原入口专属阻断受控验收，见[记录](docs/runs/2026-11-01-R1原入口阻断验收.md)。原收据的中文匹配假阴性及进程观测局限保留，独立审查结合源码终止点/未消费/副作用状态判原契约通过，不扩展为 gateway 确认卡验收。R5 的[取证可行性核定](docs/runs/2026-11-01-R5独立取证可行性核定.md)确认：现有实现未导出实际验证窗口，审计总耗时不可替代；只查日志缓冲区元数据也不能解阻。本阶段不读取 R5 设备来源、不试发 Intent、不建任务卡；独立来源与时钟/覆盖方案成立后，再审最小观测候选。
 - 安全验收离线候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 已于 11-01 完成最新 SHA 的完整离线门：14 PASS / 0 FAIL / 0 SKIP，派单 65/65、台账 7/7、监督式 runner 154/154，含 Android 单测、Lint、构建及产物检查。候选保存在 `codex/safety-offline-validation`，未合 main、未推送、未真机验收；不构成新增批次或运行许可。见[本轮补验](docs/runs/2026-11-01-安全验收候选离线补验.md)，历史失败和修复见[10-28 记录](docs/runs/2026-10-28-安全验收离线修复.md)。
 - main 上的 P0 runner 尚未强制验证允许来自确认卡，未机械绑定各次状态的确认编号与截图文件名，截图明确未拍到卡时也只告警；仅凭 runner 的 passed 不能关闭这些证据缺口。现场须按 [P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md)独立核对，证据不足不判通过、不重试。
