@@ -281,6 +281,14 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 - **有效做法**：准备来源的 URI/完整 argv 对照固定 runner 的实际 `New-C1bUri`、既有 helper 及 Provider 路由，不能只让 fake 复述手写路径。本轮 r1 错写 status 查询路径，HostSmoke 未发现；r2 独立合同对照后单次读取成功。主机结果诊断保持原 11 项短路比较，仅在字节数、严格 UTF-8 与 serial/nonce 隐私门后保存整个响应的字节数/哈希及闭合首失败字段；不保存失配值、原文或未通过锚点检查的 observation。摘要不证明来源有效或真实失配已修复。
 - **验证依据与限制**：[本轮验收与修复](../../runs/2026-11-01-C1b传输候选验收与结果绑定诊断.md)中，565 已越过 T0、两帧提交后结果绑定失败冻结，未保存 observation，实际失配仍未知；新 f983 定向 44/44、完整离线门 14/0/0，仅证明诊断契约。真实 controller 返回 observation 前会消费 active，会导致随后 abort absent；fake 须模拟此语义，不能把 absent 或无锁失败报告当作 provider 清理证明。不得补写旧证据或重跑旧卡。
 
+### C1b Windows 文本 stdin 与原始 T0 哈希（2026-11-01）
+
+- **适用条件**：Windows 主机用 shell -T 管道向 C1b 写 T0，并按原始字节绑定上游哈希；.NET 二进制 fake 不能代表 CRT 文本读取边界。
+- **已验证现象**：[本轮记录](../../runs/2026-11-01-C1b结果绑定诊断候选验收.md)中，f983 真机首失配为 upstream_t0.artifact_sha256。原 T0 的 683 个 CRLF 经显式 UCRT text 读取后变为 LF，21,658 字节变为 20,975 字节，JSON 值相同而哈希不同；binary 读取保持原字节。既有 Android 编译 Factory/Pending/Model 在所测链中保留各自输入哈希，未复现提前擦零或别名。
+- **有效做法**：原 T0 文件与哈希保持不变，stdin 只传标准单行 ASCII Base64，远端先成功设置 pipefail，再解码后交 content 写入。解码端和写端任一失败、任意输出仍停止，保留原 status 与必要 abort；完整有效数据已送达后解码器仍可能失败，不能以失败当作未创建会话。缺 shell protocol、pipefail 或 toybox base64 就失败，不回退或放宽哈希比较。
+- **验证范围**：新候选 ccc8cce 定向 50/50、完整离线门 14/0/0，另有实际宿主 POSIX 管道 5 例及 UCRT text/binary 对照；均非 ROM 解码实测。设备声明的失配哈希及 SDK 二进制分支未保存/核实，不能认定真机实际收到 LF 版本或唯一原因。冻结轮不重跑、不回填。
+- **HostSmoke 附记**：本轮合成 EncodedCommand 子进程 exit 0、隔离锁已释放，仍因额外 CLIXML progress 违反精确 stderr 断言失败；保留原记录后，仅在新合成子进程设置 ProgressPreference，修订检查通过。真实 runner 的 stderr 门未改，不能把此做法推广成忽略真实错误输出。
+
 ### C1b T0 的无 PTY 写入与远端失败核验（2026-11-01）
 
 - **适用条件**：主机将加单引号的 URI 交给 ADB 写 T0；写完后 provider 仍 absent 时，不能先假定权限撤销或 controller 失败。AOSP 参考 exec-in 会再次转义 argv，保留原来的字面引号，且只完成 stdin 复制便可返回。
