@@ -70,6 +70,8 @@
 - **适用条件与做法**：pure-a11y root 完整但 opaque，准备视觉路线时先查实际产生者。现有默认 display 截图返回 Bitmap，未携带 native window 身份或截图结果时间戳；fresh generation、a11y revision、相同 bounds 与裁图 offset 均不能单独证明 window/pane 同代绑定。确认 overlay 也推进全局 revision，不能直接用该值替代视觉 layout epoch；预期 IME/insets 变化仍使旧链失效，旧批准不复活。
 - **inventory 归因边界**：当前内部 diagnosticCodes 不序列化。固定默认上限 16 且 relabel 不删窗的生产链下，CCC 每帧 4 条且 truncated 可条件推知至少一次必要字段 shell rejection；不能确定具体字段、异常/坏值、丢弃数或是否同时超限，更不能认定 getter/ROM/probe 缺陷。后续有界分类只能扩展可解释性，不放宽 topology/IME 门。
 - **验证依据**：两路只读源码核查、存量 CCC observation 与独立设计审查，详见[评审记录](../../runs/2026-11-01-平板视觉合同评审.md)和[合同设计](../../specs/2026-11-01-平板window-pane视觉证据合同-design.md)。本轮无设备/截图/OCR；可信图像来源、geometry/epoch、TTL/同步误差仍未证实，不据此实施或开跑。
+- **11-01 来源核定（🔵 官方查阅与源码核对，未实测）**：API 34 的 `takeScreenshotOfWindow` 可按原生 window ID 发起定向请求，项目 SDK 与截图声明满足接口候选条件；但它可避开 a11y overlay，不能证明现场确认卡可见。AOSP 参考实现的结果时间在回调时构造，不作为 compositor 精确采样时刻；window bounds/transition 也不能替代 pane/IME 的 epoch。适用时先区分请求归属、可见性、几何与同代，详情与来源链接见[来源核定](../../specs/2026-11-01-平板图像来源可行性-design.md)。
+- **11-01 最小诊断（源码核对）**：当前窗口壳只在 type/display/layer/touchable/active/focused/id 七个阶段短路丢弃；其后的 bounds/title/root 错误仍保留壳。诊断须按首次停止计数，不能从 diagnosticCodes 集合恢复次数或把后续结构错误算成丢弃。枚举失败的输入数未知，不等于成功空列表。验证依据及不增 getter 的设计见[最小诊断](../../specs/2026-11-01-窗口清单最小诊断-design.md)。
 
 ## Windows / ADB 宿主坑
 
