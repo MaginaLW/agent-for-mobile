@@ -124,9 +124,12 @@ if ($cmd -ceq 'shell dumpsys accessibility') {
     $boundLine = if ($scenario -ceq 'vivo_hidden_bound') { 'Service[label=vivo输入法, component=com.vivo.ai.ime.pad/x.AutoSendImageService]' } else { 'Service[label=gw, component=dev.magina.gateway/.a11y.GatewayA11yService]' }
     Out-Text "ACCESSIBILITY MANAGER (dumpsys accessibility)`nUser state[`n  Bound services:{$boundLine}`n]`n"; exit 0
 }
-if ($cmd -notmatch '^(?<transport>exec-in|shell -T|shell) content (?<operation>write|read) --uri (?<uri>.+)$') { [Console]::Error.WriteLine("fake adb: unsupported $cmd"); exit 1 }
-$transport = $Matches.transport; $operation = $Matches.operation
-$uri = $Matches.uri
+$base64Wire = $cmd -match '^shell -T set -o pipefail && toybox base64 -d \| content write --uri (?<uri>.+)$'
+if ($base64Wire) { $transport = 'shell -T'; $operation = 'write'; $uri = $Matches.uri }
+else {
+    if ($cmd -notmatch '^(?<transport>exec-in|shell -T|shell) content (?<operation>write|read) --uri (?<uri>.+)$') { [Console]::Error.WriteLine("fake adb: unsupported $cmd"); exit 1 }
+    $transport = $Matches.transport; $operation = $Matches.operation; $uri = $Matches.uri
+}
 if (($operation -ceq 'read' -and $transport -cne 'shell') -or ($operation -ceq 'write' -and $transport -ceq 'shell')) { exit 1 }
 # AOSP: shell joins argv before sh parsing; exec-in escape_arg preserves each argv verbatim.
 # Only shell consumes the deliberate outer quotes. exec-in must never Trim them.
@@ -144,7 +147,19 @@ foreach ($pair in $Matches.query -split '&') { $kv = $pair -split '=', 2; $query
 if ($path -match '^t0/(?<run>.+)$') {
     $run = $Matches.run
     if ($scenario -ceq 'shell_protocol_unsupported') { [Console]::Error.WriteLine('fake adb: -T requires shell protocol'); exit 1 }
-    $ms = [IO.MemoryStream]::new(); [Console]::OpenStandardInput().CopyTo($ms); $bytes = $ms.ToArray()
+    $ms = [IO.MemoryStream]::new(); [Console]::OpenStandardInput().CopyTo($ms); $wire = $ms.ToArray()
+    [IO.File]::WriteAllBytes((Join-Path $state 't0-wire.bin'), $wire)
+    # Windows CRT text reads collapse CRLF; the binary scenario preserves input exactly.
+    $crtInput = if ($scenario -ceq 'crt_binary') { $wire } else { [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($wire).Replace("`r`n", "`n")) }
+    [IO.File]::WriteAllBytes((Join-Path $state 't0-crt-stdin.bin'), $crtInput)
+    if ($base64Wire) {
+        if ($scenario -ceq 'pipefail_unsupported') { [Console]::Error.WriteLine('fake shell: pipefail unsupported'); exit 2 }
+        if ($scenario -ceq 'base64_unavailable') { [Console]::Error.WriteLine('fake toybox: base64 unavailable'); exit 127 }
+        $encoded = [Text.Encoding]::ASCII.GetString($crtInput)
+        if ($encoded -cnotmatch '^[A-Za-z0-9+/]+={0,2}$') { [Console]::Error.WriteLine('fake decoder: wire is not single-line base64'); exit 8 }
+        if ($scenario -ceq 'base64_decode_fail') { exit 8 } # Left-side nonzero must fail even with empty output.
+        $bytes = [Convert]::FromBase64String($encoded)
+    } else { $bytes = $crtInput }
     [IO.File]::WriteAllBytes((Join-Path $state 't0-stdin.bin'), $bytes)
     # content catches provider exceptions, so an error can be exit 0. Include identifiers to test redaction.
     if ($scenario -ceq 't0_remote_exit') { exit 7 }
@@ -155,6 +170,8 @@ if ($path -match '^t0/(?<run>.+)$') {
         commit = $query.producer_commit_sha; artifact = $query.producer_artifact_sha256; title = $query.title_hash
         t0_sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant(); t0_at = $t0.captured_at_utc }
     Save
+    # A decoder can emit a valid prefix, allow content to create a session, then fail on trailing input.
+    if ($base64Wire -and $scenario -ceq 'base64_partial_decode_failure') { [Console]::Error.WriteLine('fake decoder: invalid trailing input'); exit 8 }
     if ($scenario -ceq 't0_remote_stderr') { [Console]::Error.WriteLine("remote failure FAKESERIAL01 $uri") }
     exit 0
 }
@@ -222,12 +239,13 @@ function New-T0Profile([string]$RunId) {
     $path = Join-Path $Temp "t0-$RunId.json"
     $profile = [ordered]@{
         schema_version = 5; run_id = $RunId; captured_at_utc = [DateTime]::UtcNow.AddSeconds(-5).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
-        device = [ordered]@{ serial_hash = (Get-Sha256Text $FakeSerial); model = 'FakeTab' }
+        device = [ordered]@{ serial_hash = (Get-Sha256Text $FakeSerial); model = 'FakeTab中文' }
         assessment = [ordered]@{ device_class = 'tablet'; intake_status = 'accepted'; readiness_status = 'blocked'
             readiness_block_reasons = @('focus_absent'); p0_capability = 'unsupported'
             p0_unsupported_reasons = @('wechat_layout_unverified', 'tablet_landscape_p0_unimplemented') }
     }
-    [IO.File]::WriteAllText($path, ($profile | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $json = ($profile | ConvertTo-Json -Depth 10).Replace("`r`n", "`n").Replace("`n", "`r`n")
+    [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
     return $path
 }
 
@@ -276,15 +294,41 @@ try {
         Assert-True ($r.Run.validation.fixture_contract_valid -and $r.Run.validation.runtime_binding_inputs_match) 'validator 未通过'
         $response = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
         Assert-True ($r.Run.result_diagnostic.bytes -eq $response.Length -and $r.Run.result_diagnostic.sha256 -ceq $r.Run.observation_sha256 -and $null -eq $r.Run.result_diagnostic.binding_failure) '成功结果摘要错误'
-        Assert-True (@($r.Log | Where-Object { $_ -match 'shell -T content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 应通过无 PTY 的 shell 写入一次，result 读取一次'
+        Assert-True (@($r.Log | Where-Object { $_ -match 'shell -T set -o pipefail && toybox base64 -d \| content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 应通过无 PTY 的解码管道写入一次，result 读取一次'
         Assert-True ([Linq.Enumerable]::SequenceEqual($t0Copy, [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin')))) '远端 stdin 字节与 T0 不同'
         Assert-NoForbiddenAdb $r
+    }
+    foreach ($scenario in @('crt_text', 'crt_binary')) {
+        Test-Case "$scenario-base64-preserves-exact-t0" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+            $t0 = [IO.File]::ReadAllBytes((Join-Path $r.Evidence 'upstream-t0-v5.json'))
+            $wire = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-wire.bin'))
+            $crtInput = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-crt-stdin.bin'))
+            $decoded = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin'))
+            Assert-True ([Text.Encoding]::UTF8.GetString($t0).Contains("`r`n") -and [Text.Encoding]::UTF8.GetString($t0).Contains('中文')) '风险样例须含 CRLF 与非 ASCII UTF-8'
+            Assert-True ([Linq.Enumerable]::SequenceEqual($wire, [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($t0)))) 'wire 必须精确为无换行/BOM 的标准 Base64'
+            Assert-True ([Linq.Enumerable]::SequenceEqual($wire, $crtInput) -and [Linq.Enumerable]::SequenceEqual($t0, $decoded)) 'CRT 模式不应改变线缆或解码后的原始 T0 字节'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match 'exec-in|shell -T content write')) '必须只写一次且无原始 stdin/exec-in 回退'
+            Assert-NoForbiddenAdb $r
+        }
+    }
+    foreach ($scenario in @('pipefail_unsupported', 'base64_unavailable', 'base64_decode_fail', 'base64_partial_decode_failure')) {
+        Test-Case "$scenario-stops-before-capture" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 1 -and $r.Run.stage -ceq 't0_written' -and $r.Run.failure_reason -match 'adb shell -T set 失败') "exit=$($r.Exit) $($r.Output)"
+            $abortState = if ($scenario -ceq 'base64_partial_decode_failure') { 'aborted' } else { 'absent' }
+            Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq $abortState) '解码/能力失败后须保留必要 abort，不能假定写入未发生'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match '/capture/|/result/|exec-in|shell -T content write')) '失败后不得采帧、重写或回退'
+            Assert-True ($null -eq $r.Run.result_diagnostic -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '失败后不得产生结果证据'
+            Assert-NoForbiddenAdb $r
+        }
     }
     foreach ($scenario in @('t0_remote_exit', 't0_remote_stderr', 't0_remote_whitespace_stderr', 't0_remote_stdout', 'shell_protocol_unsupported')) {
         Test-Case "$scenario-stops-before-capture" {
             $r = Invoke-Runner $scenario $scenario
             Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.stage -ceq 't0_written') "exit=$($r.Exit) $($r.Output)"
-            $reason = if ($scenario -in @('t0_remote_exit', 'shell_protocol_unsupported')) { 'adb shell -T content 失败' } else { 'T0 write 返回了意外输出' }
+            $reason = if ($scenario -in @('t0_remote_exit', 'shell_protocol_unsupported')) { 'adb shell -T set 失败' } else { 'T0 write 返回了意外输出' }
             Assert-True ($r.Run.failure_reason -like "*$reason*") '未在远端写入失败处停止'
             Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match '/capture/|/result/')) '写失败后重试或请求了采集'
             $abortState = if ($scenario -ceq 't0_remote_stderr') { 'aborted' } else { 'absent' }

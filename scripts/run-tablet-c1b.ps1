@@ -10,7 +10,7 @@ T-L1 C1b 平板 pure-a11y 布局观测的简单 runner（替代旧固定候选�
 只读边界（App 代码不变，本脚本只做下列 adb 动作）：
 * adb devices；adb -s <serial> install -r -t <apk>（不卸载）；
 * shell settings get secure enabled_accessibility_services；shell dumpsys accessibility；
-* shell -T content write（仅 C1b t0 URI，无 PTY）；shell content read（仅 C1b status/capture/result/abort URI）；
+* shell -T（远端固定管道 set -o pipefail && toybox base64 -d | content write，仅 C1b t0 URI，无 PTY）；shell content read（仅 C1b status/capture/result/abort URI）；
 * 另调用只读的 scripts/run-tablet-intake.ps1。
 不调用 input/tap/swipe/am start/settings put/uninstall/screencap，不修改任何设备设置；
 无障碍未开启时只打印开启步骤并以 2 退出。
@@ -300,8 +300,11 @@ try {
 
     Set-Stage 't0_written'
     $sessionStarted = $true
-    # -T 强制无 PTY，stdin EOF 后仍读取远端 stdout/stderr/exit；不支持 shell protocol 时失败，不回退。
-    $write = Invoke-Adb @('shell', '-T', 'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0Bytes
+    # 标准单行 ASCII Base64 避免 Windows CRT text stdin 改写 CRLF；原 T0 字节与哈希保持不变。
+    # -T 禁用 PTY；pipefail 将解码或写入失败向上传递，不支持这些能力时失败且不回退。
+    $t0WireBytes = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($t0Bytes))
+    $write = Invoke-Adb @('shell', '-T', 'set', '-o', 'pipefail', '&&', 'toybox', 'base64', '-d', '|',
+        'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0WireBytes
     # content 的异常可能只写 stderr 而仍 exit 0；不落盘可能回显 URI/nonce 的原文。
     if ($write.Bytes.Length -or -not [string]::IsNullOrEmpty($write.Stderr)) {
         throw "T0 write 返回了意外输出（stdout=$($write.Bytes.Length) bytes，stderr=$([Text.Encoding]::UTF8.GetByteCount($write.Stderr)) bytes）。"

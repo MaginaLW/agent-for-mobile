@@ -27,7 +27,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 → `adb install -r -t`（不卸载；设备上已是同一 APK 时跳过，因为重装会让系统解绑无障碍服务，需在设置里关闭再打开「平板 C1b 只读探针」）→ 检查无障碍服务 → `run-tablet-intake` 生成 T0-L v5
 → 经 ContentProvider 写 T0、读 `c1`、宿主等待至少 900 ms、读 `c2`、读 result。
 
-T0 通过 `adb shell -T content write --uri '<URI>'` 接收原始 stdin，禁用 PTY 并在 EOF 后读取远端输出与退出状态；需要 shell protocol 支持，不支持即失败，不回退 `exec-in`。`exec-in` 会再次转义已加引号的 URI，且不提供同等远端结果核验。T0 写入须 exit 0、stdout/stderr 均为空（含空白也拒绝），随后仍以绑定的 `status=ready_c1` 验证会话；错误只记输出字节数，不保存可能回显的会话标识。只证明离线传输契约，不替代真机验收。
+原 T0 的保存字节和 SHA-256 不变；stdin 只传标准 Base64 编码后的单行 ASCII，无 BOM、无换行，避免 Windows CRT text stdin 将 CRLF 改成 LF。远端固定为 `adb shell -T "set -o pipefail && toybox base64 -d | content write --uri '<URI>'"`：禁用 PTY，由标准解码器还原原始 T0 字节，并在 EOF 后读取远端输出与退出状态。需要 shell protocol、远端 shell 的 `pipefail` 和 `toybox base64 -d`；任一能力不支持或解码/写入任一侧失败即停止，不回退原始 stdin、`exec-in` 或 PTY。T0 写入须 exit 0、stdout/stderr 均为空（含空白也拒绝），随后仍以绑定的 `status=ready_c1` 验证会话；错误只记输出字节数，不保存可能回显的会话标识。解码器可能先输出有效前缀再失败，不能据失败假定没有创建会话，原必要 abort 保留。这里只证明离线传输契约；上述能力及链路仍须在固定候选的新轮真机验收，不认定为旧轮唯一失败根因。
 
 - 从 `c1` 起整段采集不超过 15 秒；`c1`、`c2` 各读一次，不补拍。
 - 一次调用只采一次，不自动重试。每个新运行使用新 run_id，并重新满足就位与开跑条件；已有证据目录不得覆盖。
