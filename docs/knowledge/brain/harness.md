@@ -258,6 +258,19 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
   `localhost`，写 `127.0.0.1` 会 `LOG(FATAL)`、WER 表现为 `0xc0000409`）；client `-H/-P` 与 `ADB_SERVER_SOCKET` 仍可用 numeric
   `127.0.0.1`。与 USB 无关，不要加 `ADB_USB_LEGACY=1`。
 
+### C1b 原锁生命周期与会话错误的边界（2026-11-01）
+
+- **适用条件**：包装现行 C1b runner，或分析 T0 写后 absent/session_not_found。原 runner 把自己关闭生产 lease 的返回值纳入成功条件；父进程一直持锁、子进程 join 时，子进程不能取得最后关闭成功，不能凭“都用了锁”认定组合正确。
+- **有效做法**：包装器先用真实 helper 做零设备的父子生命周期验证。本轮就位父锁释放后，子 runner 无继承 lease、独立取得原生产锁；如实保留这段锁间隙，由子 runner 对竞争和身份变化失败关闭。HostSmoke 仅验证宿主契约，不代替设备验收。
+- **会话判读**：provider 忽略 start 返回再 complete pending，可能丢掉 session_busy；controller 已记 consumed、尚未发布 active 时 begin 抛异常，也能使 rejectStart/status/abort 最终只有 session_not_found。原始 CLI 写入结束或 abort absent 都不证明接收字节完整、会话从未存在或清理完成。
+- **验证依据与限制**：[本轮核定](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)保存真实 helper HostSmoke，以及现有编译 controller/pending 的正常、busy、begin 异常三条零设备复现；只有后两条同真机签名，实际真机根因未定。真实 T0 的 factory 接受与 host stdin 等字节送达，只覆盖本地边界，未覆盖 ADB/adbd/provider 接收。
+
+### 存量诊断的空结果先核时钟与覆盖（2026-11-01）
+
+- **适用条件**：用主机 UTC 故障窗过滤 Android crash buffer。先核定目标包的 user0 UID 和独占映射，原文仅内存处理，落盘只留异常类、允许的栈符号及有界退出元数据，不保存日志正文、消息、线程名或内容指纹。
+- **有效做法与边界**：主机 epoch 下界未经历史设备钟关联时，零字节只能说明该查询为空，不能排除异常；设备本地 exit-info 时间无时区时不转成 UTC，更不能用历史强停记录归因本次。一次当前 epoch 采样也仅给当前偏移区间，不证明历史连续或事件关联。需要改变时间筛选须另定范围与开跑令，不机械重读原查询。
+- **验证依据**：[本轮存量诊断](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)九条读取成功且锁释放，crash 原文为零字节，历史 clock mapping 未证明，两个历史 exit-info 记录未与采集事务关联；没有“不曾崩溃”的结论。
+
 ## PowerShell 坑（2026-08-30 起，固定 7.6.x 实测）
 
 - **JSON lexical type**：默认 `ConvertFrom-Json` 会把合法的 quoted ISO 字符串自动转成 `DateTime`。strict reader 用
