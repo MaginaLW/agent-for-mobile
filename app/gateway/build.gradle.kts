@@ -178,7 +178,7 @@ tasks.register("verifyTabletC1aReleaseAbsence") {
  */
 tasks.register("verifyTabletC1bReleaseAbsence") {
     group = "verification"
-    description = "Verify that the T-L1 C1b debug runtime is absent while the read-only producer may remain"
+    description = "Verify that C1b runtime and unwired window capture preparation are absent from release while the read-only producer may remain"
     dependsOn("processReleaseMainManifest", "assembleRelease")
 
     doLast {
@@ -195,10 +195,12 @@ tasks.register("verifyTabletC1bReleaseAbsence") {
             "TABLET_C1B_GIT_HEAD",
             "TABLET_C1B_BUILD_CHALLENGE",
         )
+        val windowCapturePackage = "dev.magina.gateway.tablet.visionprobe"
+        val windowCaptureDexPackage = "dev/magina/gateway/tablet/visionprobe/"
         val dexForbidden = debugClassNames.map { name ->
             "dev/magina/gateway/tablet/c1b/$name"
-        } + buildConfigNames
-        val sourceForbidden = debugClassNames + buildConfigNames
+        } + buildConfigNames + windowCapturePackage + windowCaptureDexPackage
+        val sourceForbidden = debugClassNames + buildConfigNames + windowCapturePackage + windowCaptureDexPackage
 
         val mergedManifests = fileTree(layout.buildDirectory.dir("intermediates")) {
             include("**/release/**/AndroidManifest.xml")
@@ -206,8 +208,8 @@ tasks.register("verifyTabletC1bReleaseAbsence") {
         check(mergedManifests.isNotEmpty()) { "release merged manifest was not generated" }
         mergedManifests.forEach { manifest ->
             val text = manifest.readText(Charsets.UTF_8)
-            check(authority !in text && debugClassNames.none(text::contains)) {
-                "debug-only C1b provider leaked into release merged manifest: $manifest"
+            check(authority !in text && windowCapturePackage !in text && debugClassNames.none(text::contains)) {
+                "debug-only C1b/window capture code leaked into release merged manifest: $manifest"
             }
         }
 
@@ -223,7 +225,7 @@ tasks.register("verifyTabletC1bReleaseAbsence") {
                 dexEntries.forEach { entry ->
                     val dex = zip.getInputStream(entry).use { it.readBytes() }
                     check(dexForbidden.none { needle -> dex.containsAscii(needle) }) {
-                        "debug-only C1b runtime leaked into release DEX catalog: ${entry.name}"
+                        "debug-only C1b/window capture code leaked into release DEX catalog: ${entry.name}"
                     }
                 }
             }
@@ -234,7 +236,7 @@ tasks.register("verifyTabletC1bReleaseAbsence") {
                 sourceRoot.walkTopDown().filter(File::isFile).forEach { source ->
                     val bytes = source.readBytes()
                     check(sourceForbidden.none { needle -> bytes.containsAscii(needle) }) {
-                        "debug-only C1b runtime leaked into non-debug source set: $source"
+                        "debug-only C1b/window capture code leaked into non-debug source set: $source"
                     }
                 }
             }
