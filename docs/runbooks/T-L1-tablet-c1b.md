@@ -24,6 +24,8 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。`-r` 只请求保留数据；任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。
 3. 成功部署也不证明无障碍授权或持续绑定。后续另核新 producer/challenge 和采样点就绪；再满足横屏多窗、IME 等采集前置及本轮采集许可，使用 `-SkipBuild -RequireInstalledApkMatch`，防止 runner 以默认 debug 构建覆盖已签名 release。部署许可不包含 T0/c1/c2。
 
+启动 TEMP/TMP 使用已存在且独立的区内 bootstrap，不能预设到 freshness 门要求不存在的生产 `tmp`；后者只由 wrapper 在消费 claim 后创建。HostSmoke 要从实际 launcher 冷启动验证这一点。若在 claim 前因宿主目录副作用失败，也按本轮范围冻结，不能删除目录续跑；实例与证据见[安装前核验冻结](../runs/2026-11-02-诊断候选安装前核验冻结.md)。
+
 ## 命令
 
 ```powershell
