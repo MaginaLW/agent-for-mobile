@@ -23,6 +23,30 @@
 
 **验证依据与边界**：仅上游源码/README 与本地探针静态对照，无 PA2553 / OriginOS / Android 16 兼容实测。其虚拟屏 ImageReader 取帧和部分 shell 输入原语独立于无障碍，但 TaskRun 手机任务装配仍等待无障碍连接，树与事件也来自该服务；没有现成的纯 shell/OCR 降级可直接解阻 C1b。自动修复只是重写启用列表，不能证明能阻止 ROM 再撤销。完整依据与当前阻塞的重新评估见 [Mika 参考 §6](../brain/mika.md#6-对当前阻塞的重新评估)。
 
+### 本项目通道依赖对照（2026-11-01，静态核对）
+
+**适用条件**：判断 Mika 的独立截图/输入原语能否直接替换本项目 C1b 或 gateway。以下沿现有消费者追到装配点，不代表新的设备实测或全部调用图审计。
+
+| 通道 | 本项目已接线的来源/消费者 | 无障碍缺失时的边界 |
+|---|---|---|
+| 窗口、树、事件 | [C1b source](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt) 接受 AccessibilityService，从 service.windows/root 读取；[gateway 服务](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt) 在事件回调推进 revision/前台跟踪 | C1b 不能由截图代替该合同中的 window/root 绑定；Mika 没有可直接接入的无障碍替代树 |
+| 设备截图 | gateway `captureBitmap` 调 AccessibilityService.takeScreenshot；[确认卡取证](../../../app/gateway/src/main/java/dev/magina/gateway/mcp/ToolRegistry.kt) 也要求该服务。P0 runner 另有 ADB screencap 带外证据 | 带外截图原语不依赖该服务，但未安装成 gateway 截图/身份生产者；不据此宣称 gateway 已有无障碍缺失降级 |
+| OCR | [UiTools.uiSnapshot](../../../app/gateway/src/main/java/dev/magina/gateway/tools/UiTools.kt) 先 require 服务，融合使用其截图；OCR 识别算法与采集源是两层 | 算法能读位图不等于现有产品能在无障碍断开时取得可信帧、pane 或 ref；没有第二个已接线截图源 |
+| 手势 | gateway OCR ref/坐标动作最终进入服务的 dispatchGesture | Mika shell 注入只是上游原语，本地没有对等替换；不得改走裸坐标绕过 SafetyGate |
+| IME | [GatewayIme](../../../app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt) 的 InputMethodService/InputConnection 本身独立；UiTools 与 SafetyGate 消费焦点、前台和输入证据 | 活 IME 会话不证明目标 window/pane、布局或危险动作可放行；零 UI 键盘仍不能作持续绑定代理 |
+| 前台身份 | [ForegroundWindowTracker](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/ForegroundWindowTracker.kt) 由 gateway a11y 窗口/事件驱动，按当前应用窗口复核 | shell 顶层任务快照是另一证据通道，尚未替代生产身份；Unknown 时写入/危险动作仍失败关闭 |
+| 确认卡 | [ConfirmOverlay](../../../app/gateway/src/main/java/dev/magina/gateway/overlay/ConfirmOverlay.kt) 用 WindowManager 绘制；ToolRegistry 构造 SafetyGate、绑定确认编号并调用卡片取证/批准后复核 | 绘制原语不要求无障碍，不代表整条安全链独立；现有截图与批准后上下文仍依赖服务，不能省略取证门 |
+
+**有效做法与验证依据**：分别标注原语、已接线消费者和证据合同，避免把“IME 活着 / shell 能截图”提升为“执行器可用”。核对 `Gateway.kt` 能力装配、`ToolRegistry.newSafetyGate/captureConfirmCardEvidence`、服务生命周期/事件/截图/手势、IME 回调及 C1b source；代码无改动，未启用 shell/OCR 备选执行器。Mika 的能力差异与限制见[参考 §6](../brain/mika.md#6-对当前阻塞的重新评估)。
+
+### Intent 落地的独立窗口证据（2026-11-01，查阅未实测）
+
+**适用条件**：R5 要求证明 app 的启动请求被系统接收，但目标在实际验证窗口内没有到前台。当前 [SystemTools](../../../app/gateway/src/main/java/dev/magina/gateway/tools/SystemTools.kt) 无 a11y 实例即返回 false，否则约 200 ms 离散轮询；[Audit](../../../app/gateway/src/main/java/dev/magina/gateway/core/Audit.kt) 记录墙钟、进程内 ID 与工具总耗时，没有独立请求关联、轮询实际起止或完整观察轨迹。不能把配置 3 秒、错误返回或相近审计时间当成完整窗口证据。
+
+**有效做法**：分别核验“本次请求关联、独立系统接收、实际窗口起止与时钟映射、完整覆盖及丢失检测”。系统/events 是环形缓冲且受过滤/厂商输出影响；前台采样只证明采样点；录屏须核实时间映射、帧断档及身份，不能假定无丢帧；官方 Winscope ADB 路径的 debug/root 前提不能假定设备具备。无日志、离散快照或限速预览均不证明目标从未短暂落地，shell 启动也不能替代原 app 的调用身份。
+
+**验证依据与限制**：本轮静态核对代码和官方 Logcat、ADB screenrecord、ActivityStarter、窗口事件及 Winscope 说明，来源链接与四类比较见[执行记录](../../runs/2026-11-01-Mika借鉴解阻离线执行.md#r5独立完整窗口证据仍不可得)。未在 PA2553 验证来源可读性、时钟或完整性；四项不足时保留 R5 未验证，不生成派单卡，不为制造反例改权限、切前台或重发。
+
 ## 通知锁屏资格
 
 结论：**category 只是给系统的提示，拿不到对应待遇；待遇由 Style + 权限 + 必备元素共同决定。**（2026-08-02 查阅 + 真机对照；vivo 侧开关见 [vivo-originos.md](vivo-originos.md#通知与锁屏)）
