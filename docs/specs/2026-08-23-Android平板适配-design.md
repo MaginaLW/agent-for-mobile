@@ -113,6 +113,7 @@ C1b 设计要求：
 
 #### 现有证据边界
 
+- 2026-11-01 [ccc8cce 单次 C1b](../runs/2026-11-01-C1b原字节传输候选验收.md)已取得原 T0 字节绑定及合同有效的两帧：各存两微信窗口，但 inventory 不完整；微信 root 完整却 opaque。该证据支持开展正式视觉合同评审，不提供会话 pane 身份，不放行 T-L1/T-L2；未采截图或运行 OCR，现有诊断合同与安全门不变。
 - [C1b 合同](../contracts/tablet-layout-observation-c1b-v1.md)及其
   [closed schema](../contracts/tablet-layout-observation-c1b-v1.schema.json)只允许 pure-a11y 诊断。
   [C1bPaneObservation](../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bModel.kt)

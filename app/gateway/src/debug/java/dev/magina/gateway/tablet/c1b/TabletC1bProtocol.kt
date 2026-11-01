@@ -378,6 +378,11 @@ internal class C1bProtocolControl(
                 require(reasonCode in C1B_PROTOCOL_FAILURE_REASONS) {
                     "C1b failed control reason is invalid"
                 }
+                if (reasonCode == "start_failed") {
+                    require(generation == 0L && tuple == C1B_PROTOCOL_EMPTY_TUPLE) {
+                        "C1b start failure diagnostic tuple is invalid"
+                    }
+                }
                 C1B_PROTOCOL_CAPTURE_FAILURE_REASONS[reasonCode]?.let { token ->
                     val expected = if (token == "c1") {
                         C1B_PROTOCOL_C1_IN_FLIGHT_TUPLE
@@ -474,6 +479,7 @@ private val C1B_PROTOCOL_FAILURE_REASONS = setOf(
     "capture_worker_rejected",
     "observation_assembly_failed",
     "session_expiry_scheduler_rejected",
+    "start_failed",
     "start_replayed",
     "t0_invalid",
 ) + C1B_PROTOCOL_CAPTURE_FAILURE_REASONS.keys

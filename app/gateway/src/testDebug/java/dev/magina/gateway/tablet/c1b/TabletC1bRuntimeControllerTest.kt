@@ -11,6 +11,142 @@ import java.nio.charset.StandardCharsets
 
 class TabletC1bRuntimeControllerTest {
     @Test
+    fun busyStartRemainsVisibleAfterPendingCompletionWithoutReplacingActiveSession() {
+        val worker = QueuedWorker()
+        val controller = controller(worker, { FakeService("service") }) { _, _, _, _ ->
+            error("rejected start must not capture")
+        }
+        val original = controller.start(ENVELOPE, t0Raw())
+        val other = envelope("tl1-c1b-runtime-busy", "n-" + "2".repeat(32))
+        val registry = C1bPendingStartRegistry()
+        val ticket = registry.register(other) {}
+        val raw = t0Raw(other.key.runId)
+
+        assertTrue(ticket.claimStart(raw) {
+            assertEquals("session_busy", controller.start(other, raw).reasonCode)
+        })
+        ticket.complete()
+
+        assertEquals(C1bPendingAwait.NONE, registry.await(other.key, 0))
+        assertTrue(raw.all { it == 0.toByte() })
+        assertReadControls(controller, other.key, "session_busy")
+        assertEquals(original.generation, controller.status(KEY).generation)
+        assertEquals(C1bProtocolState.READY_C1, controller.status(KEY).state)
+        assertEquals(1, controller.replayLedgerSizeForTest())
+        assertEquals(0, worker.size)
+    }
+
+    @Test
+    fun validT0BeginExceptionRemainsStartFailureAfterPendingCompletion() {
+        val worker = QueuedWorker()
+        var clockCalls = 0
+        val controller = controller(
+            worker,
+            { FakeService("service") },
+            monotonicMillis = { clockCalls += 1; throw IllegalStateException("private clock detail") },
+        ) { _, _, _, _ -> error("failed start must not capture") }
+        val registry = C1bPendingStartRegistry()
+        val ticket = registry.register(ENVELOPE) {}
+        val raw = t0Raw()
+        assertTrue(ticket.claimStart(raw) {
+            try {
+                controller.start(ENVELOPE, raw)
+            } catch (_: Exception) {
+                // Match the provider's existing fallback without changing its pending lifecycle.
+                controller.rejectStart(ENVELOPE)
+            }
+        })
+        ticket.complete()
+
+        assertEquals(C1bPendingAwait.NONE, registry.await(KEY, 0))
+        assertTrue(raw.all { it == 0.toByte() })
+        val failed = controller.status(KEY)
+        assertEquals(C1bProtocolState.FAILED, failed.state)
+        assertEquals("start_failed", failed.reasonCode)
+        assertEquals(0L, failed.generation)
+        assertEquals(1, clockCalls)
+        assertEquals(1, controller.replayLedgerSizeForTest())
+        assertEquals(0, worker.size)
+        assertFalse(failed.toJson(BUILD, true).toString().contains("private"))
+        assertReadControls(controller, KEY, "start_failed", C1bProtocolState.FAILED)
+        assertEquals(1, clockCalls)
+        assertEquals("nonce_reused", controller.start(ENVELOPE, t0Raw()).reasonCode)
+        // A real same-key terminal session wins over the later absent replay rejection.
+        assertReadControls(controller, KEY, "start_failed", C1bProtocolState.FAILED)
+        assertEquals(1, clockCalls)
+    }
+
+    @Test
+    fun rejectionSlotMatchesExactKeyAndIsReplacedClearedAndNeverConsumesBusyIdentity() {
+        val worker = QueuedWorker()
+        val service = FakeService("service")
+        val controller = controller(worker, { service }) { _, _, _, _ ->
+            error("rejected reads must not capture")
+        }
+        controller.start(ENVELOPE, t0Raw())
+        val first = envelope("tl1-c1b-rejected-first", "n-" + "2".repeat(32))
+        val second = envelope("tl1-c1b-rejected-second", "n-" + "3".repeat(32))
+        val third = envelope("tl1-c1b-rejected-third", "n-" + "4".repeat(32))
+        assertEquals("session_busy", controller.start(first, t0Raw(first.key.runId)).reasonCode)
+        assertReadControls(controller, first.key, "session_busy")
+        val wrongNonce = C1bSessionKey(first.key.runId, "n-" + "5".repeat(32))
+        assertReadControls(controller, wrongNonce, "session_not_found")
+
+        assertEquals("session_busy", controller.start(second, t0Raw(second.key.runId)).reasonCode)
+        assertReadControls(controller, first.key, "session_not_found")
+        assertReadControls(controller, second.key, "session_busy")
+        assertEquals("session_busy", controller.rejectStart(third).reasonCode)
+        assertReadControls(controller, second.key, "session_not_found")
+        assertReadControls(controller, third.key, "session_busy")
+        assertEquals(1, controller.replayLedgerSizeForTest())
+        assertEquals(C1bProtocolState.READY_C1, controller.status(KEY).state)
+
+        controller.abort(KEY)
+        // Busy refusals never consumed this identity: its first accepted start still succeeds.
+        val ready = controller.start(first, t0Raw(first.key.runId))
+        assertEquals(C1bProtocolState.READY_C1, ready.state)
+        assertEquals(2, controller.replayLedgerSizeForTest())
+        assertReadControls(controller, third.key, "session_not_found")
+        assertEquals("session_busy", controller.start(second, t0Raw(second.key.runId)).reasonCode)
+        controller.shutdown()
+        assertReadControls(controller, second.key, "session_not_found")
+        val closedRaw = t0Raw(second.key.runId)
+        assertEquals("coordinator_closed", controller.start(second, closedRaw).reasonCode)
+        assertTrue(closedRaw.all { it == 0.toByte() })
+        assertReadControls(controller, second.key, "coordinator_closed")
+        controller.shutdown()
+        assertReadControls(controller, second.key, "session_not_found")
+        assertEquals(0, worker.size)
+    }
+
+    @Test
+    fun beginDoesNotCatchErrorsOrMisclassifyInvalidT0AsStartFailure() {
+        val worker = QueuedWorker()
+        var clockCalls = 0
+        val injectedError = AssertionError("injected clock error")
+        val controller = controller(worker, { FakeService("service") }, monotonicMillis = {
+            clockCalls += 1
+            throw injectedError
+        }) { _, _, _, _ -> error("must not capture") }
+        val invalid = envelope("tl1-c1b-invalid-before-clock", "n-" + "2".repeat(32))
+        val invalidRaw = byteArrayOf(1)
+        assertEquals("t0_invalid", controller.start(invalid, invalidRaw).reasonCode)
+        assertTrue(invalidRaw.all { it == 0.toByte() })
+        assertEquals(0, clockCalls)
+        val validRaw = t0Raw()
+        var thrown: AssertionError? = null
+        try {
+            controller.start(ENVELOPE, validRaw)
+        } catch (caught: AssertionError) {
+            thrown = caught
+        }
+        assertTrue(thrown === injectedError)
+        assertTrue(validRaw.all { it == 0.toByte() })
+        assertEquals(1, clockCalls)
+        assertEquals(0, worker.size)
+    }
+
+    @Test
     fun captureAndFrameValidationFailuresExposeOnlyClosedDiagnostics() {
         val cases = listOf<Pair<String, (String, String) -> C1bRawFrame>>(
             "probe_security" to { _, _ -> throw SecurityException("private title and path") },
@@ -125,6 +261,7 @@ class TabletC1bRuntimeControllerTest {
         val consumed = controller.result(KEY) as C1bRuntimeResult.Control
         assertEquals(C1bProtocolState.ABSENT, consumed.value.state)
         assertEquals("session_not_found", consumed.value.reasonCode)
+        assertReadControls(controller, KEY, "session_not_found")
         controller.shutdown()
         current = null
     }
@@ -197,6 +334,7 @@ class TabletC1bRuntimeControllerTest {
         assertEquals(C1bProtocolState.ABSENT, replay.state)
         assertEquals("nonce_reused", replay.reasonCode)
         assertTrue(replayRaw.all { it == 0.toByte() })
+        assertReadControls(controller, KEY, "build_identity_mismatch", C1bProtocolState.FAILED)
     }
 
     @Test
@@ -229,6 +367,7 @@ class TabletC1bRuntimeControllerTest {
         assertEquals(C1bProtocolState.ABSENT, overflow.state)
         assertEquals("replay_ledger_full", overflow.reasonCode)
         assertTrue(overflowRaw.single() == 0.toByte())
+        assertReadControls(controller, failedEnvelope(TABLET_C1B_REPLAY_LEDGER_CAPACITY).key, "replay_ledger_full")
         assertEquals(TABLET_C1B_REPLAY_LEDGER_CAPACITY, controller.replayLedgerSizeForTest())
         val activeAfterSaturation = controller.status(activeKey)
         assertEquals(activeBeforeSaturation.state, activeAfterSaturation.state)
@@ -270,6 +409,7 @@ class TabletC1bRuntimeControllerTest {
     private fun controller(
         worker: QueuedWorker,
         service: () -> FakeService?,
+        monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000L },
         capture: (FakeService, String, String, String) -> C1bRawFrame,
     ): TabletC1bRuntimeController<FakeService> = TabletC1bRuntimeController(
         build = BUILD,
@@ -277,7 +417,31 @@ class TabletC1bRuntimeControllerTest {
         scheduler = C1bDeadlineScheduler { _, _ -> C1bDeadlineCancellation {} },
         currentServiceIdentity = service,
         frameCapture = C1bRuntimeFrameCapture(capture),
+        monotonicMillis = monotonicMillis,
     )
+
+    private fun assertReadControls(
+        controller: TabletC1bRuntimeController<FakeService>,
+        key: C1bSessionKey,
+        reason: String,
+        state: C1bProtocolState = C1bProtocolState.ABSENT,
+    ) {
+        val controls = listOf(
+            controller.status(key),
+            controller.capture(key, "c1"),
+            (controller.result(key) as C1bRuntimeResult.Control).value,
+            controller.abort(key),
+        )
+        controls.forEach { control ->
+            assertEquals(key, control.key)
+            assertEquals(state, control.state)
+            assertEquals(reason, control.reasonCode)
+            assertEquals(0L, control.generation)
+            assertEquals(0, control.c1RequestsAccepted)
+            assertEquals(0, control.c2RequestsAccepted)
+            assertTrue(control.committedTokens.isEmpty())
+        }
+    }
 
     private fun frame(token: String, expectedHash: String): C1bRawFrame {
         val revision = if (token == "c1") 11L else 12L

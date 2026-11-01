@@ -286,8 +286,14 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 - **适用条件**：Windows 主机用 shell -T 管道向 C1b 写 T0，并按原始字节绑定上游哈希；.NET 二进制 fake 不能代表 CRT 文本读取边界。
 - **已验证现象**：[本轮记录](../../runs/2026-11-01-C1b结果绑定诊断候选验收.md)中，f983 真机首失配为 upstream_t0.artifact_sha256。原 T0 的 683 个 CRLF 经显式 UCRT text 读取后变为 LF，21,658 字节变为 20,975 字节，JSON 值相同而哈希不同；binary 读取保持原字节。既有 Android 编译 Factory/Pending/Model 在所测链中保留各自输入哈希，未复现提前擦零或别名。
 - **有效做法**：原 T0 文件与哈希保持不变，stdin 只传标准单行 ASCII Base64，远端先成功设置 pipefail，再解码后交 content 写入。解码端和写端任一失败、任意输出仍停止，保留原 status 与必要 abort；完整有效数据已送达后解码器仍可能失败，不能以失败当作未创建会话。缺 shell protocol、pipefail 或 toybox base64 就失败，不回退或放宽哈希比较。
-- **验证范围**：新候选 ccc8cce 定向 50/50、完整离线门 14/0/0，另有实际宿主 POSIX 管道 5 例及 UCRT text/binary 对照；均非 ROM 解码实测。设备声明的失配哈希及 SDK 二进制分支未保存/核实，不能认定真机实际收到 LF 版本或唯一原因。冻结轮不重跑、不回填。
+- **验证范围**：ccc8cce 定向 50/50、完整离线门 14/0/0，另有实际宿主 POSIX 管道 5 例及 UCRT text/binary 对照；随后[单次真机验收](../../runs/2026-11-01-C1b原字节传输候选验收.md)复用现装包完成原 T0 写入、两帧和结果校验，upstream T0 原字节哈希及其余运行绑定全部匹配。只证明本轮链路可用；旧设备失配值及 SDK 分支仍未知，不认定旧轮实际收到 LF 版本或唯一原因，不重跑、不回填。
 - **HostSmoke 附记**：本轮合成 EncodedCommand 子进程 exit 0、隔离锁已释放，仍因额外 CLIXML progress 违反精确 stderr 断言失败；保留原记录后，仅在新合成子进程设置 ProgressPreference，修订检查通过。真实 runner 的 stderr 门未改，不能把此做法推广成忽略真实错误输出。
+
+### C1b 有效采集与不完整拓扑分开判定（2026-11-01，真机与源码查阅）
+
+- **适用条件**：runner exit 0、observation 合同有效且绑定匹配，但 inventory 截断或子树 opaque。先分别报告采集契约、窗口拓扑、树语义，不把 passed 扩成 T-L1/P0/execution 通过。
+- **有效做法**：四条已存窗口不是原始输入总数。当前 probe 的 maximumWindows=16，但 captureWindowShell 在 type/display/layer/touchable/active/focus/id 等读取失败时也可返回 null 并置 windowsTruncated；无原始失败字段时不能从截断猜测超限、具体读错或源代码缺陷。完整 root/零 child/零正几何/无读错且未耗尽预算的 opaque，须与 inventory 不完整分别保留；IME visible=false 也不能在 inventory 截断时判 hidden observed。
+- **验证依据**：[ccc8cce 本轮](../../runs/2026-11-01-C1b原字节传输候选验收.md)两帧各存两系统、两微信窗口，微信子树完整但 opaque，topology/semantic 均 false。锁释放与正常退出不独立证明 provider 已清理；不为补证重读设备或重跑一次性采集。
 
 ### C1b T0 的无 PTY 写入与远端失败核验（2026-11-01）
 

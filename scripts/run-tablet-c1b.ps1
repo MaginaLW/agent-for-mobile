@@ -3,13 +3,14 @@
 T-L1 C1b 平板 pure-a11y 布局观测的简单 runner（替代旧固定候选主机链）。
 
 一次调用 = 一次采集，不自动重试；换新 run_id 再次调用即可，不再有 once 标记。
-流程：clean HEAD → 全局设备锁 → 单设备 → （可选）Gradle 构建探针 → install -r -t →
+流程：clean HEAD → 全局设备锁 → 单设备 → （可选）Gradle 构建探针 → 校验现装 APK →
 只读检查无障碍已启用并绑定 → T0-L v5 intake → C1b content 协议 → 证据落盘 → validator。
+现装 APK 相同则跳过安装；默认未匹配时 install -r -t，-RequireInstalledApkMatch 未确认相同即停。
 
 只读边界（App 代码不变，本脚本只做下列 adb 动作）：
 * adb devices；adb -s <serial> install -r -t <apk>（不卸载）；
 * shell settings get secure enabled_accessibility_services；shell dumpsys accessibility；
-* exec-in content write（仅 C1b t0 URI）；shell content read（仅 C1b status/capture/result/abort URI）；
+* shell -T（远端固定管道 set -o pipefail && toybox base64 -d | content write，仅 C1b t0 URI，无 PTY）；shell content read（仅 C1b status/capture/result/abort URI）；
 * 另调用只读的 scripts/run-tablet-intake.ps1。
 不调用 input/tap/swipe/am start/settings put/uninstall/screencap，不修改任何设备设置；
 无障碍未开启时只打印开启步骤并以 2 退出。
@@ -24,6 +25,7 @@ param(
     [string]$Serial,
     [string]$ApkPath,
     [switch]$SkipBuild,
+    [switch]$RequireInstalledApkMatch,
     [string]$RunId,
     # 仅离线测试：用给定 T0 画像代替真实 intake；生产调用不得传。
     [string]$TestOnlyT0ProfilePath,
@@ -100,7 +102,7 @@ function New-C1bUri([string]$Endpoint) {
     if ($Endpoint -ceq 't0') {
         $uri += "&title_hash=$TitleHash&producer_commit_sha=$($script:Run.producer_commit_sha)&producer_artifact_sha256=$($script:Run.apk_sha256)"
     }
-    # 设备端 adbd 以 sh -c 解释 shell/exec-in 命令，URI 中的 & 必须整体单引号包裹。
+    # adb shell（包括 -T）把 argv 连接为远端命令，URI 中的 & 须整体单引号包裹。
     if ($uri -match "['\s%+]") { throw 'C1b URI 含非法字符。' }
     return "'$uri'"
 }
@@ -166,7 +168,7 @@ function Set-Stage([string]$Name) { $script:Run.stage = $Name; $script:Run.times
 $script:Run = [ordered]@{
     schema = 'tablet-c1b-run/v1'; run_id = $null; outcome = 'failed'; exit_code = 1; failure_reason = $null; stage = 'init'
     commit_sha = $null; producer_commit_sha = $null; apk_sha256 = $null; apk_built = (-not $SkipBuild); serial_sha256 = $null
-    t0_sha256 = $null; observation_sha256 = $null
+    t0_sha256 = $null; observation_sha256 = $null; result_diagnostic = $null
     timestamps = [ordered]@{ started_at = Get-Utc }
     capture = [ordered]@{ generation = $null; host_wait_ms = $null; total_span_ms = $null; status_polls = 0; content_reads = 0 }
     abort = [ordered]@{ attempted = $false; state = $null; reason_code = $null }
@@ -230,11 +232,22 @@ try {
     Set-Stage 'installed'
     # 重装会让系统解绑无障碍服务；设备上已是同一 APK（sha256 相同）时跳过安装。
     $script:Run.install_skipped = $false
-    $installedPath = ((Invoke-Adb @('shell', 'pm', 'path', $script:PackageName) -AllowFailure).Text -split "`r?`n" |
+    $installedPackage = Invoke-Adb @('shell', 'pm', 'path', $script:PackageName) -AllowFailure
+    if ($RequireInstalledApkMatch -and ($installedPackage.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($installedPackage.Stderr))) {
+        throw '-RequireInstalledApkMatch：pm path 读取失败，拒绝安装探针。'
+    }
+    $installedPath = ($installedPackage.Text -split "`r?`n" |
         Where-Object { $_ -match '^package:(.+\.apk)\s*$' } | Select-Object -First 1) -replace '^package:', '' -replace '\s+$', ''
     if ($installedPath) {
-        $remoteSha = ((Invoke-Adb @('shell', 'sha256sum', "'$installedPath'") -AllowFailure).Text -split '\s+')[0]
+        $installedSha = Invoke-Adb @('shell', 'sha256sum', "'$installedPath'") -AllowFailure
+        if ($RequireInstalledApkMatch -and ($installedSha.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($installedSha.Stderr))) {
+            throw '-RequireInstalledApkMatch：sha256sum 读取失败，拒绝安装探针。'
+        }
+        $remoteSha = ($installedSha.Text -split '\s+')[0]
         if ($remoteSha -and ('sha256:' + $remoteSha.ToLowerInvariant()) -ceq $script:Run.apk_sha256) { $script:Run.install_skipped = $true }
+    }
+    if ($RequireInstalledApkMatch -and -not $script:Run.install_skipped) {
+        throw '-RequireInstalledApkMatch：未确认已安装探针 APK 与本地 SHA-256 相同，拒绝安装探针。'
     }
     if (-not $script:Run.install_skipped) {
         $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 180 -AllowFailure
@@ -287,8 +300,15 @@ try {
 
     Set-Stage 't0_written'
     $sessionStarted = $true
-    $write = Invoke-Adb @('exec-in', 'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0Bytes
-    if ($write.Bytes.Length -or $write.Stderr.Trim().Length) { throw "T0 write 返回了意外输出：$($write.Text.Trim()) $($write.Stderr.Trim())" }
+    # 标准单行 ASCII Base64 避免 Windows CRT text stdin 改写 CRLF；原 T0 字节与哈希保持不变。
+    # -T 禁用 PTY；pipefail 将解码或写入失败向上传递，不支持这些能力时失败且不回退。
+    $t0WireBytes = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($t0Bytes))
+    $write = Invoke-Adb @('shell', '-T', 'set', '-o', 'pipefail', '&&', 'toybox', 'base64', '-d', '|',
+        'content', 'write', '--uri', (New-C1bUri 't0')) -InputBytes $t0WireBytes
+    # content 的异常可能只写 stderr 而仍 exit 0；不落盘可能回显 URI/nonce 的原文。
+    if ($write.Bytes.Length -or -not [string]::IsNullOrEmpty($write.Stderr)) {
+        throw "T0 write 返回了意外输出（stdout=$($write.Bytes.Length) bytes，stderr=$([Text.Encoding]::UTF8.GetByteCount($write.Stderr)) bytes）。"
+    }
     $start = Read-C1bControl 'status'
     if ($start.state -cne 'ready_c1' -or [long]$start.generation -lt 1) { throw "T0 写入后状态应为 ready_c1，实际 $($start.state)/$($start.reason_code)。" }
     $script:Run.capture.generation = [long]$start.generation
@@ -320,16 +340,30 @@ try {
     if ($observationBytes.Length -notin 1..1048576) { throw 'observation 字节数越界。' }
     $observationRaw = [Text.UTF8Encoding]::new($false, $true).GetString($observationBytes)
     if ($observationRaw.Contains($script:SelectedSerial) -or $observationRaw.Contains($script:Nonce)) { throw 'observation 含原始 serial 或 nonce。' }
-    $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String
-    if ($observation.schema -cne 'tablet-layout-observation/c1b-v1' -or $observation.run_id -cne $RunId -or
-        $observation.expected_title_hash -cne $TitleHash -or $observation.provenance.kind -cne 'gateway_runtime_probe' -or
-        $observation.provenance.producer_commit_sha -cne $script:Run.producer_commit_sha -or
-        $observation.provenance.producer_artifact_sha256 -cne $script:Run.apk_sha256 -or
-        $observation.upstream_t0.source_kind -cne 'trusted_runtime' -or $observation.upstream_t0.run_id -cne $RunId -or
-        $observation.upstream_t0.artifact_sha256 -cne $script:Run.t0_sha256 -or
-        $observation.upstream_t0.producer_commit_sha -cne $T0ProducerSha -or
-        $observation.upstream_t0.captured_at -cne $t0.captured_at_utc) {
-        throw 'observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致。'
+    $script:Run.result_diagnostic = [ordered]@{
+        bytes = $observationBytes.Length; sha256 = Get-Sha256Bytes $observationBytes; binding_failure = $null
+    }
+    try { $observation = $observationRaw | ConvertFrom-Json -Depth 100 -DateKind String }
+    catch { $script:Run.result_diagnostic.binding_failure = 'json'; throw 'observation JSON 无效。' }
+    # 与原复合条件保持同一短路顺序；只记录固定字段名，不保留失配值或未通过绑定检查的 observation。
+    try {
+        $bindingFailure = if ($null -eq $observation -or $observation -isnot [pscustomobject] -or
+            $null -eq $observation.PSObject.Properties['schema'] -or $observation.schema -cne 'tablet-layout-observation/c1b-v1') { 'schema' }
+        elseif ($observation.run_id -cne $RunId) { 'run_id' }
+        elseif ($observation.expected_title_hash -cne $TitleHash) { 'expected_title_hash' }
+        elseif ($observation.provenance.kind -cne 'gateway_runtime_probe') { 'provenance.kind' }
+        elseif ($observation.provenance.producer_commit_sha -cne $script:Run.producer_commit_sha) { 'provenance.producer_commit_sha' }
+        elseif ($observation.provenance.producer_artifact_sha256 -cne $script:Run.apk_sha256) { 'provenance.producer_artifact_sha256' }
+        elseif ($observation.upstream_t0.source_kind -cne 'trusted_runtime') { 'upstream_t0.source_kind' }
+        elseif ($observation.upstream_t0.run_id -cne $RunId) { 'upstream_t0.run_id' }
+        elseif ($observation.upstream_t0.artifact_sha256 -cne $script:Run.t0_sha256) { 'upstream_t0.artifact_sha256' }
+        elseif ($observation.upstream_t0.producer_commit_sha -cne $T0ProducerSha) { 'upstream_t0.producer_commit_sha' }
+        elseif ($observation.upstream_t0.captured_at -cne $t0.captured_at_utc) { 'upstream_t0.captured_at' }
+        else { $null }
+    } catch { $bindingFailure = 'structure' }
+    $script:Run.result_diagnostic.binding_failure = $bindingFailure
+    if ($null -ne $bindingFailure) {
+        throw "observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致（$bindingFailure）。"
     }
     $sessionConsumed = $true
     $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v1.json'

@@ -20,16 +20,19 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 ```powershell
 pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径> `
-  [-Serial <serial>] [-ApkPath <已构建 APK>] [-SkipBuild] [-RunId <id>]
+  [-Serial <serial>] [-ApkPath <已构建 APK>] [-SkipBuild] [-RequireInstalledApkMatch] [-RunId <id>]
 ```
 
 流程：检查工作树 → 取与派单共用的全局设备锁 → 确认恰好一台设备 → Gradle 构建 `:tablet-c1b-probe:assembleDebug`
 → `adb install -r -t`（不卸载；设备上已是同一 APK 时跳过，因为重装会让系统解绑无障碍服务，需在设置里关闭再打开「平板 C1b 只读探针」）→ 检查无障碍服务 → `run-tablet-intake` 生成 T0-L v5
 → 经 ContentProvider 写 T0、读 `c1`、宿主等待至少 900 ms、读 `c2`、读 result。
 
+原 T0 的保存字节和 SHA-256 不变；stdin 只传标准 Base64 编码后的单行 ASCII，无 BOM、无换行，避免 Windows CRT text stdin 将 CRLF 改成 LF。远端固定为 `adb shell -T "set -o pipefail && toybox base64 -d | content write --uri '<URI>'"`：禁用 PTY，由标准解码器还原原始 T0 字节，并在 EOF 后读取远端输出与退出状态。需要 shell protocol、远端 shell 的 `pipefail` 和 `toybox base64 -d`；任一能力不支持或解码/写入任一侧失败即停止，不回退原始 stdin、`exec-in` 或 PTY。T0 写入须 exit 0、stdout/stderr 均为空（含空白也拒绝），随后仍以绑定的 `status=ready_c1` 验证会话；错误只记输出字节数，不保存可能回显的会话标识。解码器可能先输出有效前缀再失败，不能据失败假定没有创建会话，原必要 abort 保留。固定 ccc8cce 的[单次真机验收](../runs/2026-11-01-C1b原字节传输候选验收.md)已验证本轮链路及原字节绑定，不证明其他环境或旧轮唯一失败根因；未来运行仍须自己的固定候选与开跑条件。
+
 - 从 `c1` 起整段采集不超过 15 秒；`c1`、`c2` 各读一次，不补拍。
 - 一次调用只采一次，不自动重试。每个新运行使用新 run_id，并重新满足就位与开跑条件；已有证据目录不得覆盖。
 - 探针模块的 Gradle 构建检查保证 APK 只含只读代码；`-SkipBuild`/`-ApkPath` 只用于满足上述构建身份约束的 APK。
+- 保留当前已就绪的探针时，另传 `-RequireInstalledApkMatch`：只有已安装 APK 的 SHA-256 与本地 APK 相同才跳过安装并继续；缺包、路径或哈希读取失败、不匹配均在安装前失败并保留本轮 `run.json`，不覆盖安装。未传此参数时沿用原有安装行为。
 
 ## 产物
 
@@ -37,7 +40,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 - `upstream-t0-v5.json`：本次 T0 原始字节。
 - `tablet-layout-observation-c1b-v1.json`：经现有 c1b-v1 validator 校验。
-- `run.json`：HEAD、设备、APK、时序与结果摘要。
+- `run.json`：HEAD、设备、APK、时序与结果摘要。`result_diagnostic` 初始为 null；只在结果字节数、UTF-8 及 serial/nonce 隐私检查通过后，记录结果原始字节数、SHA-256 和首个失败锚点的固定字段名（JSON/结构无效分别为 `json`/`structure`）。未通过锚点检查的 observation 不落盘，也不保留失配值；返回 control 时记 `schema` 失败。摘要不证明来源有效、采集通过或 provider 会话已清理。
 
 ## 结果解读
 
@@ -51,6 +54,8 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 - 安装或构建失败：先离线复现，不在现场调参。
 - 失败与通过都写 `docs/runs/YYYY-MM-DD-T-L1-C1b-<主题>.md`，附 run_id 与退出码。
 - 再次运行须解决原阻塞、用新 run_id，并按 [backlog §7.3](../backlog.md)重新报就位、取得开跑令；不复用失败轮或已消费的会话。
+
+启动拒绝诊断只保留最近一次、精确 run_id/nonce 的 `absent` 原因，供 status/capture/result/abort 读取；同 key 的实际会话或终态优先，下一次 start、输入拒绝处理或 shutdown 会清除旧槽，成功响应不缓存。有效 T0 通过校验后，`coordinator.begin` 抛出的 `Exception` 收口为 `failed/start_failed`；输入读取或 T0 校验失败仍为 `t0_invalid`。这只修复已复现的信息丢失，不证明真机失败根因、清理完成或允许重跑。
 
 结果读法：`complete + childCount=0 + visited=1 + positive-visible=0` 是完整观察到 opaque root，不是树可用；
 `window_only` 只是 window focus；window title 命中不是目标会话证明。

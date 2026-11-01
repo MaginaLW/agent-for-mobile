@@ -7,6 +7,37 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class TabletC1bProtocolTest {
+    @Test
+    fun `start failure is a closed failed reason and never serializes exception detail`() {
+        val failed = control(generation = 0L, state = C1bProtocolState.FAILED, reasonCode = "start_failed")
+            .toJson(BUILD, true)
+        assertEquals("start_failed", failed.getString("reason_code"))
+        assertFalse(failed.getBoolean("ok"))
+        assertEquals("none", failed.getString("next"))
+        expectFailure { control(state = C1bProtocolState.ABSENT, reasonCode = "start_failed") }
+        expectFailure { control(state = C1bProtocolState.READY_C1, reasonCode = "start_failed") }
+        expectFailure { control(state = C1bProtocolState.FAILED, reasonCode = "start_failed_private_detail") }
+        expectFailure {
+            control(generation = 1L, state = C1bProtocolState.FAILED, reasonCode = "start_failed")
+        }
+        listOf(
+            Triple(1, 0, emptyList()),
+            Triple(1, 0, listOf("c1")),
+            Triple(1, 1, listOf("c1")),
+            Triple(1, 1, listOf("c1", "c2")),
+        ).forEach { (c1, c2, committed) ->
+            expectFailure {
+                control(
+                    generation = 0L,
+                    state = C1bProtocolState.FAILED,
+                    reasonCode = "start_failed",
+                    c1RequestsAccepted = c1,
+                    c2RequestsAccepted = c2,
+                    committedTokens = committed,
+                )
+            }
+        }
+    }
 
     @Test
     fun `all closed capture diagnostics require their exact failed capture tuple`() {

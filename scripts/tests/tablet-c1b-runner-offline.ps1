@@ -99,9 +99,22 @@ function Get-Provider {
         version_name = '0.1.0'; version_code = 1; embedded_git_head = $head; build_challenge = 'offline-c1b-read-only-placeholder'; a11y_service_ready = $true }
 }
 if ($cmd -ceq 'shell pm path dev.magina.gateway') {
-    if ($scenario -ceq 'same_apk') { Out-Text "package:/data/app/fake/base.apk`n"; exit 0 } else { exit 1 }
+    if ($scenario -ceq 'installed_missing') { exit 0 }
+    if ($scenario -in @('same_apk', 'installed_mismatch', 'installed_pm_failure', 'installed_pm_stderr', 'installed_pm_whitespace_stderr', 'installed_sha_failure', 'installed_sha_stderr')) {
+        Out-Text "package:/data/app/fake/base.apk`n"
+        if ($scenario -ceq 'installed_pm_failure') { exit 1 }
+        if ($scenario -ceq 'installed_pm_stderr') { [Console]::Error.WriteLine('fake pm read failure') }
+        if ($scenario -ceq 'installed_pm_whitespace_stderr') { [Console]::Error.Write(' ') }
+        exit 0
+    } else { exit 1 }
 }
-if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") { Out-Text "$($env:FAKE_ADB_APK_SHA)  /data/app/fake/base.apk`n"; exit 0 }
+if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") {
+    $sha = if ($scenario -ceq 'installed_mismatch') { '0' * 64 } else { $env:FAKE_ADB_APK_SHA }
+    Out-Text "$sha  /data/app/fake/base.apk`n"
+    if ($scenario -ceq 'installed_sha_failure') { exit 1 }
+    if ($scenario -ceq 'installed_sha_stderr') { [Console]::Error.WriteLine('fake sha read failure') }
+    exit 0
+}
 if ($cmd -match '^install -r -t ') { Out-Text "Performing Streamed Install`nSuccess`n"; exit 0 }
 if ($cmd -ceq 'shell settings get secure enabled_accessibility_services') {
     Out-Text $(if ($scenario -ceq 'a11y_off') { "null`n" } else { "dev.magina.gateway/.a11y.GatewayA11yService`n" }); exit 0
@@ -111,22 +124,58 @@ if ($cmd -ceq 'shell dumpsys accessibility') {
     $boundLine = if ($scenario -ceq 'vivo_hidden_bound') { 'Service[label=vivo输入法, component=com.vivo.ai.ime.pad/x.AutoSendImageService]' } else { 'Service[label=gw, component=dev.magina.gateway/.a11y.GatewayA11yService]' }
     Out-Text "ACCESSIBILITY MANAGER (dumpsys accessibility)`nUser state[`n  Bound services:{$boundLine}`n]`n"; exit 0
 }
-if ($cmd -notmatch '^(exec-in content write|shell content read) --uri (?<uri>.+)$') { [Console]::Error.WriteLine("fake adb: unsupported $cmd"); exit 1 }
-$uri = $Matches.uri
-if (-not ($uri.StartsWith("'") -and $uri.EndsWith("'"))) { [Console]::Error.WriteLine('fake adb: URI must be single-quoted'); exit 1 }
-$uri = $uri.Trim("'")
-if ($uri -notmatch '^content://dev\.magina\.gateway\.tablet\.c1b/(?<path>[a-z0-9/._-]+)\?(?<query>.+)$') { exit 1 }
+$base64Wire = $cmd -match '^shell -T set -o pipefail && toybox base64 -d \| content write --uri (?<uri>.+)$'
+if ($base64Wire) { $transport = 'shell -T'; $operation = 'write'; $uri = $Matches.uri }
+else {
+    if ($cmd -notmatch '^(?<transport>exec-in|shell -T|shell) content (?<operation>write|read) --uri (?<uri>.+)$') { [Console]::Error.WriteLine("fake adb: unsupported $cmd"); exit 1 }
+    $transport = $Matches.transport; $operation = $Matches.operation; $uri = $Matches.uri
+}
+if (($operation -ceq 'read' -and $transport -cne 'shell') -or ($operation -ceq 'write' -and $transport -ceq 'shell')) { exit 1 }
+# AOSP: shell joins argv before sh parsing; exec-in escape_arg preserves each argv verbatim.
+# Only shell consumes the deliberate outer quotes. exec-in must never Trim them.
+if ($transport -ne 'exec-in') {
+    if ($uri -cnotmatch "^'([^']+)'$") { [Console]::Error.WriteLine('fake adb: unquoted shell URI'); exit 1 }
+    $uri = $Matches[1]
+}
+if ($uri -notmatch '^content://dev\.magina\.gateway\.tablet\.c1b/(?<path>[a-z0-9/._-]+)\?(?<query>[^''\s]+)$') {
+    # exec-in discards remote output/exit: an invalid quoted URI creates no session yet returns host exit 0.
+    if ($transport -ceq 'exec-in') { [Console]::OpenStandardInput().CopyTo([IO.Stream]::Null); exit 0 }
+    [Console]::Error.WriteLine('fake adb: invalid content URI'); exit 1
+}
 $path = $Matches.path; $query = @{}
 foreach ($pair in $Matches.query -split '&') { $kv = $pair -split '=', 2; $query[$kv[0]] = $kv[1] }
 if ($path -match '^t0/(?<run>.+)$') {
-    $ms = [IO.MemoryStream]::new(); [Console]::OpenStandardInput().CopyTo($ms); $bytes = $ms.ToArray()
+    $run = $Matches.run
+    if ($scenario -ceq 'shell_protocol_unsupported') { [Console]::Error.WriteLine('fake adb: -T requires shell protocol'); exit 1 }
+    $ms = [IO.MemoryStream]::new(); [Console]::OpenStandardInput().CopyTo($ms); $wire = $ms.ToArray()
+    [IO.File]::WriteAllBytes((Join-Path $state 't0-wire.bin'), $wire)
+    # Windows CRT text reads collapse CRLF; the binary scenario preserves input exactly.
+    $crtInput = if ($scenario -ceq 'crt_binary') { $wire } else { [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($wire).Replace("`r`n", "`n")) }
+    [IO.File]::WriteAllBytes((Join-Path $state 't0-crt-stdin.bin'), $crtInput)
+    if ($base64Wire) {
+        if ($scenario -ceq 'pipefail_unsupported') { [Console]::Error.WriteLine('fake shell: pipefail unsupported'); exit 2 }
+        if ($scenario -ceq 'base64_unavailable') { [Console]::Error.WriteLine('fake toybox: base64 unavailable'); exit 127 }
+        $encoded = [Text.Encoding]::ASCII.GetString($crtInput)
+        if ($encoded -cnotmatch '^[A-Za-z0-9+/]+={0,2}$') { [Console]::Error.WriteLine('fake decoder: wire is not single-line base64'); exit 8 }
+        if ($scenario -ceq 'base64_decode_fail') { exit 8 } # Left-side nonzero must fail even with empty output.
+        $bytes = [Convert]::FromBase64String($encoded)
+    } else { $bytes = $crtInput }
+    [IO.File]::WriteAllBytes((Join-Path $state 't0-stdin.bin'), $bytes)
+    # content catches provider exceptions, so an error can be exit 0. Include identifiers to test redaction.
+    if ($scenario -ceq 't0_remote_exit') { exit 7 }
+    if ($scenario -ceq 't0_remote_whitespace_stderr') { [Console]::Error.Write(' '); exit 0 }
+    if ($scenario -ceq 't0_remote_stdout') { Out-Text "remote output FAKESERIAL01 $uri"; exit 0 }
     $t0 = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -DateKind String
-    $session = @{ run_id = $Matches.run; nonce = $query.nonce; state = 'ready_c1'; generation = 1; c1 = 0; c2 = 0; committed = @(); inflight = $null; reason = $null
+    $session = @{ run_id = $run; nonce = $query.nonce; state = 'ready_c1'; generation = 1; c1 = 0; c2 = 0; committed = @(); inflight = $null; reason = $null
         commit = $query.producer_commit_sha; artifact = $query.producer_artifact_sha256; title = $query.title_hash
         t0_sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant(); t0_at = $t0.captured_at_utc }
-    Save; exit 0
+    Save
+    # A decoder can emit a valid prefix, allow content to create a session, then fail on trailing input.
+    if ($base64Wire -and $scenario -ceq 'base64_partial_decode_failure') { [Console]::Error.WriteLine('fake decoder: invalid trailing input'); exit 8 }
+    if ($scenario -ceq 't0_remote_stderr') { [Console]::Error.WriteLine("remote failure FAKESERIAL01 $uri") }
+    exit 0
 }
-if ($null -eq $session -and $path -match '^status/(?<run>.+)$') {
+if ($null -eq $session -and $path -match '^(?:status|abort)/(?<run>.+)$') {
     Out-Text (([ordered]@{
         schema = 'tablet-c1b-control/v1'; ok = $false; run_id = $Matches.run; generation = 0; state = 'absent'; next = 'none'
         reason_code = 'session_not_found'; in_flight_token = $null; c1_requests_accepted = 0; c2_requests_accepted = 0
@@ -156,10 +205,30 @@ switch -regex ($path) {
         $o.upstream_t0.artifact_sha256 = $session.t0_sha; $o.upstream_t0.captured_at = $session.t0_at
         $o.frames[0].captured_at = $now.AddMilliseconds(-1200).ToString($fmt); $o.frames[1].captured_at = $now.AddMilliseconds(-200).ToString($fmt)
         $o.captured_at = $o.frames[1].captured_at
+        switch ($scenario) {
+            'bad_schema' { $o.schema = 'untrusted-schema' }
+            'bad_run_id' { $o.run_id = 'other-run' }
+            'bad_title' { $o.expected_title_hash = 'sha256:' + ('d' * 64) }
+            'bad_kind' { $o.provenance.kind = 'offline_fixture' }
+            'bad_commit' { $o.provenance.producer_commit_sha = '0' * 40 }
+            'bad_t0_source' { $o.upstream_t0.source_kind = 'offline_fixture' }
+            'bad_t0_run' { $o.upstream_t0.run_id = 'other-t0-run' }
+            'bad_t0_artifact' { $o.upstream_t0.artifact_sha256 = 'sha256:' + ('d' * 64) }
+            'bad_t0_commit' { $o.upstream_t0.producer_commit_sha = '0' * 40 }
+            'bad_t0_time' { $o.upstream_t0.captured_at = '2020-01-01T00:00:00.0000000Z' }
+            'result_missing' { $o.PSObject.Properties.Remove('upstream_t0') }
+            'result_serial' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue 'FAKESERIAL01' }
+            'result_nonce' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue $session.nonce }
+        }
         if ($scenario -ceq 'run_json_fail') {
             [void](New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot "repo/docs/runs/evidence/$($session.run_id)/tablet-layout-c1b/run.json"))
         }
-        Out-Text ($o | ConvertTo-Json -Depth 100 -Compress); break
+        if ($scenario -ceq 'result_control') { Out-Control; break }
+        $raw = if ($scenario -ceq 'result_invalid_json') { '{"untrusted":"DO_NOT_RETAIN_RESULT_VALUE"' } else { $o | ConvertTo-Json -Depth 100 -Compress }
+        [IO.File]::WriteAllText((Join-Path $state 'result-response.bin'), $raw, [Text.UTF8Encoding]::new($false))
+        # The real controller consumes an observation before returning its bytes to the host.
+        $session = $null; Save
+        Out-Text $raw; break
     }
     default { exit 1 }
 }
@@ -170,12 +239,13 @@ function New-T0Profile([string]$RunId) {
     $path = Join-Path $Temp "t0-$RunId.json"
     $profile = [ordered]@{
         schema_version = 5; run_id = $RunId; captured_at_utc = [DateTime]::UtcNow.AddSeconds(-5).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
-        device = [ordered]@{ serial_hash = (Get-Sha256Text $FakeSerial); model = 'FakeTab' }
+        device = [ordered]@{ serial_hash = (Get-Sha256Text $FakeSerial); model = 'FakeTab中文' }
         assessment = [ordered]@{ device_class = 'tablet'; intake_status = 'accepted'; readiness_status = 'blocked'
             readiness_block_reasons = @('focus_absent'); p0_capability = 'unsupported'
             p0_unsupported_reasons = @('wechat_layout_unverified', 'tablet_landscape_p0_unimplemented') }
     }
-    [IO.File]::WriteAllText($path, ($profile | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $json = ($profile | ConvertTo-Json -Depth 10).Replace("`r`n", "`n").Replace("`n", "`r`n")
+    [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
     return $path
 }
 
@@ -190,7 +260,7 @@ function Invoke-Runner([string]$Name, [string]$Scenario, [string[]]$Extra = @())
     $runJsonPath = Join-Path $evidence 'run.json'
     $logPath = Join-Path $state 'adb.log'
     return [pscustomobject]@{
-        Exit = $exit; Output = ($output -join "`n"); Evidence = $evidence; RunId = $runId
+        Exit = $exit; Output = ($output -join "`n"); Evidence = $evidence; RunId = $runId; State = $state
         RunRaw = if (Test-Path -LiteralPath $runJsonPath -PathType Leaf) { Get-Content -Raw -LiteralPath $runJsonPath } else { '' }
         Run = if (Test-Path -LiteralPath $runJsonPath -PathType Leaf) { Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json -DateKind String } else { $null }
         Log = [string[]]@(if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath })
@@ -222,14 +292,77 @@ try {
         $observation = Get-Content -Raw -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json') | ConvertFrom-Json -DateKind String
         Assert-True ($observation.provenance.producer_commit_sha -ceq $Head -and $observation.upstream_t0.artifact_sha256 -ceq $r.Run.t0_sha256) 'observation 锚点错误'
         Assert-True ($r.Run.validation.fixture_contract_valid -and $r.Run.validation.runtime_binding_inputs_match) 'validator 未通过'
-        Assert-True (@($r.Log | Where-Object { $_ -match 'exec-in content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 写入/result 读取次数不符'
+        $response = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
+        Assert-True ($r.Run.result_diagnostic.bytes -eq $response.Length -and $r.Run.result_diagnostic.sha256 -ceq $r.Run.observation_sha256 -and $null -eq $r.Run.result_diagnostic.binding_failure) '成功结果摘要错误'
+        Assert-True (@($r.Log | Where-Object { $_ -match 'shell -T set -o pipefail && toybox base64 -d \| content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 应通过无 PTY 的解码管道写入一次，result 读取一次'
+        Assert-True ([Linq.Enumerable]::SequenceEqual($t0Copy, [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin')))) '远端 stdin 字节与 T0 不同'
         Assert-NoForbiddenAdb $r
+    }
+    foreach ($scenario in @('crt_text', 'crt_binary')) {
+        Test-Case "$scenario-base64-preserves-exact-t0" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+            $t0 = [IO.File]::ReadAllBytes((Join-Path $r.Evidence 'upstream-t0-v5.json'))
+            $wire = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-wire.bin'))
+            $crtInput = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-crt-stdin.bin'))
+            $decoded = [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin'))
+            Assert-True ([Text.Encoding]::UTF8.GetString($t0).Contains("`r`n") -and [Text.Encoding]::UTF8.GetString($t0).Contains('中文')) '风险样例须含 CRLF 与非 ASCII UTF-8'
+            Assert-True ([Linq.Enumerable]::SequenceEqual($wire, [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($t0)))) 'wire 必须精确为无换行/BOM 的标准 Base64'
+            Assert-True ([Linq.Enumerable]::SequenceEqual($wire, $crtInput) -and [Linq.Enumerable]::SequenceEqual($t0, $decoded)) 'CRT 模式不应改变线缆或解码后的原始 T0 字节'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match 'exec-in|shell -T content write')) '必须只写一次且无原始 stdin/exec-in 回退'
+            Assert-NoForbiddenAdb $r
+        }
+    }
+    foreach ($scenario in @('pipefail_unsupported', 'base64_unavailable', 'base64_decode_fail', 'base64_partial_decode_failure')) {
+        Test-Case "$scenario-stops-before-capture" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 1 -and $r.Run.stage -ceq 't0_written' -and $r.Run.failure_reason -match 'adb shell -T set 失败') "exit=$($r.Exit) $($r.Output)"
+            $abortState = if ($scenario -ceq 'base64_partial_decode_failure') { 'aborted' } else { 'absent' }
+            Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq $abortState) '解码/能力失败后须保留必要 abort，不能假定写入未发生'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match '/capture/|/result/|exec-in|shell -T content write')) '失败后不得采帧、重写或回退'
+            Assert-True ($null -eq $r.Run.result_diagnostic -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '失败后不得产生结果证据'
+            Assert-NoForbiddenAdb $r
+        }
+    }
+    foreach ($scenario in @('t0_remote_exit', 't0_remote_stderr', 't0_remote_whitespace_stderr', 't0_remote_stdout', 'shell_protocol_unsupported')) {
+        Test-Case "$scenario-stops-before-capture" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.stage -ceq 't0_written') "exit=$($r.Exit) $($r.Output)"
+            $reason = if ($scenario -in @('t0_remote_exit', 'shell_protocol_unsupported')) { 'adb shell -T set 失败' } else { 'T0 write 返回了意外输出' }
+            Assert-True ($r.Run.failure_reason -like "*$reason*") '未在远端写入失败处停止'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'content write' }).Count -eq 1 -and -not ($r.Log -match '/capture/|/result/')) '写失败后重试或请求了采集'
+            $abortState = if ($scenario -ceq 't0_remote_stderr') { 'aborted' } else { 'absent' }
+            Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq $abortState) '写入可能已发生，须保留原 abort 尝试'
+            Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}' -and $r.Output -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') '远端输出泄漏到错误记录'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '写失败不应生成 observation'
+            Assert-True ($null -eq $r.Run.result_diagnostic) '未读 result 时不应产生摘要'
+            Assert-NoForbiddenAdb $r
+        }
     }
     Test-Case 'same-apk-skips-install' {
         $r = Invoke-Runner 'sameapk' 'same_apk'
         Assert-True ($r.Exit -eq 0 -and $r.Run.install_skipped) "exit=$($r.Exit) $($r.Output)"
         Assert-True (-not ($r.Log -match '^-s \S+ install ')) '设备上已是同一 APK 时不应重装'
         Assert-NoForbiddenAdb $r
+    }
+    Test-Case 'required-installed-apk-match-skips-install' {
+        $r = Invoke-Runner 'requiredsameapk' 'same_apk' @('-RequireInstalledApkMatch')
+        Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed' -and $r.Run.install_skipped) "exit=$($r.Exit) $($r.Output)"
+        Assert-True (-not ($r.Log -match '^-s \S+ install ')) '要求现装匹配时不应安装'
+        Assert-True (@($r.Log | Where-Object { $_ -match 'shell pm path ' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match 'shell sha256sum ' }).Count -eq 1) '现装匹配检查不应重试'
+        Assert-NoForbiddenAdb $r
+    }
+    foreach ($scenario in @('installed_missing', 'installed_mismatch', 'installed_pm_failure', 'installed_pm_stderr', 'installed_pm_whitespace_stderr', 'installed_sha_failure', 'installed_sha_stderr')) {
+        Test-Case "required-$scenario-stops-before-install" {
+            $r = Invoke-Runner "required-$scenario" $scenario @('-RequireInstalledApkMatch')
+            $reason = if ($scenario -like 'installed_pm_*') { 'pm path 读取失败' } elseif ($scenario -like 'installed_sha_*') { 'sha256sum 读取失败' } else { '未确认已安装探针 APK' }
+            Assert-True ($r.Exit -eq 1 -and $r.Run.outcome -ceq 'failed' -and $r.Run.failure_reason -match [regex]::Escape($reason)) "exit=$($r.Exit) $($r.Output)"
+            Assert-True (-not ($r.Log -match '^-s \S+ install |content|settings|dumpsys') -and -not $r.Run.abort.attempted) '匹配未确认时应在安装、权限检查和 provider 访问前停止'
+            Assert-True (@($r.Log | Where-Object { $_ -match 'shell pm path ' }).Count -eq 1) 'pm path 不应重试'
+            $expectedShaReads = if ($scenario -eq 'installed_missing' -or $scenario -like 'installed_pm_*') { 0 } else { 1 }
+            Assert-True (@($r.Log | Where-Object { $_ -match 'shell sha256sum ' }).Count -eq $expectedShaReads) 'SHA 读取次数不符'
+            Assert-NoForbiddenAdb $r
+        }
     }
     Test-Case 'multi-device-rejected' {
         $r = Invoke-Runner 'multi' 'multi'
@@ -252,10 +385,36 @@ try {
         Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq 'aborted' -and ($r.Log -match '/abort/')) 'abort 未尝试'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '失败时不应写 observation'
     }
-    Test-Case 'observation-anchor-mismatch-fails' {
-        $r = Invoke-Runner 'anchor' 'bad_anchor'
-        Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '锚点') "exit=$($r.Exit) $($r.Output)"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '锚点不符时不应写 observation'
+    foreach ($case in @(
+        @('bad_schema', 'schema'), @('bad_run_id', 'run_id'), @('bad_title', 'expected_title_hash'),
+        @('bad_kind', 'provenance.kind'), @('bad_commit', 'provenance.producer_commit_sha'),
+        @('bad_anchor', 'provenance.producer_artifact_sha256'), @('bad_t0_source', 'upstream_t0.source_kind'),
+        @('bad_t0_run', 'upstream_t0.run_id'), @('bad_t0_artifact', 'upstream_t0.artifact_sha256'),
+        @('bad_t0_commit', 'upstream_t0.producer_commit_sha'), @('bad_t0_time', 'upstream_t0.captured_at'),
+        @('result_missing', 'structure'), @('result_invalid_json', 'json'), @('result_control', 'schema')
+    )) {
+        Test-Case "result-diagnostic-$($case[0])" {
+            $r = Invoke-Runner $case[0] $case[0]
+            Assert-True ($r.Exit -eq 1 -and $r.Run.stage -ceq 'result_read') "exit=$($r.Exit) $($r.Output)"
+            Assert-True ($r.Run.result_diagnostic.binding_failure -ceq $case[1]) '未准确记录闭合失败字段'
+            if ($case[0] -cne 'result_control') {
+                $raw = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
+                $sha = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($raw)).ToLowerInvariant()
+                Assert-True ($r.Run.result_diagnostic.bytes -eq $raw.Length -and $r.Run.result_diagnostic.sha256 -ceq $sha) '失败结果摘要不匹配原始字节'
+                Assert-True ($r.Run.abort.attempted -and $r.Run.abort.state -ceq 'absent') '真实 result 消费后 abort 应 absent，不证明清理'
+            }
+            Assert-True (@($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) '失败后重复读取 result'
+            Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}|DO_NOT_RETAIN_RESULT_VALUE' -and $r.Output -notmatch 'DO_NOT_RETAIN_RESULT_VALUE') '结果原文泄漏'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '锚点不符时不应写 observation'
+            Assert-NoForbiddenAdb $r
+        }
+    }
+    foreach ($scenario in @('result_serial', 'result_nonce')) {
+        Test-Case "$scenario-before-diagnostic" {
+            $r = Invoke-Runner $scenario $scenario
+            Assert-True ($r.Exit -eq 1 -and $r.Run.failure_reason -match '原始 serial 或 nonce' -and $null -eq $r.Run.result_diagnostic) '隐私门之前不应保存摘要'
+            Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') 'run.json 泄漏标识'
+        }
     }
     Test-Case 'stale-apk-head-mismatch-fails' {
         $r = Invoke-Runner 'stale' 'stale_apk'
