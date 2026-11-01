@@ -49,6 +49,7 @@ internal class TabletC1bRuntimeController<S : Any>(
     private val consumedNonces = mutableSetOf<String>()
     private val consumedRunIds = mutableSetOf<String>()
     private var active: RuntimeSession? = null
+    private var startRejection: C1bProtocolControl? = null
     private var closed = false
     private val observationAssembler = TabletC1bAssembler()
     private val coordinator = TabletC1bReadCoordinator(
@@ -90,9 +91,10 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     @Synchronized
     fun start(envelope: C1bStartEnvelope, upstreamT0RawUtf8: ByteArray): C1bProtocolControl {
+        startRejection = null
         if (closed) {
             upstreamT0RawUtf8.fill(0)
-            return absent(envelope.key, "coordinator_closed")
+            return rejectAbsentStart(envelope.key, "coordinator_closed")
         }
         val current = active
         if (current != null && currentSnapshot(current).state in OCCUPIED_STATES) {
@@ -100,19 +102,19 @@ internal class TabletC1bRuntimeController<S : Any>(
             return if (current.envelope.key == envelope.key) {
                 if (currentSnapshot(current).state in ACTIVE_STATES) failReplay(current) else control(current)
             } else {
-                absent(envelope.key, "session_busy")
+                rejectAbsentStart(envelope.key, "session_busy")
             }
         }
         if (envelope.key.nonce in consumedNonces || envelope.key.runId in consumedRunIds) {
             upstreamT0RawUtf8.fill(0)
-            return absent(
+            return rejectAbsentStart(
                 envelope.key,
                 if (envelope.key.nonce in consumedNonces) "nonce_reused" else "run_id_reused",
             )
         }
         if (!rememberConsumed(envelope.key)) {
             upstreamT0RawUtf8.fill(0)
-            return absent(envelope.key, "replay_ledger_full")
+            return rejectAbsentStart(envelope.key, "replay_ledger_full")
         }
         if (envelope.producerCommitSha != build.embeddedGitHead) {
             upstreamT0RawUtf8.fill(0)
@@ -131,9 +133,13 @@ internal class TabletC1bRuntimeController<S : Any>(
         } finally {
             upstreamT0RawUtf8.fill(0)
         }
-        val snapshot = coordinator.begin(envelope.key.runId)
+        val snapshot = try {
+            coordinator.begin(envelope.key.runId)
+        } catch (_: Exception) {
+            return installSynthetic(envelope, C1bReadState.FAILED, "start_failed")
+        }
         if (snapshot.state == C1bReadState.ABSENT) {
-            return absent(envelope.key, requireNotNull(snapshot.reasonCode))
+            return rejectAbsentStart(envelope.key, requireNotNull(snapshot.reasonCode))
         }
         val created = RuntimeSession(
             envelope = envelope,
@@ -149,7 +155,8 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     @Synchronized
     fun rejectStart(envelope: C1bStartEnvelope): C1bProtocolControl {
-        if (closed) return absent(envelope.key, "coordinator_closed")
+        startRejection = null
+        if (closed) return rejectAbsentStart(envelope.key, "coordinator_closed")
         val current = active
         if (current != null && currentSnapshot(current).state in OCCUPIED_STATES) {
             return if (current.envelope.key == envelope.key && currentSnapshot(current).state in ACTIVE_STATES) {
@@ -157,11 +164,11 @@ internal class TabletC1bRuntimeController<S : Any>(
             } else if (current.envelope.key == envelope.key) {
                 control(current)
             } else {
-                absent(envelope.key, "session_busy")
+                rejectAbsentStart(envelope.key, "session_busy")
             }
         }
         if (envelope.key.nonce !in consumedNonces && envelope.key.runId !in consumedRunIds) {
-            if (!rememberConsumed(envelope.key)) return absent(envelope.key, "replay_ledger_full")
+            if (!rememberConsumed(envelope.key)) return rejectAbsentStart(envelope.key, "replay_ledger_full")
             return installSynthetic(envelope, C1bReadState.FAILED, "t0_invalid")
         }
         return status(envelope.key)
@@ -184,14 +191,14 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     @Synchronized
     fun status(key: C1bSessionKey): C1bProtocolControl {
-        val current = active?.takeIf { it.envelope.key == key } ?: return absent(key, "session_not_found")
+        val current = active?.takeIf { it.envelope.key == key } ?: return startRejectionOrAbsent(key)
         refresh(current)
         return control(current)
     }
 
     @Synchronized
     fun capture(key: C1bSessionKey, token: String): C1bProtocolControl {
-        val current = active?.takeIf { it.envelope.key == key } ?: return absent(key, "session_not_found")
+        val current = active?.takeIf { it.envelope.key == key } ?: return startRejectionOrAbsent(key)
         if (current.overrideSnapshot != null || !current.coordinatorStarted) return control(current)
         val snapshot = coordinator.requestCapture(current.lease, token)
         observe(current, snapshot)
@@ -201,7 +208,7 @@ internal class TabletC1bRuntimeController<S : Any>(
     @Synchronized
     fun result(key: C1bSessionKey): C1bRuntimeResult {
         val current = active?.takeIf { it.envelope.key == key }
-            ?: return C1bRuntimeResult.Control(absent(key, "session_not_found"))
+            ?: return C1bRuntimeResult.Control(startRejectionOrAbsent(key))
         if (current.overrideSnapshot != null || !current.coordinatorStarted) {
             return C1bRuntimeResult.Control(control(current))
         }
@@ -220,7 +227,7 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     @Synchronized
     fun abort(key: C1bSessionKey): C1bProtocolControl {
-        val current = active?.takeIf { it.envelope.key == key } ?: return absent(key, "session_not_found")
+        val current = active?.takeIf { it.envelope.key == key } ?: return startRejectionOrAbsent(key)
         if (current.overrideSnapshot != null || !current.coordinatorStarted) return control(current)
         observe(current, coordinator.abort(current.lease))
         return control(current)
@@ -228,6 +235,7 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     @Synchronized
     fun shutdown() {
+        startRejection = null
         if (closed) return
         closed = true
         coordinator.shutdown()
@@ -318,6 +326,12 @@ internal class TabletC1bRuntimeController<S : Any>(
 
     private fun control(current: RuntimeSession): C1bProtocolControl =
         protocolControl(currentSnapshot(current), current.envelope)
+
+    private fun rejectAbsentStart(key: C1bSessionKey, reason: String): C1bProtocolControl =
+        absent(key, reason).also { startRejection = it }
+
+    private fun startRejectionOrAbsent(key: C1bSessionKey): C1bProtocolControl =
+        startRejection?.takeIf { it.key == key } ?: absent(key, "session_not_found")
 
     private fun absent(key: C1bSessionKey, reason: String): C1bProtocolControl = C1bProtocolControl(
         key = key,

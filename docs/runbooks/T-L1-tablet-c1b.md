@@ -53,6 +53,8 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 - 失败与通过都写 `docs/runs/YYYY-MM-DD-T-L1-C1b-<主题>.md`，附 run_id 与退出码。
 - 再次运行须解决原阻塞、用新 run_id，并按 [backlog §7.3](../backlog.md)重新报就位、取得开跑令；不复用失败轮或已消费的会话。
 
+启动拒绝诊断只保留最近一次、精确 run_id/nonce 的 `absent` 原因，供 status/capture/result/abort 读取；同 key 的实际会话或终态优先，下一次 start、输入拒绝处理或 shutdown 会清除旧槽，成功响应不缓存。有效 T0 通过校验后，`coordinator.begin` 抛出的 `Exception` 收口为 `failed/start_failed`；输入读取或 T0 校验失败仍为 `t0_invalid`。这只修复已复现的信息丢失，不证明真机失败根因、清理完成或允许重跑。
+
 结果读法：`complete + childCount=0 + visited=1 + positive-visible=0` 是完整观察到 opaque root，不是树可用；
 `window_only` 只是 window focus；window title 命中不是目标会话证明。
 pure-a11y 仍 opaque 时，下一步另审 window/pane 视觉合同，不关闭应用多窗，不回退整屏坐标。
