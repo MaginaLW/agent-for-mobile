@@ -21,7 +21,7 @@
 
 **本项目建议**：未来若明确要求后台屏，需单独验证 App 启动归属、a11y 读屏、输入焦点/IME、系统弹窗溢出、接管及 ConfirmOverlay 所在屏。当前 [TabletLayoutProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt) 和 [TabletC1bProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt) 阻断多 display，不为试用放宽门禁；主屏原生多窗与独立 display 是两种拓扑。
 
-**验证依据与边界**：仅上游源码/README 与本地探针静态对照，无 PA2553 / OriginOS / Android 16 兼容实测。Mika 也依赖无障碍，不能推出可绕开当前 ROM 撤销。完整比较见 [Mika 参考](../brain/mika.md)。
+**验证依据与边界**：仅上游源码/README 与本地探针静态对照，无 PA2553 / OriginOS / Android 16 兼容实测。其虚拟屏 ImageReader 取帧和部分 shell 输入原语独立于无障碍，但 TaskRun 手机任务装配仍等待无障碍连接，树与事件也来自该服务；没有现成的纯 shell/OCR 降级可直接解阻 C1b。自动修复只是重写启用列表，不能证明能阻止 ROM 再撤销。完整依据与当前阻塞的重新评估见 [Mika 参考 §6](../brain/mika.md#6-对当前阻塞的重新评估)。
 
 ## 通知锁屏资格
 

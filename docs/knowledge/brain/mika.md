@@ -66,6 +66,22 @@
 
 **验证依据与限制**：只查题集与判据，未运行或复算成功率。该 SHA 的 eval README 仍警告“开发阶段固定自主执行”，而 `TaskRun` 已按 `runApproval` 装配，需交叉核实，不能照抄跑测命令或把不可逆题当安全测试。本文不引入这些题、不重跑一次性运行。
 
+## 6. 对当前阻塞的重新评估
+
+**适用条件**：2026-11-01 再次以同一 Mika SHA 对照本项目 `b48d541`；仅静态查阅，不改变 C 队列、运行许可或 C1b pure-a11y 合同。
+
+| 当前问题 | 新核对的依据 | 可借鉴的最小动作与边界 |
+|---|---|---|
+| vivo 数秒内撤销无障碍 | [TaskRun.connectPhone][task-connect] 即使已有 shell 仍等待无障碍连接，缺失即报错；[AccessibilityRepair][repair] 只重写启用列表、等待重新绑定，连接成功会重置修复耗尽标记 | 自动重开不等于消除撤销原因；本项目 `settings put` 已失败，不用反复重开抢采集窗口。继续厂商解阻，保留系统撤销与进程死亡两种假设的区分 |
+| 是否存在不依赖无障碍的技术路线 | [AgentDisplay][display] 用 shell 建屏、ImageReader 取帧；[ShellService][shell-input] 可指定 display 注入部分输入 | 部分截图/输入原语独立于无障碍，不能概括为所有能力都依赖它。但树、事件和产品装配仍依赖；纯 shell/OCR 执行器只是待验证的架构备选，不是现成降级，也不满足当前单显示 C1b 合同 |
+| 微信树 opaque | [TreeQuality][tree-quality] 区分 adequate/partial/unusable/protected，[ScreenSession][screen-effect] 对读不到目标区域单列 treeBlind | 复用本项目已有 opaque/read_error 字段；可并行梳理 window/pane-bound 视觉合同的证据需求。实际通道实现与验收仍按平板设计推进，不把 OCR 混进 C1b，不拿整屏变化替代目标 pane 语义 |
+| R5 缺独立完整窗口负证据 | [ScreenSession.withEffect][screen-effect] 是动作后的有预算离散快照；[EvidenceLedger][ledger-details] 会截短、同文去重并淘汰旧条；[shell 启动][shell-launch] 使用 shell 身份 | 可借鉴结果分层，不能据“没有记录”证明目标从未落前台。也不能把 app 的 `startActivity` 改成 shell 启动来证明原路径，调用身份会改变后台启动条件。原独立取证缺口保留 |
+| 兼容性排障耗费整轮人工 | [SelfCheck][selfcheck] 将权限、助手、建屏、读屏、动作、持续运行分项并声明依赖 | 借鉴分层诊断和停止原因，先利用已有记录区别“未启用 / 启用未绑定 / 连上后被撤销 / 树不可读”。不新建自检框架；若未来确需持续性对照，另行明确固定候选、范围与开跑条件，短时通过不证明长期存活 |
+
+**推进建议**：保留 C1b 的权限前置，同时允许离线证据需求梳理、R1 准备和 R5 取证可行性研究并行。它们不必等客服结论；这不授权提前接入视觉生产路径或新增真机批次。后台屏增加焦点、IME、多 display 与可见确认卡的新验收面，当前优先复用已有带外截图与诊断机制，不为解阻先移植整个 Mika。
+
+**验证依据与限制**：核对了下列固定源码的装配、帧获取、修复状态机、效果观察和证据保留方式；未安装、构建或运行 Mika，未操作设备，未证明其适配 PA2553/OriginOS。Mika 预览帧会限速并丢弃旧帧，也不能当作覆盖完整验证窗口的无损录像。
+
 ## 后续采用顺序
 
 | 顺序 | 有具体需求时的最小动作 | 前置条件 |
@@ -91,3 +107,12 @@
 [knowledge]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/docs/knowledge-format.md
 [knowledge-index]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/knowledge/KnowledgeIndex.kt
 [eval]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/eval/README.md
+[task-connect]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/task/TaskRun.kt#L476-L519
+[repair]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/shell/AccessibilityRepair.kt#L61-L113
+[display]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/cap/phone/display/AgentDisplay.kt#L18-L59
+[shell-input]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/cap/phone/shell/ShellService.kt#L638-L683
+[tree-quality]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/uistate/TreeQuality.kt
+[screen-effect]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/uistate/ScreenSession.kt#L357-L401
+[ledger-details]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/verify/EvidenceLedger.kt#L36-L64
+[shell-launch]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/cap/phone/shell/ShellService.kt#L326-L361
+[selfcheck]: https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/core/src/main/kotlin/com/wangzan101/mika/core/selfcheck/SelfCheck.kt
