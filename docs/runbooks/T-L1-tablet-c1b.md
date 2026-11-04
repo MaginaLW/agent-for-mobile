@@ -23,10 +23,12 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 历史 `597ca8b` signed release 配 inventory-result/v1 runner，其[部署交接](../runs/2026-11-02-诊断候选部署交接准备.md)及 [11-04 真机结果](../runs/2026-11-04-诊断后验与窗口采集.md)按原版本保存。新旧 producer/runner 必须成套，原签名和运行许可不复用；准备不是就位或运行许可，历史包哈希也不是当前状态。
 
 1. 安装前只核目标平板可用、USB 唯一及本轮独占；受控读取重新确认设备身份、user0、唯一 base APK 路径和预期旧包哈希。安装阶段不要求微信双窗或 IME 形态，不读取设置或 provider。
-2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。`-r` 只请求保留数据；任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。
+2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。安装开始前用 ask 明确提醒现场用户留意安装/安全提示，已覆盖授权不另索审批。`-r` 只请求保留数据；默认任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。新卡若经审查和具体授权，可仅对安装接受精确绑定 APK 完整路径/字节数/格式的单行 push 统计；其余读取仍要求 stderr 空，旧卡不追溯放宽。`156dbde` 的新卡及边界见 [11-05 记录](../runs/2026-11-05-窗口类型诊断真机采集.md)；该次安装超时，未进入分类，不能当作例外已经真机通过。
 3. 成功部署也不证明无障碍授权或持续绑定。后续另核新 producer/challenge 和采样点就绪；再满足横屏多窗、IME 等采集前置及本轮采集许可，使用 `-SkipBuild -RequireInstalledApkMatch`，防止 runner 以默认 debug 构建覆盖已签名 release。仅有部署许可时不包含 T0/c1/c2；后续只读阶段若已在同一就位报告后的明确许可中逐项覆盖，可满足前置后连续执行，不重复申请。安装仍需自己的具体范围，不能从只读阶段链推导。
 
 启动 TEMP/TMP 使用已存在且独立的区内 bootstrap，不能预设到 freshness 门要求不存在的生产 `tmp`；后者只由 wrapper 在消费 claim 后创建。HostSmoke 要从实际 launcher 冷启动验证这一点。若在 claim 前因宿主目录副作用失败，也按本轮范围冻结，不能删除目录续跑；实例与证据见[安装前核验冻结](../runs/2026-11-02-诊断候选安装前核验冻结.md)。
+
+安装超时意味着效果未知，不等于未安装。保留原冻结收据，先收现场事实；需要核实当前包时另按有效范围执行独立只读后验，不重跑安装或用后验成功改判原轮。后验 builder 交叉核真实 proof/签名收据中的 candidate、challenge 与包哈希；仅让 fake 回述配置可能漏掉旧 challenge。预算前拒绝不计原生派发，只有明确 dispatch mark 后才计调用/安装尝试，未知状态保留 null。依据为上述本轮准备反例与真机结果。
 
 ## 命令
 
@@ -48,7 +50,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 ## 产物
 
-当前类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2` 封套，新增有序、无重复的 `rejected_type_code_counts`，仅统计原 type getter 已经返回而被范围门拒绝的 Int32 及频次；不新增 getter/窗口关联，不放宽窗口、拓扑或 IME 门。收据仍为 `tablet-c1b-run/v2`，字段与含义不变，`result_schema` 明确指新封套版本。当前类型扩展尚未真机验收，不据离线实现开跑。
+当前类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2` 封套，新增有序、无重复的 `rejected_type_code_counts`，仅统计原 type getter 已经返回而被范围门拒绝的 Int32 及频次；不新增 getter/窗口关联，不放宽窗口、拓扑或 IME 门。收据仍为 `tablet-c1b-run/v2`，字段与含义不变，`result_schema` 明确指新封套版本。固定 `156dbde` 的 [11-05 单次真机采集](../runs/2026-11-05-窗口类型诊断真机采集.md)已通过新封套与绑定，两帧各拒绝 -1 一次；完整拓扑/语义及 T-L1 仍未通过，不证明被拒窗口身份或内部转换路径。
 
 历史 `597ca8b` 的 inventory-result/v1 合同已通过真机，但拓扑/语义未通过；更早 ccc8cce 的裸 observation 与收据仍按各自固定版本解释，不迁移或补字段。新 runner 只接受 inventory-result/v2，拒绝旧封套和裸 observation；不能混用 APK/runner。
 
