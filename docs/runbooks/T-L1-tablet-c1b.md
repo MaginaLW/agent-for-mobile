@@ -18,17 +18,17 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 ## 固定同签名诊断的部署与采集衔接
 
-当前开发分支的未分类窗口保留使用 `tablet-layout-observation/c1b-v2` 配 `tablet-c1b-inventory-result/v3`，见[设计与边界](../specs/2026-11-05-未分类窗口完整保留-design.md)。type 成功值保留全部 signed Int32，未知仍阻断能力；不新增图像或动作路径。新版本须固定代码/制品、完整离线门与对应就位/开跑许可，不能把现装 `156dbde` 的旧 inner/v2 封套当作新版本。
+当前未分类窗口保留使用 tablet-layout-observation/c1b-v2 配 tablet-c1b-inventory-result/v3，见[设计与边界](../specs/2026-11-05-未分类窗口完整保留-design.md)。固定 abb7b0d 的[真机结果](../runs/2026-11-05-未分类窗口真机验收.md)每帧 5 项全保存，-1 为 unknown，类型/拓扑/语义/IME 门仍阻断。新候选仍须固定代码/制品、就位及具体开跑许可，历史证据不回填。
 
 历史 `597ca8b` signed release 配 inventory-result/v1 runner，其[部署交接](../runs/2026-11-02-诊断候选部署交接准备.md)及 [11-04 真机结果](../runs/2026-11-04-诊断后验与窗口采集.md)按原版本保存。新旧 producer/runner 必须成套，原签名和运行许可不复用；准备不是就位或运行许可，历史包哈希也不是当前状态。
 
 1. 安装前只核目标平板可用、USB 唯一及本轮独占；受控读取重新确认设备身份、user0、唯一 base APK 路径和预期旧包哈希。安装阶段不要求微信双窗或 IME 形态，不读取设置或 provider。
-2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。安装开始前用 ask 明确提醒现场用户留意安装/安全提示，已覆盖授权不另索审批。`-r` 只请求保留数据；默认任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。新卡若经审查和具体授权，可仅对安装接受精确绑定 APK 完整路径/字节数/格式的单行 push 统计；其余读取仍要求 stderr 空，旧卡不追溯放宽。`156dbde` 的新卡及边界见 [11-05 记录](../runs/2026-11-05-窗口类型诊断真机采集.md)；该次安装超时，未进入分类，不能当作例外已经真机通过。
+2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。安装开始前用 ask 提醒现场留意安装/安全提示，已覆盖授权不另索审批。按 11-05 用户明确要求，新安装命令等待不设置自动超时，父/worker 总预算不得间接截断人工确认；controlled 新卡应省略安装 native timeout，并扣除安装等待后计算剩余读预算。旧 60 秒卡已冻结，不改作重试。-r 只请求保留数据；默认意外 stderr、非标准响应、外部异常或后验失败仍冻结，不补装/回滚/扩读；只有卡精确授权的单行 APK 路径/大小 push 统计可作为安装 stderr 例外，其他读取仍空 stderr。
 3. 成功部署也不证明无障碍授权或持续绑定。后续另核新 producer/challenge 和采样点就绪；再满足横屏多窗、IME 等采集前置及本轮采集许可，使用 `-SkipBuild -RequireInstalledApkMatch`，防止 runner 以默认 debug 构建覆盖已签名 release。仅有部署许可时不包含 T0/c1/c2；后续只读阶段若已在同一就位报告后的明确许可中逐项覆盖，可满足前置后连续执行，不重复申请。安装仍需自己的具体范围，不能从只读阶段链推导。
 
 启动 TEMP/TMP 使用已存在且独立的区内 bootstrap，不能预设到 freshness 门要求不存在的生产 `tmp`；后者只由 wrapper 在消费 claim 后创建。HostSmoke 要从实际 launcher 冷启动验证这一点。若在 claim 前因宿主目录副作用失败，也按本轮范围冻结，不能删除目录续跑；实例与证据见[安装前核验冻结](../runs/2026-11-02-诊断候选安装前核验冻结.md)。
 
-安装超时意味着效果未知，不等于未安装。保留原冻结收据，先收现场事实；需要核实当前包时另按有效范围执行独立只读后验，不重跑安装或用后验成功改判原轮。后验 builder 交叉核真实 proof/签名收据中的 candidate、challenge 与包哈希；仅让 fake 回述配置可能漏掉旧 challenge。预算前拒绝不计原生派发，只有明确 dispatch mark 后才计调用/安装尝试，未知状态保留 null。依据为上述本轮准备反例与真机结果。
+安装异常后的效果未知不等于未安装。保留原冻结收据，先收现场事实。按用户已采纳的 [backlog §7.3](../backlog.md#73-开跑条件)，仅安装超时/效果未知的分支若事先被单独明确授权，可执行有限独立后验（≤11读/140秒）及条件通过后一轮采集；原安装仍冻结。没有预授权则先核新范围，不用独立后验改判原轮；其他失败不走该例外。后验 builder 独立核真实 proof/签名收据的 candidate/challenge/hash，且在锁/server/设备前同时校验原 SDK 根与 adb 内容；同 hash 的复制 SDK 根也必须拒绝。预算前未派发不计调用，未知派发状态保留 null。依据见[本轮记录](../runs/2026-11-05-未分类窗口真机验收.md)。
 
 ## 命令
 
@@ -50,7 +50,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 ## 产物
 
-当前未分类窗口保留使用 `tablet-c1b-inventory-result/v3` 封套，内层为 `tablet-layout-observation/c1b-v2`。窗口 platform_type_code 保留 signed Int32；1–7 以外仍 unknown，windows_truncated=false 只表示没有漏存，不表示类型清单、焦点或 IME 已确定。外层 type invalid 首停必须为 0、rejected_type_code_counts 必须为空，observation 的同名诊断 reason 仍可存在。收据保持 tablet-c1b-run/v2，result_schema 指 v3；真实完整清单仍待验收，见[离线阶段](../runs/2026-11-05-未分类窗口离线实现.md)。
+当前未分类窗口保留使用 tablet-c1b-inventory-result/v3，内层为 tablet-layout-observation/c1b-v2；窗口 platform_type_code 保留 signed Int32，1–7 以外仍 unknown。固定 abb7b0d 真机两帧 windows_truncated=false、5 项全保存，只证明没有漏存；类型清单、焦点或 IME 未确定。外层 type invalid 首停为零、拒绝表空，observation 同名诊断 reason 仍在。收据保持 tablet-c1b-run/v2，result_schema 指 v3；[真机记录](../runs/2026-11-05-未分类窗口真机验收.md)与[离线阶段](../runs/2026-11-05-未分类窗口离线实现.md)分别解释。
 
 历史 `156dbde` 的 inventory-result/v2 配 c1b-v1，仅聚合被范围门拒绝的原整数。[11-05 单次真机采集](../runs/2026-11-05-窗口类型诊断真机采集.md)两帧各拒绝 -1 一次；完整拓扑/语义及 T-L1 未通过，不证明窗口身份或内部转换路径。旧 schema、文件名及证据不升级、不回填。
 

@@ -42,6 +42,13 @@ foreach ($relative in @(
     [void](New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force)
     Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $target
 }
+# 缩短旧式安装正超时，避免为回归等待 180 秒；0 仍走真实无期限等待路径。
+$sandboxRunner=Join-Path $Sandbox 'scripts/run-tablet-c1b.ps1'
+$runnerSource=[IO.File]::ReadAllText($sandboxRunner)
+$processInfoMarker='    $info = [Diagnostics.ProcessStartInfo]::new($FilePath)'
+if ($runnerSource.IndexOf($processInfoMarker) -lt 0 -or $runnerSource.IndexOf($processInfoMarker) -ne $runnerSource.LastIndexOf($processInfoMarker)) { throw 'process fixture injection point not unique' }
+$shortInstallDeadline='    if ($env:FAKE_ADB_SCENARIO -ceq ''install_wait'' -and $Arguments -contains ''install'' -and $TimeoutSec -gt 0) { $TimeoutSec = 1 }'
+[IO.File]::WriteAllText($sandboxRunner,$runnerSource.Replace($processInfoMarker,$shortInstallDeadline+"`n"+$processInfoMarker),[Text.UTF8Encoding]::new($false))
 # 在测试副本中注入释放后的失败，确保真实锁仍被释放；生产库不增加测试开关。
 Add-Content -LiteralPath (Join-Path $Sandbox 'scripts/lib/dispatch-lock.ps1') -Value @'
 $script:OfflineCloseDispatchLockLease = ${function:Close-DispatchLockLease}
@@ -117,7 +124,10 @@ if ($cmd -ceq "shell sha256sum '/data/app/fake/base.apk'") {
     if ($scenario -ceq 'installed_sha_stderr') { [Console]::Error.WriteLine('fake sha read failure') }
     exit 0
 }
-if ($cmd -match '^install -r -t ') { Out-Text "Performing Streamed Install`nSuccess`n"; exit 0 }
+if ($cmd -match '^install -r -t ') {
+    if ($scenario -ceq 'install_wait') { Start-Sleep -Seconds 2 }
+    Out-Text "Performing Streamed Install`nSuccess`n"; exit 0
+}
 if ($cmd -ceq 'shell settings get secure enabled_accessibility_services') {
     Out-Text $(if ($scenario -ceq 'a11y_off') { "null`n" } else { "dev.magina.gateway/.a11y.GatewayA11yService`n" }); exit 0
 }
@@ -368,6 +378,36 @@ function Assert-NoForbiddenAdb($Result) {
 }
 
 try {
+    Test-Case 'install-wait-process-zero-and-bounded-read' {
+        $tokens=$null; $errors=$null
+        $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Sandbox 'scripts/run-tablet-c1b.ps1'),[ref]$tokens,[ref]$errors)
+        Assert-True ($errors.Count -eq 0) 'runner source syntax invalid'
+        foreach ($name in @('Invoke-Process','Invoke-Adb')) {
+            $definition=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
+            Invoke-Expression $definition.Extent.Text
+        }
+        $watch=[Diagnostics.Stopwatch]::StartNew()
+        $r=Invoke-Process -FilePath $Pwsh -Arguments @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Milliseconds 200; [Console]::Write("finished")') -TimeoutSec 0
+        Assert-True ($r.ExitCode -eq 0 -and $r.Text -ceq 'finished' -and $watch.ElapsedMilliseconds -ge 150) 'zero must wait for actual child exit'
+        $timedOut=$false
+        try { $null=Invoke-Process -FilePath $Pwsh -Arguments @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 2') -TimeoutSec 1 }
+        catch { $timedOut=$_.Exception.Message -match '子进程超时' }
+        Assert-True $timedOut 'positive read deadline must still terminate a delayed child'
+        $negativeRejected=$false
+        try { $null=Invoke-Process -FilePath $Pwsh -Arguments @() -TimeoutSec -1 }
+        catch { $negativeRejected=$_.Exception.Message -match 'TimeoutSec' }
+        Assert-True $negativeRejected 'negative timeout must fail before dispatch'
+        $readRejected=$false
+        try { $null=Invoke-Adb -Arguments @('shell','content','read') -TimeoutSec 0 }
+        catch { $readRejected=$_.Exception.Message -ceq '只有安装调用可以不设置自动超时。' }
+        Assert-True $readRejected 'ADB reads must not inherit unlimited installation waiting'
+    }
+    Test-Case 'install-wait-no-deadline-through-runner' {
+        $r=Invoke-Runner 'installwait' 'install_wait'
+        Assert-True ($r.Exit -eq 0 -and $r.Run.outcome -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+        Assert-True (@($r.Log | Where-Object { $_ -match '^-s \S+ install ' }).Count -eq 1) 'installation must still happen only once'
+        Assert-NoForbiddenAdb $r
+    }
     Test-Case 'success' {
         $r = Invoke-Runner 'success' 'ok'
         Assert-True ($r.Exit -eq 0) "exit=$($r.Exit) $($r.Output)"

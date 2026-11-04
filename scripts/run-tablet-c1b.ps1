@@ -58,7 +58,7 @@ function Get-Sha256Bytes([byte[]]$Bytes) { 'sha256:' + [Convert]::ToHexString([S
 function Get-Sha256Text([string]$Text) { Get-Sha256Bytes ([Text.Encoding]::UTF8.GetBytes($Text)) }
 
 function Invoke-Process {
-    param([string]$FilePath, [string[]]$Arguments, [byte[]]$InputBytes, [int]$TimeoutSec = 60, [string]$WorkingDirectory)
+    param([string]$FilePath, [string[]]$Arguments, [byte[]]$InputBytes, [ValidateRange(0, 2147483647)][int]$TimeoutSec = 60, [string]$WorkingDirectory)
     $info = [Diagnostics.ProcessStartInfo]::new($FilePath)
     foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
     $info.UseShellExecute = $false
@@ -71,7 +71,7 @@ function Invoke-Process {
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if ($null -ne $InputBytes -and $InputBytes.Length) { $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
         $process.StandardInput.Close()
-        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+        if ($TimeoutSec -gt 0 -and -not $process.WaitForExit($TimeoutSec * 1000)) {
             try { $process.Kill($true) } catch { }
             throw "子进程超时（${TimeoutSec}s）。"
         }
@@ -87,6 +87,9 @@ function Invoke-Process {
 
 function Invoke-Adb {
     param([string[]]$Arguments, [byte[]]$InputBytes, [int]$TimeoutSec = 30, [switch]$AllowFailure)
+    if ($TimeoutSec -eq 0 -and ($Arguments.Count -eq 0 -or $Arguments[0] -cne 'install')) {
+        throw '只有安装调用可以不设置自动超时。'
+    }
     $all = if ($script:SelectedSerial) { @('-s', $script:SelectedSerial) + $Arguments } else { $Arguments }
     $result = if ($TestOnlyAdbIsScript) {
         Invoke-Process $Pwsh (@('-NoProfile', '-NonInteractive', '-File', $AdbPath) + $all) $InputBytes $TimeoutSec
@@ -272,7 +275,8 @@ try {
         throw '-RequireInstalledApkMatch：未确认已安装探针 APK 与本地 SHA-256 相同，拒绝安装探针。'
     }
     if (-not $script:Run.install_skipped) {
-        $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 180 -AllowFailure
+        # Installation may wait for the user's on-device confirmation; do not terminate that wait.
+        $install = Invoke-Adb @('install', '-r', '-t', $ApkPath) -TimeoutSec 0 -AllowFailure
         if ($install.ExitCode -ne 0 -or $install.Text -notmatch '(?m)^Success') { throw "adb install 失败：$($install.Text.Trim()) $($install.Stderr.Trim())" }
     }
 
