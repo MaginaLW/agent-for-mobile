@@ -18,7 +18,7 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 ## 固定同签名诊断的部署与采集衔接
 
-当前开发分支的类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2`，见[设计与边界](../specs/2026-11-04-窗口类型拒绝值诊断-design.md)。它仍须固定代码/制品、完整离线门与对应就位/开跑许可，不能直接复用现装 v1 包。
+当前开发分支的未分类窗口保留使用 `tablet-layout-observation/c1b-v2` 配 `tablet-c1b-inventory-result/v3`，见[设计与边界](../specs/2026-11-05-未分类窗口完整保留-design.md)。type 成功值保留全部 signed Int32，未知仍阻断能力；不新增图像或动作路径。新版本须固定代码/制品、完整离线门与对应就位/开跑许可，不能把现装 `156dbde` 的旧 inner/v2 封套当作新版本。
 
 历史 `597ca8b` signed release 配 inventory-result/v1 runner，其[部署交接](../runs/2026-11-02-诊断候选部署交接准备.md)及 [11-04 真机结果](../runs/2026-11-04-诊断后验与窗口采集.md)按原版本保存。新旧 producer/runner 必须成套，原签名和运行许可不复用；准备不是就位或运行许可，历史包哈希也不是当前状态。
 
@@ -50,15 +50,17 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 ## 产物
 
-当前类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2` 封套，新增有序、无重复的 `rejected_type_code_counts`，仅统计原 type getter 已经返回而被范围门拒绝的 Int32 及频次；不新增 getter/窗口关联，不放宽窗口、拓扑或 IME 门。收据仍为 `tablet-c1b-run/v2`，字段与含义不变，`result_schema` 明确指新封套版本。固定 `156dbde` 的 [11-05 单次真机采集](../runs/2026-11-05-窗口类型诊断真机采集.md)已通过新封套与绑定，两帧各拒绝 -1 一次；完整拓扑/语义及 T-L1 仍未通过，不证明被拒窗口身份或内部转换路径。
+当前未分类窗口保留使用 `tablet-c1b-inventory-result/v3` 封套，内层为 `tablet-layout-observation/c1b-v2`。窗口 platform_type_code 保留 signed Int32；1–7 以外仍 unknown，windows_truncated=false 只表示没有漏存，不表示类型清单、焦点或 IME 已确定。外层 type invalid 首停必须为 0、rejected_type_code_counts 必须为空，observation 的同名诊断 reason 仍可存在。收据保持 tablet-c1b-run/v2，result_schema 指 v3；真实完整清单仍待验收，见[离线阶段](../runs/2026-11-05-未分类窗口离线实现.md)。
 
-历史 `597ca8b` 的 inventory-result/v1 合同已通过真机，但拓扑/语义未通过；更早 ccc8cce 的裸 observation 与收据仍按各自固定版本解释，不迁移或补字段。新 runner 只接受 inventory-result/v2，拒绝旧封套和裸 observation；不能混用 APK/runner。
+历史 `156dbde` 的 inventory-result/v2 配 c1b-v1，仅聚合被范围门拒绝的原整数。[11-05 单次真机采集](../runs/2026-11-05-窗口类型诊断真机采集.md)两帧各拒绝 -1 一次；完整拓扑/语义及 T-L1 未通过，不证明窗口身份或内部转换路径。旧 schema、文件名及证据不升级、不回填。
+
+历史 `597ca8b` 的 inventory-result/v1 合同已通过真机，但拓扑/语义未通过；更早 ccc8cce 的裸 observation 与收据仍按各自固定版本解释，不迁移或补字段。新 runner 只接受 inventory-result/v3 与 inner c1b-v2，拒绝旧封套、旧 inner 和裸 observation；不能混用 APK/runner。
 
 `docs/runs/evidence/<run_id>/tablet-layout-c1b/`：
 
 - `upstream-t0-v5.json`：本次 T0 原始字节。
-- `tablet-c1b-inventory-result-v2.json`：新封套原始字节，包含 observation 原文、两帧首次停止及拒绝类型频次；仅在内层 run/构建/T0 绑定通过后保存。历史 v1 文件保留原名，不重命名或覆盖。
-- `tablet-layout-observation-c1b-v1.json`：封套中 observation 原文的严格 UTF-8 字节，经现有 c1b-v1 validator 校验；不重排 JSON，不改变冻结 schema 或结论。
+- `tablet-c1b-inventory-result-v3.json`：新封套原始字节，包含 observation 原文、两帧首次停止和空拒绝表；仅在闭合数值形状/隐私及内层 run/构建/T0 绑定通过后保存。良构但违反零/空约束的已绑定内容留证后计数拒绝；文本/未知键条目在保存前拒绝。历史 v1/v2 文件保留原名，不重命名或覆盖。
+- `tablet-layout-observation-c1b-v2.json`：封套中 observation 原文的严格 UTF-8 字节，经新 c1b-v2 validator 校验；不重排 JSON。旧 v1 文件/schema 按各自版本保留。
 - `run.json`：HEAD、设备、APK、时序与结果摘要。新收据的 `result_schema`、`result_envelope_sha256` 指外层；`observation_sha256` 与 `result_diagnostic` 仍指内层原文及原绑定失败字段，不能互换。`inventory_validation` 记录未运行/失败/通过及闭合原因。未通过绑定的 payload 不落盘、不保留失配值；绑定后计数失败保留已有证据且本轮失败，不重采。摘要不证明 provider 已清理或 T-L1 通过。
 
 归档时同时保存上列四份文件（失败轮只收集实际生成者），在 manifest 中分别记录封套和 observation 原字节哈希，并核对解封后的内层字节与 observation 文件完全一致。不得只归档诊断摘要或把封套哈希写入 observation_sha256；旧 run/v1 归档不要求不存在的新文件。

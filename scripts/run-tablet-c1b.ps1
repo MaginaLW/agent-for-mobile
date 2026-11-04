@@ -48,7 +48,7 @@ $Pwsh = (Get-Process -Id $PID).Path
 
 . (Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1')
 . (Join-Path $PSScriptRoot 'lib\tablet-layout-c1a.ps1')
-. (Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v1-validator.ps1')
+. (Join-Path $PSScriptRoot 'lib\tablet-layout-observation-c1b-v2-validator.ps1')
 . (Join-Path $PSScriptRoot 'lib\tablet-c1b-inventory-result.ps1')
 
 class C1bNeedsUser : Exception { C1bNeedsUser([string]$m) : base($m) {} }
@@ -372,7 +372,7 @@ try {
         (Test-C1bContainsPrivateIdentity $parsedResult.InventoryFrames)) {
         throw 'C1b result 含原始 serial 或 nonce。'
     }
-    $script:Run.result_schema = 'tablet-c1b-inventory-result/v2'
+    $script:Run.result_schema = 'tablet-c1b-inventory-result/v3'
     $script:Run.result_envelope_sha256 = Get-Sha256Bytes $envelopeBytes
     $script:Run.result_diagnostic = [ordered]@{
         bytes = $observationBytes.Length; sha256 = Get-Sha256Bytes $observationBytes; binding_failure = $null
@@ -381,7 +381,7 @@ try {
     # 与原复合条件保持同一短路顺序；只记录固定字段名，不保留失配值或未通过绑定检查的 observation。
     try {
         $bindingFailure = if ($null -eq $observation -or $observation -isnot [pscustomobject] -or
-            $null -eq $observation.PSObject.Properties['schema'] -or $observation.schema -cne 'tablet-layout-observation/c1b-v1') { 'schema' }
+            $null -eq $observation.PSObject.Properties['schema'] -or $observation.schema -cne 'tablet-layout-observation/c1b-v2') { 'schema' }
         elseif ($observation.run_id -cne $RunId) { 'run_id' }
         elseif ($observation.expected_title_hash -cne $TitleHash) { 'expected_title_hash' }
         elseif ($observation.provenance.kind -cne 'gateway_runtime_probe') { 'provenance.kind' }
@@ -400,10 +400,10 @@ try {
         throw "observation 的 run_id/commit/artifact/T0 锚点与本次采集不一致（$bindingFailure）。"
     }
     $sessionConsumed = $true
-    $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v1.json'
+    $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v2.json'
     [IO.File]::WriteAllBytes($observationPath, $observationBytes)
     $script:Run.observation_sha256 = Get-Sha256Bytes $observationBytes
-    [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'tablet-c1b-inventory-result-v2.json'), $envelopeBytes)
+    [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'tablet-c1b-inventory-result-v3.json'), $envelopeBytes)
 
     $inventory = Test-C1bInventoryCounts -Result $parsedResult
     if (-not $inventory.Valid) {
@@ -412,7 +412,7 @@ try {
     }
 
     Set-Stage 'validated'
-    $validation = Test-TabletLayoutObservationC1BV1TrustedRuntimeFile -Path $observationPath -EvidenceRoot $evidenceDir `
+    $validation = Test-TabletLayoutObservationC1BV2TrustedRuntimeFile -Path $observationPath -EvidenceRoot $evidenceDir `
         -ExpectedRunId $RunId -ExpectedProducerCommitSha $script:Run.producer_commit_sha -ExpectedProducerArtifactSha256 $script:Run.apk_sha256
     $script:Run.validation = [ordered]@{
         fixture_contract_valid = [bool]$validation.fixture_contract_valid

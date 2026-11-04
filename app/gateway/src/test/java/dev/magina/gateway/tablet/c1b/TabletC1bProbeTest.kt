@@ -33,11 +33,10 @@ class TabletC1bProbeTest {
             assertFalse(inventory.toJson(frame).toString().contains("private"))
         }
         val badWindows = listOf(
-            "type" to FakeWindow(9, 256, root = null, title = null),
-            "display" to FakeWindow(9, 1, displayId = 17, root = null, title = null),
-            "layer" to FakeWindow(9, 1, layer = 32768, root = null, title = null),
-            "touchable_bounds" to FakeWindow(9, 1, touchableBounds = C1bRect(0, 0, 40000, 2), root = null, title = null),
-            "id" to FakeWindow(-1, 1, root = null, title = null),
+            "display" to FakeWindow(9, Int.MIN_VALUE, displayId = 17, root = null, title = null),
+            "layer" to FakeWindow(9, -1, layer = 32768, root = null, title = null),
+            "touchable_bounds" to FakeWindow(9, 256, touchableBounds = C1bRect(0, 0, 40000, 2), root = null, title = null),
+            "id" to FakeWindow(-1, Int.MAX_VALUE, root = null, title = null),
         )
         badWindows.forEach { (stage, badWindow) ->
             val port = RecordingShellPort(FakePort(windowList = listOf(badWindow)))
@@ -47,48 +46,66 @@ class TabletC1bProbeTest {
             assertEquals(1, inventory.firstStopCounts.getValue("window_${stage}_invalid"))
             assertEquals(1, inventory.droppedCount)
             assertEquals(1, inventory.firstStopCounts.values.sum())
-            assertEquals(if (stage == "type") mapOf(256 to 1) else emptyMap(), inventory.rejectedTypeCodeCounts)
+            assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
+            assertEquals(0, inventory.firstStopCounts.getValue("window_type_invalid"))
         }
     }
 
     @Test
-    fun rejectedTypesKeepSignedExtremesAndRepeatedCountsWithoutAdditionalReads() {
-        val codes = listOf(Int.MAX_VALUE, -1, 256, Int.MIN_VALUE, -1)
-        val port = RecordingShellPort(FakePort(windowList = codes.mapIndexed { index, code ->
-            FakeWindow(index + 1, code, root = null, title = null)
-        }))
+    fun unknownInt32TypesRemainInInventoryWithoutNodeSemanticsOrFocusPromotion() {
+        val codes = listOf(Int.MAX_VALUE, -1, 256, Int.MIN_VALUE, -1, 0, 255)
+        val windows = codes.mapIndexed { index, code ->
+            FakeWindow(index + 1, code, root = node((index + 1).toLong(), index + 1), title = null)
+        }
+        val base = FakePort(windowList = windows)
+        val port = RecordingShellPort(base)
         val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
         val inventory = requireNotNull(frame.inventory)
 
-        assertEquals(List(codes.size) { "type" }, port.reads)
+        val shellReads = listOf("type", "display", "layer", "touchable_bounds", "active", "focus", "id", "bounds", "root")
+        assertEquals(List(codes.size) { shellReads }.flatten(), port.reads)
         assertEquals(1, port.enumerations)
-        assertEquals(5, inventory.firstStopCounts.getValue("window_type_invalid"))
-        assertEquals(5, inventory.droppedCount)
-        assertEquals(mapOf(Int.MIN_VALUE to 1, -1 to 2, 256 to 1, Int.MAX_VALUE to 1),
-            inventory.rejectedTypeCodeCounts)
-        val rejected = inventory.toJson(frame).getJSONArray("rejected_type_code_counts")
-        assertEquals(4, rejected.length())
-        listOf(Int.MIN_VALUE, -1, 256, Int.MAX_VALUE).forEachIndexed { index, code ->
-            val entry = rejected.getJSONObject(index)
-            assertEquals(setOf("platform_type_code", "count"), entry.keys().asSequence().toSet())
-            assertEquals(code, entry.getInt("platform_type_code"))
-            assertEquals(if (code == -1) 2 else 1, entry.getInt("count"))
+        assertEquals(0, inventory.firstStopCounts.getValue("window_type_invalid"))
+        assertEquals(codes.size, inventory.savedCount)
+        assertEquals(0, inventory.droppedCount)
+        assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
+        assertEquals(0, inventory.toJson(frame).getJSONArray("rejected_type_code_counts").length())
+        assertEquals(codes, frame.windows.map { it.platformTypeCode })
+        assertTrue(frame.windows.all { it.type == "unknown" })
+        val jsonWindows = frame.toJson().getJSONArray("a11y_windows")
+        codes.forEachIndexed { index, code ->
+            assertEquals(code, jsonWindows.getJSONObject(index).getInt("platform_type_code"))
         }
-        assertTrue(frame.windows.isEmpty())
-        assertTrue(frame.windowsTruncated)
+        assertFalse(frame.windowsTruncated)
+        assertTrue(frame.panes.isEmpty())
+        assertTrue(frame.nodes.isEmpty())
+        assertEquals(0, base.refreshCalls)
+        assertEquals(0, base.inputFocusCalls)
+        assertEquals(C1bFocusStatus.UNKNOWN, frame.focus.status)
+        assertFalse(frame.ime.visible)
+        assertEquals("unknown", frame.ime.mode)
+        assertEquals("unknown", frame.ime.binding)
         assertEquals(frame.copy(inventory = null).toJson().toString(), frame.toJson().toString())
         assertFalse(inventory.toString().contains(Int.MIN_VALUE.toString()))
+
+        val result = assembler().assemble(assemblyRequest(), listOf(frame,
+            capture(windows, revision = 2, captureToken = "c2", at = SECOND_AT)))
+        assertTrue("window_type_invalid" in result.reasonCodes)
+        assertTrue("ime_inventory_invalid" in result.reasonCodes)
+        assertFalse(result.toJson().getBoolean("layout_accepted"))
+        assertFalse(result.toJson().getBoolean("execution_grant"))
     }
 
     @Test
-    fun rangeBoundariesAndKnownTypeSevenNeverEnterRejectedTypeCounts() {
-        val port = RecordingShellPort(FakePort(windowList = listOf(0, 7, 255).mapIndexed { index, code ->
+    fun allKnownTypeMappingsRemainUnchangedAndNeverEnterRejectedTypeCounts() {
+        val port = RecordingShellPort(FakePort(windowList = (1..7).mapIndexed { index, code ->
             FakeWindow(index + 1, code, root = null, title = null)
         }))
         val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
         val inventory = requireNotNull(frame.inventory)
-        assertEquals(listOf(0, 7, 255), frame.windows.map { it.platformTypeCode })
-        assertEquals(listOf("unknown", "window_control", "unknown"), frame.windows.map { it.type })
+        assertEquals((1..7).toList(), frame.windows.map { it.platformTypeCode })
+        assertEquals(listOf("application", "input_method", "system", "accessibility_overlay",
+            "split_screen_divider", "magnification_overlay", "window_control"), frame.windows.map { it.type })
         assertEquals(0, inventory.droppedCount)
         assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
         assertEquals(0, inventory.toJson(frame).getJSONArray("rejected_type_code_counts").length())
@@ -97,26 +114,25 @@ class TabletC1bProbeTest {
     }
 
     @Test
-    fun rejectedTypeCountsAreAnImmutableSortedSnapshotAndRejectInvalidInputs() {
-        val stops = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 3 else 0 }
-        val source = linkedMapOf(Int.MAX_VALUE to 1, -1 to 1, Int.MIN_VALUE to 1)
-        val inventory = C1bWindowInventory(3, 16, 0, stops, source)
-        source.clear()
-        assertEquals(listOf(Int.MIN_VALUE, -1, Int.MAX_VALUE), inventory.rejectedTypeCodeCounts.keys.toList())
+    fun v3InventoryRequiresNoTypeValueDropsAndAnEmptyImmutableRejectedTable() {
+        val stops = C1B_INVENTORY_FIRST_STOPS.associateWith { 0 }
+        val inventory = C1bWindowInventory(1, 16, 1, stops)
+        assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
         assertThrows(UnsupportedOperationException::class.java) {
             (inventory.rejectedTypeCodeCounts as MutableMap<Int, Int>)[256] = 1
         }
         val oneStop = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 1 else 0 }
-        listOf(emptyMap(), mapOf(-1 to 0), mapOf(-1 to -1), mapOf(-1 to 17), mapOf(-1 to Int.MAX_VALUE),
-            mapOf(-1 to 2), mapOf(0 to 1), mapOf(7 to 1), mapOf(255 to 1)).forEach { bad ->
-            assertThrows(IllegalArgumentException::class.java) { C1bWindowInventory(1, 16, 0, oneStop, bad) }
+        assertThrows(IllegalArgumentException::class.java) { C1bWindowInventory(1, 16, 0, oneStop) }
+        listOf(mapOf(-1 to 1), mapOf(Int.MIN_VALUE to 1), mapOf(256 to 1), mapOf(Int.MAX_VALUE to 1)).forEach { bad ->
+            assertThrows(IllegalArgumentException::class.java) { C1bWindowInventory(1, 16, 1, stops, bad) }
         }
-        val sixteenStops = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 16 else 0 }
-        assertEquals(mapOf(-1 to 16), C1bWindowInventory(16, 16, 0, sixteenStops, mapOf(-1 to 16)).rejectedTypeCodeCounts)
-        assertEquals(16, C1bWindowInventory(16, 16, 0, sixteenStops,
-            (256..271).associateWith { 1 }).rejectedTypeCodeCounts.size)
-        assertThrows(IllegalArgumentException::class.java) {
-            C1bWindowInventory(17, 16, 0, sixteenStops, (256..272).associateWith { 1 })
+        val displayStop = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_display_invalid") 1 else 0 }
+        val droppedLater = C1bWindowInventory(2, 16, 1, displayStop)
+        assertEquals(1, droppedLater.droppedCount)
+        assertTrue(droppedLater.rejectedTypeCodeCounts.isEmpty())
+        assertEquals(0, droppedLater.firstStopCounts.getValue("window_type_invalid"))
+        listOf(mapOf(-1 to 0), mapOf(-1 to -1)).forEach { bad ->
+            assertThrows(IllegalArgumentException::class.java) { C1bWindowInventory(1, 16, 1, stops, bad) }
         }
     }
 
@@ -151,18 +167,18 @@ class TabletC1bProbeTest {
         val inventory = requireNotNull(budgetFrame.inventory)
         assertEquals(17, inventory.inputCount)
         assertEquals(16, inventory.attemptedCount)
-        assertEquals(4, inventory.savedCount)
-        assertEquals(12, inventory.droppedCount)
+        assertEquals(16, inventory.savedCount)
+        assertEquals(0, inventory.droppedCount)
         assertEquals(1, inventory.unattemptedCount)
-        assertEquals(12, inventory.firstStopCounts.getValue("window_type_invalid"))
-        assertEquals(mapOf(256 to 12), inventory.rejectedTypeCodeCounts)
+        assertEquals(0, inventory.firstStopCounts.getValue("window_type_invalid"))
+        assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
         assertEquals(16, budgetPort.reads.count { it == "type" })
         assertEquals(1, budgetPort.enumerations)
         assertTrue(budgetFrame.windowsTruncated)
     }
 
     @Test
-    fun inventoryDoesNotChangeV1OrCountRetainedShellFailuresAsDrops() {
+    fun inventoryDoesNotEnterV2OrCountRetainedShellFailuresAsDrops() {
         val retained = FakeWindow(9, 99, displayId = 1, bounds = C1bRect(0, 0, 40000, 2),
             touchableBounds = null, root = null, title = null)
         val port = RecordingShellPort(FakePort(windowList = listOf(retained)))
@@ -1125,7 +1141,9 @@ class TabletC1bProbeTest {
             false,
         )
         expectFailure { boundaryWindow(17, 1) }
-        expectFailure { boundaryWindow(0, 256) }
+        listOf(Int.MIN_VALUE, -1, 256, Int.MAX_VALUE).forEach { code ->
+            assertEquals(code, boundaryWindow(0, code).platformTypeCode)
+        }
         expectFailure {
             C1bSubtreeObservation(C1bSubtreeStatus.READ_ERROR, null, 0, 0, 0, 513, false)
         }

@@ -695,12 +695,13 @@ function Test-TL1C1BV1Semantics {
         [Parameter(Mandatory)]$Evidence,
         [Parameter(Mandatory)][ValidateSet('fixture','trusted_runtime')][string]$OriginMode,
         [Parameter(Mandatory)][DateTimeOffset]$ValidationNowUtc,
-        [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]]$Issues
+        [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]]$Issues,
+        [ValidateSet('c1b-v1','c1b-v2')][string]$ContractVersion = 'c1b-v1'
     )
     foreach ($reason in $script:TL1C1BV1BaseDiagnosticReasons) {
         Add-TL1C1BV1Issue $Issues $reason '/'
     }
-    if ($Evidence.schema -cne $script:TL1C1BV1Schema -or $Evidence.mode -cne 'c1b_pure_a11y_diagnostic') {
+    if ($Evidence.schema -cne "tablet-layout-observation/$ContractVersion" -or $Evidence.mode -cne 'c1b_pure_a11y_diagnostic') {
         Add-TL1C1BV1Issue $Issues 'safety_constants_invalid' '/schema'
     }
     if ($OriginMode -ceq 'fixture') {
@@ -854,7 +855,8 @@ function New-TL1C1BV1ValidationResult {
         [bool]$ContractValid,
         [bool]$RuntimeBindingInputsMatch,
         $Facts,
-        [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]]$Issues
+        [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]]$Issues,
+        [ValidateSet('c1b-v1','c1b-v2')][string]$ContractVersion = 'c1b-v1'
     )
     if ($null -eq $Facts) {
         $Facts = [pscustomobject]@{
@@ -870,8 +872,8 @@ function New-TL1C1BV1ValidationResult {
     $observationUsable = $ContractValid -and [bool]$Facts.consumer_time_valid
     $topologyObserved = $observationUsable -and [bool]$Facts.application_window_topology_observed
     return [pscustomobject][ordered]@{
-        schema = $script:TL1C1BV1ValidationSchema
-        contract_schema = $script:TL1C1BV1Schema
+        schema = "tablet-layout-observation-validation/$ContractVersion"
+        contract_schema = "tablet-layout-observation/$ContractVersion"
         fixture_contract_valid = $ContractValid
         diagnostic_status = 'blocked'
         reason_codes = @(Get-TL1C1BV1ReasonCodes $Issues)
@@ -913,27 +915,28 @@ function Test-TL1C1BV1Core {
         [Parameter(Mandatory)][DateTimeOffset]$ValidationNowUtc,
         [string]$ExpectedRunId,
         [string]$ExpectedProducerCommitSha,
-        [string]$ExpectedProducerArtifactSha256
+        [string]$ExpectedProducerArtifactSha256,
+        [ValidateSet('c1b-v1','c1b-v2')][string]$ContractVersion = 'c1b-v1'
     )
     $issues = [Collections.Generic.List[object]]::new()
     $facts = $null
     try {
         $controlledPath = Resolve-TL1C1BV1ControlledPath $Path $EvidenceRoot $issues
-        if ($null -eq $controlledPath) { return New-TL1C1BV1ValidationResult $false $false $facts $issues }
+        if ($null -eq $controlledPath) { return New-TL1C1BV1ValidationResult $false $false $facts $issues -ContractVersion $ContractVersion }
         $raw = Read-TL1C1BV1ControlledUtf8 $controlledPath $issues
-        if ($null -eq $raw) { return New-TL1C1BV1ValidationResult $false $false $facts $issues }
+        if ($null -eq $raw) { return New-TL1C1BV1ValidationResult $false $false $facts $issues -ContractVersion $ContractVersion }
         $evidence = ConvertFrom-TL1C1BV1StrictJson $raw $issues
-        if ($null -eq $evidence) { return New-TL1C1BV1ValidationResult $false $false $facts $issues }
+        if ($null -eq $evidence) { return New-TL1C1BV1ValidationResult $false $false $facts $issues -ContractVersion $ContractVersion }
         $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-        $schemaPath = Join-Path $repoRoot 'docs\contracts\tablet-layout-observation-c1b-v1.schema.json'
+        $schemaPath = Join-Path $repoRoot "docs\contracts\tablet-layout-observation-$ContractVersion.schema.json"
         if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf) -or
             -not ($raw | Test-Json -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) {
             Add-TL1C1BV1Issue $issues 'json_schema_validation_failed' '/'
-            return New-TL1C1BV1ValidationResult $false $false $facts $issues
+            return New-TL1C1BV1ValidationResult $false $false $facts $issues -ContractVersion $ContractVersion
         }
         $snapshotRaw = $evidence | ConvertTo-Json -Depth 100 -Compress -ErrorAction Stop
         $snapshot = $snapshotRaw | ConvertFrom-Json -Depth 100 -DateKind String -ErrorAction Stop
-        $facts = Test-TL1C1BV1Semantics $snapshot $OriginMode $ValidationNowUtc $issues
+        $facts = Test-TL1C1BV1Semantics $snapshot $OriginMode $ValidationNowUtc $issues -ContractVersion $ContractVersion
 
         if ($OriginMode -ceq 'trusted_runtime') {
             if ($ExpectedRunId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,79}$' -or
@@ -951,11 +954,11 @@ function Test-TL1C1BV1Core {
         $contractValid = @($codes | Where-Object { $script:TL1C1BV1ContractFailureCodes -ccontains $_ }).Count -eq 0
         $runtimeBindingInputsMatch = $OriginMode -ceq 'trusted_runtime' -and $contractValid -and
             @($codes | Where-Object { $_ -ceq 'runtime_producer_unavailable' }).Count -eq 0
-        return New-TL1C1BV1ValidationResult $contractValid $runtimeBindingInputsMatch $facts $issues
+        return New-TL1C1BV1ValidationResult $contractValid $runtimeBindingInputsMatch $facts $issues -ContractVersion $ContractVersion
     }
     catch {
         Add-TL1C1BV1Issue $issues 'validation_exception' '/'
-        return New-TL1C1BV1ValidationResult $false $false $facts $issues
+        return New-TL1C1BV1ValidationResult $false $false $facts $issues -ContractVersion $ContractVersion
     }
 }
 

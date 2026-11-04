@@ -2,7 +2,7 @@
 # Offline parser for the diagnostic envelope; never grants layout or action capability.
 Set-StrictMode -Version 3.0
 
-$script:C1bInventorySchema = 'tablet-c1b-inventory-result/v2'
+$script:C1bInventorySchema = 'tablet-c1b-inventory-result/v3'
 $script:C1bInventoryStopKeys = [string[]]@(
     'window_type_read_failed', 'window_type_invalid',
     'window_display_read_failed', 'window_display_invalid',
@@ -159,6 +159,8 @@ function ConvertFrom-C1bInventoryResult {
                 $frame.rejected_type_code_counts.Count -gt $frame.maximum_windows) {
                 return New-C1bInventoryParseFailure 'shape_invalid'
             }
+            # A well-formed nonempty numeric table is retained only as bound failed evidence.
+            # Reject arbitrary text/identities before the runner's privacy and persistence stages.
             $previousCode = $null
             foreach ($entry in $frame.rejected_type_code_counts) {
                 if (-not (Test-C1bInventoryKeys $entry @('platform_type_code','count')) -or
@@ -200,13 +202,11 @@ function Test-C1bInventoryCounts {
                 }
                 if ($frame.capture_token -cne $token -or $observed.capture.token -cne $token -or
                     $frame.capture_id -cne $observed.capture_id) { $reason = 'capture_binding_mismatch'; break }
-                $sum = 0L
-                foreach ($key in $script:C1bInventoryStopKeys) { $sum += [long]$frame.first_stop_counts.$key }
-                $rejectedTypeCount = 0L
-                foreach ($entry in $frame.rejected_type_code_counts) { $rejectedTypeCount += [long]$entry.count }
-                if ($rejectedTypeCount -ne [long]$frame.first_stop_counts.window_type_invalid) {
+                if ($frame.first_stop_counts.window_type_invalid -ne 0 -or $frame.rejected_type_code_counts.Count -ne 0) {
                     $reason = 'count_mismatch'; break
                 }
+                $sum = 0L
+                foreach ($key in $script:C1bInventoryStopKeys) { $sum += [long]$frame.first_stop_counts.$key }
                 $a = [long]$frame.attempted_count; $s = [long]$frame.saved_count; $d = [long]$frame.dropped_count
                 $state = "$($frame.enumeration_status)/$($frame.count_status)"
                 if ($state -ceq 'complete/exact') {

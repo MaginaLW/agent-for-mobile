@@ -257,9 +257,11 @@ class TabletC1bRuntimeControllerTest {
         val envelope = JSONObject(result.json)
         assertEquals(setOf("schema", "observation_json", "inventory_frames"), envelope.keys().asSequence().toSet())
         assertEquals(TABLET_C1B_INVENTORY_RESULT_SCHEMA, envelope.getString("schema"))
-        assertEquals("tablet-c1b-inventory-result/v2", envelope.getString("schema"))
+        assertEquals("tablet-c1b-inventory-result/v3", envelope.getString("schema"))
         val json = JSONObject(envelope.getString("observation_json"))
         assertEquals(TABLET_C1B_SCHEMA, json.getString("schema"))
+        assertEquals("tablet-layout-observation/c1b-v2", json.getString("schema"))
+        assertEquals("c1b-v2", json.getJSONObject("provenance").getString("version"))
         assertEquals(2, json.getJSONArray("frames").length())
         val request = TrustedRuntimeContextFactory.create(
             runId = ENVELOPE.key.runId,
@@ -290,6 +292,55 @@ class TabletC1bRuntimeControllerTest {
         assertReadControls(controller, KEY, "session_not_found")
         controller.shutdown()
         current = null
+    }
+
+    @Test
+    fun resultKeepsUnknownInt32WindowCodesWithoutTypeDropTelemetry() {
+        listOf(Int.MIN_VALUE, -1, 256, Int.MAX_VALUE).forEach { code ->
+            val worker = QueuedWorker()
+            val service = FakeService("service")
+            val controller = controller(worker, { service }) { _, _, token, hash ->
+                val raw = frame(token, hash)
+                val unknown = raw.windows.first().copy(
+                    windowLabel = "aw3",
+                    platformTypeCode = code,
+                    type = "unknown",
+                    rootHandleStatus = C1bRootHandleStatus.ABSENT,
+                    rootPackage = null,
+                    rootWindowBinding = C1bWindowBinding.UNKNOWN,
+                    subtreeCapture = C1bSubtreeObservation(C1bSubtreeStatus.NOT_ATTEMPTED, null, 0, 0, 0, 0, false),
+                    expectedWindowTitleMatch = C1bTitleMatchStatus.NOT_ATTEMPTED,
+                )
+                raw.copy(
+                    windows = raw.windows + unknown,
+                    focus = C1bFocusObservation(C1bFocusStatus.UNKNOWN, null, null),
+                    ime = C1bImeObservation(false, "unknown", null, "unknown", null, token),
+                    windowIdentityTokens = raw.windowIdentityTokens + ("aw3" to 30),
+                    inventory = C1bWindowInventory(3, 16, 3, C1B_INVENTORY_FIRST_STOPS.associateWith { 0 }),
+                )
+            }
+            controller.start(ENVELOPE, t0Raw())
+            controller.capture(KEY, "c1")
+            worker.runNext()
+            controller.capture(KEY, "c2")
+            worker.runNext()
+            val result = controller.result(KEY) as C1bRuntimeResult.Observation
+            val envelope = JSONObject(result.json)
+            assertEquals("tablet-c1b-inventory-result/v3", envelope.getString("schema"))
+            val observation = JSONObject(envelope.getString("observation_json"))
+            assertEquals("tablet-layout-observation/c1b-v2", observation.getString("schema"))
+            assertTrue(observation.getJSONArray("reason_codes").toString().contains("window_type_invalid"))
+            listOf(0, 1).forEach { index ->
+                val frame = observation.getJSONArray("frames").getJSONObject(index)
+                val unknown = frame.getJSONArray("a11y_windows").getJSONObject(2)
+                assertEquals(code, unknown.getInt("platform_type_code"))
+                assertEquals("unknown", unknown.getString("type"))
+                val inventory = envelope.getJSONArray("inventory_frames").getJSONObject(index)
+                assertEquals(0, inventory.getJSONObject("first_stop_counts").getInt("window_type_invalid"))
+                assertEquals(0, inventory.getJSONArray("rejected_type_code_counts").length())
+            }
+            controller.shutdown()
+        }
     }
 
     @Test

@@ -7,11 +7,11 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Collections
 
-internal const val TABLET_C1B_SCHEMA = "tablet-layout-observation/c1b-v1"
+internal const val TABLET_C1B_SCHEMA = "tablet-layout-observation/c1b-v2"
 internal const val TABLET_C1B_MODE = "c1b_pure_a11y_diagnostic"
-internal const val TABLET_C1B_INVENTORY_RESULT_SCHEMA = "tablet-c1b-inventory-result/v2"
+internal const val TABLET_C1B_INVENTORY_RESULT_SCHEMA = "tablet-c1b-inventory-result/v3"
 
-/** Only the existing shell short-circuit boundaries; not later tree/geometry failures. */
+/** Existing shell boundaries; v3 retains the window_type_invalid first-stop key as zero, not its semantic reason. */
 internal val C1B_INVENTORY_FIRST_STOPS = listOf(
     "window_type_read_failed", "window_type_invalid",
     "window_display_read_failed", "window_display_invalid",
@@ -45,10 +45,8 @@ internal class C1bWindowInventory(
         require(this.firstStopCounts.values.all { it in 0..maximumWindows } &&
             this.firstStopCounts.values.sumOf(Int::toLong) == droppedCount.toLong()
         ) { "C1b inventory counts invalid" }
-        require(this.rejectedTypeCodeCounts.size <= maximumWindows &&
-            this.rejectedTypeCodeCounts.all { (code, count) -> code !in 0..255 && count in 1..maximumWindows } &&
-            this.rejectedTypeCodeCounts.values.sumOf(Int::toLong) ==
-            this.firstStopCounts.getValue("window_type_invalid").toLong()
+        require(this.firstStopCounts.getValue("window_type_invalid") == 0 &&
+            this.rejectedTypeCodeCounts.isEmpty()
         ) { "C1b rejected type counts invalid" }
     }
 
@@ -255,7 +253,6 @@ internal data class C1bWindowObservation(
 ) {
     init {
         require(displayId in 0..16) { "C1b window display id is outside the contract range" }
-        require(platformTypeCode in 0..255) { "C1b platform window type is outside the contract range" }
     }
 
     fun toJson(): JSONObject = JSONObject()
@@ -416,7 +413,7 @@ internal data class C1bProvenance(
     fun toJson(): JSONObject = JSONObject()
         .put("kind", kind)
         .put("name", name)
-        .put("version", "c1b-v1")
+        .put("version", "c1b-v2")
         .put("producer_commit_sha", producerCommitSha)
         .put("producer_artifact_sha256", producerArtifactSha256)
         .put("runtime_attested", false)
