@@ -8,7 +8,7 @@
 
 前轮 `156dbde` 每帧丢弃一次 -1，是本次修复输入，不用新结果回填。新代码既有完整离线门 16/16、修复专项和固定产物补验复用；C0 真机源固定 abb7b0d。C 停止后另按用户明确要求改标准 runner 的安装等待为无自动超时，离线 5/5、独审通过；此 host 增量未用于 C0，不称再次真机安装。
 
-前轮固定 `597ca8b713456cbfe82aa84af3abdcb7c19e1c79` 的后验与一次 C1b 已通过当时封套/原文/计数合同：两帧输入 5 / 保存 4 / 丢弃 1，唯一首次停止 `window_type_invalid`，精确值及窗口身份未记录，不用新轮回填。见[前轮记录](docs/runs/2026-11-04-诊断后验与窗口采集.md)。旧安装卡及 f983/565/e673/51fe 原轮保持冻结；手机 C 道与批次 4 继续暂停，当前诊断分支未合 main。
+前轮固定 `597ca8b713456cbfe82aa84af3abdcb7c19e1c79` 的后验与一次 C1b 已通过当时封套/原文/计数合同：两帧输入 5 / 保存 4 / 丢弃 1，唯一首次停止 `window_type_invalid`，精确值及窗口身份未记录，不用新轮回填。见[前轮记录](docs/runs/2026-11-04-诊断后验与窗口采集.md)。旧安装卡及 f983/565/e673/51fe 原轮保持冻结；手机 C 道与批次 4 继续暂停，本轮诊断源码已按用户要求合入 main，T-L1 仍未通过。
 
 ## 需要用户做的
 
@@ -22,7 +22,7 @@ A08 安装在 60 秒 native timeout 冻结（8 次 SDK、锁释放，效果当�
 
 - 根据已收齐的 5 项壳数据，核定 unknown 类型/IME 与 window/pane 视觉来源的安全边界；root package=android 不能替代角色证明，不猜映射或忽略该窗。
 - 图像来源范围审查已完成：现有 lifecycle 仅输出元数据，C1b APK 明确禁止截图能力；未来需独立核定隔离制品、端侧展示与隐私范围。完整 inventory、pane/几何/同代仍是前置，不创建图像运行卡或新批次。见[本轮复审](docs/runs/2026-11-04-诊断后验与窗口采集.md#图像来源范围复审)。
-- 未分类窗口新代码留在 `codex/c1b-unknown-types`，尚未真机验收，不合 main。已验 `156dbde` 与历史 `597ca8b` 按原版本保留；旧原字节传输候选 `ccc8cce` 已在 main。
+- 未分类窗口受测代码 abb7b0d、后续已验证的安装等待策略及归档已合入 main。真机合同通过不等于 T-L1 通过；旧 156dbde/597ca8b 证据按原版本保留，不回填。
 - 安全离线候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 保持隔离，既有完整门 14/14 不等于真机验收。R1 原入口阻断已受控验收；R5 独立来源及实际验证窗口仍未成立，不新增任务卡；P0、T-L2 与手机批次 4 保留原门禁。具体队列见 [backlog](docs/backlog.md)。
 
 ## 里程碑
@@ -42,6 +42,8 @@ A08 安装在 60 秒 native timeout 冻结（8 次 SDK、锁释放，效果当�
 - 11-01 的 51fe/e673 轮在 T0 absent 冻结；565 的复合锚点失败字段未定，f983 首失配 upstream_t0.artifact_sha256，不能回填旧轮。ccc8cce 新轮有效 observation 已保存，原 T0 绑定通过；window_inventory_truncated、semantic_subtree_opaque、ime_inventory_invalid 等七项 blocker 保留，显示回退未单独验证，provider 清理仍无独立证明。见[原字节传输验收](docs/runs/2026-11-01-C1b原字节传输候选验收.md)。
 - 11-04 新诊断轮确认每帧完整枚举 5 项、尝试 5、保存 4、类型有效性门丢弃 1；该项的后续 display/layer/几何/焦点/id/root 未读取。保存的两个微信 root 各仅一个退化不可见节点、child_count=0，语义 opaque。IME 的 visible=false 不足以覆盖 mode/binding unknown，七项 blocker 保留。
 - 新流程保留只读边界、固定完整 HEAD、全局设备锁与每轮开跑令；旧 once、UAC 与主机候选冻结链已退役。失败仍保留本轮证据，不自动重试；新一轮按 [C1b 规程](docs/runbooks/T-L1-tablet-c1b.md)重新就位。
+
+11-05 用户明确要求“合main”后，main 从 07f9be8 快进至 d238ef1，再同步本次状态记录。合入设备端与受测 abb7b0d 无差异，PC 安装等待增量沿用 5/5 离线和独审结论；未重装或重跑已消费真机轮。详见[本次整合记录](docs/runs/2026-11-05-未分类窗口真机验收.md#合入-main)。
 
 ## 暂停与后置
 
