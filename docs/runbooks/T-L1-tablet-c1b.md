@@ -14,7 +14,7 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 - 探针无障碍服务已开启（runner 以探针自报的 `a11y_service_ready` 为准；vivo 的 `dumpsys accessibility` 绑定列表可能不列出它）。首次安装后先点开桌面图标「平板 C1b 只读探针」，再到 设置 → 快捷与辅助 → 无障碍 开启，i管家弹窗选“允许”。若权限随后被 vivo 安全中心撤销，目前没有已知解法，见[运行记录](../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)；先解阻，不反复开启或重跑。runner 只检查，不改设置；未就绪时 exit 2。
 - 工作树 clean；固定完整 HEAD 记为本次 `commit_sha`。APK 内嵌构建 SHA 记为 `producer_commit_sha`：须是 HEAD 的祖先且两者之间 `app/` 无改动；只改脚本或文档不必重装。`run.json` 同时记录这两个 SHA。
 - PC Suite 手机助手若占用 TCP 5037 且其 adb 版本不同，可能与 `-AdbPath` 冲突。需要时由用户结束该会话；runner 不终止外部进程。
-- 真机运行前，按 [backlog §7.3](../backlog.md) 先报就位、再等用户开跑令。
+- 真机运行前，按 [backlog §7.3](../backlog.md) 先报就位、再取得具体开跑令。对同一固定完整 SHA、同一制品和设备，可一次列明并授权身份核验→只读后验→就绪核验→一轮有限采集；报告和许可须列各阶段、累计次数/预算及停止条件，已覆盖阶段满足前置后连续执行，不逐阶段重复询问。任一阶段失败即冻结，不包含重试或另一次采集；候选、制品、设备、来源、预算或目的地变化，以及新增图像、安装、设置写入或危险动作，不继承该只读许可。
 
 ## 固定同签名诊断的部署与采集衔接
 
@@ -24,7 +24,7 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 1. 安装前只核目标平板可用、USB 唯一及本轮独占；受控读取重新确认设备身份、user0、唯一 base APK 路径和预期旧包哈希。安装阶段不要求微信双窗或 IME 形态，不读取设置或 provider。
 2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。`-r` 只请求保留数据；任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。
-3. 成功部署也不证明无障碍授权或持续绑定。后续另核新 producer/challenge 和采样点就绪；再满足横屏多窗、IME 等采集前置及本轮采集许可，使用 `-SkipBuild -RequireInstalledApkMatch`，防止 runner 以默认 debug 构建覆盖已签名 release。部署许可不包含 T0/c1/c2。
+3. 成功部署也不证明无障碍授权或持续绑定。后续另核新 producer/challenge 和采样点就绪；再满足横屏多窗、IME 等采集前置及本轮采集许可，使用 `-SkipBuild -RequireInstalledApkMatch`，防止 runner 以默认 debug 构建覆盖已签名 release。仅有部署许可时不包含 T0/c1/c2；后续只读阶段若已在同一就位报告后的明确许可中逐项覆盖，可满足前置后连续执行，不重复申请。安装仍需自己的具体范围，不能从只读阶段链推导。
 
 启动 TEMP/TMP 使用已存在且独立的区内 bootstrap，不能预设到 freshness 门要求不存在的生产 `tmp`；后者只由 wrapper 在消费 claim 后创建。HostSmoke 要从实际 launcher 冷启动验证这一点。若在 claim 前因宿主目录副作用失败，也按本轮范围冻结，不能删除目录续跑；实例与证据见[安装前核验冻结](../runs/2026-11-02-诊断候选安装前核验冻结.md)。
 
@@ -42,7 +42,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 原 T0 的保存字节和 SHA-256 不变；stdin 只传标准 Base64 编码后的单行 ASCII，无 BOM、无换行，避免 Windows CRT text stdin 将 CRLF 改成 LF。远端固定为 `adb shell -T "set -o pipefail && toybox base64 -d | content write --uri '<URI>'"`：禁用 PTY，由标准解码器还原原始 T0 字节，并在 EOF 后读取远端输出与退出状态。需要 shell protocol、远端 shell 的 `pipefail` 和 `toybox base64 -d`；任一能力不支持或解码/写入任一侧失败即停止，不回退原始 stdin、`exec-in` 或 PTY。T0 写入须 exit 0、stdout/stderr 均为空（含空白也拒绝），随后仍以绑定的 `status=ready_c1` 验证会话；错误只记输出字节数，不保存可能回显的会话标识。解码器可能先输出有效前缀再失败，不能据失败假定没有创建会话，原必要 abort 保留。固定 ccc8cce 的[单次真机验收](../runs/2026-11-01-C1b原字节传输候选验收.md)已验证本轮链路及原字节绑定，不证明其他环境或旧轮唯一失败根因；未来运行仍须自己的固定候选与开跑条件。
 
 - 从 `c1` 起整段采集不超过 15 秒；`c1`、`c2` 各读一次，不补拍。
-- 一次调用只采一次，不自动重试。每个新运行使用新 run_id，并重新满足就位与开跑条件；已有证据目录不得覆盖。
+- 一次调用只采一次，不自动重试。每个新采集运行使用新 run_id，并重新满足就位与开跑条件；同一明确许可内尚未消费的只读前置阶段按阶段链连续执行，不视为新采集。已有证据目录不得覆盖。
 - 探针模块的 Gradle 构建检查保证 APK 只含只读代码；`-SkipBuild`/`-ApkPath` 只用于满足上述构建身份约束的 APK。
 - 保留当前已就绪的探针时，另传 `-RequireInstalledApkMatch`：只有已安装 APK 的 SHA-256 与本地 APK 相同才跳过安装并继续；缺包、路径或哈希读取失败、不匹配均在安装前失败并保留本轮 `run.json`，不覆盖安装。未传此参数时沿用原有安装行为。
 
@@ -72,7 +72,7 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 - 设备数不是 1：检查 USB 与 5037 上的其他 adb server。
 - 安装或构建失败：先离线复现，不在现场调参。
 - 失败与通过都写 `docs/runs/YYYY-MM-DD-T-L1-C1b-<主题>.md`，附 run_id 与退出码。
-- 再次运行须解决原阻塞、用新 run_id，并按 [backlog §7.3](../backlog.md)重新报就位、取得开跑令；不复用失败轮或已消费的会话。
+- 失败后的再次运行须有新证据说明原阻塞已解决、使用新 run_id，并按 [backlog §7.3](../backlog.md)重新报就位、取得列明预算与停止条件的开跑令；不复用失败轮或已消费的会话。此规则不要求同一有效阶段链的成功前置步骤逐项重新审批。既有更严格单次授权不追溯扩大，危险动作的设备端现场确认保持不变。
 
 启动拒绝诊断只保留最近一次、精确 run_id/nonce 的 `absent` 原因，供 status/capture/result/abort 读取；同 key 的实际会话或终态优先，下一次 start、输入拒绝处理或 shutdown 会清除旧槽，成功响应不缓存。有效 T0 通过校验后，`coordinator.begin` 抛出的 `Exception` 收口为 `failed/start_failed`；输入读取或 T0 校验失败仍为 `t0_invalid`。这只修复已复现的信息丢失，不证明真机失败根因、清理完成或允许重跑。
 
