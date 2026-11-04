@@ -372,7 +372,7 @@ try {
         (Test-C1bContainsPrivateIdentity $parsedResult.InventoryFrames)) {
         throw 'C1b result 含原始 serial 或 nonce。'
     }
-    $script:Run.result_schema = 'tablet-c1b-inventory-result/v1'
+    $script:Run.result_schema = 'tablet-c1b-inventory-result/v2'
     $script:Run.result_envelope_sha256 = Get-Sha256Bytes $envelopeBytes
     $script:Run.result_diagnostic = [ordered]@{
         bytes = $observationBytes.Length; sha256 = Get-Sha256Bytes $observationBytes; binding_failure = $null
@@ -403,7 +403,7 @@ try {
     $observationPath = Join-Path $evidenceDir 'tablet-layout-observation-c1b-v1.json'
     [IO.File]::WriteAllBytes($observationPath, $observationBytes)
     $script:Run.observation_sha256 = Get-Sha256Bytes $observationBytes
-    [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'tablet-c1b-inventory-result-v1.json'), $envelopeBytes)
+    [IO.File]::WriteAllBytes((Join-Path $evidenceDir 'tablet-c1b-inventory-result-v2.json'), $envelopeBytes)
 
     $inventory = Test-C1bInventoryCounts -Result $parsedResult
     if (-not $inventory.Valid) {

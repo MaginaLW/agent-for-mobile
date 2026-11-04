@@ -35,7 +35,7 @@ function Invoke-Git([string[]]$Arguments) {
 foreach ($relative in @(
     'scripts\run-tablet-c1b.ps1', 'scripts\lib\dispatch-lock.ps1', 'scripts\lib\tablet-layout-c1a.ps1',
     'scripts\lib\tablet-layout-observation-c1b-v1-validator.ps1', 'docs\contracts\tablet-layout-observation-c1b-v1.schema.json',
-    'scripts\lib\tablet-c1b-inventory-result.ps1', 'docs\contracts\tablet-c1b-inventory-result-v1.schema.json'
+    'scripts\lib\tablet-c1b-inventory-result.ps1', 'docs\contracts\tablet-c1b-inventory-result-v2.schema.json'
 )) {
     $target = Join-Path $Sandbox $relative
     [void](New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force)
@@ -222,6 +222,14 @@ switch -regex ($path) {
             'result_nonce' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue $session.nonce }
             'result_serial_escaped' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue 'FAKESERIAL01' }
             'result_nonce_escaped' { $o | Add-Member -NotePropertyName unexpected -NotePropertyValue $session.nonce }
+            'rejected_type_codes' {
+                foreach ($frame in $o.frames) {
+                    $frame.windows_truncated = $true
+                    $frame.focus.status = 'unknown'; $frame.focus.window_label = $null; $frame.focus.node_label = $null
+                    $frame.ime.mode = 'unknown'; $frame.ime.binding = 'unknown'
+                }
+                $o.reason_codes = @($o.reason_codes) + @('window_inventory_truncated', 'ime_inventory_invalid')
+            }
         }
         if ($scenario -ceq 'run_json_fail') {
             [void](New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot "repo/docs/runs/evidence/$($session.run_id)/tablet-layout-c1b/run.json"))
@@ -247,6 +255,7 @@ switch -regex ($path) {
                     window_layer_read_failed = 0; window_layer_invalid = 0; window_touchable_bounds_read_failed = 0; window_touchable_bounds_invalid = 0
                     window_active_read_failed = 0; window_focus_read_failed = 0; window_id_read_failed = 0; window_id_invalid = 0
                 }
+                rejected_type_code_counts = @()
             }
         })
         switch ($scenario) {
@@ -258,16 +267,35 @@ switch -regex ($path) {
             'diagnostic_serial_escaped' { $inventoryFrames[0].capture_id = 'FAKESERIAL01' }
             'diagnostic_nonce' { $inventoryFrames[0].capture_id = $session.nonce }
             'diagnostic_nonce_escaped' { $inventoryFrames[0].capture_id = $session.nonce }
+            'rejected_type_codes' {
+                foreach ($frame in $inventoryFrames) {
+                    $frame.input_count += 4; $frame.attempted_count += 4; $frame.dropped_count = 4
+                    $frame.first_stop_counts.window_type_invalid = 4
+                    $frame.rejected_type_code_counts = @(
+                        [ordered]@{ platform_type_code = [int]::MinValue; count = 1 },
+                        [ordered]@{ platform_type_code = -1; count = 1 },
+                        [ordered]@{ platform_type_code = 256; count = 1 },
+                        [ordered]@{ platform_type_code = [int]::MaxValue; count = 1 }
+                    )
+                }
+            }
+            'rejected_type_count_mismatch' {
+                $inventoryFrames[0].rejected_type_code_counts = @([ordered]@{ platform_type_code = -1; count = 1 })
+            }
         }
-        $envelope = [ordered]@{ schema = 'tablet-c1b-inventory-result/v1'; observation_json = $inner; inventory_frames = $inventoryFrames }
+        $envelope = [ordered]@{ schema = 'tablet-c1b-inventory-result/v2'; observation_json = $inner; inventory_frames = $inventoryFrames }
         if ($scenario -ceq 'outer_version') { $envelope.schema = 'tablet-c1b-inventory-result/v9' }
+        if ($scenario -ceq 'legacy_inventory_v1') {
+            $envelope.schema = 'tablet-c1b-inventory-result/v1'
+            foreach ($frame in $inventoryFrames) { [void]$frame.Remove('rejected_type_code_counts') }
+        }
         if ($scenario -ceq 'outer_unknown') { $envelope.extra = 'DO_NOT_RETAIN_RESULT_VALUE' }
         $raw = $envelope | ConvertTo-Json -Depth 100 -Compress
         switch ($scenario) {
             'result_invalid_json' { $raw = '{"untrusted":"DO_NOT_RETAIN_RESULT_VALUE"' }
             'bare_v1' { $raw = $inner }
             'outer_duplicate' { $raw = $raw.Replace('"schema":', '"schema":"duplicate","schema":') }
-            'outer_surrogate' { $raw = '{"schema":"tablet-c1b-inventory-result/v1","observation_json":"\ud800","inventory_frames":[]}' }
+            'outer_surrogate' { $raw = '{"schema":"tablet-c1b-inventory-result/v2","observation_json":"\ud800","inventory_frames":[]}' }
             'outer_bom' { $raw = [string][char]0xfeff + $raw }
             'oversized_result' { $raw = ' ' * 1048577 }
             'diagnostic_serial_escaped' { $raw = $raw.Replace('FAKESERIAL01', '\u0046AKESERIAL01') }
@@ -345,12 +373,26 @@ try {
         $response = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
         $innerResponse = [IO.File]::ReadAllBytes((Join-Path $r.State 'observation-response.bin'))
         Assert-True ($r.Run.result_diagnostic.bytes -eq $innerResponse.Length -and $r.Run.result_diagnostic.sha256 -ceq $r.Run.observation_sha256 -and $null -eq $r.Run.result_diagnostic.binding_failure) '成功内层结果摘要错误'
-        Assert-True ($r.Run.schema -ceq 'tablet-c1b-run/v2' -and $r.Run.result_schema -ceq 'tablet-c1b-inventory-result/v1' -and $r.Run.inventory_validation.status -ceq 'passed' -and $r.Run.inventory_validation.reason_codes.Count -eq 0) '新版本收据错误'
-        $envelopeCopy = [IO.File]::ReadAllBytes((Join-Path $r.Evidence 'tablet-c1b-inventory-result-v1.json'))
+        Assert-True ($r.Run.schema -ceq 'tablet-c1b-run/v2' -and $r.Run.result_schema -ceq 'tablet-c1b-inventory-result/v2' -and $r.Run.inventory_validation.status -ceq 'passed' -and $r.Run.inventory_validation.reason_codes.Count -eq 0) '新版本收据错误'
+        $envelopeCopy = [IO.File]::ReadAllBytes((Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json'))
         Assert-True ([Linq.Enumerable]::SequenceEqual($response, $envelopeCopy)) '封套原始字节未保留'
         Assert-True ($r.Run.result_envelope_sha256 -ceq ('sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($response)).ToLowerInvariant()) -and $r.Run.result_envelope_sha256 -cne $r.Run.observation_sha256) '外层哈希不能替代内层哈希'
         Assert-True (@($r.Log | Where-Object { $_ -match 'shell -T set -o pipefail && toybox base64 -d \| content write' }).Count -eq 1 -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) 'T0 应通过无 PTY 的解码管道写入一次，result 读取一次'
         Assert-True ([Linq.Enumerable]::SequenceEqual($t0Copy, [IO.File]::ReadAllBytes((Join-Path $r.State 't0-stdin.bin')))) '远端 stdin 字节与 T0 不同'
+        Assert-NoForbiddenAdb $r
+    }
+    Test-Case 'rejected-type-values-preserved-without-layout-grant' {
+        $r = Invoke-Runner 'rejectedtypes' 'rejected_type_codes'
+        Assert-True ($r.Exit -eq 0 -and $r.Run.inventory_validation.status -ceq 'passed') "exit=$($r.Exit) $($r.Output)"
+        $envelope = Get-Content -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json') -Raw | ConvertFrom-Json -Depth 100 -DateKind String
+        foreach ($frame in $envelope.inventory_frames) {
+            Assert-True (($frame.rejected_type_code_counts.platform_type_code -join ',') -ceq '-2147483648,-1,256,2147483647') '拒绝类型原整数或有序表丢失'
+            Assert-True ($frame.dropped_count -eq 4 -and $frame.first_stop_counts.window_type_invalid -eq 4) '首次停止计数被修改'
+        }
+        Assert-True (-not $r.Run.validation.application_window_topology_observed -and -not $r.Run.validation.semantic_tree_usable) '诊断数值不得变成布局或语义许可'
+        $response = [IO.File]::ReadAllBytes((Join-Path $r.State 'result-response.bin'))
+        Assert-True ([Linq.Enumerable]::SequenceEqual($response, [IO.File]::ReadAllBytes((Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json')))) '类型诊断封套原字节改变'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v1.json'))) '不得伪装旧版本封套'
         Assert-NoForbiddenAdb $r
     }
     foreach ($scenario in @('crt_text', 'crt_binary')) {
@@ -461,13 +503,13 @@ try {
             Assert-True (@($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) '失败后重复读取 result'
             Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}|DO_NOT_RETAIN_RESULT_VALUE' -and $r.Output -notmatch 'DO_NOT_RETAIN_RESULT_VALUE') '结果原文泄漏'
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '锚点不符时不应写 observation'
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v1.json')) -and $r.Run.inventory_validation.reason_codes[0] -ceq 'run_binding_mismatch') '锚点不符不得持久化封套'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json')) -and $r.Run.inventory_validation.reason_codes[0] -ceq 'run_binding_mismatch') '锚点不符不得持久化封套'
             Assert-NoForbiddenAdb $r
         }
     }
     foreach ($case in @(
         @('result_invalid_json', 'encoding_invalid'), @('result_control', 'version_mismatch'),
-        @('bare_v1', 'version_mismatch'), @('outer_version', 'version_mismatch'),
+        @('bare_v1', 'version_mismatch'), @('legacy_inventory_v1', 'version_mismatch'), @('outer_version', 'version_mismatch'),
         @('outer_unknown', 'shape_invalid'), @('outer_duplicate', 'duplicate_key'),
         @('inner_duplicate', 'duplicate_key'), @('inner_invalid_json', 'encoding_invalid'),
         @('outer_bom', 'encoding_invalid'), @('inner_bom', 'encoding_invalid'),
@@ -479,18 +521,18 @@ try {
             Assert-True ($r.Exit -eq 1 -and $r.Run.stage -ceq 'result_read') "exit=$($r.Exit) $($r.Output)"
             Assert-True ($r.Run.inventory_validation.status -ceq 'failed' -and $r.Run.inventory_validation.reason_codes.Count -eq 1 -and $r.Run.inventory_validation.reason_codes[0] -ceq $case[1]) "wrong rejection $($r.RunRaw)"
             Assert-True ($null -eq $r.Run.result_diagnostic -and $null -eq $r.Run.result_schema -and $null -eq $r.Run.result_envelope_sha256) '解封失败不得冒充已识别结果'
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json')) -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v1.json'))) '未绑定内容不得落盘'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json')) -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json'))) '未绑定内容不得落盘'
             Assert-True (@($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1 -and $r.Run.abort.attempted) '失败不得重读或跳过终止'
             Assert-True ($r.RunRaw -notmatch 'DO_NOT_RETAIN_RESULT_VALUE|FAKESERIAL01|content://|n-[0-9a-f]{32}' -and $r.Output -notmatch 'DO_NOT_RETAIN_RESULT_VALUE') '坏值泄漏'
             Assert-NoForbiddenAdb $r
         }
     }
-    foreach ($case in @(@('count_mismatch', 'count_mismatch'), @('capture_mismatch', 'capture_binding_mismatch'), @('count_overflow', 'count_overflow'), @('invalid_observation', 'observation_invalid'))) {
+    foreach ($case in @(@('count_mismatch', 'count_mismatch'), @('rejected_type_count_mismatch', 'count_mismatch'), @('capture_mismatch', 'capture_binding_mismatch'), @('count_overflow', 'count_overflow'), @('invalid_observation', 'observation_invalid'))) {
         Test-Case "bound-result-$($case[0])-retained" {
             $r = Invoke-Runner $case[0] $case[0]
             Assert-True ($r.Exit -eq 1 -and $r.Run.inventory_validation.status -ceq 'failed' -and $r.Run.inventory_validation.reason_codes[0] -ceq $case[1]) "wrong failure $($r.RunRaw)"
             Assert-True (-not $r.Run.abort.attempted -and @($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1) '已绑定已消费结果不能重读或再次终止'
-            foreach ($pair in @(@('result-response.bin','tablet-c1b-inventory-result-v1.json'), @('observation-response.bin','tablet-layout-observation-c1b-v1.json'))) {
+            foreach ($pair in @(@('result-response.bin','tablet-c1b-inventory-result-v2.json'), @('observation-response.bin','tablet-layout-observation-c1b-v1.json'))) {
                 Assert-True ([Linq.Enumerable]::SequenceEqual([IO.File]::ReadAllBytes((Join-Path $r.State $pair[0])), [IO.File]::ReadAllBytes((Join-Path $r.Evidence $pair[1])))) '失败证据原文被丢弃或改写'
             }
             Assert-NoForbiddenAdb $r
@@ -513,7 +555,7 @@ try {
             } else {
                 Assert-True ($r.Run.failure_reason -match '原始 serial 或 nonce') '解码后标识必须由隐私门拒绝'
             }
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v1.json')) -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '含私有标识的外层或内层内容不得落盘'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-c1b-inventory-result-v2.json')) -and -not (Test-Path -LiteralPath (Join-Path $r.Evidence 'tablet-layout-observation-c1b-v1.json'))) '含私有标识的外层或内层内容不得落盘'
             Assert-True ($r.RunRaw -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') 'run.json 泄漏标识'
             Assert-True ($r.Output -notmatch 'FAKESERIAL01|content://|n-[0-9a-f]{32}') '失败输出泄漏标识'
             Assert-True (@($r.Log | Where-Object { $_ -match '/result/' }).Count -eq 1 -and $r.Run.abort.attempted) '隐私失败不能重读结果'

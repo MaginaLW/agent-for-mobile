@@ -257,6 +257,7 @@ class TabletC1bRuntimeControllerTest {
         val envelope = JSONObject(result.json)
         assertEquals(setOf("schema", "observation_json", "inventory_frames"), envelope.keys().asSequence().toSet())
         assertEquals(TABLET_C1B_INVENTORY_RESULT_SCHEMA, envelope.getString("schema"))
+        assertEquals("tablet-c1b-inventory-result/v2", envelope.getString("schema"))
         val json = JSONObject(envelope.getString("observation_json"))
         assertEquals(TABLET_C1B_SCHEMA, json.getString("schema"))
         assertEquals(2, json.getJSONArray("frames").length())
@@ -279,6 +280,8 @@ class TabletC1bRuntimeControllerTest {
             assertEquals(2, inventory.getInt("input_count"))
             assertEquals(2, inventory.getInt("saved_count"))
             assertEquals(0, inventory.getInt("dropped_count"))
+            assertEquals(0, inventory.getJSONArray("rejected_type_code_counts").length())
+            assertFalse(json.getJSONArray("frames").getJSONObject(index).has("rejected_type_code_counts"))
         }
         assertFalse(result.toString().contains(result.json))
         val consumed = controller.result(KEY) as C1bRuntimeResult.Control

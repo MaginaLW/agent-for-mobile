@@ -4,7 +4,7 @@ Set-StrictMode -Version 3.0
 . (Join-Path $PSScriptRoot '..\lib\tablet-c1b-inventory-result.ps1')
 $script:Passed = 0
 $script:Failed = 0
-$schemaPath = Join-Path $PSScriptRoot '..\..\docs\contracts\tablet-c1b-inventory-result-v1.schema.json'
+$schemaPath = Join-Path $PSScriptRoot '..\..\docs\contracts\tablet-c1b-inventory-result-v2.schema.json'
 
 function Assert-True([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
 function Test-Case([string]$Name, [scriptblock]$Body) {
@@ -21,11 +21,11 @@ function New-TestEnvelope {
         $diagnostics += [ordered]@{ capture_id="capture-$token"; capture_token=$token;
             enumeration_status='complete'; count_status='exact'; maximum_windows=16;
             input_count=1; unattempted_count=0; attempted_count=1; saved_count=1; dropped_count=0;
-            first_stop_counts=$stops }
+            first_stop_counts=$stops; rejected_type_code_counts=@() }
     }
     # Intentionally synthetic: this suite validates the envelope, never v1 runtime provenance.
     $observation = [ordered]@{ schema='tablet-layout-observation/c1b-v1'; frames=$observed }
-    return [ordered]@{ schema='tablet-c1b-inventory-result/v1';
+    return [ordered]@{ schema='tablet-c1b-inventory-result/v2';
         observation_json=($observation | ConvertTo-Json -Depth 30); inventory_frames=$diagnostics }
 }
 function Set-TestObservation($Envelope, [scriptblock]$Change) {
@@ -50,6 +50,20 @@ function Assert-Counts($Envelope, [AllowNull()][string]$Reason) {
     if ($Reason) { Assert-True (-not $counts.Valid -and $counts.ReasonCode -ceq $Reason) "counts expected $Reason; got $($counts.ReasonCode)" }
     else { Assert-True $counts.Valid "counts failed: $($counts.ReasonCode)" }
 }
+function New-RejectedTypeEnvelope([int[]]$Codes=@(-1), [int[]]$Counts=@(1)) {
+    $e = New-TestEnvelope
+    $entries = @(); $total = 0
+    for ($index = 0; $index -lt $Codes.Count; $index++) {
+        $entries += [ordered]@{ platform_type_code=$Codes[$index]; count=$Counts[$index] }
+        $total += $Counts[$index]
+    }
+    $f = $e.inventory_frames[0]
+    $f.rejected_type_code_counts = $entries
+    $f.input_count = 1 + $total; $f.attempted_count = 1 + $total; $f.dropped_count = $total
+    $f.first_stop_counts.window_type_invalid = $total
+    Set-TestObservation $e { param($o) $o.frames[0].windows_truncated=$true }
+    return $e
+}
 
 Test-Case 'exact and unknown type accepted without granting topology' { Assert-Counts (New-TestEnvelope) $null }
 Test-Case 'original observation whitespace unicode and bytes retained' {
@@ -73,6 +87,7 @@ Test-Case 'budget plus dropped counts conserve 17 inputs 4 saved' {
     $e=New-TestEnvelope; $f=$e.inventory_frames[0]
     $f.input_count=17; $f.attempted_count=16; $f.saved_count=4; $f.dropped_count=12; $f.unattempted_count=1
     foreach($key in $script:C1bInventoryStopKeys){$f.first_stop_counts[$key]=1}
+    $f.rejected_type_code_counts=@([ordered]@{platform_type_code=-1;count=1})
     Set-TestObservation $e {param($o) $o.frames[0].a11y_windows=@(@{},@{},@{},@{}); $o.frames[0].windows_truncated=$true }
     Assert-Counts $e $null
 }
@@ -138,7 +153,12 @@ foreach($value in @(-1,17,1.5,'1',$true,$null)) {
     }
 }
 Test-Case 'bucket bounded by actual budget' { $e=New-TestEnvelope; $e.inventory_frames[0].maximum_windows=1; $e.inventory_frames[0].first_stop_counts.window_id_invalid=2; Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid' }
-Test-Case 'wrong version rejected' { $e=New-TestEnvelope; $e.schema='tablet-c1b-inventory-result/v2'; Assert-ParseFailure (Convert-TestEnvelope $e) 'version_mismatch' }
+Test-Case 'wrong version rejected' { $e=New-TestEnvelope; $e.schema='tablet-c1b-inventory-result/v3'; Assert-ParseFailure (Convert-TestEnvelope $e) 'version_mismatch' }
+Test-Case 'historical inventory v1 is explicitly rejected' {
+    $e=New-TestEnvelope; $e.schema='tablet-c1b-inventory-result/v1'
+    foreach($frame in $e.inventory_frames){$frame.Remove('rejected_type_code_counts')}
+    Assert-ParseFailure (Convert-TestEnvelope $e) 'version_mismatch'
+}
 Test-Case 'bare v1 rejected' { Assert-ParseFailure ([Text.Encoding]::UTF8.GetBytes((New-TestEnvelope).observation_json)) 'version_mismatch' }
 Test-Case 'outer duplicate key rejected' {
     $raw=[Text.Encoding]::UTF8.GetString((Convert-TestEnvelope (New-TestEnvelope)))
@@ -196,6 +216,121 @@ Test-Case 'schema accepts overflow shape but consumer rejects success' {
     $e=New-TestEnvelope; $f=$e.inventory_frames[0]; $f.count_status='overflow'; $f.input_count=$null; $f.unattempted_count=$null
     Assert-True (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath) 'overflow schema'
     Assert-Counts $e 'count_overflow'
+}
+Test-Case 'rejected type Int32 extremes and distinct codes retained in signed order' {
+    $e=New-RejectedTypeEnvelope -Codes @([int]::MinValue,-1,256,[int]::MaxValue) -Counts @(1,2,1,1)
+    Assert-Counts $e $null
+    $parsed=ConvertFrom-C1bInventoryResult -Bytes (Convert-TestEnvelope $e)
+    Assert-True ($parsed.InventoryFrames[0].rejected_type_code_counts[0].platform_type_code -eq [int]::MinValue) 'minimum code changed'
+    Assert-True ($parsed.InventoryFrames[0].rejected_type_code_counts[1].count -eq 2) 'frequency changed'
+    Assert-True ($parsed.InventoryFrames[0].rejected_type_code_counts[3].platform_type_code -eq [int]::MaxValue) 'maximum code changed'
+    Assert-True (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath) 'schema rejected valid Int32 histogram'
+}
+Test-Case 'type read failure has no rejected code' {
+    $e=New-TestEnvelope; $f=$e.inventory_frames[0]
+    $f.input_count=2; $f.attempted_count=2; $f.dropped_count=1; $f.first_stop_counts.window_type_read_failed=1
+    Set-TestObservation $e {param($o) $o.frames[0].windows_truncated=$true}
+    Assert-Counts $e $null
+    $f.rejected_type_code_counts=@([ordered]@{platform_type_code=-1;count=1})
+    Assert-Counts $e 'count_mismatch'
+}
+foreach($mutation in @('missing-array','null-array','object-array','null-item','extra-item-key','missing-code','missing-frequency','code-case','frequency-case','empty-item')) {
+    Test-Case "rejected type closed shape $mutation" {
+        $e=New-RejectedTypeEnvelope; $f=$e.inventory_frames[0]
+        switch($mutation){
+            missing-array {$f.Remove('rejected_type_code_counts')}
+            null-array {$f.rejected_type_code_counts=$null}
+            object-array {$f.rejected_type_code_counts=[ordered]@{platform_type_code=-1;count=1}}
+            null-item {$f.rejected_type_code_counts=@($null)}
+            extra-item-key {$f.rejected_type_code_counts[0]['window_id']=42}
+            missing-code {$f.rejected_type_code_counts[0].Remove('platform_type_code')}
+            missing-frequency {$f.rejected_type_code_counts[0].Remove('count')}
+            code-case {$f.rejected_type_code_counts=@([ordered]@{Platform_type_code=-1;count=1})}
+            frequency-case {$f.rejected_type_code_counts=@([ordered]@{platform_type_code=-1;Count=1})}
+            empty-item {$f.rejected_type_code_counts=@([ordered]@{})}
+        }
+        Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+    }
+}
+foreach($value in @(0,7,255,-2147483649L,2147483648L,'-1',$true,$null,-1.5)) {
+    Test-Case "invalid rejected type code [$value]" {
+        $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts[0].platform_type_code=$value
+        Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+    }
+}
+foreach($value in @(0,-1,17,'1',$true,$null,1.5)) {
+    Test-Case "invalid rejected type frequency [$value]" {
+        $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts[0].count=$value
+        Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+    }
+}
+foreach($pair in @(@(-1,-1),@(256,256),@(256,-1),@(-1,[int]::MinValue))) {
+    Test-Case "duplicate or unsorted rejected type codes [$($pair -join ',')]" {
+        $e=New-RejectedTypeEnvelope -Codes $pair -Counts @(1,2)
+        Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+    }
+}
+Test-Case 'histogram length and count respect actual budget' {
+    $e=New-RejectedTypeEnvelope -Codes @(-2,-1) -Counts @(1,1); $e.inventory_frames[0].maximum_windows=1
+    $e.inventory_frames[0].attempted_count=1; $e.inventory_frames[0].dropped_count=1
+    $e.inventory_frames[0].first_stop_counts.window_type_invalid=1
+    Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+    $e=New-RejectedTypeEnvelope -Counts @(2); $e.inventory_frames[0].maximum_windows=1
+    $e.inventory_frames[0].attempted_count=1; $e.inventory_frames[0].dropped_count=1
+    $e.inventory_frames[0].first_stop_counts.window_type_invalid=1
+    Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+}
+Test-Case 'histogram cannot exceed sixteen distinct codes' {
+    $e=New-TestEnvelope
+    $e.inventory_frames[0].rejected_type_code_counts=@(256..272|ForEach-Object{[ordered]@{platform_type_code=$_;count=1}})
+    Assert-ParseFailure (Convert-TestEnvelope $e) 'shape_invalid'
+}
+Test-Case 'rejected type histogram sum is checked after frame binding' {
+    $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts[0].count=2
+    Assert-Counts $e 'count_mismatch'
+    $e.inventory_frames[0].capture_id='old-capture'
+    Assert-Counts $e 'capture_binding_mismatch'
+}
+Test-Case 'invalid type stop cannot omit its code histogram' {
+    $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts=@()
+    Assert-Counts $e 'count_mismatch'
+}
+Test-Case 'failed enumeration cannot claim a rejected type' {
+    $e=New-TestEnvelope; $f=$e.inventory_frames[0]
+    $f.enumeration_status='failed'; $f.count_status='unavailable'; $f.input_count=$null; $f.unattempted_count=$null
+    $f.attempted_count=0; $f.saved_count=0
+    $f.rejected_type_code_counts=@([ordered]@{platform_type_code=-1;count=1})
+    Set-TestObservation $e {param($o) $o.frames[0].a11y_windows=@(); $o.frames[0].windows_truncated=$true}
+    Assert-Counts $e 'count_mismatch'
+    Assert-True (-not (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) 'unavailable histogram accepted by schema'
+}
+foreach($field in @('platform_type_code','count')) {
+    foreach($rawValue in @('-1.0','1e0','1.5','9223372036854775808')) {
+        Test-Case "histogram $field non integer token $rawValue" {
+            $e=New-RejectedTypeEnvelope
+            $raw=[Text.Encoding]::UTF8.GetString((Convert-TestEnvelope $e))
+            $old=if($field -ceq 'platform_type_code'){'"platform_type_code":-1'}else{'"count":1'}
+            $raw=$raw.Replace($old,('"'+$field+'":'+$rawValue))
+            Assert-ParseFailure ([Text.Encoding]::UTF8.GetBytes($raw)) 'shape_invalid'
+        }
+    }
+}
+Test-Case 'histogram duplicate property rejected before conversion' {
+    $raw=[Text.Encoding]::UTF8.GetString((Convert-TestEnvelope (New-RejectedTypeEnvelope)))
+    $raw=$raw.Replace('"platform_type_code":-1','"platform_type_code":-1,"platform_type_code":256')
+    Assert-ParseFailure ([Text.Encoding]::UTF8.GetBytes($raw)) 'duplicate_key'
+}
+Test-Case 'schema rejects missing histogram and invalid entry shape' {
+    $e=New-TestEnvelope; $e.inventory_frames[0].Remove('rejected_type_code_counts')
+    Assert-True (-not (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) 'missing histogram accepted'
+    $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts[0]['extra']=0
+    Assert-True (-not (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) 'unknown histogram key accepted'
+}
+foreach($value in @(0,7,255,-2147483649L,2147483648L,-1.5)) {
+    Test-Case "schema rejects invalid rejected type code [$value]" {
+        $e=New-RejectedTypeEnvelope; $e.inventory_frames[0].rejected_type_code_counts[0].platform_type_code=$value
+        Assert-True (-not (Test-Json -Json ($e|ConvertTo-Json -Depth 100) -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) 'schema code accepted'
+    }
 }
 Write-Host "tablet-c1b inventory result offline: $script:Passed passed, $script:Failed failed"
 if($script:Failed){exit 1}

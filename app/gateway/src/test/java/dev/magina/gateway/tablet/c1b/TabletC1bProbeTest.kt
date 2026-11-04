@@ -29,6 +29,7 @@ class TabletC1bProbeTest {
             assertEquals(0, inventory.unattemptedCount)
             assertEquals(1, inventory.firstStopCounts.getValue("window_${stage}_read_failed"))
             assertEquals(1, inventory.firstStopCounts.values.sum())
+            assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
             assertFalse(inventory.toJson(frame).toString().contains("private"))
         }
         val badWindows = listOf(
@@ -46,6 +47,76 @@ class TabletC1bProbeTest {
             assertEquals(1, inventory.firstStopCounts.getValue("window_${stage}_invalid"))
             assertEquals(1, inventory.droppedCount)
             assertEquals(1, inventory.firstStopCounts.values.sum())
+            assertEquals(if (stage == "type") mapOf(256 to 1) else emptyMap(), inventory.rejectedTypeCodeCounts)
+        }
+    }
+
+    @Test
+    fun rejectedTypesKeepSignedExtremesAndRepeatedCountsWithoutAdditionalReads() {
+        val codes = listOf(Int.MAX_VALUE, -1, 256, Int.MIN_VALUE, -1)
+        val port = RecordingShellPort(FakePort(windowList = codes.mapIndexed { index, code ->
+            FakeWindow(index + 1, code, root = null, title = null)
+        }))
+        val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
+        val inventory = requireNotNull(frame.inventory)
+
+        assertEquals(List(codes.size) { "type" }, port.reads)
+        assertEquals(1, port.enumerations)
+        assertEquals(5, inventory.firstStopCounts.getValue("window_type_invalid"))
+        assertEquals(5, inventory.droppedCount)
+        assertEquals(mapOf(Int.MIN_VALUE to 1, -1 to 2, 256 to 1, Int.MAX_VALUE to 1),
+            inventory.rejectedTypeCodeCounts)
+        val rejected = inventory.toJson(frame).getJSONArray("rejected_type_code_counts")
+        assertEquals(4, rejected.length())
+        listOf(Int.MIN_VALUE, -1, 256, Int.MAX_VALUE).forEachIndexed { index, code ->
+            val entry = rejected.getJSONObject(index)
+            assertEquals(setOf("platform_type_code", "count"), entry.keys().asSequence().toSet())
+            assertEquals(code, entry.getInt("platform_type_code"))
+            assertEquals(if (code == -1) 2 else 1, entry.getInt("count"))
+        }
+        assertTrue(frame.windows.isEmpty())
+        assertTrue(frame.windowsTruncated)
+        assertEquals(frame.copy(inventory = null).toJson().toString(), frame.toJson().toString())
+        assertFalse(inventory.toString().contains(Int.MIN_VALUE.toString()))
+    }
+
+    @Test
+    fun rangeBoundariesAndKnownTypeSevenNeverEnterRejectedTypeCounts() {
+        val port = RecordingShellPort(FakePort(windowList = listOf(0, 7, 255).mapIndexed { index, code ->
+            FakeWindow(index + 1, code, root = null, title = null)
+        }))
+        val frame = TabletC1bProbe(port, now = { FIRST_AT }).capture(request())
+        val inventory = requireNotNull(frame.inventory)
+        assertEquals(listOf(0, 7, 255), frame.windows.map { it.platformTypeCode })
+        assertEquals(listOf("unknown", "window_control", "unknown"), frame.windows.map { it.type })
+        assertEquals(0, inventory.droppedCount)
+        assertTrue(inventory.rejectedTypeCodeCounts.isEmpty())
+        assertEquals(0, inventory.toJson(frame).getJSONArray("rejected_type_code_counts").length())
+        assertFalse(frame.windowsTruncated)
+        assertEquals(C1bFocusStatus.UNKNOWN, frame.focus.status)
+    }
+
+    @Test
+    fun rejectedTypeCountsAreAnImmutableSortedSnapshotAndRejectInvalidInputs() {
+        val stops = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 3 else 0 }
+        val source = linkedMapOf(Int.MAX_VALUE to 1, -1 to 1, Int.MIN_VALUE to 1)
+        val inventory = C1bWindowInventory(3, 16, 0, stops, source)
+        source.clear()
+        assertEquals(listOf(Int.MIN_VALUE, -1, Int.MAX_VALUE), inventory.rejectedTypeCodeCounts.keys.toList())
+        assertThrows(UnsupportedOperationException::class.java) {
+            (inventory.rejectedTypeCodeCounts as MutableMap<Int, Int>)[256] = 1
+        }
+        val oneStop = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 1 else 0 }
+        listOf(emptyMap(), mapOf(-1 to 0), mapOf(-1 to -1), mapOf(-1 to 17), mapOf(-1 to Int.MAX_VALUE),
+            mapOf(-1 to 2), mapOf(0 to 1), mapOf(7 to 1), mapOf(255 to 1)).forEach { bad ->
+            assertThrows(IllegalArgumentException::class.java) { C1bWindowInventory(1, 16, 0, oneStop, bad) }
+        }
+        val sixteenStops = C1B_INVENTORY_FIRST_STOPS.associateWith { if (it == "window_type_invalid") 16 else 0 }
+        assertEquals(mapOf(-1 to 16), C1bWindowInventory(16, 16, 0, sixteenStops, mapOf(-1 to 16)).rejectedTypeCodeCounts)
+        assertEquals(16, C1bWindowInventory(16, 16, 0, sixteenStops,
+            (256..271).associateWith { 1 }).rejectedTypeCodeCounts.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            C1bWindowInventory(17, 16, 0, sixteenStops, (256..272).associateWith { 1 })
         }
     }
 
@@ -67,10 +138,13 @@ class TabletC1bProbeTest {
         assertTrue(failedJson.isNull("input_count"))
         assertTrue(failedJson.isNull("unattempted_count"))
         assertEquals(0, failedJson.getInt("attempted_count"))
+        assertEquals(0, emptyJson.getJSONArray("rejected_type_code_counts").length())
+        assertEquals(0, failedJson.getJSONArray("rejected_type_code_counts").length())
         assertTrue(failedFrame.windowsTruncated)
 
         val handles = (1..17).map { index ->
-            FakeWindow(index, if (index <= 12) 256 else 3, root = null, title = null)
+            FakeWindow(index, if (index == 17) Int.MIN_VALUE else if (index <= 12) 256 else 3,
+                root = null, title = null)
         }
         val budgetPort = RecordingShellPort(FakePort(windowList = handles))
         val budgetFrame = TabletC1bProbe(budgetPort, now = { FIRST_AT }).capture(request())
@@ -81,6 +155,7 @@ class TabletC1bProbeTest {
         assertEquals(12, inventory.droppedCount)
         assertEquals(1, inventory.unattemptedCount)
         assertEquals(12, inventory.firstStopCounts.getValue("window_type_invalid"))
+        assertEquals(mapOf(256 to 12), inventory.rejectedTypeCodeCounts)
         assertEquals(16, budgetPort.reads.count { it == "type" })
         assertEquals(1, budgetPort.enumerations)
         assertTrue(budgetFrame.windowsTruncated)

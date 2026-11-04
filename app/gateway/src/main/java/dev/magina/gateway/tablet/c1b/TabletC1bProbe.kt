@@ -126,11 +126,13 @@ internal class TabletC1bProbe(
         val windowsAttempt = attempt { port.windows().toList() }
         val allHandles = windowsAttempt.value.orEmpty()
         val firstStopCounts = C1B_INVENTORY_FIRST_STOPS.associateWith { 0 }.toMutableMap()
+        val rejectedTypeCodeCounts = mutableMapOf<Int, Int>()
         var windowsTruncated = !windowsAttempt.succeeded || allHandles.size > limits.maximumWindows
         if (!windowsAttempt.succeeded) diagnosticCodes += "window_inventory_truncated"
 
         val states = allHandles.take(limits.maximumWindows).mapIndexedNotNull { index, handle ->
-            captureWindowShell(index + 1, handle, display, request.expectedTitleHash, diagnosticCodes, firstStopCounts)
+            captureWindowShell(index + 1, handle, display, request.expectedTitleHash, diagnosticCodes,
+                firstStopCounts, rejectedTypeCodeCounts)
                 ?: null.also { windowsTruncated = true }
         }
         val applicationStates = states.filter { it.type == "application" }
@@ -218,6 +220,7 @@ internal class TabletC1bProbe(
                 maximumWindows = limits.maximumWindows,
                 savedCount = states.size,
                 firstStopCounts = firstStopCounts,
+                rejectedTypeCodeCounts = rejectedTypeCodeCounts,
             ),
         )
     }
@@ -229,6 +232,7 @@ internal class TabletC1bProbe(
         expectedTitleHash: String,
         frameCodes: MutableSet<String>,
         firstStopCounts: MutableMap<String, Int>,
+        rejectedTypeCodeCounts: MutableMap<Int, Int>,
     ): MutableWindowState? {
         fun reject(code: String): MutableWindowState? {
             frameCodes += code
@@ -238,6 +242,9 @@ internal class TabletC1bProbe(
         val platformTypeAttempt = attempt { port.platformTypeCode(handle) }
         val platformTypeCode = platformTypeAttempt.value
         if (!platformTypeAttempt.succeeded || platformTypeCode == null || platformTypeCode !in 0..255) {
+            if (platformTypeAttempt.succeeded && platformTypeCode != null) {
+                rejectedTypeCodeCounts[platformTypeCode] = rejectedTypeCodeCounts.getOrDefault(platformTypeCode, 0) + 1
+            }
             return reject(if (platformTypeAttempt.succeeded) "window_type_invalid" else "window_type_read_failed")
         }
         val displayAttempt = attempt { port.windowDisplayId(handle) }

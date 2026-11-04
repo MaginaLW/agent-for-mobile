@@ -5,10 +5,11 @@ import org.json.JSONObject
 import dev.magina.gateway.tablet.TabletProbeRunContext
 import java.time.Duration
 import java.time.Instant
+import java.util.Collections
 
 internal const val TABLET_C1B_SCHEMA = "tablet-layout-observation/c1b-v1"
 internal const val TABLET_C1B_MODE = "c1b_pure_a11y_diagnostic"
-internal const val TABLET_C1B_INVENTORY_RESULT_SCHEMA = "tablet-c1b-inventory-result/v1"
+internal const val TABLET_C1B_INVENTORY_RESULT_SCHEMA = "tablet-c1b-inventory-result/v2"
 
 /** Only the existing shell short-circuit boundaries; not later tree/geometry failures. */
 internal val C1B_INVENTORY_FIRST_STOPS = listOf(
@@ -26,8 +27,10 @@ internal class C1bWindowInventory(
     val maximumWindows: Int,
     val savedCount: Int,
     firstStopCounts: Map<String, Int>,
+    rejectedTypeCodeCounts: Map<Int, Int> = emptyMap(),
 ) {
     val firstStopCounts: Map<String, Int> = firstStopCounts.toMap()
+    val rejectedTypeCodeCounts: Map<Int, Int> = Collections.unmodifiableMap(rejectedTypeCodeCounts.toSortedMap())
     val attemptedCount: Int = inputCount?.coerceAtMost(maximumWindows) ?: 0
     val droppedCount: Int = attemptedCount - savedCount
     val unattemptedCount: Int? = inputCount?.minus(attemptedCount)
@@ -42,6 +45,11 @@ internal class C1bWindowInventory(
         require(this.firstStopCounts.values.all { it in 0..maximumWindows } &&
             this.firstStopCounts.values.sumOf(Int::toLong) == droppedCount.toLong()
         ) { "C1b inventory counts invalid" }
+        require(this.rejectedTypeCodeCounts.size <= maximumWindows &&
+            this.rejectedTypeCodeCounts.all { (code, count) -> code !in 0..255 && count in 1..maximumWindows } &&
+            this.rejectedTypeCodeCounts.values.sumOf(Int::toLong) ==
+            this.firstStopCounts.getValue("window_type_invalid").toLong()
+        ) { "C1b rejected type counts invalid" }
     }
 
     fun toJson(frame: C1bRawFrame): JSONObject {
@@ -50,6 +58,10 @@ internal class C1bWindowInventory(
         ) { "C1b inventory frame mismatch" }
         val stops = JSONObject()
         C1B_INVENTORY_FIRST_STOPS.forEach { stops.put(it, firstStopCounts.getValue(it)) }
+        val rejectedTypes = JSONArray()
+        rejectedTypeCodeCounts.forEach { (code, count) ->
+            rejectedTypes.put(JSONObject().put("platform_type_code", code).put("count", count))
+        }
         return JSONObject()
             .put("capture_id", frame.captureId)
             .put("capture_token", frame.capture.token)
@@ -62,6 +74,7 @@ internal class C1bWindowInventory(
             .put("saved_count", savedCount)
             .put("dropped_count", droppedCount)
             .put("first_stop_counts", stops)
+            .put("rejected_type_code_counts", rejectedTypes)
     }
 
     override fun toString(): String = "C1bWindowInventory(counts=<bounded>)"

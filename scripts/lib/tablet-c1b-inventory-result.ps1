@@ -2,7 +2,7 @@
 # Offline parser for the diagnostic envelope; never grants layout or action capability.
 Set-StrictMode -Version 3.0
 
-$script:C1bInventorySchema = 'tablet-c1b-inventory-result/v1'
+$script:C1bInventorySchema = 'tablet-c1b-inventory-result/v2'
 $script:C1bInventoryStopKeys = [string[]]@(
     'window_type_read_failed', 'window_type_invalid',
     'window_display_read_failed', 'window_display_invalid',
@@ -127,7 +127,7 @@ function ConvertFrom-C1bInventoryResult {
         if ($observationBytes.Length -lt 1 -or $observationBytes.Length -gt 1048576) { return New-C1bInventoryParseFailure 'output_size_exceeded' }
         foreach ($frame in $envelope.inventory_frames) {
             if (-not (Test-C1bInventoryKeys $frame @('capture_id','capture_token','enumeration_status','count_status',
-                'maximum_windows','input_count','unattempted_count','attempted_count','saved_count','dropped_count','first_stop_counts'))) {
+                'maximum_windows','input_count','unattempted_count','attempted_count','saved_count','dropped_count','first_stop_counts','rejected_type_code_counts'))) {
                 return New-C1bInventoryParseFailure 'shape_invalid'
             }
             if ($frame.capture_id -isnot [string] -or $frame.capture_id -cnotmatch '\A[a-z0-9][a-z0-9._-]{0,79}\z' -or
@@ -154,6 +154,21 @@ function ConvertFrom-C1bInventoryResult {
                 if (-not (Test-C1bInventoryInteger $frame.first_stop_counts.$key 0 $frame.maximum_windows)) {
                     return New-C1bInventoryParseFailure 'shape_invalid'
                 }
+            }
+            if ($frame.rejected_type_code_counts -isnot [array] -or
+                $frame.rejected_type_code_counts.Count -gt $frame.maximum_windows) {
+                return New-C1bInventoryParseFailure 'shape_invalid'
+            }
+            $previousCode = $null
+            foreach ($entry in $frame.rejected_type_code_counts) {
+                if (-not (Test-C1bInventoryKeys $entry @('platform_type_code','count')) -or
+                    -not (Test-C1bInventoryInteger $entry.platform_type_code -2147483648 2147483647) -or
+                    ($entry.platform_type_code -ge 0 -and $entry.platform_type_code -le 255) -or
+                    -not (Test-C1bInventoryInteger $entry.count 1 $frame.maximum_windows) -or
+                    ($null -ne $previousCode -and $entry.platform_type_code -le $previousCode)) {
+                    return New-C1bInventoryParseFailure 'shape_invalid'
+                }
+                $previousCode = [long]$entry.platform_type_code
             }
         }
         return [pscustomobject]@{ Valid=$true; ReasonCode=$null; ObservationRaw=$observationRaw;
@@ -187,6 +202,11 @@ function Test-C1bInventoryCounts {
                     $frame.capture_id -cne $observed.capture_id) { $reason = 'capture_binding_mismatch'; break }
                 $sum = 0L
                 foreach ($key in $script:C1bInventoryStopKeys) { $sum += [long]$frame.first_stop_counts.$key }
+                $rejectedTypeCount = 0L
+                foreach ($entry in $frame.rejected_type_code_counts) { $rejectedTypeCount += [long]$entry.count }
+                if ($rejectedTypeCount -ne [long]$frame.first_stop_counts.window_type_invalid) {
+                    $reason = 'count_mismatch'; break
+                }
                 $a = [long]$frame.attempted_count; $s = [long]$frame.saved_count; $d = [long]$frame.dropped_count
                 $state = "$($frame.enumeration_status)/$($frame.count_status)"
                 if ($state -ceq 'complete/exact') {

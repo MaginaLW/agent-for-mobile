@@ -18,7 +18,9 @@ C1b 不含危险动作；手机侧发送/支付/删除的两段式确认不受�
 
 ## 固定同签名诊断的部署与采集衔接
 
-诊断 `597ca8b` 的 signed release 与新封套 runner 必须成套使用，输入及一次覆盖准备见[部署交接记录](../runs/2026-11-02-诊断候选部署交接准备.md)。准备不是就位或运行许可，历史现装包哈希也不是当前状态。
+当前开发分支的类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2`，见[设计与边界](../specs/2026-11-04-窗口类型拒绝值诊断-design.md)。它仍须固定代码/制品、完整离线门与对应就位/开跑许可，不能直接复用现装 v1 包。
+
+历史 `597ca8b` signed release 配 inventory-result/v1 runner，其[部署交接](../runs/2026-11-02-诊断候选部署交接准备.md)及 [11-04 真机结果](../runs/2026-11-04-诊断后验与窗口采集.md)按原版本保存。新旧 producer/runner 必须成套，原签名和运行许可不复用；准备不是就位或运行许可，历史包哈希也不是当前状态。
 
 1. 安装前只核目标平板可用、USB 唯一及本轮独占；受控读取重新确认设备身份、user0、唯一 base APK 路径和预期旧包哈希。安装阶段不要求微信双窗或 IME 形态，不读取设置或 provider。
 2. 报告本轮就位后取得固定范围的部署开跑令，再由 C 对固定完整 SHA 和 signed APK 至多覆盖一次。`-r` 只请求保留数据；任意安装 stderr、非标准响应、超时或后验失败均冻结，不补装、不回滚、不扩读来改判旧卡。
@@ -46,12 +48,14 @@ pwsh -NoProfile -File scripts/run-tablet-c1b.ps1 -AdbPath <adb.exe 绝对路径>
 
 ## 产物
 
-当前隔离诊断实现使用 `tablet-c1b-inventory-result/v1` 结果封套与 `tablet-c1b-run/v2` 收据（[实现状态](../runs/2026-11-01-窗口清单诊断离线实现.md)）。尚未真机验收，不据此开跑；历史固定 ccc8cce 的裸 v1 结果和收据仍按原版本解释，不转换、不补计数。新 runner 拒绝裸 v1，旧 runner 不兼容新封套，不能混用 APK/runner。
+当前类型拒绝值诊断使用 `tablet-c1b-inventory-result/v2` 封套，新增有序、无重复的 `rejected_type_code_counts`，仅统计原 type getter 已经返回而被范围门拒绝的 Int32 及频次；不新增 getter/窗口关联，不放宽窗口、拓扑或 IME 门。收据仍为 `tablet-c1b-run/v2`，字段与含义不变，`result_schema` 明确指新封套版本。当前类型扩展尚未真机验收，不据离线实现开跑。
+
+历史 `597ca8b` 的 inventory-result/v1 合同已通过真机，但拓扑/语义未通过；更早 ccc8cce 的裸 observation 与收据仍按各自固定版本解释，不迁移或补字段。新 runner 只接受 inventory-result/v2，拒绝旧封套和裸 observation；不能混用 APK/runner。
 
 `docs/runs/evidence/<run_id>/tablet-layout-c1b/`：
 
 - `upstream-t0-v5.json`：本次 T0 原始字节。
-- `tablet-c1b-inventory-result-v1.json`：新结果封套原始字节，包含 observation 原文和两帧首次停止诊断；仅在内层 run/构建/T0 绑定通过后保存。
+- `tablet-c1b-inventory-result-v2.json`：新封套原始字节，包含 observation 原文、两帧首次停止及拒绝类型频次；仅在内层 run/构建/T0 绑定通过后保存。历史 v1 文件保留原名，不重命名或覆盖。
 - `tablet-layout-observation-c1b-v1.json`：封套中 observation 原文的严格 UTF-8 字节，经现有 c1b-v1 validator 校验；不重排 JSON，不改变冻结 schema 或结论。
 - `run.json`：HEAD、设备、APK、时序与结果摘要。新收据的 `result_schema`、`result_envelope_sha256` 指外层；`observation_sha256` 与 `result_diagnostic` 仍指内层原文及原绑定失败字段，不能互换。`inventory_validation` 记录未运行/失败/通过及闭合原因。未通过绑定的 payload 不落盘、不保留失配值；绑定后计数失败保留已有证据且本轮失败，不重采。摘要不证明 provider 已清理或 T-L1 通过。
 
