@@ -27,6 +27,21 @@ class GatewayOwnedWindowPolicyTest {
     }
 
     @Test
+    fun `gateway accessibility overlay window is excluded`() {
+        // AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
+        assertFalse(
+            shouldExposeWindow(
+                windowType = 4,
+                applicationWindowType = 1,
+                inputMethodWindowType = 2,
+                rootPackage = "dev.magina.gateway",
+                ownPackage = "dev.magina.gateway",
+                confirmationAwaiting = false,
+            ),
+        )
+    }
+
+    @Test
     fun `all non application windows are hidden while confirmation is awaiting`() {
         assertFalse(shouldExposeWindow(3, 1, 2, null, "dev.magina.gateway", true))
         assertTrue(shouldExposeWindow(1, 1, 2, "com.tencent.mm", "dev.magina.gateway", true))

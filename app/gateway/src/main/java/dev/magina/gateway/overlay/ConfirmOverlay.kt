@@ -23,6 +23,25 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 /**
+ * 确认卡窗口宿主。无障碍服务可用时优先用 `TYPE_ACCESSIBILITY_OVERLAY`，尝试绕开 vivo 对后台
+ * `TYPE_APPLICATION_OVERLAY` 的静默拦截；无障碍服务不可用时回退应用悬浮窗。
+ */
+data class ConfirmOverlayWindowHost(
+    val context: Context,
+)
+
+internal enum class ConfirmOverlayWindowKind { ACCESSIBILITY_OVERLAY, APPLICATION_OVERLAY, UNAVAILABLE }
+
+internal fun chooseConfirmOverlayWindowKind(
+    accessibilityHostAvailable: Boolean,
+    canDrawOverlays: Boolean,
+): ConfirmOverlayWindowKind = when {
+    accessibilityHostAvailable -> ConfirmOverlayWindowKind.ACCESSIBILITY_OVERLAY
+    canDrawOverlays -> ConfirmOverlayWindowKind.APPLICATION_OVERLAY
+    else -> ConfirmOverlayWindowKind.UNAVAILABLE
+}
+
+/**
  * 统一安全门内部的确认悬浮窗（不暴露为 MCP 工具，harness §5.3 带内确认）。
  * 危险动作弹网关生成的卡片，人在手机上点头。
  *
@@ -45,6 +64,7 @@ object ConfirmOverlay {
     fun ask(
         context: Context,
         actionDesc: String,
+        overlayHost: ConfirmOverlayWindowHost? = null,
         timeoutMs: Long = 60_000,
         onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
         /**
@@ -67,10 +87,24 @@ object ConfirmOverlay {
             channel = "overlay",
             fallback = SafetyFallbacks.OVERLAY_CHANNEL_DOWN,
         )
-        if (!Settings.canDrawOverlays(context)) throw GatewayError(
+        val windowKind = chooseConfirmOverlayWindowKind(
+            accessibilityHostAvailable = overlayHost != null,
+            canDrawOverlays = overlayHost == null && Settings.canDrawOverlays(context),
+        )
+        if (windowKind == ConfirmOverlayWindowKind.UNAVAILABLE) throw GatewayError(
             ErrorCode.E_PERM_MISSING, "悬浮窗权限未授予，带内确认不可用",
             channel = "overlay", fallback = SafetyFallbacks.OVERLAY_PERMISSION_MISSING,
         )
+        val windowContext = if (windowKind == ConfirmOverlayWindowKind.ACCESSIBILITY_OVERLAY) {
+            overlayHost!!.context
+        } else {
+            context
+        }
+        val windowType = if (windowKind == ConfirmOverlayWindowKind.ACCESSIBILITY_OVERLAY) {
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        } else {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        }
 
         val future = CompletableFuture<Boolean>()
         // 两条通道共用同一个 complete；这层只把"生效的那一次"归属到通道上，胜负判定一字未动。
@@ -82,7 +116,11 @@ object ConfirmOverlay {
         val buttonsEnabled = CompletableFuture<Unit>()
         val readiness = ConfirmationReadinessGate()
         val main = Handler(Looper.getMainLooper())
-        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val wm = windowContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        android.util.Log.i(
+            "GatewayApproval",
+            "confirm overlay host=${if (overlayHost != null) "accessibility" else "application"} type=$windowType",
+        )
         isAwaitingDecision = true
         var view: LinearLayout? = null
         var pendingView: LinearLayout? = null
@@ -201,7 +239,7 @@ object ConfirmOverlay {
                 val lp = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    windowType,
                     // NOT_FOCUSABLE 是必须的：可获焦的 overlay 会从 App 手里抢走窗口输入焦点，
                     // 于是 ①App 窗口在卡显示期间既非 active 也非 focused，前台身份被判 unknown；
                     // ②被操作 App 的 InputConnection 被拆掉重建，IME 会话 id 换新，确认后的

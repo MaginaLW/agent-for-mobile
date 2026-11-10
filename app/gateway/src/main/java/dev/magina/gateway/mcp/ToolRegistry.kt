@@ -26,6 +26,7 @@ import dev.magina.gateway.core.preparedTargetSurvivesTypeText
 import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
 import dev.magina.gateway.overlay.ConfirmCardTarget
 import dev.magina.gateway.overlay.ConfirmOverlay
+import dev.magina.gateway.overlay.ConfirmOverlayWindowHost
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
@@ -416,9 +417,13 @@ object ToolRegistry {
             // 两处独立记录同一件事——只有一处时它坏了没人看得出来。
             var decidedVia: ApprovalChannel? = null
             try {
+                val overlayHost = GatewayA11yService.instance?.let { service ->
+                    ConfirmOverlayWindowHost(context = service)
+                }
                 ConfirmOverlay.ask(
                     context = Gateway.appContext,
                     actionDesc = decision.cardText(attempt.confirmationId),
+                    overlayHost = overlayHost,
                     onShownBeforeButtonsEnabled = { cardTarget ->
                         call.testSession = Gateway.testControl.onConfirmationShown(attempt) {
                             captureConfirmCardEvidence(cardTarget)
