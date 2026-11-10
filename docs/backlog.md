@@ -24,6 +24,12 @@
 
 ## 4. 当前工作与验收批次
 
+### 网关确认卡无障碍 overlay（2026-11-10）
+
+- 已完成：`885f4af` 的 `TYPE_ACCESSIBILITY_OVERLAY` 确认卡在 PA2553 后台 Settings 前台可见；允许路径 `ui_action` OK、`decided_via=overlay`、`context=rechecked`，返回动作执行到桌面。见[真机记录](runs/2026-11-10-无障碍overlay确认卡真机验证.md)与[离线记录](runs/2026-11-10-无障碍overlay确认卡离线实现.md)。
+- 未完成：通知仍只有拒绝/查看详细，`gateway-approval` 角标 `mShowBadge=false`；拒绝路径、其他 App、重启/长期绑定未验。本整合提交包含代码；未重新安装/重跑。
+- 边界：不构成 T-L1/P0/execution；S05-A02 仍独立待批。
+
 ### C1b（T-L1）
 
 旧主机证据链已退役（最后提交 `7a3b069`），改用 [C1b 规程](runbooks/T-L1-tablet-c1b.md)的简单 runner：HEAD 固定、设备锁、构建安装、两帧只读采集，一次调用一次采集。

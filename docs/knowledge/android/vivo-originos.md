@@ -101,6 +101,12 @@
 - **有效做法**：把 enabled、应用自报、系统绑定、同一实例和可采集会话分别判定。两点 ready 不证明中间连续、系统侧绑定或安全中心自动恢复；provider 访问可能启动进程，也没有 nonce 回显证明。不要为做对照要求用户重进设置或切换权限。
 - **验证依据与限制**：[本轮记录](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)的两点观察和后来一次采集均未改设置或安装。采集越过就绪检查，却在 T0 写后 absent，c1/c2 未开始；该签名不能直接归因无障碍撤销。历史撤销、设置页静态机制与本轮握手故障不能混成同一条已证因果链。
 
+### 11-10 网关确认卡（PA2553）
+
+- **普通 app overlay 受阻**：`SYSTEM_ALERT_WINDOW=allow` 且应用级“后台弹出界面”未让 `TYPE_APPLICATION_OVERLAY` 卡在后台出现；通知只有“拒绝/查看详细”，查看详细切前台后目标过期。
+- **无障碍 overlay 候选有效**：`TYPE_ACCESSIBILITY_OVERLAY` 候选（APK `4B46D30D…C0C1`，构建 `93b8502`）在后台 Settings 前台时卡可见；允许后 `ui_action` OK、`decided_via=overlay`、`context=rechecked`，返回动作执行到桌面。仅一次安全返回的允许路径；拒绝、其他 App、重启/长期绑定未验，不证明 vivo“后台弹出界面”本身生效。
+- **验证依据**：[真机记录](../../runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[离线记录](../../runs/2026-11-10-无障碍overlay确认卡离线实现.md)。这是单设备验证，不构成 S05/T-L1/P0 证据。
+
 ## 深链 / Intent
 
 - **系统设置子页深链不可靠**：`am start -a android.settings.BLUETOOTH_SETTINGS` 不把蓝牙页带到前台（主设置、无障碍页可靠）。`open_uri` 必须有「深链失败 → UI 导航兜底」。其余子页见 [sys-cli.md §4](sys-cli.md)。
