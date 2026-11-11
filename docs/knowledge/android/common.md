@@ -82,6 +82,8 @@
 
 ## 自有零 UI IME
 
+- **区分 SET_TEXT 与真实 IME（API 36 AVD，2026-11-12 实测）**：`type_text` 省略 ref 仍会优先 SET_TEXT，默认 IME 已切换或返回 OK 都不是 commitText 证据。合成 ime-only EditText 仅拒绝 SET_TEXT、保留普通 InputConnection，run-07 取得真实 `data.channel=ime_commit`、committed/verified=true、中文精确读回，独立快照相符且实际拒绝计数 1；外层审计仍为 a11y。原 default/enabled（含 subtype）恢复并逐字读回。适用于隔离 AVD 的通道回归，不证明 PA2553/微信或异常路径零 OCR。依据：[run-07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)。
+
 - **`ime_visible` / `keyboard_state.visible` 在自有 IME 下恒为 false**（2026-07-25）：`GatewayIme.onEvaluateInputViewShown()` 有意返回 false，永不创建 `TYPE_INPUT_METHOD` 窗口。拿它当"输入会话是活的"的代理，已准备目标就永远记录不成功，也不能用它"佐证键盘没弹起"。**教训：选活性/可见性代理指标时，先确认它在自家组件架构下可能为真。**
 - **替换判据**：① `ImeBridge.session()` 非空且 InputConnection 可用；② 会话 `EditorInfo.packageName` 等于前台包（需单独留存 `sessionPackage`）；③ 降级链不走"已聚焦"短路，必须亲手执行已校验的盲点，打字后 OCR 读回。**"聚焦前后 session id 必须变化"不成立**：微信输入框键盘收起后仍长期持有活连接，再点一次不触发 `onStartInput`。
 - **#23 `performEditorAction()` 返回 true 不代表 App 做了任何事**（2026-07-26）：只表示调用投递到了活着的输入连接。发送类危险动作的结果必须由后验决定，不能由"通道调用被受理"决定。
@@ -142,6 +144,8 @@
   - 改 `app/gateway` 源码后必须重新 assemble 并让 provision 重装才生效，用 `dumpsys package <pkg>` 的 `lastUpdateTime` 核对。
 
 ## adb / uiautomator 工具链
+
+- **Windows/ADB 37.0.1 的本地 AVD 隔离（2026-11-12 实测）**：只传随机不存在的 `--one-device` 不足以证明 USB 排除，run-06 私有表实际列出 PA2553 并在 shell 前拒绝。run-07 改用官方初始化门 `ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动 emulator 前严格要求只有标准表头，后续仅准预期 emulator；在主机 PnP 仍有实体 USB Present/OK 的条件下通过了完整 AVD/IME 链。不要忽略未知行或把 binary 含环境键当执行证据；原过滤失效唯一原因未定。依据：[实施记录 run-06/07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)及[台架规程](../../runbooks/本地测试台.md)，不外推未来版本。
 
 - **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类正常）。截图+视觉兜底是刚需；自研 AccessibilityService 直读事件流可绕开 idle 等待。
 - 软键盘弹出导致坐标错位（M0 两次误触主因之一）→ 键盘状态感知 + 点击前二次校验（网关已内建）。
