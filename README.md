@@ -1,14 +1,14 @@
 # 手机 Agent（代号待定）
 
-把已付费的 AI 订阅（Claude Pro / ChatGPT Plus）变成能替你操作手机和平板各 App 的托管助手。
+通过 ChatGPT 订阅与 Codex CLI，构建能操作手机和平板各 App 的托管助手。
 
-**架构**：设备端 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI，只走官方订阅通道。
+**架构**：设备端 = 无障碍执行器 + MCP server；大脑 = Codex CLI + gateway，只走官方订阅通道。Claude 执行路线已退役，旧暂停件不恢复或迁移；历史 trace 与通用设备能力保留。
 
 **设备基线**：Android 手机与平板复用同一执行器。当前验收基线是 vivo PA2553 / Android 16 / 日常横屏“应用多窗”，同一微信的双 OS window 是主线适配对象。手机是历史基线，手机 C 道（手机真机验收）暂停。未验证的形态一律 fail-closed。
 
 ## 入口
 
-- 开发指南：[AGENTS.md](AGENTS.md)（Claude 经 [CLAUDE.md](CLAUDE.md) 导入）
+- 开发指南：[AGENTS.md](AGENTS.md)
 - 当前状态与卡点：[STATUS.md](STATUS.md)
 - 待办与有效决定：[docs/backlog.md](docs/backlog.md)
 - 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
@@ -21,7 +21,7 @@
 | M0 | mobile-mcp 真机跑通 5 个验收任务 | ✅ 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)） |
 | M1 | 自研 Android 执行器 App（Kotlin，无障碍 + MCP HTTP server + 确认层） | 🟡 网关已在历史手机上跑通，部分工具仍是占位（见[能力现状](docs/knowledge/android/m1b-capabilities.md)）；P0 安全硬门未闭合 |
 | M1-T | Android 平板横屏基线（T0-L 入场 → T-L1 只读证据 → T-L2 横屏 P0） | 🟡 T0-L 完成；T-L1 未通过；C1b 简单 runner 已在 [10-09 真机尝试](docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)中走通构建、安装，采集被 vivo 撤销无障碍权限阻塞 |
-| M2 | 大脑迁上手机（Termux/AVF 跑 Claude Code） | ⬜ 未开始 |
+| M2 | Claude Code 迁上手机（Termux/AVF） | 已取消，不再列为待办 |
 | M3 | 宏系统「教一遍」、语音/分享入口、App 技能包 | ⬜ 未开始 |
 
 当前候选、卡点与下一步见 [STATUS.md](STATUS.md)；平板架构见[适配设计](docs/specs/2026-08-23-Android平板适配-design.md)。
