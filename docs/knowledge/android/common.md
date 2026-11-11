@@ -126,6 +126,8 @@
 
 ## 监督式真机跑测控制面
 
+- **安装会话丢失时保留 UNKNOWN（F3-P01，2026-11-12）**：原句柄不可访问后，只读核宿主进程/监听与已有原件；旧 manifest 的 RUNNING 不证明仍在运行，无进程/无监听也不证明设备装包成功或失败。原 manifest 保留，补充观察另存；区分已落盘 SDK=13 与已启动但无结果的第 14 次安装，未记录的退出码/结束时间/时长不补零。原轮冻结，不因无自动超时、剩余预算或 C1b A10 模板自动恢复/补后验。依据：[本轮归档](../../runs/2026-11-11-离线减负实施.md#f3-p01安装会话丢失后的-unknown-冻结归档)，只核宿主，没有新增设备命令。
+
 - **确认状态可观察不等于可写**：debug runner 只用 `run-as` 写一次性 `test-control.json`（字段严格校验、不含 allowed/denied），PC 只读 `test-confirmation-state.json`；决定只来自手机按钮回调，不加"测试方便"的 decision 写接口。release 用 no-op 控制面。token、确认状态、截图不经 exported provider/网络接口；外部命令异常不得拼接 adb stdout。
 - **危险 Enter 绑定输入证据与业务目标**：`type_text` 后登记短 TTL 证据（预览、长度、SHA-256、焦点指纹），准备宏另存 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`，只沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 先使其失效；Enter 前后复核。audit 只记长度/哈希不落正文。
 - **同一确认要有机械关联键**：12 位 confirm ID 同时显示在卡片、写入 confirmation state、绑定该卡截图；不能靠"时间接近"配对。
