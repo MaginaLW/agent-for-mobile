@@ -287,7 +287,7 @@ try{
     $actualAvd=Invoke-BenchAdb @('emu','avd','name') 'avd-identity' 10
     $actualApi=Invoke-BenchAdb @('shell','getprop','ro.build.version.sdk') 'api-identity' 10
     $qemu=Invoke-BenchAdb @('shell','getprop','ro.kernel.qemu') 'qemu-identity' 10
-    Assert-Bench (($actualAvd -split '\r?\n')[0] -ceq $summary.avd_name -and $actualApi -ceq '36' -and $qemu -ceq '1') 'emulator_identity_mismatch'
+    Assert-Bench (($actualAvd -split '[\r\n]+')[0] -ceq $summary.avd_name -and $actualApi -ceq '36' -and $qemu -ceq '1') 'emulator_identity_mismatch'
     $summary.actual_api=$actualApi; $emulatorVerified=$true
     Set-BenchPhase 'install_and_bind'
     foreach($app in @(@{Path=$gateway;Package='dev.magina.gateway';Hash=$summary.gateway_apk_sha256},@{Path=$target;Package='dev.magina.testtarget';Hash=$summary.target_apk_sha256})){
