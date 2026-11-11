@@ -45,6 +45,8 @@ $summary=[ordered]@{
     expected_api=36; actual_api='UNKNOWN'; serial=('emulator-'+$ConsolePort); avd_name='UNKNOWN'
     acceleration_verified=$false; available_memory_mb='UNKNOWN'
     isolated_adb_server_port=$AdbServerPort; server_pid='UNKNOWN'; emulator_pid='UNKNOWN'
+    adb_usb_initialization_requested='disabled'; adb_mdns_requested='disabled'; adb_emulator_discovery_requested='enabled'
+    initial_isolated_device_table_empty='UNKNOWN'
     physical_device_commands=0; approval_injected=$false; token_logged=$false
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
     touch_exploration_setting='UNKNOWN'; touch_exploration_enabled='UNKNOWN'
@@ -143,6 +145,12 @@ function Invoke-BenchAdb([string[]]$Arguments,[string]$Name,[int]$TimeoutSeconds
     Assert-BenchOwnedServer
     # Official adb treats numeric 127.0.0.1 as a remote server spec: connection failure cannot launch a daemon.
     return Invoke-BenchNative $script:adb (@('-H','127.0.0.1','-P',"$AdbServerPort",'-s',$summary.serial)+$Arguments) $Name $TimeoutSeconds -Sensitive:$Sensitive
+}
+function Get-BenchDeviceRows([string]$Devices){
+    $lines=@($Devices -split '[\r\n]+'|ForEach-Object {$_.Trim()}|Where-Object {$_})
+    Assert-Bench ($lines.Count -ge 1 -and $lines[0] -ceq 'List of devices attached' -and
+        @($lines|Where-Object {$_ -ceq 'List of devices attached'}).Count -eq 1) 'adb_device_table_header_invalid'
+    return @($lines|Select-Object -Skip 1)
 }
 function Get-BenchCertificate([string]$Apk,[string]$Name){
     $raw=Invoke-BenchNative $script:signer @('verify','--print-certs',$Apk) $Name 30
@@ -272,6 +280,8 @@ try{
         TEMP=(Join-Path $output 'tmp');TMP=(Join-Path $output 'tmp')
         JAVA_TOOL_OPTIONS=('-Duser.home="'+(Join-Path $output 'home')+'" -Djava.io.tmpdir="'+(Join-Path $output 'tmp')+'"')
         ANDROID_ADB_SERVER_PORT="$AdbServerPort";ADB_SERVER_SOCKET="tcp:127.0.0.1:$AdbServerPort"
+        # Official adb client/main.cpp gates USB backend initialization and mDNS discovery on these values.
+        ADB_USB='0';ADB_MDNS='0';ADB_EMU='1'
     }
     $summary.source_sha=Invoke-BenchNative 'git' @('rev-parse','HEAD') 'source-head'
     $dirty=Invoke-BenchNative 'git' @('status','--porcelain=v1','--untracked-files=normal') 'source-status'
@@ -308,6 +318,10 @@ try{
         Start-Sleep -Milliseconds 100
     }
     Assert-Bench $serverReady 'isolated_adb_server_listen_timeout'
+    Set-BenchPhase 'verify_empty_isolated_adb'
+    $initialDevices=Invoke-BenchAdb @('devices') 'pre-emulator-empty-devices' 10
+    Assert-Bench (@(Get-BenchDeviceRows $initialDevices).Count -eq 0) 'isolated_adb_not_empty_before_emulator'
+    $summary.initial_isolated_device_table_empty=$true
     Set-BenchPhase 'start_emulator'
     $emulator=Start-BenchProcess $emulatorExe @('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)",'-no-window','-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
     $summary.emulator_pid=$emulator.Process.Id
@@ -317,8 +331,9 @@ try{
         Assert-BenchRemaining 180
         Assert-Bench (-not $emulator.Process.HasExited) 'emulator_exited_before_boot'
         $devices=Invoke-BenchAdb @('devices') 'isolated-devices' 10
-        $rows=@($devices -split '\r?\n'|Where-Object {$_ -match '^\S+\s+(device|offline|unauthorized)\b'})
-        Assert-Bench (@($rows|Where-Object {($_ -split '\s+')[0] -cne $summary.serial}).Count -eq 0) 'foreign_device_on_isolated_server'
+        $rows=@(Get-BenchDeviceRows $devices)
+        $expectedRow='^'+[regex]::Escape($summary.serial)+'\s+(device|offline|unauthorized)(?:\s|$)'
+        Assert-Bench (@($rows|Where-Object {$_ -cnotmatch $expectedRow}).Count -eq 0) 'foreign_device_on_isolated_server'
         if(@($rows|Where-Object {$_ -cmatch ('^'+[regex]::Escape($summary.serial)+'\s+device\b')}).Count -eq 1){
             $boot=Invoke-BenchAdb @('shell','getprop','sys.boot_completed') 'boot-complete' 10
             if($boot -ceq '1'){$online=$true;break}
