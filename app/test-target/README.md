@@ -2,11 +2,13 @@
 
 独立包 `dev.magina.testtarget`，仅合成页面，无权限、账号、网络、Provider 或真实发送能力。构建入口为 `:test-target:assembleDebug`；运行在隔离 API 36 模拟器，构建继续使用工程已有 compile/target 35。主工程通过 `-PlocalTestbench=true` 显式纳入本模块；默认构建和 C1b 隔离构建不应因此扩大。
 
-固定深链 `agent-testbench://target/<route>`，route 为 `list`、`search`、`conversation`、`opaque`、`degenerate`、`ime`。列表→搜索→会话保留真实 UI 路径；自动台架可通过既有 `intent_send` 的 VIEW 深链路由进入各页，不将它冒充实际点击导航覆盖。
+固定深链 `agent-testbench://target/<route>`，route 为 `list`、`search`、`conversation`、`opaque`、`degenerate`、`ime`、`ime-only`。列表→搜索→会话保留真实 UI 路径；自动台架可通过既有 `intent_send` 的 VIEW 深链路由进入各页，不将它冒充实际点击导航覆盖。
 
 search 路由在初始化完控件与监听器后，让可聚焦的内容容器请求输入焦点，避免 EditText 自动成为初始输入焦点；这只作用于 search，不改变 ime 路由。`target_search_focus` 显示 `输入框焦点：true/false`，初始及变化后都读取实际 `search.hasFocus()`，不硬编码未聚焦。该标签只观测输入焦点；gateway 现行 `ui_action focus` 使用 `ACTION_ACCESSIBILITY_FOCUS`，不能将无障碍焦点与输入焦点混为同一判据，实际动作结果与状态仍需台架核对。
 
 同一 search 场景渲染时，通过 `AccessibilityManager.isTouchExplorationEnabled()` 只读取得实际状态并显示 `触摸探索：true/false`；不增加权限、Service 或状态写入，也不宣称该标签持续监听后续变更。触摸探索关闭时，无障碍 focus 的拒绝属于待核对的负向能力结果，不计为动作成功；可独立用真实 `set_text` 和精确读回验证受控输入正向链。旧 run04 未读取该状态，不能由新标签倒推旧轮的唯一根因。
+
+`ime-only` 是独立的输入通道靶标：真实 EditText（ID `target_composer`）只对无障碍 `ACTION_SET_TEXT` 返回 false，其余无障碍行为继续调用父类；没有覆盖或伪造 `InputConnection`，保留普通 IME `commitText`、焦点与可访问文本。页面直接请求输入焦点和显示当前 IME，省掉一次点击；这不切换或启用输入法，也不证明 IME 实际就绪。`无障碍 SET_TEXT 拒绝次数：N` 只在实际 SET_TEXT 回调被拒绝时递增，新页面实例为零。页面没有发送按钮，也不自行写入输入文本；IME 正向验证必须同时核对 gateway 实际返回 `channel=ime_commit` 与输入框精确文本，不能只凭拒绝计数或手填文本声称走过 IME。本新增源码尚不是已安装包或 F3 设备写入许可。
 
 会话页输入框、发送按钮和回调计数分别使用 `target_composer`、`target_send`、`target_action_count` 资源 ID。发送按钮只增加本 Activity 的内存计数；新页面/Activity 重建会重置，不出网、不写业务存储。用于证明未经确认时 callback 仍为 0，或现场真人允许一次后恰好为 1；测试器不得自点 gateway 确认卡。
 

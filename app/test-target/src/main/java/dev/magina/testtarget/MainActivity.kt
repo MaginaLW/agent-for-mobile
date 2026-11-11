@@ -42,7 +42,7 @@ class MainActivity : Activity() {
             else -> null
         }
         show(when (route) {
-            "list", "search", "conversation", "opaque", "degenerate", "ime" -> route
+            "list", "search", "conversation", "opaque", "degenerate", "ime", "ime-only" -> route
             else -> "invalid"
         })
     }
@@ -85,6 +85,7 @@ class MainActivity : Activity() {
                 focusState.text = "输入框焦点：${search.hasFocus()}"
             }
             "conversation", "ime" -> conversation(showIme = route == "ime")
+            "ime-only" -> imeOnly()
             "opaque" -> {
                 label("下方内容使用 Canvas 绘制；子树不向无障碍暴露文字。")
                 content.addView(OpaqueContent(this), LinearLayout.LayoutParams(-1, 520))
@@ -116,6 +117,24 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun imeOnly() {
+        label("此输入框拒绝无障碍 SET_TEXT，保留普通输入连接与真实文本。")
+        val editor = ImeOnlyInput(this).apply {
+            id = R.id.target_composer
+            hint = "仅 IME 提交的合成文本"
+            isSingleLine = true
+            isSaveEnabled = false
+        }
+        content.addView(editor)
+        val rejected = label("无障碍 SET_TEXT 拒绝次数：${editor.rejectedSetTextCount}")
+        editor.onSetTextRejected = { count -> rejected.text = "无障碍 SET_TEXT 拒绝次数：$count" }
+        editor.requestFocus()
+        editor.post {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
     private fun label(value: String, viewId: Int = View.NO_ID): TextView = TextView(this).apply {
         id = viewId
         text = value
@@ -138,6 +157,22 @@ class MainActivity : Activity() {
             text = value
             setOnClickListener { action() }
         })
+    }
+}
+
+/** Only the accessibility SET_TEXT path is rejected; the platform InputConnection is unchanged. */
+private class ImeOnlyInput(context: Context) : EditText(context) {
+    var rejectedSetTextCount: Int = 0
+        private set
+    var onSetTextRejected: (Int) -> Unit = {}
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
+            rejectedSetTextCount += 1
+            onSetTextRejected(rejectedSetTextCount)
+            return false
+        }
+        return super.performAccessibilityAction(action, arguments)
     }
 }
 

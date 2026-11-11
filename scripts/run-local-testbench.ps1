@@ -21,7 +21,8 @@ param(
     [ValidateRange(60,900)][int]$BootTimeoutSeconds=300,
     [ValidateRange(240,3600)][int]$RuntimeSeconds=900,
     [switch]$PrepareOnly,
-    [switch]$Run
+    [switch]$Run,
+    [switch]$ImeProbe
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3.0
@@ -30,6 +31,10 @@ $encoding=[Text.UTF8Encoding]::new($false,$true)
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $server=$null; $emulator=$null; $client=$null; $token=$null
 $forwardAdded=$false; $emulatorVerified=$false
+$imeState=$null; $imeRestoreAttempted=$false; $imeTyped=$null
+$imeProbeText='台架中文输入甲乙'
+$gatewayImeComponent='dev.magina.gateway/.ime.GatewayIme'
+$gatewayImeIds=@($gatewayImeComponent,'dev.magina.gateway/dev.magina.gateway.ime.GatewayIme')
 $script:commandIndex=0; $script:rpcId=0; $script:auditIds=[Collections.Generic.List[string]]::new()
 $script:phase='preflight'
 $summary=[ordered]@{
@@ -46,6 +51,12 @@ $summary=[ordered]@{
     input_focus_before='UNKNOWN'; input_focus_after_focus_probe='UNKNOWN'
     accessibility_focus_result='UNKNOWN'; accessibility_focus_negative_verified=$false
     callback_count_before='UNKNOWN'; callback_count_after='UNKNOWN'; audit_verified=$false
+    ime_probe_requested=[bool]$ImeProbe; ime_probe_started=$false
+    ime_probe_status=$(if($ImeProbe){'not_run'}else{'not_requested'}); ime_probe_channel='UNKNOWN'
+    ime_original_default='UNKNOWN'; ime_original_enabled='UNKNOWN'
+    ime_selected_default='UNKNOWN'; ime_set_text_rejections='UNKNOWN'
+    ime_text_readback_verified=$false; ime_audit_verified=$false
+    ime_restore_attempted=$false; ime_restore_verified='UNKNOWN'; ime_restore_reason='UNKNOWN'
     emulator_process_stopped='UNKNOWN'; adb_server_process_stopped='UNKNOWN'
     declared_ports_released='UNKNOWN'; remaining_listener_owners=@()
     cleanup_proven=$false; failure_phase='UNKNOWN'; failure_reason='UNKNOWN'
@@ -212,6 +223,21 @@ function Open-BenchRoute([string]$Route){
     Assert-BenchForeground ('route-'+$Route+'-foreground')
     $summary.routes_verified+=,$Route
 }
+function Restore-BenchIme {
+    Assert-Bench ($null -ne $script:imeState -and $emulatorVerified) 'ime_restore_original_state_unavailable'
+    $script:imeRestoreAttempted=$true
+    $summary.ime_restore_attempted=$true; $summary.ime_restore_verified=$false
+    Set-BenchPhase 'restore_original_avd_ime'
+    if($script:imeState.Changed){
+        [void](Invoke-BenchAdb @('shell','ime','set','--user','0',$script:imeState.Default) 'restore-original-ime' 20)
+        # Enabled entries can contain subtype separators; quote the validated value for the Android shell.
+        [void](Invoke-BenchAdb @('shell','settings','--user','0','put','secure','enabled_input_methods',("'"+$script:imeState.Enabled+"'")) 'restore-original-enabled-imes' 20)
+    }
+    $restoredDefault=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','default_input_method') 'read-restored-default-ime' 15
+    $restoredEnabled=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','enabled_input_methods') 'read-restored-enabled-imes' 15
+    Assert-Bench ($restoredDefault -ceq $script:imeState.Default -and $restoredEnabled -ceq $script:imeState.Enabled) 'original_ime_restore_readback_mismatch'
+    $summary.ime_restore_verified=$true; $summary.ime_restore_reason='original_default_and_enabled_state_match'
+}
 
 $output=[IO.Path]::GetFullPath($OutputDirectory)
 Assert-BenchLocalPath $output (Join-Path $repoRoot '.checks')|Out-Null
@@ -220,6 +246,7 @@ New-Item -ItemType Directory -Path $output -Force|Out-Null
 try{
     Assert-Bench (-not($Run -and $PrepareOnly)) 'run_and_prepare_only_conflict'
     Assert-Bench ($ConsolePort%2 -eq 0 -and $RuntimeSeconds -ge $BootTimeoutSeconds+180) 'invalid_ports_or_runtime_budget'
+    if($ImeProbe){Assert-Bench ($RuntimeSeconds -ge $BootTimeoutSeconds+300) 'ime_probe_requires_additional_runtime_budget'}
     $ports=@($AdbServerPort,$ConsolePort,($ConsolePort+1),$HttpPort)
     Assert-Bench (@($ports|Select-Object -Unique).Count -eq 4) 'ports_not_distinct'
     $listeners=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners())
@@ -339,7 +366,9 @@ try{
     $initialized=Invoke-BenchRpc 'initialize' @{protocolVersion='2025-03-26';capabilities=@{};clientInfo=@{name='local-testbench';version='1'}} 'initialize'
     Assert-Bench ($initialized.protocolVersion -ceq '2025-03-26') 'mcp_protocol_mismatch'
     $tools=Invoke-BenchRpc 'tools/list' @{} 'tools-list'
-    foreach($required in @('foreground_app','intent_send','ui_snapshot','ui_action')){Assert-Bench ($tools.tools.name -ccontains $required) 'required_gateway_tool_missing'}
+    $requiredTools=@('foreground_app','intent_send','ui_snapshot','ui_action')
+    if($ImeProbe){$requiredTools+=,'type_text'}
+    foreach($required in $requiredTools){Assert-Bench ($tools.tools.name -ccontains $required) 'required_gateway_tool_missing'}
     Open-BenchRoute 'list'
     [void](Get-BenchSnapshot 'list-snapshot')
     Open-BenchRoute 'search'
@@ -378,6 +407,55 @@ try{
     $after=Get-BenchSnapshot 'conversation-after-timeout'
     $summary.callback_count_after=Get-BenchCount $after
     Assert-Bench ($summary.callback_count_after -eq 0) 'unconfirmed_click_executed'
+    if($ImeProbe){
+        Assert-BenchRemaining 150
+        Set-BenchPhase 'prepare_owned_avd_ime_probe'
+        $summary.ime_probe_started=$true; $summary.ime_probe_status='running'
+        $originalDefault=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','default_input_method') 'save-original-default-ime' 15
+        $originalEnabled=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','enabled_input_methods') 'save-original-enabled-imes' 15
+        Assert-Bench ($originalDefault -cmatch '^[A-Za-z][A-Za-z0-9_.]*/[A-Za-z.][A-Za-z0-9_.]*$' -and
+            $originalEnabled -cne 'null' -and $originalEnabled -cmatch '^[A-Za-z0-9_./:;-]+$') 'original_ime_state_unknown_or_invalid'
+        $imeState=[pscustomobject]@{Default=$originalDefault;Enabled=$originalEnabled;Changed=$false}
+        $summary.ime_original_default=$originalDefault; $summary.ime_original_enabled=$originalEnabled
+        $enabledIds=@($originalEnabled -split ':'|ForEach-Object {($_ -split ';')[0]})
+        if(@($enabledIds|Where-Object {$_ -cin $gatewayImeIds}).Count -eq 0){
+            $imeState.Changed=$true
+            [void](Invoke-BenchAdb @('shell','ime','enable','--user','0',$gatewayImeComponent) 'enable-owned-gateway-ime' 20)
+        }
+        if($originalDefault -cnotin $gatewayImeIds){
+            $imeState.Changed=$true
+            [void](Invoke-BenchAdb @('shell','ime','set','--user','0',$gatewayImeComponent) 'select-owned-gateway-ime' 20)
+        }
+        $selectedDefault=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','default_input_method') 'read-selected-default-ime' 15
+        $selectedEnabled=Invoke-BenchAdb @('shell','settings','--user','0','get','secure','enabled_input_methods') 'read-selected-enabled-imes' 15
+        $summary.ime_selected_default=$selectedDefault
+        $selectedIds=@($selectedEnabled -split ':'|ForEach-Object {($_ -split ';')[0]})
+        Assert-Bench ($selectedDefault -cin $gatewayImeIds -and @($selectedIds|Where-Object {$_ -cin $gatewayImeIds}).Count -eq 1) 'gateway_ime_selection_not_verified'
+        Open-BenchRoute 'ime-only'
+        $imeForeground=Invoke-BenchTool 'foreground_app' @{} 'ime-session-ready'
+        Assert-BenchToolOk $imeForeground
+        Assert-Bench ($imeForeground.ctx.app -ceq 'dev.magina.testtarget' -and $imeForeground.ctx.foreground_known -eq $true -and
+            $imeForeground.ctx.caps -ccontains 'ime_active') 'ime_probe_target_or_input_session_not_ready'
+        $imeBefore=Get-BenchSnapshot 'ime-only-before-input'
+        [void](Find-BenchInput $imeBefore)
+        Assert-Bench ($imeBefore.focused_identity_source -ceq 'a11y' -and -not [string]::IsNullOrWhiteSpace([string]$imeBefore.focused_input_id)) 'ime_probe_focused_editable_unavailable'
+        $rejectionsBefore=@($imeBefore.elements|Where-Object {$_.source -ceq 'a11y' -and $_.text -ceq '无障碍 SET_TEXT 拒绝次数：0'})
+        Assert-Bench ($rejectionsBefore.Count -eq 1) 'ime_probe_set_text_rejection_baseline_invalid'
+        Set-BenchPhase 'type_text_through_real_ime'
+        # Omitting ref is the public API's null-ref path; it must still try SET_TEXT before IME.
+        $imeTyped=Invoke-BenchTool 'type_text' @{text=$imeProbeText;mode='replace'} 'ime-type-text' 30
+        Assert-BenchToolOk $imeTyped
+        $summary.ime_probe_channel=$imeTyped.data.channel
+        Assert-Bench ($imeTyped.data.channel -ceq 'ime_commit' -and $imeTyped.data.committed -is [bool] -and $imeTyped.data.committed -ceq $true -and
+            $imeTyped.data.verified -is [bool] -and $imeTyped.data.verified -ceq $true -and $imeTyped.data.readback -ceq $imeProbeText) 'ime_commit_response_not_verified'
+        $imeAfter=Get-BenchSnapshot 'ime-only-independent-readback'
+        $imeReadback=Find-BenchInput $imeAfter
+        $rejectionsAfter=@($imeAfter.elements|Where-Object {$_.source -ceq 'a11y' -and $_.text -ceq '无障碍 SET_TEXT 拒绝次数：1'})
+        Assert-Bench ($imeReadback.text -ceq $imeProbeText -and $rejectionsAfter.Count -eq 1) 'ime_commit_target_text_or_rejection_count_mismatch'
+        $summary.ime_set_text_rejections=1; $summary.ime_text_readback_verified=$true
+        Restore-BenchIme
+        $summary.ime_probe_status='input_and_restore_verified_pending_audit'
+    }
     Set-BenchPhase 'collect_audit'
     $auditFiles=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','ls','files/audit') 'audit-file-list'
     $lines=[Collections.Generic.List[string]]::new()
@@ -395,13 +473,30 @@ try{
     Assert-Bench ($focusEntry.result -ceq 'E_VERIFY_FAIL' -and $focusEntry.channel -ceq 'a11y') 'accessibility_focus_negative_audit_mismatch'
     $inputEntry=@($audit|Where-Object id -CEQ $typed.audit_id)[0]
     Assert-Bench ($inputEntry.result -ceq 'OK' -and $inputEntry.channel -ceq 'a11y') 'ordinary_action_audit_mismatch'
+    if($ImeProbe){
+        $imeEntry=@($audit|Where-Object id -CEQ $imeTyped.audit_id)[0]
+        $imeHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($imeProbeText))).ToLowerInvariant()
+        Assert-Bench ($imeEntry.tool -ceq 'type_text' -and $imeEntry.result -ceq 'OK' -and $imeEntry.channel -ceq 'a11y' -and
+            $imeEntry.args.text_length -eq $imeProbeText.Length -and $imeEntry.args.text_sha256 -ceq $imeHash -and
+            $null -eq $imeEntry.args.PSObject.Properties['text']) 'ime_commit_audit_mismatch'
+        Assert-Bench ($summary.ime_restore_verified -ceq $true) 'ime_restore_unproven'
+        $summary.ime_audit_verified=$true; $summary.ime_probe_status='passed'
+    }
     $summary.audit_verified=$true; $summary.status='passed'
 }catch{
     $summary.failure_phase=$script:phase
     # Exception dumps can carry request headers or native context; persist only the named failure.
     $reason=$_.Exception.Message
     $summary.failure_reason=if($reason -cmatch '^[a-z][a-z0-9_-]+$'){$reason}else{'testbench_exception_'+$_.Exception.GetType().Name}
+    if($summary.ime_probe_started){$summary.ime_probe_status='failed'}
 }finally{
+    if($null -ne $imeState -and -not $imeRestoreAttempted){
+        try{Restore-BenchIme}catch{
+            $summary.ime_restore_verified=$false
+            $restoreReason=$_.Exception.Message
+            $summary.ime_restore_reason=if($restoreReason -cmatch '^[a-z][a-z0-9_-]+$'){$restoreReason}else{'ime_restore_exception_'+$_.Exception.GetType().Name}
+        }
+    }
     $token=$null
     if($null -ne $client){$client.Dispose()}
     if($forwardAdded -and $null -ne $server -and -not $server.Process.HasExited){try{[void](Invoke-BenchAdb @('forward','--remove',"tcp:$HttpPort") 'remove-owned-forward' 10)}catch{}}
