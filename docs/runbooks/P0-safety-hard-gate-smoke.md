@@ -20,6 +20,8 @@ Agent 从仓库根目录执行：
 pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale,Deny -Executor gateway -Provision
 ```
 
+默认大脑为 Codex，执行器为 gateway；Claude 请求在设备准备前拒绝。该默认变更不代表新的真机验收或运行许可。
+
 这条命令由 Agent 执行，不转交用户。`-Legs` 必须显式给出；runner 接受 `Allow|Stale|Deny`，即使参数次序颠倒也固定按 Allow→Stale→Deny 串行执行。任一腿失败、超时、拒绝、证据缺失或清理失败都会停止整组，危险动作不会自动重派。
 
 **`-Provision` 每一轮都要带，不是只在第一轮。** runner 的 `finally` 每轮收尾都会把输入法恢复成用户原来的（这是故意的：不该让跑测把设备留在网关输入法上），所以下一轮不带 `-Provision` 必然 `setup-fail：gateway 输入法未成为默认输入法`。这条在派单之前失败，不花钱，但会白等一轮（2026-07-31 实际踩到）。
