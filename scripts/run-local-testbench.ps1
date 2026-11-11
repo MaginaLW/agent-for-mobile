@@ -44,6 +44,7 @@ $summary=[ordered]@{
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
     callback_count_before='UNKNOWN'; callback_count_after='UNKNOWN'; audit_verified=$false
     emulator_process_stopped='UNKNOWN'; adb_server_process_stopped='UNKNOWN'
+    declared_ports_released='UNKNOWN'; remaining_listener_owners=@()
     cleanup_proven=$false; failure_phase='UNKNOWN'; failure_reason='UNKNOWN'
     runtime_acceptance=$false; production_execution_grant=$false
 }
@@ -112,9 +113,22 @@ function Invoke-BenchNative([string]$File,[string[]]$Arguments,[string]$Name,[in
         return $result.Output.Trim()
     }finally{$handle.Process.Dispose()}
 }
-function Invoke-BenchAdb([string[]]$Arguments,[string]$Name,[int]$TimeoutSeconds=30,[switch]$Sensitive){
+function Get-BenchPortListeners([int[]]$Ports){
+    $conditions=@($Ports|ForEach-Object {'LocalPort = '+$_})
+    # MSFT_NetTCPConnection State=2 is LISTEN; an empty query is distinct from probe failure.
+    try{return @(Get-CimInstance -Namespace 'root/StandardCimv2' -ClassName MSFT_NetTCPConnection -Filter ('State = 2 AND ('+($conditions -join ' OR ')+')') -ErrorAction Stop)}
+    catch{throw 'listener_ownership_probe_unavailable'}
+}
+function Assert-BenchOwnedServer {
     Assert-Bench ($null -ne $server -and -not $server.Process.HasExited) 'isolated_adb_server_exited'
-    return Invoke-BenchNative $script:adb (@('-P',"$AdbServerPort",'-s',$summary.serial)+$Arguments) $Name $TimeoutSeconds -Sensitive:$Sensitive
+    $listeners=@(Get-BenchPortListeners @($AdbServerPort))
+    Assert-Bench ($listeners.Count -gt 0) 'isolated_adb_server_not_listening'
+    Assert-Bench (@($listeners|Where-Object {$_.OwningProcess -ne $server.Process.Id -or $_.LocalAddress -cnotin @('127.0.0.1','::1')}).Count -eq 0) 'isolated_adb_listener_owner_mismatch'
+}
+function Invoke-BenchAdb([string[]]$Arguments,[string]$Name,[int]$TimeoutSeconds=30,[switch]$Sensitive){
+    Assert-BenchOwnedServer
+    # Official adb treats numeric 127.0.0.1 as a remote server spec: connection failure cannot launch a daemon.
+    return Invoke-BenchNative $script:adb (@('-H','127.0.0.1','-P',"$AdbServerPort",'-s',$summary.serial)+$Arguments) $Name $TimeoutSeconds -Sensitive:$Sensitive
 }
 function Get-BenchCertificate([string]$Apk,[string]$Name){
     $raw=Invoke-BenchNative $script:signer @('verify','--print-certs',$Apk) $Name 30
@@ -241,10 +255,17 @@ try{
     Assert-Bench (Test-Path -LiteralPath (Join-Path $output 'avd/config.ini')) 'avd_not_created_in_declared_directory'
     Set-BenchPhase 'start_isolated_adb'
     # --one-device restricts USB discovery to a per-run nonexistent USB identifier; TCP emulators remain available.
-    $server=Start-BenchProcess $script:adb @('-L',"tcp:127.0.0.1:$AdbServerPort",'--one-device',('local-testbench-no-usb-'+$nonce),'server','nodaemon')
+    # tcp:<port> with no -a binds the supported loopback listener; numeric-host -L is unsupported by adb.
+    $server=Start-BenchProcess $script:adb @('-L',"tcp:$AdbServerPort",'--one-device',('local-testbench-no-usb-'+$nonce),'server','nodaemon')
     $summary.server_pid=$server.Process.Id
-    Start-Sleep -Milliseconds 500
-    Assert-Bench (-not $server.Process.HasExited) 'isolated_adb_server_start_failed'
+    $serverReady=$false
+    foreach($attempt in 1..20){
+        Assert-Bench (-not $server.Process.HasExited) 'isolated_adb_server_start_failed'
+        $listeners=@(Get-BenchPortListeners @($AdbServerPort))
+        if($listeners.Count -gt 0){Assert-BenchOwnedServer;$serverReady=$true;break}
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-Bench $serverReady 'isolated_adb_server_listen_timeout'
     Set-BenchPhase 'start_emulator'
     $emulator=Start-BenchProcess $emulatorExe @('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)",'-no-window','-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
     $summary.emulator_pid=$emulator.Process.Id
@@ -253,7 +274,7 @@ try{
     while($clock.Elapsed.TotalSeconds -lt $bootLimit){
         Assert-BenchRemaining 180
         Assert-Bench (-not $emulator.Process.HasExited) 'emulator_exited_before_boot'
-        $devices=Invoke-BenchNative $script:adb @('-P',"$AdbServerPort",'devices') 'isolated-devices' 10
+        $devices=Invoke-BenchAdb @('devices') 'isolated-devices' 10
         $rows=@($devices -split '\r?\n'|Where-Object {$_ -match '^\S+\s+(device|offline|unauthorized)\b'})
         Assert-Bench (@($rows|Where-Object {($_ -split '\s+')[0] -cne $summary.serial}).Count -eq 0) 'foreign_device_on_isolated_server'
         if(@($rows|Where-Object {$_ -cmatch ('^'+[regex]::Escape($summary.serial)+'\s+device\b')}).Count -eq 1){
@@ -353,7 +374,7 @@ try{
     $summary.failure_phase=$script:phase
     # Exception dumps can carry request headers or native context; persist only the named failure.
     $reason=$_.Exception.Message
-    $summary.failure_reason=if($reason -cmatch '^[a-z][a-z0-9_]+$'){$reason}else{'testbench_exception_'+$_.Exception.GetType().Name}
+    $summary.failure_reason=if($reason -cmatch '^[a-z][a-z0-9_-]+$'){$reason}else{'testbench_exception_'+$_.Exception.GetType().Name}
 }finally{
     $token=$null
     if($null -ne $client){$client.Dispose()}
@@ -372,8 +393,15 @@ try{
             $summary.adb_server_process_stopped=$server.Process.HasExited
             [void](Save-BenchProcess $server 'adb-server')
         }catch{$summary.adb_server_process_stopped=$false}finally{$server.Process.Dispose()}
+        try{
+            $remaining=@(Get-BenchPortListeners @($AdbServerPort,$ConsolePort,($ConsolePort+1),$HttpPort))
+            $summary.remaining_listener_owners=@($remaining|Select-Object LocalAddress,LocalPort,OwningProcess)
+            $summary.declared_ports_released=$remaining.Count -eq 0
+            if(@($remaining|Where-Object LocalPort -EQ $AdbServerPort).Count -gt 0){$summary.adb_server_process_stopped=$false}
+            if(@($remaining|Where-Object {$_.LocalPort -in @($ConsolePort,($ConsolePort+1))}).Count -gt 0){$summary.emulator_process_stopped=$false}
+        }catch{$summary.declared_ports_released='UNKNOWN';$summary.adb_server_process_stopped=$false}
     }
-    if($summary.status -ceq 'passed' -and ($summary.emulator_process_stopped -cne $true -or $summary.adb_server_process_stopped -cne $true)){
+    if($summary.status -ceq 'passed' -and ($summary.emulator_process_stopped -cne $true -or $summary.adb_server_process_stopped -cne $true -or $summary.declared_ports_released -cne $true)){
         $summary.status='failed';$summary.failure_phase='cleanup';$summary.failure_reason='owned_process_shutdown_unproven'
     }
     $summary.elapsed_seconds=[int]$clock.Elapsed.TotalSeconds
