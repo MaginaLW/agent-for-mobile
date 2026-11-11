@@ -42,6 +42,9 @@ $summary=[ordered]@{
     isolated_adb_server_port=$AdbServerPort; server_pid='UNKNOWN'; emulator_pid='UNKNOWN'
     physical_device_commands=0; approval_injected=$false; token_logged=$false
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
+    touch_exploration_setting='UNKNOWN'; touch_exploration_enabled='UNKNOWN'
+    input_focus_before='UNKNOWN'; input_focus_after_focus_probe='UNKNOWN'
+    accessibility_focus_result='UNKNOWN'; accessibility_focus_negative_verified=$false
     callback_count_before='UNKNOWN'; callback_count_after='UNKNOWN'; audit_verified=$false
     emulator_process_stopped='UNKNOWN'; adb_server_process_stopped='UNKNOWN'
     declared_ports_released='UNKNOWN'; remaining_listener_owners=@()
@@ -168,7 +171,14 @@ function Invoke-BenchTool([string]$Tool,$Arguments,[string]$Name,[int]$TimeoutSe
     $script:auditIds.Add($envelope.audit_id)
     return $envelope
 }
-function Assert-BenchToolOk($Envelope){Assert-Bench ($Envelope.ok -ceq $true) ('tool_failed_'+$(if($Envelope.PSObject.Properties['error']){$Envelope.error.code}else{'unknown'}))}
+function Assert-BenchToolOk($Envelope){
+    if($Envelope.ok -ceq $true){return}
+    $code='unknown'
+    if($Envelope.PSObject.Properties['error'] -and $null -ne $Envelope.error -and
+        $Envelope.error.PSObject.Properties['code'] -and $Envelope.error.code -is [string] -and
+        $Envelope.error.code -cmatch '^E_[A-Z_]{1,80}$'){$code=$Envelope.error.code.ToLowerInvariant()}
+    throw ('tool_failed_'+$code)
+}
 function Assert-BenchForeground([string]$Name){
     $fg=Invoke-BenchTool 'foreground_app' @{} $Name
     Assert-BenchToolOk $fg
@@ -185,6 +195,11 @@ function Find-BenchInput($Snapshot){
     $matches=@($Snapshot.elements|Where-Object {$_.role -ceq 'input' -and $_.source -ceq 'a11y'})
     Assert-Bench ($matches.Count -eq 1) 'target_input_not_unique'
     return $matches[0]
+}
+function Get-BenchBooleanState($Snapshot,[string]$Prefix){
+    $matches=@($Snapshot.elements|Where-Object {$_.source -ceq 'a11y' -and $_.text -cin @(($Prefix+'true'),($Prefix+'false'))})
+    Assert-Bench ($matches.Count -eq 1) 'target_boolean_state_not_unique'
+    return $matches[0].text -ceq ($Prefix+'true')
 }
 function Get-BenchCount($Snapshot){
     $matches=@($Snapshot.elements|Where-Object {$_.text -cmatch '^本地发送回调次数：[0-9]+$' -and $_.source -ceq 'a11y'})
@@ -318,6 +333,8 @@ try{
         Start-Sleep -Seconds 1
     }
     Assert-Bench $healthy 'gateway_http_not_ready'
+    $touchSetting=Invoke-BenchAdb @('shell','settings','get','secure','touch_exploration_enabled') 'touch-exploration-setting'
+    $summary.touch_exploration_setting=if($touchSetting -cin @('0','1')){$touchSetting}else{'UNKNOWN'}
     Set-BenchPhase 'real_mcp_chain'
     $initialized=Invoke-BenchRpc 'initialize' @{protocolVersion='2025-03-26';capabilities=@{};clientInfo=@{name='local-testbench';version='1'}} 'initialize'
     Assert-Bench ($initialized.protocolVersion -ceq '2025-03-26') 'mcp_protocol_mismatch'
@@ -327,11 +344,20 @@ try{
     [void](Get-BenchSnapshot 'list-snapshot')
     Open-BenchRoute 'search'
     $snapshot=Get-BenchSnapshot 'search-before-focus'
+    $summary.input_focus_before=Get-BenchBooleanState $snapshot '输入框焦点：'
+    $summary.touch_exploration_enabled=Get-BenchBooleanState $snapshot '触摸探索：'
+    Assert-Bench ($summary.input_focus_before -ceq $false) 'target_search_input_not_initially_unfocused'
+    Assert-Bench ($summary.touch_exploration_enabled -ceq $false) 'unexpected_touch_exploration_mode'
     $inputNode=Find-BenchInput $snapshot
     $focused=Invoke-BenchTool 'ui_action' @{ref=$inputNode.ref;action='focus'} 'focus-search'
-    Assert-BenchToolOk $focused
-    $summary.ordinary_actions_verified+=,'focus'
+    # The existing gateway action is ACCESSIBILITY_FOCUS, not input FOCUS. Normal non-reader mode
+    # must report its native refusal honestly; it is never counted as a successful input action.
+    Assert-Bench (-not $focused.ok -and $focused.error.code -ceq 'E_VERIFY_FAIL' -and $focused.error.channel -ceq 'a11y') 'unexpected_accessibility_focus_result'
+    $summary.accessibility_focus_result=$focused.error.code
+    $summary.accessibility_focus_negative_verified=$true
     $snapshot=Get-BenchSnapshot 'search-before-set-text'
+    $summary.input_focus_after_focus_probe=Get-BenchBooleanState $snapshot '输入框焦点：'
+    Assert-Bench ($summary.input_focus_after_focus_probe -ceq $false) 'accessibility_probe_changed_input_focus'
     $inputNode=Find-BenchInput $snapshot
     $typed=Invoke-BenchTool 'ui_action' @{ref=$inputNode.ref;action='set_text';text='TESTBENCH_SEARCH'} 'set-search-text'
     Assert-BenchToolOk $typed
@@ -365,10 +391,10 @@ try{
     foreach($id in $script:auditIds){Assert-Bench (@($audit|Where-Object id -CEQ $id).Count -eq 1) 'audit_id_missing_or_duplicate'}
     $blocked=@($audit|Where-Object id -CEQ $denied.audit_id)
     Assert-Bench ($blocked[0].tool -ceq 'ui_action' -and $blocked[0].result -ceq 'E_CONFIRM_TIMEOUT') 'timeout_audit_mismatch'
-    foreach($id in @($focused.audit_id,$typed.audit_id)){
-        $entry=@($audit|Where-Object id -CEQ $id)[0]
-        Assert-Bench ($entry.result -ceq 'OK' -and $entry.channel -ceq 'a11y') 'ordinary_action_audit_mismatch'
-    }
+    $focusEntry=@($audit|Where-Object id -CEQ $focused.audit_id)[0]
+    Assert-Bench ($focusEntry.result -ceq 'E_VERIFY_FAIL' -and $focusEntry.channel -ceq 'a11y') 'accessibility_focus_negative_audit_mismatch'
+    $inputEntry=@($audit|Where-Object id -CEQ $typed.audit_id)[0]
+    Assert-Bench ($inputEntry.result -ceq 'OK' -and $inputEntry.channel -ceq 'a11y') 'ordinary_action_audit_mismatch'
     $summary.audit_verified=$true; $summary.status='passed'
 }catch{
     $summary.failure_phase=$script:phase

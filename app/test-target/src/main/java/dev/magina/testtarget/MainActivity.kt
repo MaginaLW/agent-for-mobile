@@ -9,6 +9,8 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.View
+import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -64,12 +66,23 @@ class MainActivity : Activity() {
                 button("输入法场景") { show("ime") }
             }
             "search" -> {
+                content.isFocusable = true
+                content.isFocusableInTouchMode = true
+                content.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+                val accessibilityManager = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+                label("触摸探索：${accessibilityManager.isTouchExplorationEnabled}")
                 val search = input("输入测试会话名", R.id.target_search_input)
+                val focusState = label("输入框焦点：${search.hasFocus()}", R.id.target_search_focus)
+                search.onFocusChangeListener = View.OnFocusChangeListener { _, _ ->
+                    focusState.text = "输入框焦点：${search.hasFocus()}"
+                }
                 label("可搜索：测试联系人甲")
                 button("查找测试会话") {
                     if (search.text.toString() == "测试联系人甲") show("conversation")
                     else label("未找到测试会话")
                 }
+                content.requestFocus()
+                focusState.text = "输入框焦点：${search.hasFocus()}"
             }
             "conversation", "ime" -> conversation(showIme = route == "ime")
             "opaque" -> {
