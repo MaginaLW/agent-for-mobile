@@ -1,0 +1,55 @@
+{
+  "schema": "c1b-replay-corpus/v1",
+  "derivation": "ConvertTo-CorpusFixture in scripts/tests/c1b-corpus-replay-offline.ps1",
+  "source_bytes_committed": false,
+  "cases": [
+    {
+      "name": "597ca8b",
+      "version": "c1b-v1",
+      "fixture": "597ca8b.json",
+      "fixture_sha256": "ff18393afde3a0bbd00d873ca1029668c09cd5e0f1ba0ac683cae7a050715548",
+      "source_observation": "docs/runs/evidence/tl1-c1b-20261104-c597ca8b-r1/tablet-layout-c1b/tablet-layout-observation-c1b-v1.json",
+      "source_observation_sha256": "0c3b2aea02060e5c11becf01f7c087a8c6178a7fd397e2c40ecc5d683c5127ff",
+      "source_envelope": "docs/runs/evidence/tl1-c1b-20261104-c597ca8b-r1/tablet-layout-c1b/tablet-c1b-inventory-result-v1.json",
+      "source_envelope_sha256": "053bbee81ba1ba6a9e8d6046b25211f126be7780235264c22686678c5c38d668",
+      "expected_reasons": [
+        "ime_inventory_invalid",
+        "pane_semantic_roles_unverified",
+        "semantic_subtree_opaque",
+        "tablet_layout_diagnostic_only",
+        "target_conversation_unverified",
+        "target_regions_unverified",
+        "window_inventory_truncated"
+      ],
+      "expected_facts": {
+        "application_window_topology_observed": false,
+        "semantic_tree_usable": false,
+        "ime_hidden_observed": false
+      }
+    },
+    {
+      "name": "abb7b0d",
+      "version": "c1b-v2",
+      "fixture": "abb7b0d.json",
+      "fixture_sha256": "d4b0d63c0c1f2c6460890fcf74fe8333bb57cdd8a1a04b536befe8d5168ba8a2",
+      "source_observation": "docs/runs/evidence/tl1-c1b-20261105-cabb7b0d-r2/tablet-layout-c1b/tablet-layout-observation-c1b-v2.json",
+      "source_observation_sha256": "51876f1322b2acc84b77b2e44b76e71a4fc198e9a118538ec80cddfb35bf5a1c",
+      "source_envelope": "docs/runs/evidence/tl1-c1b-20261105-cabb7b0d-r2/tablet-layout-c1b/tablet-c1b-inventory-result-v3.json",
+      "source_envelope_sha256": "96494b1807530725c1c15313e553fbefdad253e9a4ca7ebb8beb88e62c0d64b2",
+      "expected_reasons": [
+        "ime_inventory_invalid",
+        "pane_semantic_roles_unverified",
+        "semantic_subtree_opaque",
+        "tablet_layout_diagnostic_only",
+        "target_conversation_unverified",
+        "target_regions_unverified",
+        "window_type_invalid"
+      ],
+      "expected_facts": {
+        "application_window_topology_observed": false,
+        "semantic_tree_usable": false,
+        "ime_hidden_observed": false
+      }
+    }
+  ]
+}

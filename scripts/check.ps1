@@ -238,6 +238,46 @@ Invoke-Check 'C1b inventory 结果合同离线' {
     $summary
 }
 
+Invoke-Check 'C1b 真实派生语料回放与有界变异' {
+    Invoke-Logged -LogName 'c1b-corpus-replay-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-corpus-replay-offline.ps1')
+    ) | Out-Null
+    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-corpus-replay-offline.log')
+    if ($summary -cnotmatch '^c1b corpus replay offline: \d+ passed, 0 failed; originals=0$') {
+        throw "C1b 语料回放汇总不符：$summary"
+    }
+    $summary
+}
+
+Invoke-Check '运行复核草稿与身份预检离线' {
+    Invoke-Logged -LogName 'prepare-run-review-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\prepare-run-review-offline.ps1')
+    ) | Out-Null
+    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'prepare-run-review-offline.log')
+    if ($summary -cnotmatch '^prepare run review offline: \d+ passed, 0 failed$') {
+        throw "运行复核草稿测试汇总不符：$summary"
+    }
+    $summary
+}
+
+Invoke-Check '合同改动联动检查' {
+    Invoke-Logged -LogName 'contract-coverage-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\contract-coverage-offline.ps1')
+    ) | Out-Null
+    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'contract-coverage-offline.log')
+    if ($summary -cnotmatch '^contract coverage offline: \d+ passed, 0 failed$') {
+        throw "合同联动测试汇总不符：$summary"
+    }
+    Invoke-Logged -LogName 'contract-coverage.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-contract-coverage.ps1'), '-RepoRoot', $RepoRoot
+    ) | Out-Null
+    $result = Get-Content -LiteralPath (Join-Path $LogDir 'contract-coverage.log') -Raw | ConvertFrom-Json
+    if ($result.schema -cne 'contract-coverage/v1' -or $result.status -cne 'passed') {
+        throw '合同改动未覆盖且未明确豁免。'
+    }
+    $summary
+}
+
 Invoke-Check 'C1b runner 离线' {
     Invoke-Logged -LogName 'tablet-c1b-runner-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-c1b-runner-offline.ps1')

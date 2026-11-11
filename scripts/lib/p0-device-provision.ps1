@@ -43,7 +43,7 @@ function Invoke-P0ExternalText {
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][string]$Operation,
         [switch]$AllowFailure,
-        [int]$TimeoutSec = 30
+        [ValidateRange(0, 2147483647)][int]$TimeoutSec = 30
     )
 
     $start = New-P0StartInfo -FilePath $FilePath -Arguments $Arguments
@@ -56,11 +56,13 @@ function Invoke-P0ExternalText {
         $process.StandardInput.Close()
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+        if ($TimeoutSec -gt 0 -and -not $process.WaitForExit($TimeoutSec * 1000)) {
             $process.Kill($true)
             [void]$process.WaitForExit(5000)
             throw "$Operation 超时。"
         }
+        # 0 只由安装入口传入：现场确认等待不设自动超时；读取等仍使用正数预算。
+        $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         [void]$stderrTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0 -and -not $AllowFailure) { throw "$Operation 失败。" }
@@ -126,6 +128,12 @@ function Invoke-P0AdbText {
         [switch]$AllowFailure,
         [int]$TimeoutSec = 30
     )
+    if ($TimeoutSec -eq 0) {
+        $commandIndex = if ($Arguments.Count -ge 2 -and $Arguments[0] -ceq '-s') { 2 } else { 0 }
+        if ($Arguments.Count -le $commandIndex -or $Arguments[$commandIndex] -cne 'install') {
+            throw '只有安装调用可以不设置自动超时。'
+        }
+    }
     Invoke-P0ExternalText -FilePath $AdbPath -Arguments $Arguments -Operation $Operation -AllowFailure:$AllowFailure -TimeoutSec $TimeoutSec
 }
 
@@ -362,7 +370,7 @@ function Start-P0DeviceProvision {
 
         if ($Provision) {
             if (-not (Test-Path -LiteralPath $ApkPath -PathType Leaf)) { throw "setup-fail：缺少 debug APK：$ApkPath" }
-            $null = Invoke-P0DeviceCommand -Session $session -Arguments @('install','-r',$ApkPath) -Operation '安装 debug APK' -TimeoutSec 120
+            $null = Invoke-P0DeviceCommand -Session $session -Arguments @('install','-r',$ApkPath) -Operation '安装 debug APK' -TimeoutSec 0
             foreach ($permission in @(
                 'android.permission.POST_NOTIFICATIONS',
                 'android.permission.BLUETOOTH_CONNECT',
