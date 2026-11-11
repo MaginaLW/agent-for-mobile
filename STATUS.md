@@ -37,7 +37,7 @@ A08 安装在 60 秒 native timeout 冻结（8 次 SDK、锁释放，效果当�
 | M0 mobile-mcp 真机验收 | 完成（2026-07-16，4.5/5） |
 | M1 自研网关 | 已在历史手机上跑通。P0 两段式硬门未闭合：批次 1–3 已验收；现行链路下 Allow、Stale 尚未独立真机验收（见 [P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md)）；语义意图四腿（批次 4）暂停 0/4 |
 | M1-T 平板适配 | T0-L 完成；C1a origin/read-only 成立；C1b abb7b0d 的 v3 真机收齐 5 项/帧，unknown/语义/IME 仍阻塞，T-L1 未通过；T-L2 未入队 |
-| M2 大脑迁到手机 | 未开始 |
+| M2 大脑迁到手机 | Claude/Termux 路线已取消，不再列入待办 |
 | M3 宏、入口与技能包 | 未开始 |
 
 ## C1b 卡点详情
