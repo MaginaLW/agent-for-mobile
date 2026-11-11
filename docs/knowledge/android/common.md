@@ -147,6 +147,8 @@
 
 ## adb / uiautomator 工具链
 
+- **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](../../runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
+
 - **Windows/ADB 37.0.1 的本地 AVD 隔离（2026-11-12 实测）**：只传随机不存在的 `--one-device` 不足以证明 USB 排除，run-06 私有表实际列出 PA2553 并在 shell 前拒绝。run-07 改用官方初始化门 `ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动 emulator 前严格要求只有标准表头，后续仅准预期 emulator；在主机 PnP 仍有实体 USB Present/OK 的条件下通过了完整 AVD/IME 链。不要忽略未知行或把 binary 含环境键当执行证据；原过滤失效唯一原因未定。依据：[实施记录 run-06/07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)及[台架规程](../../runbooks/本地测试台.md)，不外推未来版本。
 
 - **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类正常）。截图+视觉兜底是刚需；自研 AccessibilityService 直读事件流可绕开 idle 等待。
