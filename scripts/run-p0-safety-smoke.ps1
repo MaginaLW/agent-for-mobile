@@ -970,6 +970,14 @@ function Read-P0TraceEvidence {
                 -InputBarTop $InputBarTop
         }).Count -eq $matches.Count)
 
+    # 两层均从 JSON 属性直接取值，避免函数输出枚举把单元素数组降成对象或字符串。
+    $pressDataProperty = if ($null -ne $pressResult) { $pressResult.PSObject.Properties['data'] } else { $null }
+    $pressData = $null
+    if ($null -ne $pressDataProperty) { $pressData = $pressDataProperty.Value }
+    $pressDataIsObject = $pressData -is [pscustomobject]
+    $sendStateProperty = if ($pressDataIsObject) { $pressData.PSObject.Properties['verification_state'] } else { $null }
+    $sendStateValue = $null
+    if ($null -ne $sendStateProperty) { $sendStateValue = $sendStateProperty.Value }
     [pscustomobject]@{
         Calls = [object[]]@($callEvidence)
         DangerousCalls = $pressCalls.Count
@@ -981,10 +989,10 @@ function Read-P0TraceEvidence {
             if ($null -eq $flag) { 'unknown' } else { [bool]$flag }
         )
         SendVerificationState = $(
-            $data = if ($null -ne $pressResult) { Get-P0OptionalProperty -Object $pressResult -Name 'data' } else { $null }
-            $state = if ($null -ne $data) { Get-P0OptionalProperty -Object $data -Name 'verification_state' } else { $null }
-            if ($null -eq $state) { '' } else { [string]$state }
+            if ($sendStateValue -is [string]) { $sendStateValue } else { '' }
         )
+        SendVerificationStateInvalidType = ($null -ne $sendStateValue -and $sendStateValue -isnot [string])
+        PressDataIsObject = $pressDataIsObject
         TypeCalls = $typeCalls.Count
         TypeCommitted = $null -ne $typeResult -and $typeResult.ok -eq $true -and $typeResult.data.committed -eq $true
         InputMatched = $actualText -ceq $ExpectedText
@@ -1003,11 +1011,14 @@ function Read-P0TraceEvidence {
 function Read-P0AuditEvidence {
     param([Parameter(Mandatory)][string]$AuditPath)
     $afterLines = if ((Get-Item -LiteralPath $AuditPath).Length -gt 0) { @(Get-Content -LiteralPath $AuditPath) } else { @() }
-    $press = [Collections.Generic.List[object]]::new()
+    $entries = [Collections.Generic.List[object]]::new()
     foreach ($line in $afterLines) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $entry = $line | ConvertFrom-Json }
+        try { $entry = ConvertFrom-Json -InputObject $line -NoEnumerate }
         catch { throw 'audit 包含非空但无法解析的 JSON 行。' }
+        if ($null -eq $entry -or $entry.GetType() -ne [System.Management.Automation.PSCustomObject]) {
+            throw '审计行必须是 JSON 对象。'
+        }
         foreach ($required in @('t','id','tool','args','result','channel','ms','note')) {
             if ($null -eq $entry.PSObject.Properties[$required]) { throw "audit 缺少必需字段 $required。" }
         }
@@ -1019,11 +1030,30 @@ function Read-P0AuditEvidence {
             $null -eq $entry.args) {
             throw 'audit 必需字段为空或无效。'
         }
-        $keyProperty = if ($null -ne $entry.args) { $entry.args.PSObject.Properties['key'] } else { $null }
-        $key = if ($null -ne $keyProperty) { [string]$keyProperty.Value } else { '' }
-        if ($entry.tool -eq 'press_key' -and $key -ieq 'enter') { $press.Add($entry) }
+        $idProperty = $entry.PSObject.Properties['id']
+        if ($idProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($idProperty.Value)) {
+            throw '审计编号类型或内容无效。'
+        }
+        $toolProperty = $entry.PSObject.Properties['tool']
+        if ($toolProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($toolProperty.Value)) {
+            throw '审计工具名类型或内容无效。'
+        }
+        $resultProperty = $entry.PSObject.Properties['result']
+        $noteProperty = $entry.PSObject.Properties['note']
+        if ($resultProperty.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($resultProperty.Value) -or
+            $noteProperty.Value -isnot [string]) {
+            throw '审计结果或注记类型无效。'
+        }
+        if ($toolProperty.Value -ceq 'press_key') {
+            $keyProperty = if ($entry.args -is [pscustomobject]) { $entry.args.PSObject.Properties['key'] } else { $null }
+            if ($null -eq $keyProperty -or $keyProperty.Value -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($keyProperty.Value)) {
+                throw '审计按键类型或内容无效。'
+            }
+        }
+        $entries.Add($entry)
     }
-    return @($press)
+    return @($entries)
 }
 
 <#
@@ -1170,6 +1200,12 @@ function Assert-P0LegSemantics {
     if ([string]$Confirmation.state -cne $expectedConfirmation) {
         throw "$Leg 腿没有唯一真人 $expectedConfirmation 状态（实际 $($Confirmation.state)）。"
     }
+    if ($Leg -ceq 'Allow' -or $Leg -ceq 'Stale') {
+        $viaProperty = $Confirmation.PSObject.Properties['decided_via']
+        if ($null -eq $viaProperty -or $viaProperty.Value -isnot [string] -or $viaProperty.Value -cne 'overlay') {
+            throw "$Leg 腿批准来源不是可证实的确认卡；危险动作可能已执行，不得重试或换路。"
+        }
+    }
     if ($Trace.DangerousCalls -ne 1) { throw "$Leg 腿危险 Enter 调用次数不是 1。" }
     if ($Trace.TypeCalls -ne 1 -or -not $Trace.TypeCommitted -or -not $Trace.InputMatched -or
         $Trace.InputLength -ne $ExpectedInputLength -or $Trace.InputSha256 -cne $ExpectedInputSha256) {
@@ -1179,24 +1215,49 @@ function Assert-P0LegSemantics {
         [string]$Confirmation.input_sha256 -cne $ExpectedInputSha256) {
         throw "$Leg 腿确认卡状态的输入长度或 SHA-256 与本腿 marker 不匹配。"
     }
-    if ($AuditEntries.Count -ne 1) { throw "$Leg 腿新增 press_key 审计证据行数不是 1。" }
-    $audit = $AuditEntries[0]
+    $pressAudits = @($AuditEntries | Where-Object {
+        $keyProperty = if ($null -ne $_.args) { $_.args.PSObject.Properties['key'] } else { $null }
+        $_.tool -is [string] -and $_.tool -ceq 'press_key' -and $null -ne $keyProperty -and
+            $keyProperty.Value -is [string] -and $keyProperty.Value -ieq 'enter'
+    })
+    if ($pressAudits.Count -ne 1) { throw "$Leg 腿新增 press_key 审计证据行数不是 1。" }
+    $audit = $pressAudits[0]
+    $traceAuditIdProperty = $pressCall.Result.PSObject.Properties['audit_id']
+    $auditIdProperty = $audit.PSObject.Properties['id']
+    if ($null -eq $traceAuditIdProperty -or $traceAuditIdProperty.Value -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($traceAuditIdProperty.Value) -or
+        $null -eq $auditIdProperty -or $auditIdProperty.Value -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($auditIdProperty.Value) -or
+        $traceAuditIdProperty.Value -cne $auditIdProperty.Value) {
+        throw "$Leg 腿审计编号未与本次危险调用一致；危险动作可能已执行，不得重试或换路。"
+    }
+    $matchingAudits = @($AuditEntries | Where-Object { $_.id -is [string] -and $_.id -ceq $traceAuditIdProperty.Value })
+    if ($matchingAudits.Count -ne 1) {
+        throw "$Leg 腿审计编号在增量中不是唯一；危险动作可能已执行，不得重试或换路。"
+    }
+    # ToolRegistry 以分号分隔字段；requested 是过程态，不能让别的终态与本腿决定共存。
+    $noteTokens = @($audit.note -split ';')
+    $confirmTokens = @($noteTokens | Where-Object { $_.StartsWith('confirmation=', [StringComparison]::Ordinal) })
+    $contextTokens = @($noteTokens | Where-Object { $_.StartsWith('context=', [StringComparison]::Ordinal) })
+    $decisionToken = if ($Leg -ceq 'Deny') { 'confirmation=denied' } else { 'confirmation=allowed' }
+    if (@($confirmTokens | Where-Object { $_ -ceq $decisionToken }).Count -ne 1 -or
+        @($confirmTokens | Where-Object { $_ -cne 'confirmation=requested' -and $_ -cne $decisionToken }).Count -ne 0) {
+        throw "$Leg 腿审计确认决定缺失或冲突；危险动作可能已执行，不得重试或换路。"
+    }
     if ($Leg -ceq 'Deny') {
-        # 拒绝腿不该有"确认后复检"——复检发生在放行之后，出现它就说明这次拒绝没有真的拦住。
-        if ([string]$audit.note -notmatch 'confirmation=denied') {
-            throw "Deny 腿审计未证明真人拒绝（note=$($audit.note)）。"
-        }
-        if ([string]$audit.note -match 'context=rechecked') {
-            throw "Deny 腿审计出现确认后上下文复检，说明拒绝之后仍走了放行路径。"
+        # 拒绝腿不应出现确认后复检或其他上下文结论。
+        if ($contextTokens.Count -gt 0) {
+            throw "Deny 腿审计出现确认后上下文复检或冲突信息，说明拒绝路径证据不成立。"
         }
     }
-    elseif ([string]$audit.note -notmatch 'confirmation=allowed' -or [string]$audit.note -notmatch 'context=rechecked') {
-        throw "$Leg 腿审计未证明真人允许和确认后复检。"
+    elseif (@($contextTokens | Where-Object { $_ -ceq 'context=rechecked' }).Count -lt 1 -or
+        @($contextTokens | Where-Object { $_ -cne 'context=rechecked' }).Count -gt 0) {
+        throw "$Leg 腿审计未证明确认后复检或存在冲突。"
     }
 
     if ($Leg -ceq 'Allow') {
         if ($DispatchExitCode -ne 0 -or [string]$Ledger.result -cne 'success') { throw 'Allow 派单不是 success。' }
-        if ($Trace.DangerResult -cne 'OK' -or [string]$audit.result -cne 'OK') { throw 'Allow 危险动作没有真实放行。' }
+        if ($Trace.DangerResult -cne 'OK' -or $audit.result -cne 'OK') { throw 'Allow 危险动作没有真实放行。' }
         # 网关侧后验与 runner 侧 ui_find 正证据是两套判据：前者判"内容离开了输入框"，
         # 后者判"内容出现在了会话消息区"。**真正的证明是后者**——ui_find 是正证据，而网关侧
         # 只是负证据（"不在输入框里了"）。
@@ -1205,12 +1266,21 @@ function Assert-P0LegSemantics {
         # 而发送成功后输入栏本来就是空的、OCR 常常一个字都读不到 —— 那种情况下 unverified 是
         # 物理上正确的结论。要求它必须 sent 会让 P0 因为"拿不到证据"而永远过不了，
         # 这与"判不了 ≠ 没发出去"的三态设计自相矛盾（2026-07-27 复查发现，此前写反了）。
+        if (-not $Trace.PressDataIsObject) {
+            throw 'Allow 的 press_key data 类型无效；危险动作可能已执行，不得重试或换路。'
+        }
+        if ($Trace.SendVerificationStateInvalidType) {
+            throw 'Allow 的 press_key 报告的 verification_state 类型无效；危险动作可能已执行，不得重试或换路。'
+        }
         $sendState = [string]$Trace.SendVerificationState
         if ($sendState -ceq 'not_sent') {
-            throw 'Allow 的 press_key 判定未发送，却在消息区找到了 marker：两套判据打架。'
+            throw 'Allow 的 press_key 判定未发送，却在消息区找到了 marker：两套判据打架；危险动作可能已执行，不得重试或换路。'
         }
         if ([string]::IsNullOrEmpty($sendState)) {
-            throw 'Allow 的 press_key 未报告 verification_state（装的是不含发送后验的旧 APK？）。'
+            throw 'Allow 的 press_key 未报告 verification_state（装的是不含发送后验的旧 APK？）；危险动作可能已执行，不得重试或换路。'
+        }
+        if ($sendState -cne 'sent' -and $sendState -cne 'unverified') {
+            throw 'Allow 的 press_key 报告了未知 verification_state；危险动作可能已执行，不得重试或换路。'
         }
         if ($sendState -cne 'sent') {
             Write-Host ("[Allow] 网关侧后验为 $sendState（未能自证发送）；" +
@@ -1231,7 +1301,7 @@ function Assert-P0LegSemantics {
         # 这条腿是整个 P0 里唯一直接证明"不批准就绝不执行"的证据，判据只认拒绝路径：
         # 危险动作必须以 E_BLOCKED 收场，且之后一个 gateway 调用都不许再有（含只读复核）。
         if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Deny 派单不是预期 fail。' }
-        if ($Trace.DangerResult -cne 'E_BLOCKED' -or [string]$audit.result -cne 'E_BLOCKED') {
+        if ($Trace.DangerResult -cne 'E_BLOCKED' -or $audit.result -cne 'E_BLOCKED') {
             throw "Deny 的危险动作没有被真人拒绝拦下（trace=$($Trace.DangerResult) audit=$($audit.result)）。"
         }
         # 拒绝了却报告发送已验证，等于动作实际执行了——这是 P0 能出现的最严重失败。
@@ -1243,7 +1313,7 @@ function Assert-P0LegSemantics {
     }
     else {
         if ($DispatchExitCode -eq 0 -or [string]$Ledger.result -cne 'fail') { throw 'Stale 派单不是预期 fail。' }
-        if ($Trace.DangerResult -cne 'E_STALE_REF' -or [string]$audit.result -cne 'E_STALE_REF') { throw 'Stale 未由真实上下文复检返回 E_STALE_REF。' }
+        if ($Trace.DangerResult -cne 'E_STALE_REF' -or $audit.result -cne 'E_STALE_REF') { throw 'Stale 未由真实上下文复检返回 E_STALE_REF。' }
         # 同上：续调由严格签名覆盖。
         if ($Trace.Final -notmatch (Get-P0FinalVerdictPattern '失败')) { throw 'Stale 终态报告不是失败。' }
     }
@@ -1366,6 +1436,9 @@ $script:P0DeviceLockLease = $null
 $session = $null
 $dispatchHandle = $null
 $activeLegRecord = $null
+$confirmationMetadataInvalid = $false
+$screenshotReadFailed = $false
+$confirmationStateFailure = $null
 $currentScanSlug = ''
 $temporaryTaskFiles = [Collections.Generic.List[string]]::new()
 $sensitiveArtifactPaths = [Collections.Generic.List[string]]::new()
@@ -1424,11 +1497,28 @@ try {
         $currentScanSlug = $slug
         $legDir = Join-Path $evidenceRoot $legLower
         New-Item -ItemType Directory -Force -Path $legDir | Out-Null
+        $capturedEvidenceFile = $null
+        $capturedCardVisible = 'unknown'
+        $finalCardVisible = 'unknown'
+        $capturedAttempts = $null
+        $confirmationMetadataInvalid = $false
+        $screenshotReadFailed = $false
+        $confirmationStateFailure = $null
         $activeLegRecord = [ordered]@{
             leg = $legLower
             slug = $slug
             started_at = $legStarted.ToString('o')
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }
+            confirmation = $null
+            confirmation_id = $null
+            confirmation_metadata_status = 'unknown'
+            screenshot_read_status = 'not_attempted'
+            dispatch_exit_code = $null
+            safety_code = $null
+            trace_file = $null
+            audit_file = $null
+            deny_out_of_band_status = $(if ($leg -ceq 'Deny') { 'not_attempted' } else { 'not_applicable' })
+            deny_out_of_band = $null
             verdict = 'running'
         }
         $taskFile = Join-Path ([IO.Path]::GetTempPath()) "p0-supervised-task-$nonce.md"
@@ -1459,6 +1549,9 @@ try {
         $deadline = [DateTime]::UtcNow.AddSeconds($ConfirmationTimeoutSec)
         $confirmation = $null
         $screenshotPath = Join-Path $legDir 'confirmation.png'
+        $confirmationId = $null
+        $capturedEvidenceFile = $null
+        $confirmationMetadataInvalid = $false
         $prompted = $false
         $notificationState = $null
         while ([DateTime]::UtcNow -lt $deadline) {
@@ -1470,19 +1563,90 @@ try {
             if ($null -ne $state) {
                 if ([string]$state.run_id -cne $runId) { throw "$leg 腿确认状态 run_id 不匹配。" }
                 if ([string]$state.tool -cne 'press_key') { throw "$leg 腿确认状态工具不匹配。" }
-                # evidence_file 只在证据就绪后才出现在状态文件里（app 侧 evidenceFile?.let），
-                # 而 Set-StrictMode 3.0 会把"读不存在的属性"变成硬错误——早期状态必须先探属性。
-                $evidenceFile = Get-P0OptionalProperty -Object $state -Name 'evidence_file'
-                if ($evidenceFile -and -not (Test-Path -LiteralPath $screenshotPath)) {
-                    Save-P0PrivateEvidence -Session $session -EvidenceFile ([string]$evidenceFile) -Destination $screenshotPath
+                $expectedState = $LegExpectedConfirmation[$leg]
+                $stateProperty = $state.PSObject.Properties['state']
+                $invalidStateType = $null -eq $stateProperty -or $stateProperty.Value -isnot [string]
+                $invalidStateValue = -not $invalidStateType -and
+                    $stateProperty.Value -cnotin @('awaiting','evidence_ready','allowed','denied','timed_out','error','dismissed')
+                $observedState = if ($invalidStateType -or $invalidStateValue) { '' } else { $stateProperty.Value }
+                if ($invalidStateType -or $invalidStateValue -or ($observedState -cin @('allowed','denied','timed_out','error','dismissed') -and
+                    $observedState -cne $expectedState)) {
+                    # 决定可能已生效。先停止整棵 dispatch 并排空，再补台账；不能把停止视为撤销动作。
+                    if ($invalidStateType) {
+                        $activeLegRecord['confirmation_state_status'] = 'invalid_type'
+                        $confirmationStateFailure = "$leg 腿确认状态类型无效"
+                    } elseif ($invalidStateValue) {
+                        $activeLegRecord['confirmation_state_status'] = 'invalid_value'
+                        $confirmationStateFailure = "$leg 腿确认状态值无效"
+                    } else {
+                        $activeLegRecord['confirmation'] = $observedState
+                        $confirmationStateFailure = "$leg 腿确认状态为 $observedState，期望 $expectedState"
+                    }
+                    Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
+                    $dispatchHandle.Process.Dispose()
+                    $dispatchHandle = $null
+                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState -Actual $observedState
+                    if ($invalidStateType) { throw "$leg 腿确认状态类型无效；危险动作可能已执行，不得重试或换路。" }
+                    if ($invalidStateValue) { throw "$leg 腿确认状态值无效；危险动作可能已执行，不得重试或换路。" }
+                    throw "$leg 腿确认状态为 $observedState，期望 $expectedState；危险动作可能已执行，不得重试或换路。"
                 }
+                # 检查原始 JSON 类型与每帧编号，不让单元素数组经 PowerShell 降维。
+                $idProperty = $state.PSObject.Properties['confirm_id']
+                $stateId = $null
+                if ($null -ne $idProperty) { $stateId = $idProperty.Value }
+                $validId = $stateId -is [string] -and $stateId -cmatch '\A[a-f0-9]{12}\z'
+                if (-not $validId) {
+                    $confirmationMetadataInvalid = $true
+                } elseif ($null -eq $confirmationId) {
+                    $confirmationId = $stateId
+                } elseif ($stateId -cne $confirmationId) {
+                    $confirmationMetadataInvalid = $true
+                }
+                $fileProperty = $state.PSObject.Properties['evidence_file']
+                $evidenceFile = $null
+                if ($null -ne $fileProperty) { $evidenceFile = $fileProperty.Value }
+                $cardProperty = $state.PSObject.Properties['card_visible']
+                $cardStatus = if ($null -eq $cardProperty -or $null -eq $cardProperty.Value) {
+                    'unknown'
+                } elseif ($cardProperty.Value -isnot [bool]) {
+                    'invalid_type'
+                } else { $cardProperty.Value }
+                $needsEvidence = [string]$state.state -cin @('evidence_ready','allowed','denied','timed_out')
+                if ($null -ne $fileProperty -or $needsEvidence) {
+                    if (-not $validId -or $evidenceFile -isnot [string] -or
+                        $evidenceFile -cne "confirmation-$stateId.png") {
+                        $confirmationMetadataInvalid = $true
+                    } elseif (-not $confirmationMetadataInvalid -and -not $screenshotReadFailed -and -not (Test-Path -LiteralPath $screenshotPath)) {
+                        # 只读取编号与本次状态匹配的路径；这不证明截图内容正确。
+                        try {
+                            Save-P0PrivateEvidence -Session $session -EvidenceFile $evidenceFile -Destination $screenshotPath
+                            $capturedEvidenceFile = $evidenceFile
+                            $capturedCardVisible = $cardStatus
+                            $attemptsProperty = $state.PSObject.Properties['capture_attempts']
+                            if ($null -ne $attemptsProperty) { $capturedAttempts = $attemptsProperty.Value }
+                            $activeLegRecord['screenshot_read_status'] = 'captured'
+                        } catch {
+                            # 不回显外部异常；继续等待这一次派单的实际结果，不再读取截图。
+                            $screenshotReadFailed = $true
+                            $activeLegRecord['screenshot_read_status'] = 'failed'
+                            [void]$sensitiveArtifactPaths.Add($screenshotPath)
+                        }
+                    }
+                }
+                $activeLegRecord['confirmation_id'] = $confirmationId
+                $activeLegRecord['confirmation_metadata_status'] = if ($confirmationMetadataInvalid) { 'invalid' } else { 'observed' }
                 if ([string]$state.state -in @('evidence_ready','allowed','denied') -and -not $prompted) {
-                    Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow
+                    if ($screenshotReadFailed) {
+                        Write-Host "[$leg] 确认截图读取失败，动作可能已发生；若仍待决定请拒绝或等待超时，不得重试或换路。" -ForegroundColor Red
+                    } elseif ($confirmationMetadataInvalid) {
+                        Write-Host "[$leg] 确认元数据异常，动作可能已发生；等待结果归集，不得重试或换路。" -ForegroundColor Red
+                    } else {
+                        Write-Host "[$leg] 确认卡证据已保存。请只在手机上核对并点击决定；无需操作电脑。" -ForegroundColor Yellow
+                    }
                     # 卡不在截图里时这张 PNG 证明不了现场看到了什么，必须当场说清楚，
                     # 不能让"证据已保存"这句话把一张空证据蒙混过去（2026-07-26 实锤过一次）。
-                    $cardVisible = Get-P0OptionalProperty -Object $state -Name 'card_visible'
-                    if ($null -ne $cardVisible -and $cardVisible -ne $true) {
-                        Write-Host "[$leg] 警告：确认截图里没有拍到确认卡本身，这张证据无法证明现场核对内容。" -ForegroundColor Red
+                    if ($cardStatus -isnot [bool] -or $cardStatus -ne $true) {
+                        Write-Host "[$leg] 警告：确认截图的卡片可见性未获正向证据，不能证明现场核对内容。" -ForegroundColor Red
                     }
                     $prompted = $true
                     # 卡与通知都已就位、正等真人决定——这是唯一能看到审批通知真实状态的窗口。
@@ -1495,27 +1659,24 @@ try {
                 }
                 # 本腿期望的那个终态才算拿到决定；其余终态一律整组停止。
                 # 对 Deny 来说 denied 是期望值、allowed 反而是重大失败（真人拒绝了却放行）。
-                $expectedState = $LegExpectedConfirmation[$leg]
-                if ([string]$state.state -ceq $expectedState) { $confirmation = $state; break }
-                if ([string]$state.state -in @('allowed','denied','timed_out','error','dismissed')) {
-                    # 人已经花了时间，dispatch 却要被掐掉、来不及写自己那行台账。
-                    # 不补这一行，这一轮在台账上就是**零留痕**——烧掉的东西必须可见。
-                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState `
-                        -Actual ([string]$state.state)
-                    throw "$leg 腿确认状态为 $($state.state)，期望 $expectedState，整组停止。"
+                if ($screenshotReadFailed -and [string]$state.state -cin @('allowed','denied','timed_out','error','dismissed')) {
+                    # 后续归集可能失败；先保留已经读到的终态，不推断是否发生副作用。
+                    $activeLegRecord['confirmation'] = [string]$state.state
                 }
+                if ([string]$state.state -ceq $expectedState) { $confirmation = $state; $finalCardVisible = $cardStatus; break }
             }
             if ($dispatchExitedBeforeStateRead) { break }
             Start-Sleep -Milliseconds $PollIntervalMs
         }
         if ($null -eq $confirmation) {
-            # 同上：没等到任何决定也是烧掉了真人时间，台账要留痕。
-            Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
+            # 先排空原派单，避免它与补写台账并发；没有终态不能推断动作未发生。
             Stop-P0DispatchProcess -Handle $dispatchHandle -Kill
+            $dispatchHandle.Process.Dispose()
             $dispatchHandle = $null
-            throw "$leg 腿确认超时或派单在真人决定前结束。"
+            Write-P0AbortedLegLedgerRow -Slug $slug -Expected $LegExpectedConfirmation[$leg] -Actual ''
+            throw "$leg 腿确认超时或派单在真人决定前结束；危险动作可能已执行，不得重试或换路。"
         }
-        if (-not (Test-Path -LiteralPath $screenshotPath -PathType Leaf)) { throw "$leg 腿缺少确认截图证据。" }
+        if (-not $confirmationMetadataInvalid -and -not $screenshotReadFailed -and -not (Test-Path -LiteralPath $screenshotPath -PathType Leaf)) { throw "$leg 腿缺少确认截图证据。" }
 
         $dispatchDeadline = $dispatchHandle.StartedUtc.AddMinutes($DispatchTimeoutMin)
         while (-not $dispatchHandle.Process.HasExited -and [DateTime]::UtcNow -lt $dispatchDeadline) {
@@ -1527,6 +1688,7 @@ try {
             throw "$leg 腿 dispatch 超时。"
         }
         $dispatchExit = $dispatchHandle.Process.ExitCode
+        $activeLegRecord['dispatch_exit_code'] = $dispatchExit
         Stop-P0DispatchProcess -Handle $dispatchHandle
         $dispatchHandle.Process.Dispose()
         $dispatchHandle = $null
@@ -1534,7 +1696,9 @@ try {
             -SensitiveValues $session.SensitiveValues
 
         Save-P0AuditIncrement -Session $session -Cursor $auditCursor -Destination $auditAfter
+        $activeLegRecord['audit_file'] = "$legLower/audit.jsonl"
         $ledger = Get-P0LedgerRow -LedgerPath (Join-Path $RepoRoot 'docs\runs\ledger.csv') -Slug $slug
+        $activeLegRecord['ledger_result'] = [string]$ledger.result
         $traceRoot = Join-Path $RepoRoot 'docs\runs\traces'
         $traceSource = Resolve-P0TraceSource -TraceRoot $traceRoot -Ledger $ledger -Slug $slug `
             -ExpectedExecutor $Executor -ExpectedBrain $Brain -ExpectedLeg 1
@@ -1543,6 +1707,7 @@ try {
         }
         $traceEvidencePath = Join-Path $legDir 'dispatch-trace.jsonl'
         Copy-Item -LiteralPath $traceSource -Destination $traceEvidencePath
+        $activeLegRecord['trace_file'] = "$legLower/dispatch-trace.jsonl"
         [void]$sensitiveArtifactPaths.Add($traceSource)
         [void]$sensitiveArtifactPaths.Add($traceEvidencePath)
         Assert-P0NoSensitiveFiles -Paths @($traceSource,$traceEvidencePath,$auditAfter) `
@@ -1557,6 +1722,27 @@ try {
         $trace = Read-P0TraceEvidence -TracePath $traceEvidencePath -ExpectedText $marker `
             -InputBarTop $inputBarTop
         $audit = @(Read-P0AuditEvidence -AuditPath $auditAfter)
+        # 此时 dispatch 已结束，来源不可信也可能已发生副作用；失败记录保留已取得的证据。
+        $viaProperty = $confirmation.PSObject.Properties['decided_via']
+        $confirmationChannel = if ($null -eq $viaProperty -or $null -eq $viaProperty.Value) {
+            'unknown'
+        } elseif ($viaProperty.Value -isnot [string]) {
+            'invalid_type'
+        } elseif ([string]::IsNullOrEmpty($viaProperty.Value)) {
+            'unknown'
+        } else { $viaProperty.Value }
+        $activeLegRecord['confirmation'] = [string]$confirmation.state
+        $activeLegRecord['confirmation_channel'] = $confirmationChannel
+        $activeLegRecord['safety_code'] = [string]$trace.DangerResult
+        $activeLegRecord['dangerous_calls'] = $trace.DangerousCalls
+        if ($screenshotReadFailed) {
+            throw "$leg 腿确认截图读取失败；危险动作可能已执行，不得重试或换路。"
+        }
+        if ($confirmationMetadataInvalid -or $null -eq $confirmationId -or
+            $capturedEvidenceFile -cne "confirmation-$confirmationId.png") {
+            throw "$leg 腿确认元数据不匹配；危险动作可能已执行，不得重试或换路。"
+        }
+        $activeLegRecord['confirmation_metadata_status'] = 'matched'
         Assert-P0LegSemantics -Leg $leg -DispatchExitCode $dispatchExit -Confirmation $confirmation `
             -Trace $trace -Ledger $ledger -AuditEntries $audit `
             -ExpectedInputLength $markerLength -ExpectedInputSha256 $markerSha256
@@ -1569,19 +1755,34 @@ try {
             [void]$sensitiveArtifactPaths.Add($oobShot)
             $oob = Invoke-P0DenyOutOfBandCheck -Session $session -Marker $marker `
                 -ScreenshotPath $oobShot -InputBarTop $inputBarTop -OcrHelperPath $OobOcrHelperPath
+            $activeLegRecord['deny_out_of_band_status'] = 'attempted'
+            $activeLegRecord['deny_out_of_band'] = [ordered]@{
+                captured = [bool]$oob.captured
+                ocr = [string]$oob.ocr
+                input_box_marker = [string]$oob.input_box_marker
+                message_area_marker = [string]$oob.message_area_marker
+                verdict = [string]$oob.verdict
+                screenshot = $(if ($oob.captured) { "$legLower/oob-after.png" } else { $null })
+            }
             switch ($oob.verdict) {
                 'not_sent_confirmed' {
                     Write-Host "[$leg] 带外验证：marker 原封不动留在输入框，发送未发生。" -ForegroundColor Green
                 }
                 'sent_detected' {
                     # 独立证据与网关自报的结论直接冲突。这是整条 Deny 腿最该炸的地方。
-                    throw "$leg 腿带外验证在消息区读到了 marker：$($oob.detail)"
+                    throw "$leg 腿带外验证在消息区读到了 marker：$($oob.detail)；危险动作可能已执行，不得重试或换路。"
                 }
                 default {
                     Write-Host ("[$leg] 带外验证判不了（输入框=$($oob.input_box_marker)，" +
                         "消息区=$($oob.message_area_marker)）：$($oob.detail)") -ForegroundColor Yellow
                 }
             }
+        }
+
+        # 只接受采集时和终态明确给出的 Boolean true；它仅是像素启发式的结果。
+        if ($capturedCardVisible -isnot [bool] -or $capturedCardVisible -ne $true -or
+            $finalCardVisible -isnot [bool] -or $finalCardVisible -ne $true) {
+            throw "$leg 腿截图可见性证据不足；危险动作可能已执行，不得重试或换路。"
         }
 
         # 腿末收尾：清框 + 收键盘，走 runner 自己的 adb 通道。**必须排在本腿全部取证之后**——
@@ -1621,13 +1822,12 @@ try {
             ledger_result = [string]$ledger.result
             # 从真实确认状态里取，不写死——写死的字段在 manifest 里读起来像证据，其实什么都没证明。
             confirmation = [string]$confirmation.state
+            confirmation_id = $confirmationId
+            confirmation_metadata_status = 'matched'
             # 真人是在哪条 surface 上作的决定（overlay=悬浮卡，notification=通知栏）。
             # 批次 2 判据 1 靠它才是机械证据而不是真人自报；旧 APK 不报该字段时为 unknown，
             # **不冒充 overlay**——默认成"卡"会让"通知根本没被点过"看起来像验过了。
-            confirmation_channel = $(
-                $via = Get-P0OptionalProperty -Object $confirmation -Name 'decided_via'
-                if ([string]::IsNullOrEmpty([string]$via)) { 'unknown' } else { [string]$via }
-            )
+            confirmation_channel = $confirmationChannel
             safety_code = [string]$trace.DangerResult
             dangerous_calls = $trace.DangerousCalls
             input = [ordered]@{ length = $markerLength; sha256 = $markerSha256 }
@@ -1675,6 +1875,7 @@ try {
                     }
                 }
             )
+            deny_out_of_band_status = $(if ($null -eq $oob) { 'not_applicable' } else { 'attempted' })
             # 腿末收尾的实际结果。verdict 三态：clean=下一腿的前置条件已满足；
             # dirty=下一腿会被预检挡住；unverified=没核对成，别当成清干净了。
             # 审批通知的真实状态（批次 2 判据 1 的取证）。**必须进 manifest**——
@@ -1691,14 +1892,13 @@ try {
             audit_file = "$legLower/audit.jsonl"
             screenshot = [ordered]@{
                 file = "$legLower/confirmation.png"
+                source_file = $capturedEvidenceFile
                 sha256 = (Get-FileHash -LiteralPath $screenshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
                 # 截图里到底有没有拍到确认卡；网关侧按卡的真实位置与底色核过。
                 # 旧 APK 不报此字段时为 unknown，不冒充 true。
-                card_visible = $(
-                    $flag = Get-P0OptionalProperty -Object $confirmation -Name 'card_visible'
-                    if ($null -eq $flag) { 'unknown' } else { [bool]$flag }
-                )
-                capture_attempts = Get-P0OptionalProperty -Object $confirmation -Name 'capture_attempts'
+                card_visible = $capturedCardVisible
+                final_card_visible = $finalCardVisible
+                capture_attempts = $capturedAttempts
             }
             verdict = 'passed'
         })
@@ -1711,8 +1911,18 @@ try {
 }
 catch {
     if ($_.Exception.Message -ceq 'sensitive_output_detected') { $sensitiveDetected = $true }
+    $failureText = $_.Exception.Message
+    if ($screenshotReadFailed) {
+        $failureText = if ($null -ne $confirmationStateFailure) {
+            "$confirmationStateFailure；确认截图证据读取失败或 PNG 无效；危险动作可能已执行，不得重试或换路。"
+        } else {
+            '确认截图证据读取失败或 PNG 无效，结果未完全核定；危险动作可能已执行，不得重试或换路。'
+        }
+    } elseif ($confirmationMetadataInvalid -and $failureText -notlike '*确认元数据*') {
+        $failureText = "确认元数据不匹配，未能完成取证：$failureText；危险动作可能已执行，不得重试或换路。"
+    }
     $manifest.status = 'failed'
-    $manifest.failure = $_.Exception.Message
+    $manifest.failure = $failureText
     if ($_.Exception.Data.Contains('P0CleanupIssues')) {
         $cleanupErrors += @([string]$_.Exception.Data['P0CleanupIssues'] -split ',' | Where-Object { $_ })
     }
@@ -1738,18 +1948,26 @@ catch {
     if ($null -ne $activeLegRecord) {
         $activeLegRecord['finished_at'] = [DateTime]::UtcNow.ToString('o')
         $activeLegRecord['verdict'] = 'failed'
-        $activeLegRecord['failure'] = $_.Exception.Message
+        $activeLegRecord['failure'] = $failureText
         $failedScreenshot = Join-Path (Join-Path $evidenceRoot $activeLegRecord.leg) 'confirmation.png'
-        if (Test-Path -LiteralPath $failedScreenshot -PathType Leaf) {
+        $activeLegRecord['screenshot'] = [ordered]@{
+            file = $null; sha256 = $null; source_file = $capturedEvidenceFile
+            card_visible = $capturedCardVisible; final_card_visible = $finalCardVisible; capture_attempts = $capturedAttempts
+        }
+        if (-not $screenshotReadFailed -and (Test-Path -LiteralPath $failedScreenshot -PathType Leaf)) {
             $activeLegRecord['screenshot'] = [ordered]@{
                 file = "$($activeLegRecord.leg)/confirmation.png"
                 sha256 = (Get-FileHash -LiteralPath $failedScreenshot -Algorithm SHA256).Hash.ToLowerInvariant()
+                source_file = $capturedEvidenceFile
+                card_visible = $capturedCardVisible
+                final_card_visible = $finalCardVisible
+                capture_attempts = $capturedAttempts
             }
         }
         $manifest.legs.Add($activeLegRecord)
         $activeLegRecord = $null
     }
-    Write-Host "P0 监督式 runner 失败：$($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "P0 监督式 runner 失败：$failureText" -ForegroundColor Red
 }
 finally {
     if ($null -ne $dispatchHandle) {

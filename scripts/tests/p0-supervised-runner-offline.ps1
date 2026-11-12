@@ -153,23 +153,28 @@ function New-Fixture {
         'trace_malformed', 'trace_non_gateway', 'trace_tool_search', 'trace_local_bash_after_block',
         'result_malformed',
         'result_orphan', 'audit_malformed', 'audit_missing_field',
+        'audit_cursor_fail', 'audit_cursor_missing', 'audit_cursor_malformed',
+        'audit_date_fail', 'audit_date_malformed', 'audit_id_mismatch', 'audit_id_missing', 'audit_id_array', 'audit_id_number', 'audit_id_empty', 'audit_id_case', 'audit_id_duplicate', 'audit_id_unrelated_duplicate', 'audit_other_key_array', 'audit_row_id_array', 'audit_row_id_number', 'audit_tool_array', 'audit_key_array', 'audit_note_array', 'audit_result_array', 'audit_top_array', 'audit_note_fake_confirmation', 'audit_note_fake_context', 'audit_note_conflict_confirmation', 'audit_note_conflict_context', 'audit_note_deny_conflict', 'audit_note_real_format', 'audit_note_deny_real',
         'ledger_traversal', 'ledger_absolute', 'ledger_wrong_slug', 'ledger_legacy_slug',
         'ledger_wrong_brain', 'ledger_wrong_leg', 'ledger_symlink',
-        'png_truncated', 'png_bad_crc', 'png_bad_dimensions',
+        'png_truncated', 'png_bad_crc', 'png_bad_dimensions', 'png_read_error', 'png_ready_allowed', 'png_ready_denied', 'png_ready_timeout', 'png_ready_timedout', 'png_ready_error', 'png_ready_dismissed', 'png_unexpected_allowed', 'png_state_array_allowed', 'png_state_array_matching',
         'stdout_secret', 'stderr_bearer', 'trace_secret', 'trace_bearer',
         'audit_secret', 'ledger_secret', 'manifest_secret', 'existing_config_stdout_secret',
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
-        'card_not_captured', 'send_unverified', 'legacy_no_send_field',
+        'card_not_captured', 'card_missing', 'card_string_true', 'card_first_false', 'card_deny_sent_detected', 'send_unverified', 'send_unknown_state', 'legacy_no_send_field',
+        'send_array_sent', 'send_array_unverified', 'send_array_empty', 'send_number', 'send_boolean', 'send_not_sent',
+        'send_data_array', 'send_data_empty', 'send_data_number', 'send_data_boolean', 'send_data_string',
         'deny_read_after', 'deny_rechecked', 'deny_but_allowed', 'deny_but_sent',
         'find_ocr_zero_letter', 'find_focus_missing_with_band', 'find_band_marker_inside',
         'find_ocr_split_bubble', 'find_ocr_extra_text',
         'teardown_dirty', 'teardown_probe_not_ready', 'teardown_visible_keyboard',
         'teardown_keyboard_stuck', 'teardown_ime_unreadable',
         'teardown_not_foreground', 'teardown_foreground_stuck', 'teardown_overlay',
-        'decided_via_notification', 'dispatch_post_start_failure',
+        'decided_via_notification', 'decided_via_missing', 'decided_via_array', 'dispatch_post_start_failure',
+        'confirm_id_changed', 'confirm_id_missing', 'confirm_id_invalid', 'confirm_id_array', 'confirm_id_newline', 'confirm_file_mismatch', 'confirm_invalid_timeout',
         'dispatch_pre_start_failure', 'dispatch_resource_cleanup_failure'
     )][string]$Scenario)
 
@@ -188,6 +193,22 @@ function New-Fixture {
 
     $fixtureRunner = Join-Path $repo 'scripts\run-p0-safety-smoke.ps1'
     Copy-Item -LiteralPath $SourceRunner -Destination $fixtureRunner
+    if ($Scenario -eq 'card_deny_sent_detected') {
+        # 模拟 OCR 强反证，不声明真实图像识别；用于验证抛错前 manifest 已留存结果。
+        $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
+        $needle = "            `$activeLegRecord['deny_out_of_band_status'] = 'attempted'"
+        $replacement = @'
+            Copy-Item -LiteralPath $screenshotPath -Destination $oobShot
+            $oob.captured = $true
+            $oob.ocr = 'fixture-ocr'
+            $oob.message_area_marker = 'present'
+            $oob.verdict = 'sent_detected'
+            $oob.detail = 'fixture strong counterevidence'
+            $activeLegRecord['deny_out_of_band_status'] = 'attempted'
+'@.TrimEnd("`r", "`n")
+        if (-not $runnerSource.Contains($needle, [StringComparison]::Ordinal)) { throw '测试设施错误：无法定位带外结果注入点。' }
+        $runnerSource.Replace($needle, $replacement) | Set-Content -LiteralPath $fixtureRunner -Encoding utf8
+    }
     Copy-Item -LiteralPath $SourceProvisioner -Destination (Join-Path $repo 'scripts\lib\p0-device-provision.ps1')
     if ($Scenario -eq 'dispatch_post_start_failure') {
         # 精确把故障打在 gate host 已入 Job、gate 已放行、调用者尚未拿到 Handle 的窗口；
@@ -212,7 +233,7 @@ function New-Fixture {
         $runnerSource = $runnerSource.Replace($needle, $fault.TrimEnd("`r", "`n"))
         Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
     }
-    if ($Scenario -in @('timeout','dispatch_post_start_failure')) {
+    if ($Scenario -in @('timeout','dispatch_post_start_failure','png_unexpected_allowed','png_state_array_allowed','png_state_array_matching')) {
         # 仅在 fixture 副本中把顺序断言钉到真实 cleanup 边界：返回后查 PID 只能证明“最终死了”，
         # 这两道守卫证明设备恢复与根 lease 释放发生时，Job 内持活后代已经死亡。
         $runnerSource = Get-Content -LiteralPath $fixtureRunner -Raw -Encoding utf8
@@ -243,6 +264,14 @@ function New-Fixture {
             }
             $injectedGuard = $guard.Replace('__PHASE__', $phase).TrimEnd("`r", "`n")
             $runnerSource = $runnerSource.Replace($needle, "$injectedGuard`r`n$needle")
+        }
+        if ($Scenario -in @('png_unexpected_allowed','png_state_array_allowed','png_state_array_matching')) {
+            $ledgerNeedle = '                    Write-P0AbortedLegLedgerRow -Slug $slug -Expected $expectedState -Actual $observedState'
+            if (-not $runnerSource.Contains($ledgerNeedle, [StringComparison]::Ordinal)) {
+                throw '测试设施错误：无法定位非预期终态的补台账点。'
+            }
+            $ledgerGuard = $guard.Replace('__PHASE__', 'before_ledger').TrimEnd("`r", "`n")
+            $runnerSource = $runnerSource.Replace($ledgerNeedle, "$ledgerGuard`r`n$ledgerNeedle")
         }
         Set-Content -LiteralPath $fixtureRunner -Value $runnerSource -Encoding utf8
     }
@@ -389,6 +418,7 @@ function Get-DispatchGlobalLockPath {
     Set-Content -LiteralPath (Join-Path $state 'enabled-a11y.txt') -Value $initialA11y -Encoding ascii
     '{"t":"old","id":"historical","tool":"foreground_app","args":{},"result":"OK","note":"old"}' |
         Set-Content -LiteralPath (Join-Path $state 'audit.jsonl') -Encoding utf8
+    if ($Scenario -eq 'audit_cursor_missing') { Remove-Item -LiteralPath (Join-Path $state 'audit.jsonl') }
 
     Set-Content -LiteralPath (Join-Path $state 'token.txt') -Value $fakeToken -Encoding ascii
 
@@ -454,12 +484,75 @@ if "%1"=="exec-out" (
     exit /b 0
   )
   if "%5"=="files/test-confirmation-state.json" (
+    if "%SCEN%"=="confirm_id_changed" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="card_first_false" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_ready_allowed" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_ready_denied" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_ready_timedout" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_ready_error" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_ready_dismissed" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_unexpected_allowed" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_state_array_allowed" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
+    if "%SCEN%"=="png_state_array_matching" if exist "%P0_FAKE_STATE%\confirmation-initial.json" if not exist "%P0_FAKE_STATE%\confirmation-initial-read.txt" (
+      type "%P0_FAKE_STATE%\confirmation-initial.json"
+      >"%P0_FAKE_STATE%\confirmation-initial-read.txt" echo 1
+      exit /b 0
+    )
     if not exist "%P0_FAKE_STATE%\confirmation-state.json" exit /b 1
     type "%P0_FAKE_STATE%\confirmation-state.json"
+    if "%SCEN%"=="png_unexpected_allowed" >"%P0_FAKE_STATE%\confirmation-observed.txt" echo 1
+    if "%SCEN%"=="png_state_array_allowed" >"%P0_FAKE_STATE%\confirmation-observed.txt" echo 1
+    if "%SCEN%"=="png_state_array_matching" >"%P0_FAKE_STATE%\confirmation-observed.txt" echo 1
     exit /b 0
   )
   rem exec-out 里唯一的 .png 就是确认卡截图，扩展名判据比子串匹配便宜一个进程。
   if "%~x5"==".png" (
+    if "%SCEN%"=="png_read_error" (1>&2 echo fixture-private-error-never-print& exit /b 7)
+    if "%SCEN%"=="png_ready_allowed" exit /b 7
+    if "%SCEN%"=="png_ready_denied" exit /b 7
+    if "%SCEN%"=="png_ready_timedout" exit /b 7
+    if "%SCEN%"=="png_ready_error" exit /b 7
+    if "%SCEN%"=="png_ready_dismissed" exit /b 7
+    if "%SCEN%"=="png_ready_timeout" exit /b 7
+    if "%SCEN%"=="png_unexpected_allowed" exit /b 7
+    if "%SCEN%"=="png_state_array_allowed" exit /b 7
+    if "%SCEN%"=="png_state_array_matching" exit /b 7
     if not exist "%P0_FAKE_STATE%\%~nx5" exit /b 1
     type "%P0_FAKE_STATE%\%~nx5"
     exit /b 0
@@ -469,11 +562,13 @@ if "%1"=="exec-out" (
   rem 而不是只认 %4：它把"审计必须走 run-as"钉进离线门——改回裸 exec-out 路径就匹配不上，
   rem 审计增量读成 0 行，门当场失败，而不是等上真机才发现证据采不到。
   if "%2 %4"=="run-as wc" (
+    if "%SCEN%"=="audit_cursor_fail" exit /b 1
+    if "%SCEN%"=="audit_cursor_malformed" (echo invalid& exit /b 0)
     if not exist "%P0_FAKE_STATE%\audit.jsonl" exit /b 1
     rem find 必须走绝对路径：继承到的 PATH 若把 Git Bash 的 Unix find 排在 System32 前面，
     rem `find /v /c ""` 会被当成"递归搜索 /v 和 /c 两个目录"——/c 在 Git Bash 里就是整个 C 盘，
     rem 于是这一句一直扫到 30 秒超时被 kill。2026-07-26 靠它误诊了好几轮（先怪机器负载、再怪 stdin）。
-    for /f %%C in ('%SystemRoot%\System32\find.exe /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C audit.jsonl
+    for /f %%C in ('%SystemRoot%\System32\find.exe /v /c "" ^< "%P0_FAKE_STATE%\audit.jsonl"') do echo %%C %6
     exit /b 0
   )
   if "%2 %4"=="run-as tail" (
@@ -484,7 +579,11 @@ if "%1"=="exec-out" (
 )
 rem -- leg teardown fake device state: see the PowerShell comment above this here-string --
 if "%1"=="shell" (
-  if "%2"=="date" (echo 20260723& exit /b 0)
+  if "%2"=="date" (
+    if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="audit_date_fail" exit /b 1
+    if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="audit_date_malformed" (echo invalid& exit /b 0)
+    echo 20260723& exit /b 0
+  )
   if "%2 %3"=="input keyevent" (
     >>"%P0_FAKE_STATE%\keyevent.log" echo %*
     if "%4"=="4" (
@@ -648,15 +747,27 @@ $fixtureLease = $null
 $fixtureDescendant = $null
 function Start-FixtureDispatchDescendant {
     $readyPath = Join-Path $state 'dispatch-descendant-ready.txt'
-    $holdScript = @(
+    $holdScriptLines = @(
         'Set-Content -LiteralPath $env:P0_FIXTURE_DESCENDANT_READY -Value ''ready'' -Encoding ascii',
         'Start-Sleep -Seconds 60'
-    ) -join "`r`n"
+    )
+    if ($scenario -in @('png_unexpected_allowed','png_state_array_allowed','png_state_array_matching')) {
+        $holdScriptLines = @(
+            'Set-Content -LiteralPath $env:P0_FIXTURE_DESCENDANT_READY -Value ''ready'' -Encoding ascii',
+            'while (-not (Test-Path -LiteralPath $env:P0_FIXTURE_OBSERVED)) { Start-Sleep -Milliseconds 20 }',
+            'Start-Sleep -Seconds 8',
+            'Set-Content -LiteralPath $env:P0_FIXTURE_CONTINUATION -Value ''fake-tool-call'' -Encoding ascii',
+            'Start-Sleep -Seconds 60'
+        )
+    }
+    $holdScript = $holdScriptLines -join "`r`n"
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = (Get-Process -Id $PID).Path
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.Environment['P0_FIXTURE_DESCENDANT_READY'] = $readyPath
+    $start.Environment['P0_FIXTURE_OBSERVED'] = Join-Path $state 'confirmation-observed.txt'
+    $start.Environment['P0_FIXTURE_CONTINUATION'] = Join-Path $state 'continuation-attempted.txt'
     $encodedHoldScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holdScript))
     foreach ($arg in @('-NoProfile','-NonInteractive','-EncodedCommand',$encodedHoldScript)) {
         $start.ArgumentList.Add($arg)
@@ -675,7 +786,7 @@ function Start-FixtureDispatchDescendant {
     }
     return $process
 }
-if ($scenario -in @('timeout','dispatch_post_start_failure')) {
+if ($scenario -in @('timeout','dispatch_post_start_failure','png_unexpected_allowed','png_state_array_allowed','png_state_array_matching')) {
     . (Join-Path $repo 'scripts\lib\dispatch-lock.ps1')
     $fixtureLease = Open-DispatchLock -Path (Get-DispatchGlobalLockPath) -Owner 'fixture-dispatch-child'
     Set-Content -LiteralPath (Join-Path $state 'dispatch-child-pid.txt') -Value $PID -Encoding ascii
@@ -708,7 +819,10 @@ while (-not (Test-Path -LiteralPath (Join-Path $state 'test-control.json'))) {
 }
 $control = Get-Content -LiteralPath (Join-Path $state 'test-control.json') -Raw | ConvertFrom-Json
 $leg = if ($Slug -match 'stale') { 'stale' } elseif ($Slug -match 'deny') { 'deny' } else { 'allow' }
-$evidenceName = "confirmation-$($control.nonce).png"
+$confirmId = $control.nonce.Substring(0, 12)
+$otherConfirmId = if ($confirmId -ceq 'aaaaaaaaaaaa') { 'bbbbbbbbbbbb' } else { 'aaaaaaaaaaaa' }
+$evidenceName = "confirmation-$confirmId.png"
+if ($scenario -eq 'confirm_file_mismatch') { $evidenceName = "confirmation-$otherConfirmId.png" }
 if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
     $validPngBase64 =
         'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAqElEQVR4nOXOIQEAAAwEoetf+hcDMYGnas/xgMYDGg9oPKDxgMYD' +
@@ -726,16 +840,70 @@ if ($scenario -notin @('missing_screenshot','trace_local_bash_after_block')) {
 $confirmHash = if ($scenario -eq 'wrong_hash') { '0' * 64 } else { $markerHash }
 $confirmState = if ($leg -eq 'deny') { 'denied' } else { 'allowed' }
 if ($scenario -eq 'deny_but_allowed') { $confirmState = 'allowed' }
+if ($scenario -eq 'png_unexpected_allowed') { $confirmState = 'allowed' }
+if ($scenario -in @('png_state_array_allowed','png_state_array_matching')) { $confirmState = @('allowed') }
+if ($scenario -eq 'png_ready_denied') { $confirmState = 'denied' }
+if ($scenario -eq 'png_ready_timedout') { $confirmState = 'timed_out' }
+if ($scenario -eq 'png_ready_error') { $confirmState = 'error' }
+if ($scenario -eq 'png_ready_dismissed') { $confirmState = 'dismissed' }
 $confirm = [ordered]@{
-    run_id=$control.run_id; confirm_id=$control.nonce; state=$confirmState; tool='press_key';
+    run_id=$control.run_id; confirm_id=$confirmId; state=$confirmState; tool='press_key';
     time='2026-07-23T00:00:00Z'; evidence_file=$evidenceName;
     input_length=$marker.Length; input_sha256=$confirmHash
-    card_visible=($scenario -ne 'card_not_captured'); capture_attempts=1
+    card_visible=($scenario -notin @('card_not_captured', 'card_deny_sent_detected')); capture_attempts=1
 }
-# 通知栏那条通道点下的决定。app 侧只在真有生效决定时才写这个字段，
-# 所以默认场景**故意不写**——它就是"旧 APK / 没人点通知"的对照组。
-if ($scenario -eq 'decided_via_notification') { $confirm.decided_via = 'notification' }
-if ($scenario -eq 'timeout') {
+if ($scenario -eq 'card_missing') { $confirm.Remove('card_visible') }
+if ($scenario -eq 'card_string_true') { $confirm.card_visible = 'true' }
+# 来源须由已生效决定提供；缺失、通知和非字符串均用于验收反例。
+switch ($scenario) {
+    'decided_via_notification' { $confirm.decided_via = 'notification' }
+    'decided_via_missing' { }
+    'decided_via_array' { $confirm.decided_via = @('overlay') }
+    default { $confirm.decided_via = 'overlay' }
+}
+switch ($scenario) {
+    'confirm_id_missing' { $confirm.Remove('confirm_id') }
+    'confirm_id_invalid' { $confirm.confirm_id = 'BAD' }
+    'confirm_invalid_timeout' { $confirm.confirm_id = 'BAD' }
+    'confirm_id_array' { $confirm.confirm_id = @($confirmId) }
+    'confirm_id_newline' { $confirm.confirm_id = "$confirmId`n" }
+    'confirm_id_changed' {
+        $confirm.state = 'evidence_ready'
+        $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-initial.json') -Encoding utf8
+        $initialDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not (Test-Path -LiteralPath (Join-Path $state 'confirmation-initial-read.txt'))) {
+            if ([DateTime]::UtcNow -ge $initialDeadline) { throw 'fixture first confirmation was not read' }
+            Start-Sleep -Milliseconds 20
+        }
+        $confirm.state = $confirmState
+        $confirm.confirm_id = $otherConfirmId
+        $confirm.evidence_file = "confirmation-$otherConfirmId.png"
+        Copy-Item -LiteralPath (Join-Path $state $evidenceName) -Destination (Join-Path $state $confirm.evidence_file)
+    }
+    'card_first_false' {
+        $confirm.state = 'evidence_ready'
+        $confirm.card_visible = $false
+        $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-initial.json') -Encoding utf8
+        $initialDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not (Test-Path -LiteralPath (Join-Path $state 'confirmation-initial-read.txt'))) {
+            if ([DateTime]::UtcNow -ge $initialDeadline) { throw 'fixture first confirmation was not read' }
+            Start-Sleep -Milliseconds 20
+        }
+        $confirm.state = $confirmState
+        $confirm.card_visible = $true
+    }
+    { $_ -in @('png_ready_allowed','png_ready_denied','png_ready_timedout','png_ready_error','png_ready_dismissed','png_unexpected_allowed','png_state_array_allowed','png_state_array_matching') } {
+        $confirm.state = 'evidence_ready'
+        $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-initial.json') -Encoding utf8
+        $initialDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not (Test-Path -LiteralPath (Join-Path $state 'confirmation-initial-read.txt'))) {
+            if ([DateTime]::UtcNow -ge $initialDeadline) { throw 'fixture first confirmation was not read' }
+            Start-Sleep -Milliseconds 20
+        }
+        $confirm.state = $confirmState
+    }
+}
+if ($scenario -in @('timeout', 'confirm_invalid_timeout', 'png_ready_timeout')) {
     $confirm.state = 'evidence_ready'
     $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
     try { Start-Sleep -Seconds 20 }
@@ -743,6 +911,14 @@ if ($scenario -eq 'timeout') {
     exit 9
 }
 $confirm | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $state 'confirmation-state.json') -Encoding utf8
+if ($scenario -in @('png_unexpected_allowed','png_state_array_allowed','png_state_array_matching')) {
+    $continuationDeadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath (Join-Path $state 'continuation-attempted.txt')) -and [DateTime]::UtcNow -lt $continuationDeadline) {
+        Start-Sleep -Milliseconds 20
+    }
+    if ($null -ne $fixtureLease) { [void](Close-DispatchLockLease -Lease $fixtureLease) }
+    exit 91
+}
 
 $traceDir = Join-Path $repo 'docs\runs\traces'
 $traceStamp = '20260723-000000'
@@ -818,6 +994,7 @@ if ($scenario -eq 'pre_enter_write') {
     ToolResult 'w0' @{ok=$true;data=@{done=$true}}
 }
 ToolUse 'p1' 'press_key' @{key='enter'}
+$pressAuditId = "a-$($control.nonce)"
 $result = 'success'; $exit = 0; $code = 'OK'; $note = 'confirmation=allowed;context=rechecked'
 if ($leg -eq 'stale') { $result='fail'; $exit=1; $code='E_STALE_REF' }
 if ($leg -eq 'deny') {
@@ -833,10 +1010,27 @@ if ($code -eq 'OK') {
     # legacy_no_send_field 腿模拟不带该字段的旧 APK。
     $pressData = switch ($scenario) {
         'send_unverified' { @{done=$true;sent_verified=$false;verification_state='unverified';verification_channel='ocr'} }
+        'send_unknown_state' { @{done=$true;sent_verified=$false;verification_state='unknown';verification_channel='ocr'} }
+        'send_array_sent' { @{done=$true;sent_verified=$true;verification_state=@('sent');verification_channel='a11y'} }
+        'send_array_unverified' { @{done=$true;sent_verified=$false;verification_state=@('unverified');verification_channel='ocr'} }
+        'send_array_empty' { @{done=$true;sent_verified=$false;verification_state=@();verification_channel='ocr'} }
+        'send_number' { @{done=$true;sent_verified=$false;verification_state=1;verification_channel='ocr'} }
+        'send_boolean' { @{done=$true;sent_verified=$false;verification_state=$true;verification_channel='ocr'} }
+        'send_not_sent' { @{done=$true;sent_verified=$false;verification_state='not_sent';verification_channel='ocr'} }
         'legacy_no_send_field' { @{done=$true} }
         default { @{done=$true;sent_verified=$true;verification_state='sent';verification_channel='a11y'} }
     }
-    ToolResult 'p1' @{ok=$true;data=$pressData}
+    if ($scenario -eq 'send_data_array') { $pressData = ,$pressData }
+    if ($scenario -eq 'send_data_empty') { $pressData = @() }
+    if ($scenario -eq 'send_data_number') { $pressData = 1 }
+    if ($scenario -eq 'send_data_boolean') { $pressData = $true }
+    if ($scenario -eq 'send_data_string') { $pressData = 'sent' }
+    $pressEnvelope = @{ok=$true;data=$pressData;audit_id=$pressAuditId}
+    if ($scenario -eq 'audit_id_missing') { $pressEnvelope.Remove('audit_id') }
+    if ($scenario -eq 'audit_id_array') { $pressEnvelope.audit_id = @($pressAuditId) }
+    if ($scenario -eq 'audit_id_number') { $pressEnvelope.audit_id = 123 }
+    if ($scenario -eq 'audit_id_empty') { $pressEnvelope.audit_id = ' ' }
+    ToolResult 'p1' $pressEnvelope
     if ($scenario -eq 'unknown_post_tool') {
         ToolUse 'u1' 'future_write' @{value='x'}
         ToolResult 'u1' @{ok=$true;data=@{done=$true}}
@@ -914,7 +1108,7 @@ if ($code -eq 'OK') {
         }
     }
 } else {
-    $pressErrorEnvelope = @{ok=$false;error=@{code=$code;channel='safety';retryable=$false}}
+    $pressErrorEnvelope = @{ok=$false;error=@{code=$code;channel='safety';retryable=$false};audit_id=$pressAuditId}
     if ($scenario -eq 'deny_but_sent') {
         # 有 bug 的网关：一边报 E_BLOCKED，一边带出"发送已验证"。信封形态是畸形的，
         # 但被测组件本来就是我们不敢假设其正确的那个——这条断言就是为这种情况准备的。
@@ -944,11 +1138,40 @@ if ($scenario -eq 'trace_malformed') { Add-Content -LiteralPath $tracePath -Valu
 $auditIncrement = Join-Path $state 'audit-increment.jsonl'
 if ($scenario -ne 'empty_audit') {
     $auditObject = @{t='2026-07-23T00:00:00.000';id="a-$($control.nonce)";tool='press_key';args=@{key='enter'};result=$code;channel='safety';ms=1;note=$note}
+    if ($scenario -eq 'audit_id_mismatch') { $auditObject.id = 'a-historical' }
+    if ($scenario -eq 'audit_id_case') { $auditObject.id = $pressAuditId.ToUpperInvariant() }
+    if ($scenario -eq 'audit_row_id_array') { $auditObject.id = @($pressAuditId) }
+    if ($scenario -eq 'audit_row_id_number') { $auditObject.id = 123 }
+    if ($scenario -eq 'audit_tool_array') { $auditObject.tool = @('press_key') }
+    if ($scenario -eq 'audit_key_array') { $auditObject.args.key = @('enter') }
+    if ($scenario -eq 'audit_note_array') { $auditObject.note = @($note) }
+    if ($scenario -eq 'audit_result_array') { $auditObject.result = @($code) }
+    switch ($scenario) {
+        'audit_note_fake_confirmation' { $auditObject.note = 'notconfirmation=allowed;context=rechecked' }
+        'audit_note_fake_context' { $auditObject.note = 'confirmation=allowed;notcontext=rechecked' }
+        'audit_note_conflict_confirmation' { $auditObject.note = 'confirmation=requested;confirmation=allowed;confirmation=denied;context=rechecked' }
+        'audit_note_conflict_context' { $auditObject.note = 'confirmation=allowed;context=rechecked;context=stale' }
+        'audit_note_deny_conflict' { $auditObject.note = 'confirmation=requested;confirmation=denied;confirmation=allowed' }
+        'audit_note_real_format' { $auditObject.note = 'risk=confirmation_required;args_fp=fixture;confirmation=requested;confirmation=allowed;decided_via=overlay;context=rechecked' }
+        'audit_note_deny_real' { $auditObject.note = 'risk=confirmation_required;args_fp=fixture;confirmation=requested;confirmation=denied;decided_via=overlay' }
+    }
     if ($scenario -eq 'audit_secret') { $auditObject.note += ";token=$fixtureToken" }
     if ($scenario -eq 'audit_missing_field') { $auditObject.Remove('channel') }
     $auditLine = $auditObject | ConvertTo-Json -Compress
+    if ($scenario -eq 'audit_top_array') { $auditLine = "[$auditLine]" }
     $auditLine | Add-Content -LiteralPath (Join-Path $state 'audit.jsonl') -Encoding utf8
     $auditLine | Set-Content -LiteralPath $auditIncrement -Encoding utf8
+    if ($scenario -in @('audit_id_duplicate','audit_id_unrelated_duplicate','audit_other_key_array')) {
+        $otherId = if ($scenario -eq 'audit_id_duplicate') { $pressAuditId } else { 'a-unrelated' }
+        $otherArgs = if ($scenario -eq 'audit_other_key_array') { @{key=@('enter')} } else { @{} }
+        $otherAudit = @{t='2026-07-23T00:00:01.000';id=$otherId;tool='foreground_app';args=$otherArgs;result='OK';channel='a11y';ms=1;note=''} | ConvertTo-Json -Compress
+        $otherAudit | Add-Content -LiteralPath (Join-Path $state 'audit.jsonl') -Encoding utf8
+        $otherAudit | Add-Content -LiteralPath $auditIncrement -Encoding utf8
+        if ($scenario -eq 'audit_id_unrelated_duplicate') {
+            $otherAudit | Add-Content -LiteralPath (Join-Path $state 'audit.jsonl') -Encoding utf8
+            $otherAudit | Add-Content -LiteralPath $auditIncrement -Encoding utf8
+        }
+    }
     if ($scenario -eq 'audit_malformed') { Add-Content -LiteralPath $auditIncrement -Value '{bad-audit' -Encoding utf8 }
 } else {
     Set-Content -LiteralPath $auditIncrement -Value '' -NoNewline -Encoding utf8
@@ -1314,6 +1537,10 @@ try {
         Assert-True (Test-Path -LiteralPath (Join-Path $fixture.State 'health.log')) '付费派单前未运行本地协议健康探针。'
         foreach ($index in 0..1) {
             $expectedHash = Get-TestSha256 $markers[$index]
+            $id = $manifestJson.legs[$index].confirmation_id
+            Assert-True ($id -cmatch '^[a-f0-9]{12}$') '确认编号未按规范记录。'
+            Assert-True ($manifestJson.legs[$index].confirmation_metadata_status -ceq 'matched') '确认元数据未绑定。'
+            Assert-True ($manifestJson.legs[$index].screenshot.source_file -ceq "confirmation-$id.png") '截图来源与编号不匹配。'
             Assert-True ($manifestJson.legs[$index].input.length -eq $markers[$index].Length) 'manifest 输入长度不符。'
             Assert-True ($manifestJson.legs[$index].input.sha256 -ceq $expectedHash) 'manifest 输入摘要不符。'
             Assert-True ($manifestJson.legs[$index].input_evidence_matched -eq $true) 'manifest 未记录真实输入证据匹配。'
@@ -1407,6 +1634,127 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) '旧 APK 缺字段必须判失败。'
         Assert-Contains $result.Text '未报告 verification_state'
+        Assert-Contains $result.Text '不得重试'
+    }
+
+    Test-Case 'Allow 腿：未知 verification_state 不得通过' {
+        $fixture = New-Fixture send_unknown_state
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) "未知状态必须判失败，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+        Assert-Contains $result.Text '未知 verification_state'
+        Assert-Contains $result.Text '不得重试'
+    }
+
+    foreach ($scenario in @('send_array_sent', 'send_array_unverified')) {
+        Test-Case "Allow 腿：数组状态 $scenario 不得通过" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "数组状态不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+            Assert-Contains $result.Text 'verification_state 类型无效'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            Assert-True ($manifestJson.legs[0].verdict -ceq 'failed') '失败腿未记入 manifest。'
+            Assert-True ($manifestJson.legs[0].dispatch_exit_code -eq 0) '未保留 dispatch 实际结果。'
+            Assert-True ($manifestJson.legs[0].safety_code -ceq 'OK') '未保留实际危险动作结果。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].trace_file)) '未保留 trace。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].audit_file)) '未保留 audit。'
+        }
+    }
+
+    Test-Case 'Allow 腿：空数组、数字和布尔状态均不得通过' {
+        foreach ($scenario in @('send_array_empty', 'send_number', 'send_boolean')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+            Assert-Contains $result.Text 'verification_state 类型无效'
+            Assert-Contains $result.Text '不得重试'
+        }
+    }
+
+    foreach ($scenario in @('send_data_array', 'send_data_empty')) {
+        Test-Case "Allow 腿：数组 data $scenario 不得通过" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "数组 data 不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+            Assert-Contains $result.Text 'press_key data 类型无效'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            Assert-True ($manifestJson.legs[0].verdict -ceq 'failed') '失败腿未记入 manifest。'
+            Assert-True ($manifestJson.legs[0].dispatch_exit_code -eq 0) '未保留 dispatch 实际结果。'
+            Assert-True ($manifestJson.legs[0].safety_code -ceq 'OK') '未保留实际危险动作结果。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].trace_file)) '未保留 trace。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].audit_file)) '未保留 audit。'
+        }
+    }
+
+    foreach ($scenario in @('send_data_number', 'send_data_boolean', 'send_data_string')) {
+        Test-Case "Allow 腿：标量 data $scenario 不得通过" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 不得通过。"
+            Assert-Contains $result.Text 'press_key data 类型无效'
+            Assert-Contains $result.Text '不得重试'
+        }
+    }
+
+    Test-Case 'Allow 腿：not_sent 与消息区命中冲突时失败且不得重试' {
+        $fixture = New-Fixture send_not_sent
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '后验明确未发送不得通过。'
+        Assert-Contains $result.Text '两套判据打架'
+        Assert-Contains $result.Text '不得重试'
+    }
+
+    foreach ($scenario in @('confirm_id_changed', 'confirm_id_missing', 'confirm_id_invalid', 'confirm_id_array', 'confirm_id_newline', 'confirm_file_mismatch')) {
+        Test-Case "确认元数据不匹配 $scenario 不得通过" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "确认元数据错误不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+            Assert-Contains $result.Text '确认元数据'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            $entry = $manifestJson.legs[0]
+            Assert-True ($entry.verdict -ceq 'failed') '失败腿未记入 manifest。'
+            Assert-True ($entry.confirmation_metadata_status -ceq 'invalid') '未记录元数据不可用。'
+            Assert-True ($entry.dispatch_exit_code -eq 0 -and $entry.safety_code -ceq 'OK') '未保留实际危险动作结果。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.trace_file)) '未保留 trace。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.audit_file)) '未保留 audit。'
+            $evidenceReads = @(Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') | Where-Object { $_ -match 'exec-out.*cat.*cache/confirmation-' })
+            if ($scenario -eq 'confirm_id_changed') {
+                Assert-True ($entry.confirmation_id -cmatch '^[a-f0-9]{12}$') '未保留先前核对的编号。'
+                Assert-True ($entry.screenshot.source_file -ceq "confirmation-$($entry.confirmation_id).png") '未保留首帧截图来源。'
+                Assert-True ($evidenceReads.Count -eq 1 -and $evidenceReads[0].Contains($entry.screenshot.source_file)) '读取了不匹配的终态截图。'
+            } else {
+                Assert-True ($null -eq $entry.screenshot.source_file) '不匹配的截图文件不应读取或报告为已保存来源。'
+                Assert-True ($evidenceReads.Count -eq 0) '读取了不匹配的截图文件。'
+                if ($scenario -ne 'confirm_file_mismatch') {
+                    Assert-True ($null -eq $entry.confirmation_id) '非法编号不能作为可信编号记录。'
+                }
+            }
+        }
+    }
+
+    Test-Case '确认元数据异常且未取得终态时保留未知证据和禁止重试' {
+        $fixture = New-Fixture confirm_invalid_timeout
+        $result = Invoke-FixtureRunner $fixture @('Allow') 2
+        Assert-True ($result.ExitCode -ne 0) '无终态不得通过。'
+        Assert-Contains $result.Text '确认元数据'
+        Assert-Contains $result.Text '危险动作可能已执行'
+        Assert-Contains $result.Text '不得重试'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        $entry = $manifestJson.legs[0]
+        Assert-True ($entry.confirmation_metadata_status -ceq 'invalid') '未记录元数据异常。'
+        Assert-True ($null -eq $entry.confirmation_id -and $null -eq $entry.screenshot.source_file) '未知编号或截图不应冒充已核验。'
+        Assert-True ($null -eq $entry.trace_file -and $null -eq $entry.audit_file -and $null -eq $entry.safety_code) '缺失的证据不应冒充已取得。'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '失败后不得重派。'
     }
 
     Test-Case '首腿失败立即停止且不重试' {
@@ -1419,7 +1767,8 @@ try {
 
     Test-Case '确认超时失败并终止子进程' {
         $fixture = New-Fixture timeout
-        $result = Invoke-FixtureRunner $fixture @('Allow') 2
+        # 假 dispatch 需先启动并确认持活后代；留出启动余量后仍由生产 runner 的时钟触发超时。
+        $result = Invoke-FixtureRunner $fixture @('Allow') 8
         Assert-True ($result.ExitCode -ne 0) '确认超时必须失败。'
         Assert-Contains $result.Text '确认超时'
         Assert-FixtureDispatchTreeDrainedBeforeCleanup $fixture 'confirmation-timeout'
@@ -1467,6 +1816,143 @@ try {
         $after = Open-DispatchLock -Path $lockPath -Owner 'after-resource-cleanup-failure'
         try { Assert-True ($null -ne $after.Stream) '资源 Dispose 故障后无法重取设备锁。' }
         finally { [void](Close-DispatchLockLease -Lease $after) }
+    }
+
+    foreach ($scenario in @('missing_screenshot', 'png_truncated', 'png_read_error', 'png_ready_allowed')) {
+        Test-Case "截图读取失败后保留已允许的原派单结果且不得重试 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 不得通过。"
+            Assert-Contains $result.Text '危险动作可能已执行'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            Assert-True ($null -ne $manifest) '缺少失败 manifest。'
+            $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+            Assert-True ($entry.verdict -ceq 'failed' -and $entry.confirmation -ceq 'allowed') '未保留已观察决定。'
+            Assert-True ($entry.dispatch_exit_code -eq 0 -and $entry.safety_code -ceq 'OK') '未保留原派单结果。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.trace_file)) '未保留原 trace。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.audit_file)) '未保留 audit。'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '不得重新派单。'
+            Assert-True ($entry.screenshot_read_status -ceq 'failed') '未记录截图读取失败。'
+            $screenshotReads = @(Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') | Where-Object { $_ -match 'exec-out.*cat.*cache/confirmation-' })
+            Assert-True ($screenshotReads.Count -eq 1) '截图读取失败后不得重试。'
+        }
+    }
+
+    Test-Case '截图读取失败后未取得决定时保持未知且不重试' {
+        $fixture = New-Fixture png_ready_timeout
+        $result = Invoke-FixtureRunner $fixture @('Allow') 3
+        Assert-True ($result.ExitCode -ne 0) '未取得决定不得通过。'
+        Assert-Contains $result.Text '危险动作可能已执行'
+        Assert-Contains $result.Text '不得重试'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($entry.verdict -ceq 'failed' -and $entry.screenshot_read_status -ceq 'failed') '未记录截图失败。'
+        Assert-True ($null -eq $entry.safety_code -and $null -eq $entry.trace_file -and $null -eq $entry.audit_file) '未取得的结果不得猜测。'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '不得重新派单。'
+        $screenshotReads = @(Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') | Where-Object { $_ -match 'exec-out.*cat.*cache/confirmation-' })
+        Assert-True ($screenshotReads.Count -eq 1) '不得重读截图。'
+    }
+
+    Test-Case '截图读取失败后出现非预期拒绝立即停止并保留终态' {
+        $fixture = New-Fixture png_ready_denied
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '非预期终态不得通过。'
+        Assert-Contains $result.Text '危险动作可能已执行'
+        Assert-Contains $result.Text '不得重试'
+        Assert-Contains $result.Text '确认状态为 denied，期望 allowed'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        $entry = $manifestJson.legs[0]
+        Assert-Contains $manifestJson.failure '确认状态为 denied，期望 allowed'
+        Assert-True ($entry.screenshot_read_status -ceq 'failed') '未保留截图读取失败。'
+        Assert-True ($entry.verdict -ceq 'failed' -and $entry.confirmation -ceq 'denied') '未保留非预期终态。'
+        Assert-True ($null -eq $entry.trace_file -and $null -eq $entry.audit_file -and $null -eq $entry.safety_code) '未取得的证据不得猜测。'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '不得重新派单。'
+    }
+
+    foreach ($case in @(
+        @{ Scenario = 'png_ready_timedout'; State = 'timed_out' },
+        @{ Scenario = 'png_ready_error'; State = 'error' },
+        @{ Scenario = 'png_ready_dismissed'; State = 'dismissed' }
+    )) {
+        Test-Case "截图失败后非预期终态 $($case.State) 不得被掩盖" {
+            $fixture = New-Fixture $case.Scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '非预期终态不得通过。'
+            $expected = "确认状态为 $($case.State)，期望 allowed"
+            Assert-Contains $result.Text $expected
+            Assert-Contains $result.Text '危险动作可能已执行'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            Assert-Contains $manifestJson.failure $expected
+            Assert-True ($manifestJson.legs[0].screenshot_read_status -ceq 'failed') '未保留截图读取失败。'
+            Assert-True ($manifestJson.legs[0].confirmation -ceq $case.State) '未保留真实终态。'
+        }
+    }
+
+    Test-Case '截图失败且 Deny 意外允许时立即停止持活派单及后代' {
+        $fixture = New-Fixture png_unexpected_allowed
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) 'Deny 意外允许不得通过。'
+        Assert-Contains $result.Text '危险动作可能已执行'
+        Assert-Contains $result.Text '不得重试'
+        Assert-Contains $result.Text '确认状态为 allowed，期望 denied'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'continuation-attempted.txt'))) '意外允许后执行器后代仍尝试续调。'
+        Assert-FixtureDispatchTreeDrainedBeforeCleanup $fixture 'unexpected-allowed'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch-descendant-order.log')) -contains 'before_ledger') '补台账前未证明 dispatch 后代已退出。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        $entry = $manifestJson.legs[0]
+        Assert-Contains $manifestJson.failure '确认状态为 allowed，期望 denied'
+        Assert-True ($entry.verdict -ceq 'failed' -and $entry.confirmation -ceq 'allowed') '未保留实际决定。'
+        Assert-True ($entry.screenshot_read_status -ceq 'failed' -and $null -eq $entry.safety_code) '未取得结果不得猜测。'
+        Assert-True ($entry.deny_out_of_band_status -ceq 'not_attempted' -and $null -eq $entry.deny_out_of_band) '未采带外证据不得冒充未发送。'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '不得重新派单。'
+    }
+
+    foreach ($scenario in @('png_state_array_allowed','png_state_array_matching')) {
+        Test-Case "截图失败且确认状态为单元素数组时不得当作决定 $scenario" {
+            $fixture = New-Fixture $scenario
+            $leg = if ($scenario -eq 'png_state_array_allowed') { 'Deny' } else { 'Allow' }
+            $result = Invoke-FixtureRunner $fixture @($leg)
+            Assert-True ($result.ExitCode -ne 0) '非法确认状态不得通过。'
+            Assert-Contains $result.Text '危险动作可能已执行'
+            Assert-Contains $result.Text '不得重试'
+            Assert-Contains $result.Text '确认状态类型无效'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'continuation-attempted.txt'))) '非法状态后执行器后代仍尝试续调。'
+            Assert-FixtureDispatchTreeDrainedBeforeCleanup $fixture 'invalid-state'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+            Assert-True ($entry.confirmation_state_status -ceq 'invalid_type') '未记录非法状态类型。'
+            Assert-True ($null -eq $entry.confirmation -and $null -eq $entry.safety_code) '数组不得冒充真实决定或安全结论。'
+        }
+    }
+
+    Test-Case '截图读取失败的 Deny 腿保留实际结果但不假定未发送' {
+        $fixture = New-Fixture png_read_error
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) '截图读取失败不得通过。'
+        Assert-Contains $result.Text '危险动作可能已执行'
+        Assert-Contains $result.Text '不得重试'
+        Assert-Contains $result.Text '确认截图证据读取失败'
+        Assert-NotMatches $result.Text 'fixture-private-error-never-print'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $manifestRaw = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8
+        Assert-NotMatches $manifestRaw 'fixture-private-error-never-print'
+        $entry = ($manifestRaw | ConvertFrom-Json).legs[0]
+        Assert-True ($entry.verdict -ceq 'failed' -and $entry.confirmation -ceq 'denied') '未保留实际决定。'
+        Assert-True ($entry.safety_code -ceq 'E_BLOCKED') '未保留网关报告。'
+        Assert-True ($entry.deny_out_of_band_status -ceq 'not_attempted' -and $null -eq $entry.deny_out_of_band) '未采带外证据不得冒充未发送。'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '不得重新派单。'
     }
 
     Test-Case '截图证据缺失不得判通过' {
@@ -1626,40 +2112,122 @@ try {
         }
     }
 
-    Test-Case '确认截图没拍到卡时当场警告并如实写进 manifest' {
-        $fixture = New-Fixture card_not_captured
-        $result = Invoke-FixtureRunner $fixture @('Allow')
-        Assert-Contains $result.Text '没有拍到确认卡本身'
-        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
-            -Filter run-manifest.json -Recurse | Select-Object -First 1
-        Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
-        $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
-        Assert-True ($manifestJson.legs[0].screenshot.card_visible -eq $false) `
-            'manifest 未如实记录截图没拍到确认卡。'
+    foreach ($scenario in @('card_not_captured', 'card_missing', 'card_string_true')) {
+        Test-Case "确认截图可见性不足 $scenario 不得通过" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) "截图证据不足不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+            Assert-Contains $result.Text '截图可见性证据不足'
+            Assert-Contains $result.Text '不得重试'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            $entry = $manifestJson.legs[0]
+            Assert-True ($entry.verdict -ceq 'failed' -and $entry.safety_code -ceq 'OK') '必须保留失败及危险动作结果。'
+            Assert-True ($entry.dispatch_exit_code -eq 0) '未保留 dispatch 实际结果。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.trace_file)) '未保留 trace。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.audit_file)) '未保留 audit。'
+            Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.screenshot.file)) '未保留截图。'
+            Assert-True ($entry.screenshot.source_file -ceq "confirmation-$($entry.confirmation_id).png") '未保留截图来源。'
+            $expected = switch ($scenario) { 'card_not_captured' { $false } 'card_missing' { 'unknown' } default { 'invalid_type' } }
+            Assert-True ($entry.screenshot.card_visible -ceq $expected) '未如实记录截图可见性。'
+        }
     }
 
-    Test-Case '决定来自哪条 surface 如实进 manifest，缺字段记 unknown 不冒充悬浮卡' {
-        # 批次 2 判据 1 要的是"通知上点得到、并且真的放行了"。没有这个字段时，那句话
-        # 只能由真人自报——本仓已经吃过一次"判据全部来自自报"的亏。
+    Test-Case 'Deny 截图可见性不足时仍保留带外检查' {
+        foreach ($scenario in @('card_not_captured', 'card_missing', 'card_string_true')) {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Deny')
+            Assert-True ($result.ExitCode -ne 0) "$scenario 的 Deny 截图证据不足不得通过。"
+            Assert-Contains $result.Text '截图可见性证据不足'
+            Assert-Contains $result.Text '不得重试'
+            Assert-Contains (Get-Content -LiteralPath (Join-Path $fixture.State 'adb.log') -Raw) 'exec-out screencap -p'
+            $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                -Filter run-manifest.json -Recurse | Select-Object -First 1
+            $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+            Assert-True ($entry.deny_out_of_band_status -ceq 'attempted' -and $entry.deny_out_of_band.verdict -ceq 'inconclusive') '未保留带外取证结果。'
+            Assert-True ($entry.verdict -ceq 'failed') '截图缺口未记录。'
+        }
+    }
+
+    Test-Case 'Deny 带外强反证抛错前必须保留结果' {
+        $fixture = New-Fixture card_deny_sent_detected
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) '带外强反证不得通过。'
+        Assert-Contains $result.Text '带外验证在消息区读到了 marker'
+        Assert-Contains $result.Text '不得重试'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($entry.deny_out_of_band_status -ceq 'attempted' -and $entry.deny_out_of_band.verdict -ceq 'sent_detected') '强反证未记录。'
+        Assert-True ($entry.deny_out_of_band.message_area_marker -ceq 'present' -and $entry.deny_out_of_band.ocr -ceq 'fixture-ocr') '强反证细节未记录。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $entry.deny_out_of_band.screenshot)) '带外截图未保留。'
+        Assert-True ($entry.screenshot.card_visible -eq $false -and $entry.verdict -ceq 'failed') '失败及原截图状态未记录。'
+    }
+
+    Test-Case '先保存的截图未拍到卡，终态 true 不能修复证据' {
+        $fixture = New-Fixture card_first_false
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '终态 true 不能改变已保存截图的检测结果。'
+        Assert-Contains $result.Text '截图可见性证据不足'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($entry.screenshot.card_visible -eq $false -and $entry.screenshot.final_card_visible -eq $true) '未区分采集时与终态的检测结果。'
+    }
+
+    Test-Case 'Deny 语义错误未到带外取证时如实记录未采' {
+        $fixture = New-Fixture deny_but_sent
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -ne 0) 'Deny 语义错误不得通过。'
+        $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+            -Filter run-manifest.json -Recurse | Select-Object -First 1
+        $entry = (Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json).legs[0]
+        Assert-True ($entry.deny_out_of_band_status -ceq 'not_attempted' -and $null -eq $entry.deny_out_of_band) '未采结果不得冒充带外证据。'
+    }
+
+    Test-Case 'Allow 腿：通知来源不得当成卡上批准' {
         $viaNotification = New-Fixture decided_via_notification
         $result = Invoke-FixtureRunner $viaNotification @('Allow')
-        Assert-True ($result.ExitCode -eq 0) "通知通道决定不该让腿失败：`n$($result.Text)"
+        Assert-True ($result.ExitCode -ne 0) "通知来源不能通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+        Assert-Contains $result.Text '不得重试'
         $manifest = Get-ChildItem -LiteralPath (Join-Path $viaNotification.Repo 'docs\runs\evidence') `
             -Filter run-manifest.json -Recurse | Select-Object -First 1
         $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         Assert-True ($manifestJson.legs[0].confirmation_channel -ceq 'notification') `
-            'manifest 未如实记录决定来自通知栏。'
+            '失败 manifest 未如实记录决定来自通知栏。'
+        Assert-True ($manifestJson.legs[0].verdict -ceq 'failed') '失败腿未记入 manifest。'
+        Assert-True ($manifestJson.legs[0].dispatch_exit_code -eq 0) '未保留 dispatch 实际结果。'
+        Assert-True ($manifestJson.legs[0].safety_code -ceq 'OK') '未保留实际危险动作结果。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].trace_file)) '未保留 trace。'
+        Assert-True (Test-Path -LiteralPath (Join-Path $manifest.DirectoryName $manifestJson.legs[0].audit_file)) '未保留 audit。'
+    }
 
-        # 对照组：app 不报该字段时必须是 unknown。默认成 overlay 会让"通知从没被点过"
-        # 在 manifest 里读起来像验过了。
-        $plain = New-Fixture happy
-        $plainResult = Invoke-FixtureRunner $plain @('Allow')
-        Assert-True ($plainResult.ExitCode -eq 0) "对照组不该失败：`n$($plainResult.Text)"
-        $plainManifest = Get-ChildItem -LiteralPath (Join-Path $plain.Repo 'docs\runs\evidence') `
-            -Filter run-manifest.json -Recurse | Select-Object -First 1
-        $plainJson = Get-Content -LiteralPath $plainManifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
-        Assert-True ($plainJson.legs[0].confirmation_channel -ceq 'unknown') `
-            '缺 decided_via 时 manifest 必须记 unknown。'
+    Test-Case 'Allow 和 Stale 腿：通知、缺失或非字符串来源不得通过' {
+        foreach ($scenario in @('decided_via_notification', 'decided_via_missing', 'decided_via_array')) {
+            foreach ($leg in @('Allow', 'Stale')) {
+                $fixture = New-Fixture $scenario
+                $result = Invoke-FixtureRunner $fixture @($leg)
+                Assert-True ($result.ExitCode -ne 0) "$scenario $leg 不得通过，实际 exit=$($result.ExitCode)：`n$($result.Text)"
+                Assert-Contains $result.Text '不得重试'
+                $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
+                    -Filter run-manifest.json -Recurse | Select-Object -First 1
+                $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+                $expected = switch ($scenario) {
+                    'decided_via_notification' { 'notification' }
+                    'decided_via_missing' { 'unknown' }
+                    default { 'invalid_type' }
+                }
+                Assert-True ($manifestJson.legs[0].confirmation_channel -ceq $expected) "$scenario 的来源记录不正确。"
+                Assert-True ($manifestJson.legs[0].verdict -ceq 'failed') '失败腿未记入 manifest。'
+            }
+        }
+    }
+
+    Test-Case 'Deny 腿：通知拒绝仍可通过' {
+        $fixture = New-Fixture decided_via_notification
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -eq 0) "通知拒绝不应被阻断：`n$($result.Text)"
     }
 
     Test-Case '候选区残留文字在开跑前零付费拦下' {
@@ -1704,17 +2272,26 @@ try {
             $loops[0].Extent.Text.Replace('[DateTime]::UtcNow', '(Get-P0FixtureClock)'))
 
         function Invoke-P0ConfirmationLoopCase([string]$Scenario) {
+            $baseScenario = $Scenario -replace '_screenshot_failed$', ''
             $flow = [pscustomobject]@{
                 Now = [DateTime]::new(2026, 9, 30, 0, 0, 0, [DateTimeKind]::Utc)
                 Exited = ($Scenario -ne 'empty_then_final_exit')
-                Reads = 0; Sleeps = 0; EvidenceSaves = 0; AbortedRows = 0
+                Reads = 0; Sleeps = 0; EvidenceSaves = 0; AbortedRows = 0; Stops = 0
             }
             $runId = 'fixture-confirmation-run'
-            $leg = 'Allow'
-            $LegExpectedConfirmation = @{ Allow = 'allowed' }
+            $leg = if ($baseScenario -eq 'unexpected_allowed') { 'Deny' } else { 'Allow' }
+            $LegExpectedConfirmation = @{ Allow = 'allowed'; Deny = 'denied' }
             $deadline = $flow.Now.AddSeconds(3)
             $PollIntervalMs = 20
             $confirmation = $null
+            $confirmationId = $null
+            $capturedEvidenceFile = $null
+            $capturedCardVisible = 'unknown'
+            $capturedAttempts = $null
+            $finalCardVisible = 'unknown'
+            $confirmationMetadataInvalid = $false
+            $screenshotReadFailed = $Scenario.EndsWith('_screenshot_failed')
+            $activeLegRecord = @{}
             $prompted = $true
             $notificationState = $null
             $session = [pscustomobject]@{ FixtureOnly = $true }
@@ -1727,6 +2304,7 @@ try {
             $process | Add-Member -MemberType ScriptProperty -Name HasExited -Value {
                 $flow.Exited
             }.GetNewClosure()
+            $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
             $dispatchHandle = [pscustomobject]@{ Process = $process }
             function Get-P0FixtureClock { return $flow.Now }
             function Start-Sleep([int]$Milliseconds) {
@@ -1744,27 +2322,44 @@ try {
                 }
                 if ($Scenario -eq 'missing_final') { return $null }
                 if ($Scenario -eq 'late_terminal') { $flow.Now = $deadline }
-                return [pscustomobject]@{
+                $fixtureState = [pscustomobject]@{
                     run_id = $(if ($Scenario -eq 'wrong_run_id') { 'other-run' } else { $runId })
                     tool = $(if ($Scenario -eq 'wrong_tool') { 'type_text' } else { 'press_key' })
-                    state = $(switch ($Scenario) {
+                    state = $(switch ($baseScenario) {
                         'contradictory_terminal' { 'denied' }
                         'expired_terminal' { 'timed_out' }
                         'error_terminal' { 'error' }
                         'dismissed_terminal' { 'dismissed' }
                         default { 'allowed' }
                     })
-                    evidence_file = 'fixture-confirmation.png'
+                    confirm_id = 'abcdef123456'
+                    evidence_file = 'confirmation-abcdef123456.png'
+                    card_visible = $true
                 }
+                switch ($baseScenario) {
+                    'invalid_state_array' { $fixtureState.state = @('allowed') }
+                    'invalid_state_integer' { $fixtureState.state = 1 }
+                    'invalid_state_null' { $fixtureState.state = $null }
+                    'invalid_state_missing' { $fixtureState.PSObject.Properties.Remove('state') }
+                    'invalid_state_unknown' { $fixtureState.state = 'unexpected' }
+                    'invalid_state_upper' { $fixtureState.state = 'ALLOWED' }
+                    'invalid_state_empty' { $fixtureState.state = '' }
+                }
+                return $fixtureState
             }
             function Save-P0PrivateEvidence($Session, [string]$EvidenceFile, [string]$Destination) {
-                if ($EvidenceFile -cne 'fixture-confirmation.png' -or $Destination -cne $screenshotPath) {
+                if ($EvidenceFile -cne 'confirmation-abcdef123456.png' -or $Destination -cne $screenshotPath) {
                     throw '生产证据保存参数发生偏移。'
                 }
                 $flow.EvidenceSaves++
             }
             function Write-P0AbortedLegLedgerRow([string]$Slug, [string]$Expected, [string]$Actual) {
+                if ($flow.Stops -ne 1) { throw '必须先停止 dispatch 再补台账。' }
                 $flow.AbortedRows++
+            }
+            function Stop-P0DispatchProcess($Handle, [switch]$Kill) {
+                if (-not $Kill) { throw '非预期终态须终止 dispatch。' }
+                $flow.Stops++
             }
             $failure = $null
             try { . $pollLoop } catch { $failure = $_.Exception.Message }
@@ -1772,7 +2367,7 @@ try {
                 Confirmed = ($null -ne $confirmation)
                 Failure = $failure
                 Reads = $flow.Reads; Sleeps = $flow.Sleeps
-                EvidenceSaves = $flow.EvidenceSaves; AbortedRows = $flow.AbortedRows
+                EvidenceSaves = $flow.EvidenceSaves; AbortedRows = $flow.AbortedRows; Stops = $flow.Stops
             }
         }
 
@@ -1794,7 +2389,24 @@ try {
         foreach ($scenario in @('contradictory_terminal','expired_terminal','error_terminal','dismissed_terminal')) {
             $invalid = Invoke-P0ConfirmationLoopCase $scenario
             Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure -and
-                $invalid.AbortedRows -eq 1) '矛盾、过期或失败终态必须保留原失败判据和台账。'
+                $invalid.Stops -eq 1 -and $invalid.AbortedRows -eq 1) '矛盾、过期或失败终态必须先停止派单并保留台账。'
+        }
+        foreach ($scenario in @('unexpected_allowed','contradictory_terminal','expired_terminal','error_terminal','dismissed_terminal')) {
+            $invalid = Invoke-P0ConfirmationLoopCase "${scenario}_screenshot_failed"
+            Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure -and
+                $invalid.Stops -eq 1 -and $invalid.AbortedRows -eq 1) '截图失败时非预期终态必须立即停止，再补台账。'
+        }
+        foreach ($scenario in @('invalid_state_array','invalid_state_integer','invalid_state_null','invalid_state_missing')) {
+            $invalid = Invoke-P0ConfirmationLoopCase $scenario
+            Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure -and
+                $invalid.Stops -eq 1 -and $invalid.AbortedRows -eq 1) '非字符串确认状态必须立即停止，不能当作决定。'
+            Assert-Contains $invalid.Failure '确认状态类型无效'
+        }
+        foreach ($scenario in @('invalid_state_unknown','invalid_state_upper','invalid_state_empty')) {
+            $invalid = Invoke-P0ConfirmationLoopCase $scenario
+            Assert-True (-not $invalid.Confirmed -and $null -ne $invalid.Failure -and
+                $invalid.Stops -eq 1 -and $invalid.AbortedRows -eq 1) '未知或非规范大小写状态必须立即停止。'
+            Assert-Contains $invalid.Failure '确认状态值无效'
         }
         $late = Invoke-P0ConfirmationLoopCase 'late_terminal'
         Assert-True (-not $late.Confirmed -and $late.Reads -eq 1 -and $late.EvidenceSaves -eq 0) `
@@ -1827,6 +2439,93 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Stale')
         Assert-True ($result.ExitCode -ne 0) 'Stale 后 R 续调必须失败。'
         Assert-Contains $result.Text '续调'
+    }
+
+    foreach ($scenario in @('audit_cursor_fail', 'audit_cursor_missing', 'audit_cursor_malformed')) {
+        Test-Case "审计游标不可读时不得派单 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '游标不可读不得通过。'
+            Assert-Contains $result.Text '审计游标'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) '游标不可读仍派单。'
+        }
+    }
+    foreach ($scenario in @('audit_id_mismatch', 'audit_id_missing', 'audit_id_array', 'audit_id_number', 'audit_id_empty', 'audit_id_case', 'audit_id_duplicate', 'audit_row_id_array', 'audit_row_id_number')) {
+        Test-Case "审计与当前危险调用编号不匹配 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '审计编号异常不得通过。'
+            Assert-Contains $result.Text '审计'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+        }
+    }
+    foreach ($scenario in @('audit_date_fail', 'audit_date_malformed')) {
+        Test-Case "审计结束日期不可信不得通过 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '审计日期未知不得通过。'
+            Assert-Contains $result.Text '审计'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+        }
+    }
+
+    foreach ($scenario in @('audit_tool_array', 'audit_key_array')) {
+        Test-Case "审计工具或按键数组不得判通过 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '审计工具或按键数组不得通过。'
+            Assert-Contains $result.Text '审计'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+        }
+    }
+    foreach ($scenario in @('audit_note_array', 'audit_result_array')) {
+        Test-Case "审计注记或结果数组不得判通过 $scenario" {
+            $fixture = New-Fixture $scenario
+            $result = Invoke-FixtureRunner $fixture @('Allow')
+            Assert-True ($result.ExitCode -ne 0) '审计注记或结果数组不得通过。'
+            Assert-Contains $result.Text '审计'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+        }
+    }
+    Test-Case '审计行顶层数组不得冒充对象' {
+        $fixture = New-Fixture audit_top_array
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -ne 0) '审计行顶层数组不得通过。'
+        Assert-Contains $result.Text '审计'
+        Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+    }
+
+    foreach ($scenario in @('audit_note_fake_confirmation', 'audit_note_fake_context', 'audit_note_conflict_confirmation', 'audit_note_conflict_context', 'audit_note_deny_conflict')) {
+        Test-Case "审计确认注记必须使用无冲突完整 token $scenario" {
+            $fixture = New-Fixture $scenario
+            $leg = if ($scenario -eq 'audit_note_deny_conflict') { 'Deny' } else { 'Allow' }
+            $result = Invoke-FixtureRunner $fixture @($leg)
+            Assert-True ($result.ExitCode -ne 0) '缺失或冲突的完整审计 token 不得通过。'
+            Assert-Contains $result.Text '审计'
+            Assert-True (@(Get-Content -LiteralPath (Join-Path $fixture.State 'dispatch.log')).Count -eq 1) '审计失败后不得重派。'
+        }
+    }
+    Test-Case '审计确认注记接受生产格式的 requested 和 allowed' {
+        $fixture = New-Fixture audit_note_real_format
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "合法生产注记不应误阻断：$($result.Text)"
+    }
+    Test-Case '审计确认注记接受生产格式的 requested 和 denied' {
+        $fixture = New-Fixture audit_note_deny_real
+        $result = Invoke-FixtureRunner $fixture @('Deny')
+        Assert-True ($result.ExitCode -eq 0) "合法拒绝注记不应误阻断：$($result.Text)"
+    }
+
+    Test-Case '无关审计编号重复不改变本腿判定' {
+        $fixture = New-Fixture audit_id_unrelated_duplicate
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "无关编号重复不应误阻断：$($result.Text)"
+    }
+
+    Test-Case '非按键审计不套用按键参数语义' {
+        $fixture = New-Fixture audit_other_key_array
+        $result = Invoke-FixtureRunner $fixture @('Allow')
+        Assert-True ($result.ExitCode -eq 0) "非按键审计不应按按键参数误阻断：$($result.Text)"
     }
 
     Test-Case '空 audit 增量不得判通过但历史 audit 不造成采集失败' {
@@ -2364,6 +3063,33 @@ PODENY-DCA2222F6441|72|2117|472|32
         Assert-Contains $body '$Cursor.Day'
         # 只在真跨天时才动，避免把同一天的行重复接一遍。
         Assert-Contains $body '-ceq [string]$Cursor.Day) { return }'
+    }
+
+    Test-Case '审计日期只接受同日或明确的次日' {
+        . $SourceProvisioner
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('audit-day-' + [guid]::NewGuid().ToString('N'))
+        $script:TestRoots.Add($root)
+        New-Item -ItemType Directory -Path $root | Out-Null
+        $dest = Join-Path $root 'audit.jsonl'
+        $script:FixtureAuditDay = '20270101'
+        $script:FixtureAuditFiles = [Collections.Generic.List[string]]::new()
+        function Invoke-P0DeviceCommand { param($Session,$Arguments,$Operation,[switch]$AllowFailure) return [pscustomobject]@{ ExitCode=0; Stdout=$script:FixtureAuditDay } }
+        function Invoke-P0ExternalToFile {
+            param($FilePath,$Arguments,$Destination,$Operation)
+            [void]$script:FixtureAuditFiles.Add([string]$Arguments[-1])
+            [IO.File]::WriteAllText($Destination, "fixture`n", [Text.UTF8Encoding]::new($false))
+        }
+        $session = [pscustomobject]@{ AdbPath='fake-adb'; Serial='fake-serial' }
+        $cursor = [pscustomobject]@{ Day='20261231'; Path='files/audit/20261231.jsonl'; LineCount=3 }
+        Save-P0AuditIncrement -Session $session -Cursor $cursor -Destination $dest
+        Assert-True ($script:FixtureAuditFiles.Count -eq 2 -and $script:FixtureAuditFiles[1] -ceq 'files/audit/20270101.jsonl') '跨年次日未补读。'
+        foreach ($day in @('20261230', '20270102', '20261301')) {
+            $script:FixtureAuditDay = $day
+            $threw = $false
+            try { Save-P0AuditIncrement -Session $session -Cursor $cursor -Destination $dest }
+            catch { $threw = $true; Assert-Contains $_.Exception.Message '不得重试' }
+            Assert-True $threw "日期 $day 不得当作可信跨日。"
+        }
     }
 
     Test-Case 'dispatch 已记过台账时不再补 aborted 行' {
