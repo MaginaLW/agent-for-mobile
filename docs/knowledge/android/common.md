@@ -165,6 +165,14 @@
 - **保存故障/恢复/持久性分开**：choice-failure-01中Start保存失败保持停态、Stop保存失败仍停当前服务，UI均UNKNOWN；mode两次恢复/读回仅证明恢复子集。最终reboot客户端超时，整轮FAIL、停止持久性未验，不借run-03回填。
 - **主动Kill不是自然崩溃**：choice-failure-01收尾前emulator/server仍活跃，natural_exit_code空，Kill后-1仅属after_cleanup；run-02既有MDMP非内存头/目录访问异常才支持原生崩溃结论。进程/端口释放不等于数据清理，五轮cleanup_proven=false保留。
 
+## 有限签名与两点存活证据
+
+适用于2026-11-12 BOOT-SIGN-A01/F4-P01；依据：[本轮交叉基线与签名记录](../../runs/2026-11-12-网关开机恢复离线.md)。
+
+- Get-Command git可能返回多个Application；直接取Source后传[string]会拼接成不存在的可执行路径。明确选择单个Application再取Source；本次仅修此准备错误，原准入失败保留，不记作证书/签名尝试，不能自动换key或重置次数。
+- 同签名以公开证书匹配、官方verify及非签名ZIP载荷一致分别核定；本次542项相同只证明原输入载荷保留，不等于手机安装、BOOT或ROM通过。key只读占用与同一调用退出/输出截止保持，凭据不入记录。
+- 旧包F4-P01五分钟两点服务/绑定/health与samePID通过，只证明两点，不证明连续或长期存活，也不迁移到新BOOT包。签名PASS、旧包观察PASS、公开固定提交与未来手机许可分别记录。
+
 ## Windows 批处理与离线套件
 
 - **隔离工作树复制Gradle缓存的长路径（2026-11-12）**：在较长的managed worktree路径下，Python标准copytree可对超过260字符的目标报不存在；本轮只读源模块/wrapper缓存、目标resolve核实仍位于当前工作树后，以Windows长路径前缀补齐本任务部分产物成功。未修改全局LongPaths设置，不把配置、凭据或keystore混入缓存复制。依据：[开机恢复离线记录](../../runs/2026-11-12-网关开机恢复离线.md)；这是缓存准备经验，不是设备或开机行为证明。
