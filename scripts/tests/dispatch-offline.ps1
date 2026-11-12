@@ -692,8 +692,8 @@ public static class Program {
         Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) '测试开始前锁目录已存在。'
         $result = Invoke-Dispatch $taskArgs
         Assert-ExitCode $result 0
-        Assert-Matches $result.Text 'budget=\$2(?:\.0)?'
-        Assert-Matches $result.Text '机械成本上限 2(?:\.0)? 美元'
+        Assert-Contains $result.Text 'budget=订阅通道/无 API 硬上限'
+        Assert-Contains $result.Text '走 ChatGPT 订阅通道，不提供 API 美元硬上限'
         Assert-NotMatches $result.Text '\{\{BUDGET_(?:USD|POLICY)\}\}'
         Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) 'DryRun 创建了主机级锁目录。'
 
@@ -1063,68 +1063,36 @@ public static class Program {
             'Claude 失败终态被误要求 success-only 计量字段。'
     }
 
-    Test-Case 'cmd/bat executable 与 Model 参数含 shell 元字符时 fail closed' {
-        $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
-        Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
-        $ledgerExisted = Test-Path -LiteralPath $LedgerPath -PathType Leaf
-        $ledgerBytes = if ($ledgerExisted) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
-        $savedOverride = $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE
-        $injectedPath = Join-Path $SentinelDir 'cmd-injected.txt'
-        try {
-            foreach ($model in @(
-                'sonnet&echo injected>%DISPATCH_TEST_SENTINEL_DIR%\cmd-injected.txt',
-                'sonnet"&echo injected>cmd-injected.txt'
-            )) {
-                Remove-Item -LiteralPath $injectedPath -Force -ErrorAction SilentlyContinue
-                $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $null
-                $slug = 'offline-cmd-arg-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-                $result = Invoke-Dispatch @(
-                    '-Task','offline cmd argument injection guard','-Slug',$slug,
-                    '-Brain','claude','-Executor','gateway','-Model',$model
-                )
-                Assert-True ($result.ExitCode -ne 0) "恶意 Model 未被拒绝：$model"
-                Assert-True (-not (Test-Path -LiteralPath $injectedPath)) '恶意 Model 执行了 cmd 注入载荷。'
-                Assert-True (-not (Test-Path -LiteralPath (Join-Path $SentinelDir 'claude-called.txt'))) `
-                    '含 shell 元字符的 Model 仍启动了 fake Claude。'
-                $errorFile = Get-ChildItem -LiteralPath $TracesDir -Filter "*-$slug-gateway-claude-leg1.err.txt" |
-                    Select-Object -Last 1
-                Assert-True ($null -ne $errorFile) 'cmd 参数拒绝路径没有留下有界 stderr。'
-                # PowerShell 的原生 stderr 在重定向时可能包成 CLIXML；匹配稳定的 ASCII 前缀，
-                # 同时由上面的进程未启动/无注入副作用断言证明这里确实 fail closed。
-                Assert-Matches (Get-Content -LiteralPath $errorFile.FullName -Raw) 'cmd/bat executable'
-            }
-
-            $unsafeDirectory = Join-Path $TestRoot 'unsafe(parent)'
-            New-Item -ItemType Directory -Path $unsafeDirectory -Force | Out-Null
-            $unsafeExecutable = Join-Path $unsafeDirectory 'claude.cmd'
-            Copy-Item -LiteralPath (Join-Path $FakeBin 'claude.cmd') -Destination $unsafeExecutable
-            $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $unsafeExecutable
-            $pathSlug = 'offline-cmd-executable-unsafe'
-            $pathResult = Invoke-Dispatch @(
-                '-Task','offline cmd executable injection guard','-Slug',$pathSlug,
-                '-Brain','claude','-Executor','gateway'
-            )
-            Assert-True ($pathResult.ExitCode -ne 0) '含括号的 .cmd executable 未被拒绝。'
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $SentinelDir 'claude-called.txt'))) `
-                '含 shell 元字符的 executable 仍被启动。'
-            $pathError = Get-ChildItem -LiteralPath $TracesDir `
-                -Filter "*-$pathSlug-gateway-claude-leg1.err.txt" | Select-Object -Last 1
-            Assert-Matches (Get-Content -LiteralPath $pathError.FullName -Raw) 'cmd/bat executable'
+    Test-Case '退役 Claude 新请求在任何工具和仓库副作用前拒绝' {
+        $effects = Get-RepoEffectState
+        foreach ($preview in @($false, $true)) {
+            $arguments = @('-Task','offline retired brain','-Slug','offline-retired',
+                '-Brain','claude','-Executor','gateway','-Model','sonnet&echo must-not-execute')
+            if ($preview) { $arguments += '-DryRun' }
+            $result = Invoke-Dispatch $arguments
+            Assert-True ($result.ExitCode -ne 0) '退役 Claude 新请求被接受。'
+            Assert-Contains $result.Text 'Claude 执行已退役'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $effects
         }
-        finally {
-            $env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE = $savedOverride
-            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
-                Where-Object Name -like '*-offline-cmd-*-gateway-claude-leg1.*' |
-                Remove-Item -Force -ErrorAction SilentlyContinue
-            if ((Test-Path -LiteralPath $TracesDir -PathType Container) -and
-                @(Get-ChildItem -LiteralPath $TracesDir -Force).Count -eq 0) {
-                Remove-Item -LiteralPath $TracesDir -Force
-            }
-            if ($ledgerExisted) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytes) }
-            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
-            Remove-Item -LiteralPath $gatewayConfig -Force -ErrorAction SilentlyContinue
-            if ($null -ne $ledgerBytes -and $ledgerBytes.Length -gt 0) {
-                [Array]::Clear($ledgerBytes, 0, $ledgerBytes.Length)
+    }
+
+    Test-Case '退役 Claude 与缺少 brain 的旧 gateway 暂停件拒绝恢复且不消费' {
+        foreach ($brainLine in @('brain: claude', '')) {
+            $retiredPause = Join-Path $TestRoot 'retired-gateway.pause.md'
+            $raw = "slug: offline-retired-confirm`nleg: 1`nexecutor: gateway`n$brainLine`n---`n[AWAIT_CONFIRM]`nretired-body-must-not-leak"
+            [IO.File]::WriteAllText($retiredPause, $raw)
+            foreach ($preview in @($false, $true)) {
+                $effects = Get-RepoEffectState
+                $arguments = @('-Confirm',$retiredPause,'-Brain','codex')
+                if ($preview) { $arguments += '-DryRun' }
+                $result = Invoke-Dispatch $arguments -InputText 'RESUME'
+                Assert-True ($result.ExitCode -ne 0) '旧 Claude 暂停件被恢复或改投 Codex。'
+                Assert-Contains $result.Text 'Claude 执行已退役'
+                Assert-NotMatches $result.Text 'retired-body-must-not-leak'
+                Assert-True ([IO.File]::ReadAllText($retiredPause) -ceq $raw) '退役拒绝路径消费或重写了旧暂停件。'
+                Assert-NoExternalTools $result
+                Assert-NoRepoEffects $effects
             }
         }
     }
@@ -1146,14 +1114,6 @@ public static class Program {
             $env:ARBITRARY_PARENT_SECRET = 'must-not-reach-fake-codex'
             $parentLease = Open-DispatchLock -Path $LockPath -Owner 'offline-parent' -LeaseToken ''
             $env:AGENT_MOBILE_DEVICE_LOCK_LEASE = $parentLease.LeaseToken
-
-            $claudeResult = Invoke-Dispatch @(
-                '-Task','offline fake claude lease isolation','-Slug','offline-claude-lease',
-                '-Brain','claude','-Executor','gateway'
-            )
-            Assert-ExitCode $claudeResult 0
-            Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'claude-lock-env.txt') -Raw).Trim() -ceq '[]') `
-                'Claude brain 继承了 runner→dispatch 的设备 lease token。'
 
             $cases = @(
                 @{ Scenario='success'; Exit=0; Pattern='派单结果：success' },
@@ -1257,9 +1217,6 @@ public static class Program {
             if ($null -ne $parentLease) { [void](Close-DispatchLockLease -Lease $parentLease) }
             Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
                 Where-Object Name -like '*-offline-codex-*-gateway-codex-leg1.*' |
-                Remove-Item -Force -ErrorAction SilentlyContinue
-            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
-                Where-Object Name -like '*-offline-claude-lease-gateway-claude-leg1.*' |
                 Remove-Item -Force -ErrorAction SilentlyContinue
             if ((Test-Path -LiteralPath $TracesDir -PathType Container) -and
                 @(Get-ChildItem -LiteralPath $TracesDir -Force).Count -eq 0) {
@@ -1433,12 +1390,12 @@ public static class Program {
         Assert-NoRepoEffects $before
     }
 
-    Test-Case '省略 Executor 默认 mobile' {
+    Test-Case '省略 Brain 和 Executor 默认 Codex gateway' {
         $result = Invoke-Dispatch $taskArgs
         Assert-ExitCode $result 0
-        Assert-Contains $result.Text 'executor=mobile'
-        Assert-Matches $result.Text 'configs[\\/]mobile-mcp\.json'
-        Assert-Contains $result.Text 'mcp__mobile'
+        Assert-Contains $result.Text 'executor=gateway brain=codex'
+        Assert-Matches $result.Text 'configs[\\/]gateway-mcp\.json'
+        Assert-Contains $result.Text 'mcp__gateway'
         Assert-NoExternalTools $result
         Assert-NoRepoEffects $before
     }
@@ -1506,6 +1463,7 @@ public static class Program {
 slug: offline-gateway-confirm
 leg: 1
 executor: gateway
+brain: codex
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -1534,6 +1492,7 @@ session_id: offline
 slug: offline-gateway-safety-terminal
 leg: 1
 executor: gateway
+brain: codex
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -1569,7 +1528,7 @@ session_id: offline
         # 把作废变换抽成纯函数，以便与拒绝重放一起离线验证。
         . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
 
-        $raw = "slug: s1`nleg: 1`nexecutor: gateway`n---`n[AWAIT_CONFIRM]`n屏幕现状：x`n"
+        $raw = "slug: s1`nleg: 1`nexecutor: gateway`nbrain: codex`n---`n[AWAIT_CONFIRM]`n屏幕现状：x`n"
         $document = Read-DispatchPauseDocument -Text $raw
         Assert-True ($document.Meta['slug'] -ceq 's1') 'meta 解析错误。'
         Assert-True ($document.Consumed -ceq '') '未消费的暂停件不该带 consumed。'
@@ -1629,7 +1588,7 @@ session_id: offline
 
     Test-Case '暂停件合法扩展字段和空行保持兼容' {
         . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
-        $raw = "slug: offline-extended-pause`n`nleg: 1`nexecutor: gateway`nfuture_field: retained:value`n---`n[AWAIT_CONFIRM]`nbody"
+        $raw = "slug: offline-extended-pause`n`nleg: 1`nexecutor: gateway`nbrain: codex`nfuture_field: retained:value`n---`n[AWAIT_CONFIRM]`nbody"
         $document = Read-DispatchPauseDocument -Text $raw
         Assert-True ($document.Meta['future_field'] -ceq 'retained:value') '未知合法字段必须保留。'
         $marked = Set-DispatchPauseConsumed -Text $raw -At '2026-08-01T12:00:00Z'
@@ -1714,6 +1673,7 @@ session_id: offline
 slug: offline-claimed-approval
 leg: 1
 executor: gateway
+brain: codex
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -1733,7 +1693,7 @@ session_id: offline
     Test-Case '暂停件只接受规范第一腿编号' {
         foreach ($leg in @('0', '00', '01', '+1', '-1', '1.0', '2147483648')) {
             $invalidPause = Join-Path $TestRoot 'invalid-first-leg.pause.md'
-            $raw = "slug: offline-invalid-first-leg`nleg: $leg`nexecutor: gateway`n---`n" +
+            $raw = "slug: offline-invalid-first-leg`nleg: $leg`nexecutor: gateway`nbrain: codex`n---`n" +
                 "[AWAIT_CONFIRM]`nsecret-invalid-leg-body-must-not-leak"
             Set-Content -LiteralPath $invalidPause -Encoding utf8 -Value $raw
             $result = Invoke-Dispatch @('-Confirm', $invalidPause, '-DryRun')
@@ -1748,7 +1708,7 @@ session_id: offline
     Test-Case '暂停件路径中的方括号按字面读取' {
         $literalPause = Join-Path $TestRoot 'literal[1].pause.md'
         $wildcardDecoy = Join-Path $TestRoot 'literal1.pause.md'
-        $header = "slug: offline-literal-pause`nleg: 1`nexecutor: gateway`n---`n[AWAIT_CONFIRM]`n"
+        $header = "slug: offline-literal-pause`nleg: 1`nexecutor: gateway`nbrain: codex`n---`n[AWAIT_CONFIRM]`n"
         Set-Content -LiteralPath $literalPause -Encoding utf8 -Value ($header + 'literal-path-selected')
         Set-Content -LiteralPath $wildcardDecoy -Encoding utf8 -Value ($header + 'wildcard-decoy-must-not-be-selected')
         $literalBefore = [IO.File]::ReadAllText($literalPause)
@@ -1769,6 +1729,7 @@ session_id: offline
 slug: offline-chained
 leg: 2
 executor: gateway
+brain: codex
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -1788,6 +1749,7 @@ session_id: offline
 slug: offline-bogus-leg
 leg: 一
 executor: gateway
+brain: codex
 session_id: offline
 ---
 [AWAIT_CONFIRM]
@@ -1808,6 +1770,7 @@ session_id: offline
 slug: offline-consumed
 leg: 1
 executor: gateway
+brain: codex
 session_id: offline
 consumed: 2026-08-01T00:00:00.0000000Z
 ---

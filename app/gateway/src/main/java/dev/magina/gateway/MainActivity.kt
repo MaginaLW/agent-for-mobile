@@ -85,7 +85,7 @@ class MainActivity : Activity() {
             appendLine("\ntoken: ${Gateway.token()}")
             appendLine("\nPC 侧接入：")
             appendLine("adb forward tcp:${Gateway.DEFAULT_PORT} tcp:${Gateway.DEFAULT_PORT}")
-            appendLine("然后 claude --mcp-config configs/gateway-mcp.json")
+            appendLine("然后在 PC 仓库中使用 Codex + gateway 派单（scripts/dispatch.ps1）")
         }
     }
 }

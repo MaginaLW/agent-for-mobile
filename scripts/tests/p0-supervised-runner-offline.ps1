@@ -333,6 +333,7 @@ function Remove-P0PrivateTemporaryFile {
     }
     # 任务模板不用假货：fixture 跑的必须是真机上会派发的同一份正文。
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-brain.ps1') -Destination (Join-Path $repo 'scripts\lib\dispatch-brain.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
     Copy-Item -LiteralPath $SourceDeviceLockHelper `
@@ -635,7 +636,7 @@ param(
     [string]$TaskFile,
     [string]$Slug,
     [string]$Executor,
-    [string]$Brain = 'claude',
+    [string]$Brain = 'codex',
     [int]$TimeoutMin
 )
 $ErrorActionPreference = 'Stop'
@@ -748,8 +749,22 @@ $traceStamp = '20260723-000000'
 $traceName = "$traceStamp-$Slug-$Executor-$Brain-leg1.jsonl"
 $tracePath = Join-Path $traceDir $traceName
 function Add-Event($Object) { Add-Content -LiteralPath $tracePath -Value ($Object | ConvertTo-Json -Compress -Depth 20) -Encoding utf8 }
-function ToolUse($Id, $Name, $ToolInput) { Add-Event @{ type='assistant'; message=@{ content=@(@{type='tool_use';id=$Id;name="mcp__gateway__$Name";input=$ToolInput}) } } }
-function ToolResult($Id, $Envelope) { Add-Event @{ type='user'; message=@{ content=@(@{type='tool_result';tool_use_id=$Id;content=@(@{type='text';text=($Envelope | ConvertTo-Json -Compress -Depth 20)})}) } } }
+$fixtureCalls = @{}
+Add-Event @{type='thread.started';thread_id='offline-codex'}
+Add-Event @{type='turn.started'}
+function ToolUse($Id, $Name, $ToolInput) {
+    $item = @{type='mcp_tool_call';id=$Id;server='gateway';tool=$Name;arguments=$ToolInput}
+    $fixtureCalls[$Id] = $item
+    Add-Event @{type='item.started';item=$item}
+}
+function ToolResult($Id, $Envelope) {
+    $item = if ($fixtureCalls.ContainsKey($Id)) { $fixtureCalls[$Id].Clone() } else {
+        @{type='mcp_tool_call';id=$Id;server='gateway';tool='orphan';arguments=@{}}
+    }
+    $item.status = 'completed'
+    $item.result = @{content=@(@{type='text';text=($Envelope | ConvertTo-Json -Compress -Depth 20)})}
+    Add-Event @{type='item.completed';item=$item}
+}
 
 $typedText = if ($scenario -eq 'wrong_text') { 'P0ALLOW-WRONG000000' } else { $marker }
 function Emit-Macro {
@@ -914,10 +929,11 @@ if ($code -eq 'OK') {
 if ($scenario -eq 'result_orphan') { ToolResult 'orphan-result' @{ok=$true;data=@{done=$true}} }
 # 复刻 2026-07-26：Enter 被安全门拦住、确认卡从未出现，执行器随后调了一次本机 Bash。
 if ($scenario -eq 'trace_local_bash_after_block') {
-    Add-Event @{type='assistant';message=@{content=@(@{type='tool_use';id='b0';name='Bash';input=@{command='true'}})}}
-    Add-Event @{type='user';message=@{content=@(@{type='tool_result';tool_use_id='b0';content=@(@{type='text';text='(no output)'})})}}
+    Add-Event @{type='item.started';item=@{type='command_execution';id='b0';command='true'}}
+    Add-Event @{type='item.completed';item=@{type='command_execution';id='b0';command='true';exit_code=0}}
 }
-Add-Event @{type='result';subtype='success';result=if($result -eq 'success'){'结果：成功'}else{'结果：失败'}}
+Add-Event @{type='item.completed';item=@{type='agent_message';id='final';text=if($result -eq 'success'){'结果：成功'}else{'结果：失败'}}}
+Add-Event @{type='turn.completed';usage=@{input_tokens=1;cached_input_tokens=0;output_tokens=1}}
 if ($scenario -eq 'trace_secret') {
     Add-Event @{type='assistant';message=@{content=@(@{type='text';text="token=$fixtureToken"})}}
 }
@@ -962,7 +978,7 @@ if ($scenario -ne 'missing_ledger') {
             $legacyName
         }
         'ledger_wrong_brain' {
-            $wrongName = "$traceStamp-$Slug-$Executor-codex-leg1.jsonl"
+            $wrongName = "$traceStamp-$Slug-$Executor-claude-leg1.jsonl"
             Copy-Item -LiteralPath $tracePath -Destination (Join-Path $traceDir $wrongName)
             $wrongName
         }
@@ -1165,10 +1181,15 @@ try {
         }
         finally { $env:LOCALAPPDATA = $savedLocalAppData }
         Assert-True ($LASTEXITCODE -eq 0) "DryRun 失败：$($output -join "`n")"
-        Assert-Contains ($output -join "`n") 'legs=Allow,Stale'
+        Assert-Contains ($output -join "`n") 'legs=Allow,Stale executor=gateway brain=codex'
         Assert-True (-not (Test-Path -LiteralPath $lockPath)) 'DryRun 创建了主机级设备锁。'
         $evidenceAfter = @(Get-ChildItem -LiteralPath (Join-Path $SourceRepoRoot 'docs\runs\evidence') -Recurse -File -ErrorAction SilentlyContinue).Count
         Assert-True ($evidenceAfter -eq $evidenceBefore) 'DryRun 写入了 evidence。'
+        $retired = & $PwshPath -NoProfile -File $SourceRunner -Legs Allow -Brain claude `
+            -AdbPath 'definitely-missing-adb' -DispatchPath 'definitely-missing-dispatch' 2>&1
+        Assert-True ($LASTEXITCODE -ne 0) '监督式 runner 接受了退役 Claude 请求。'
+        Assert-Contains ($retired -join "`n") 'Claude 执行已退役'
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) '退役 Claude 请求创建了设备锁。'
     }
 
     Test-Case 'health probe 兼容 PowerShell 7.0 且 runner 使用跨 worktree 主机级租约' {
@@ -1780,11 +1801,11 @@ try {
             '读取返回时已到原截止时间的 allowed，不得保存为通过或延长确认窗口。'
     }
 
-    Test-Case 'ToolSearch 加载 schema 不算越权也不进调用序列' {
+    Test-Case 'Claude ToolSearch 事件不得冒充 Codex trace' {
         $fixture = New-Fixture trace_tool_search
         $result = Invoke-FixtureRunner $fixture @('Allow')
-        Assert-True ($result.ExitCode -eq 0) "ToolSearch 不该让腿失败：`n$($result.Text)"
-        Assert-Contains $result.Text '语义判定通过'
+        Assert-True ($result.ExitCode -ne 0) "旧 Claude 事件被当成 Codex 接受：`n$($result.Text)"
+        Assert-Contains $result.Text 'trace'
     }
 
     Test-Case '腿失败也照样查出执行器越权调用本机工具' {
@@ -1792,12 +1813,12 @@ try {
         $result = Invoke-FixtureRunner $fixture @('Allow')
         Assert-True ($result.ExitCode -ne 0) '缺确认截图必须失败。'
         Assert-Contains $result.Text '越权'
-        Assert-Contains $result.Text 'Bash'
+        Assert-Contains $result.Text 'command_execution'
         $manifest = Get-ChildItem -LiteralPath (Join-Path $fixture.Repo 'docs\runs\evidence') `
             -Filter run-manifest.json -Recurse | Select-Object -First 1
         Assert-True ($null -ne $manifest) '缺少 run-manifest.json。'
         $manifestJson = Get-Content -LiteralPath $manifest.FullName -Raw -Encoding utf8 | ConvertFrom-Json
-        Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'Bash') `
+        Assert-True ([string]$manifestJson.tool_policy_violations -ceq 'command_execution') `
             "manifest 未记录越权工具，实际：$($manifestJson.tool_policy_violations)"
     }
 

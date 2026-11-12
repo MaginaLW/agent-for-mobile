@@ -1,3 +1,5 @@
+> 历史规程：Claude 执行路线已退役，以下 Claude 命令不再执行。保留既有 mobile-MCP/设备验收证据；当前任务使用 Codex + gateway 派单，按 [AGENTS](../../AGENTS.md) 核定许可，不能按本历史记录自动开跑。
+
 # M0 Runbook：零代码概念验证
 
 > ⚠️ **2026-07-16 harness 重组后**：mobile server 不再常驻项目 `.mcp.json`（开发会话不挂手机工具）。复跑本 runbook 时，所有 `claude` 命令加 `--mcp-config configs/mobile-mcp.json`（在仓库根运行）。背景见 [brain/harness.md](../knowledge/brain/harness.md)。

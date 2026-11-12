@@ -14,7 +14,7 @@ P0 安全硬门监督式真机 runner。
 param(
     [Parameter(Mandatory)][string[]]$Legs,
     [ValidateSet('gateway')][string]$Executor = 'gateway',
-    [ValidateSet('claude','codex')][string]$Brain = 'claude',
+    [ValidateSet('claude','codex')][string]$Brain = 'codex',
     [switch]$Provision,
     [string]$RepoRootOverride,
     [string]$AdbPath = 'adb',
@@ -32,6 +32,10 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
+
+if ($Brain -eq 'claude') {
+    throw 'Claude 执行已退役：监督式 runner 仅接受 Codex + gateway；未开始设备准备或派单。'
+}
 
 if ($ConfirmationTimeoutSec -lt 1 -or $ConfirmationTimeoutSec -gt 240) { throw 'ConfirmationTimeoutSec 必须为 1..240。' }
 if ($DispatchTimeoutMin -lt 1 -or $DispatchTimeoutMin -gt 60) { throw 'DispatchTimeoutMin 必须为 1..60。' }
@@ -96,7 +100,7 @@ $orderedLegs = @('Allow','Stale','Deny') | Where-Object { $requested.Contains($_
 $LegExpectedConfirmation = @{ Allow = 'allowed'; Stale = 'allowed'; Deny = 'denied' }
 
 if ($DryRun) {
-    Write-Host "[DryRun] P0 监督式 runner：legs=$($orderedLegs -join ',') executor=$Executor provision=$([bool]$Provision)"
+    Write-Host "[DryRun] P0 监督式 runner：legs=$($orderedLegs -join ',') executor=$Executor brain=$Brain provision=$([bool]$Provision)"
     Write-Host '[DryRun] 不连接设备、不调用 dispatch、不创建证据或锁。'
     exit 0
 }
@@ -116,6 +120,7 @@ if (-not (Test-Path -LiteralPath $LedgerHelperPath -PathType Leaf)) {
     throw "缺少台账/终态判据 helper：$LedgerHelperPath"
 }
 . $LedgerHelperPath
+. (Join-Path $RepoRoot 'scripts\lib\dispatch-brain.ps1')
 
 # runner 必须自己持有一层不允许 breakaway 的 Job。只设 KILL_ON_JOB_CLOSE，不设置
 # BREAKAWAY_OK / SILENT_BREAKAWAY_OK；因此 gate host 及其 dispatch 后代构成一个不可逃逸的
@@ -644,6 +649,17 @@ function Get-P0NonGatewayToolUses {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try { $event = $line | ConvertFrom-Json -Depth 30 }
         catch { continue }
+        if ([string]$event.type -eq 'item.started' -and $event.item.type -eq 'mcp_tool_call') {
+            if ([string]$event.item.server -cne 'gateway') {
+                [void]$offenders.Add("mcp__$($event.item.server)__$($event.item.tool)")
+            }
+            continue
+        }
+        if ([string]$event.type -in @('item.started','item.completed') -and
+            $event.item.type -eq 'command_execution') {
+            [void]$offenders.Add('command_execution')
+            continue
+        }
         if ([string]$event.type -cne 'assistant') { continue }
         foreach ($content in @($event.message.content)) {
             if ([string]$content.type -cne 'tool_use') { continue }
@@ -858,85 +874,21 @@ function Read-P0TraceEvidence {
         [int]$InputBarTop = 0
     )
 
-    $calls = [Collections.Generic.List[object]]::new()
-    $results = @{}
-    $infrastructureCallIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $final = ''
-    $finalOrdinal = [int]::MaxValue
-    $timelineOrdinal = 0
-
-    foreach ($line in Get-Content -LiteralPath $TracePath -Encoding utf8) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $event = $line | ConvertFrom-Json -Depth 30 }
-        catch { throw 'trace 包含非空但无法解析的 JSON 行。' }
-        if ($event.type -eq 'assistant') {
-            foreach ($content in @($event.message.content)) {
-                if ($content.type -ne 'tool_use') { continue }
-                $timelineOrdinal++
-                $rawName = [string]$content.name
-                # schema 加载工具不产生副作用，也不算一次执行动作，从调用序列里整条略过。
-                if ($rawName -cin $script:P0InfrastructureTools) {
-                    [void]$infrastructureCallIds.Add([string]$content.id)
-                    continue
-                }
-                $toolNameMatch = [regex]::Match($rawName, '^mcp__gateway__(.+)$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-                if (-not $toolNameMatch.Success) {
-                    throw "trace 包含非 gateway 或未知 channel 的 tool_use：$rawName"
-                }
-                $calls.Add([pscustomobject]@{
-                    RawName = $rawName
-                    Name = $toolNameMatch.Groups[1].Value
-                    Id = [string]$content.id
-                    Input = $content.input
-                    TimelineOrdinal = $timelineOrdinal
-                })
-            }
-        }
-        elseif ($event.type -eq 'user') {
-            foreach ($content in @($event.message.content)) {
-                if ($content.type -ne 'tool_result') { continue }
-                $timelineOrdinal++
-                $id = [string]$content.tool_use_id
-                # schema 加载工具的结果是纯文本，既不该被当作证据信封解析，也不算孤儿。
-                if ($infrastructureCallIds.Contains($id)) { continue }
-                $envelope = Get-ToolResultEnvelope -Content $content.content
-                if ($null -eq $envelope) { throw 'trace 包含无法唯一解析的 tool_result。' }
-                if ([string]::IsNullOrWhiteSpace($id)) { throw 'trace 包含缺失 id 的 tool_result。' }
-                if (-not $results.ContainsKey($id)) { $results[$id] = [Collections.Generic.List[object]]::new() }
-                $results[$id].Add([pscustomobject]@{ TimelineOrdinal=$timelineOrdinal; Envelope=$envelope })
-            }
-        }
-        elseif ($event.type -eq 'result' -and $event.result -is [string]) {
-            $timelineOrdinal++
-            $finalOrdinal = $timelineOrdinal
-            $final = $event.result
-        }
-    }
-
-    $callIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($call in $calls) {
-        if (-not [string]::IsNullOrWhiteSpace($call.Id)) { [void]$callIds.Add($call.Id) }
-    }
-    foreach ($resultId in @($results.Keys)) {
-        if (-not $callIds.Contains([string]$resultId)) { throw 'trace 包含没有对应 tool_use 的孤儿 tool_result。' }
-    }
-
+    # Dispatch 与监督式 runner 消费同一份 Codex JSONL 合同；唯一结果、顺序和终态
+    # 由既有 parser 检查，下面只适配既有 P0 语义字段，不另写第二套事件解析器。
+    $transcript = Read-DispatchTraceTranscript -TracePath $TracePath -Brain codex
+    $final = $transcript.FinalText
     $callEvidence = [Collections.Generic.List[object]]::new()
-    for ($index = 0; $index -lt $calls.Count; $index++) {
-        $call = $calls[$index]
-        $resultEntries = if ($results.ContainsKey($call.Id)) { @($results[$call.Id]) } else { @() }
-        $nextBoundary = if ($index + 1 -lt $calls.Count) { $calls[$index + 1].TimelineOrdinal } else { $finalOrdinal }
-        $resultEntry = if ($resultEntries.Count -eq 1) { $resultEntries[0] } else { $null }
+    foreach ($call in $transcript.Calls) {
+        if ($call.Server -cne 'gateway') { throw "trace 包含非 gateway 工具：$($call.RawName)" }
         $callEvidence.Add([pscustomobject]@{
             Name = $call.Name
             Id = $call.Id
             Input = $call.Input
-            TimelineOrdinal = $call.TimelineOrdinal
-            ResultCount = $resultEntries.Count
-            Result = if ($null -ne $resultEntry) { $resultEntry.Envelope } else { $null }
-            CompletedBeforeNext = $null -ne $resultEntry -and
-                $resultEntry.TimelineOrdinal -gt $call.TimelineOrdinal -and
-                $resultEntry.TimelineOrdinal -lt $nextBoundary
+            TimelineOrdinal = $call.StartedOrdinal
+            ResultCount = $call.ResultCount
+            Result = $call.ResultEnvelope
+            CompletedBeforeNext = $call.CompletedBeforeNext
         })
     }
 

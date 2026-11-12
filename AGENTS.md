@@ -1,13 +1,13 @@
 # 手机 Agent 项目 · 开发指南
 
-把已付费的 AI 订阅（Claude Pro / ChatGPT Plus）变成能替用户操作手机和平板各 App 的托管助手。
-架构：设备端 = 无障碍执行器 + MCP server；大脑 = Claude Code / Codex CLI（官方订阅通道）。设计见 [方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)。
+通过 ChatGPT 订阅与 Codex CLI，构建能操作手机和平板各 App 的托管助手。
+架构：设备端 = 无障碍执行器 + MCP server；大脑 = Codex CLI + gateway（官方订阅通道）。Claude 执行与 Termux/AVF 迁移路线已取消，历史证据和通用设备能力保留。设计见 [方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)。
 
-本文件面向开发会话（下文的 A 指协调与开发会话，C 指真机验收执行）。`scripts/dispatch.ps1` 派出的执行器大脑以派单提示词为准（Claude 侧在仓库根启动，会自动载入 CLAUDE.md），但同样受铁律 3 约束。
+本文件面向开发会话（下文的 A 指协调与开发会话，C 指真机验收执行）。`scripts/dispatch.ps1` 派出的执行器大脑以派单提示词为准，但同样受铁律 3 约束。
 
 ## 铁律
 
-1. **合规红线**：Claude 订阅只经 Claude Code / Agent SDK 官方通道；ChatGPT Plus 只经 Codex CLI 官方登录；永不逆向两家网页端私有接口。
+1. **合规红线**：ChatGPT 订阅只经 Codex CLI 官方登录；不调用已退役的 Claude 执行入口，永不逆向网页端私有接口。
 2. **开发会话不直接操作手机**：仓库不挂载 mobile MCP。成体系跑测走 `scripts/dispatch.ps1`（设计见 [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md)）；临时单跑见下方“运行时差异”。
 3. **危险操作（发送/支付/删除类）永远两段式**：临界动作前停下汇报，由现场用户在设备上可见的确认卡（ConfirmOverlay）确认后才继续。开发任务授权、PC 侧输入或 RESUME 都不能替代这道确认。
 
@@ -53,11 +53,8 @@
 
 ## 运行时差异
 
-| 项 | Claude Code | Codex CLI |
-|---|---|---|
-| 入口 | CLAUDE.md 导入本文件 | 本文件 |
-| 订阅通道 | Claude Pro，经 Claude Code | ChatGPT Plus，经 Codex CLI 官方登录 |
-| 派单 | `-Brain claude`（默认），`-Executor mobile` 或 `gateway` | `-Brain codex -Executor gateway`；codex + mobile 会被脚本拒绝 |
-| 临时单跑真机 | `claude --mcp-config configs/mobile-mcp.json`（该文件是 Claude 的 `--mcp-config` 格式） | 不适用，走 dispatch |
-| 子任务与提问 | 用当前运行时实际可用的工具；不假定 `AskUserQuestion` 等工具名或固定会话 ID | 同左 |
-| 额度 | [cost.md](docs/knowledge/brain/cost.md) | 同左 |
+默认派单为 `-Brain codex -Executor gateway`；`codex + mobile` 尚无可信 runtime 契约，实际执行继续拒绝。mobile profile 只保留历史配置预览，不因此放行执行。
+
+Claude 新派单和旧暂停件（包括缺少 `brain`、按旧格式解释为 Claude 的记录）均拒绝；不得映射为 Codex。旧 trace 的读取、通用 mobile-MCP/ADB 与设备端能力保留。危险动作仍按铁律 3，经手机确认卡决定；退役不重开任何真机预算。
+
+开发入口为本文件；临时真机任务也走 dispatch。子任务与提问使用当前运行时可用工具，额度说明见 [cost.md](docs/knowledge/brain/cost.md)。

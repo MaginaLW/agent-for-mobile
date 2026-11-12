@@ -4,10 +4,10 @@
 设计：docs/specs/2026-07-17-执行harness-design.md（§4–§7）
 
 用法：
-  scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15] [-Model sonnet]
+  scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15] [-Model <Codex模型>]
   scripts/dispatch.ps1 -Task "<内联任务文本>" [-Slug 短名]
   scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md    # gateway 纯前置条件恢复；PC 输入 RESUME 不批准危险动作
-  加 -Executor mobile|gateway 选择执行器；省略时保持 mobile。
+  默认 Codex + gateway；Claude 派单已退役，mobile 仅保留历史配置预览。
   加 -DryRun 只打印组装后的提示词与参数，不预检不派单。
 
 约束：路径参数不要含空格（Start-Process 参数按空格分词，本仓路径无空格即可）。
@@ -27,8 +27,8 @@ param(
     [double]$MaxBudgetUsd = 2.0,
     [ValidateRange(1, 60)][int]$TimeoutMin = 15,
     [string]$Model = 'sonnet',
-    [ValidateSet('claude', 'codex')][string]$Brain = 'claude',
-    [ValidateSet('mobile', 'gateway')][string]$Executor = 'mobile',
+    [ValidateSet('claude', 'codex')][string]$Brain = 'codex',
+    [ValidateSet('mobile', 'gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
     [switch]$DryRun
 )
@@ -40,6 +40,10 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
+
+if ($Brain -eq 'claude') {
+    throw 'Claude 执行已退役：不接受新派单或恢复；请新建 Codex + gateway 任务，不能迁移旧暂停件。'
+}
 
 $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
@@ -112,6 +116,9 @@ if ($Confirm) {
     }
     $pauseBrain = if ([string]::IsNullOrWhiteSpace($meta['brain'])) { 'claude' } else { [string]$meta['brain'] }
     if ($pauseBrain -notin @('claude', 'codex')) { throw "暂停件 brain 无效：$pauseBrain" }
+    if ($pauseBrain -eq 'claude') {
+        throw 'Claude 执行已退役：旧 Claude 暂停件（含未记录 brain 的旧格式）不得恢复或映射为 Codex。'
+    }
     if ($BrainWasExplicit -and $Brain -cne $pauseBrain) {
         throw "确认腿 brain 冲突：暂停件要求 $pauseBrain，显式参数为 $Brain。确认腿必须继承原大脑。"
     }
