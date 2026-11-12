@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -57,8 +58,22 @@ class MainActivity : Activity() {
                 Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
             )
         }
-        button("⑤ 启动网关服务") { GatewayService.start(this); status.postDelayed({ refresh() }, 500) }
-        button("停止网关服务") { GatewayService.stop(this); status.postDelayed({ refresh() }, 500) }
+        fun serviceAction(start: Boolean) {
+            try {
+                if (start) GatewayService.start(this) else GatewayService.stop(this)
+            } catch (error: RuntimeException) {
+                Log.w("GatewayUi", "用户切换网关服务失败", error)
+                val message = if (GatewayService.bootChoiceSaveUnconfirmed) {
+                    "操作未完整完成；开机恢复选择保存未确认，请检查状态"
+                } else {
+                    "系统未完成服务操作，请检查状态"
+                }
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            status.postDelayed({ refresh() }, 500)
+        }
+        button("⑤ 启动网关（开机自动恢复）") { serviceAction(start = true) }
+        button("停止网关（同时关闭开机恢复）") { serviceAction(start = false) }
         button("复制 token") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("gateway-token", Gateway.token()))
@@ -78,6 +93,12 @@ class MainActivity : Activity() {
             appendLine("== 执行网关 0.1.0-m1a ==\n")
             appendLine("MCP:  http://127.0.0.1:${Gateway.DEFAULT_PORT}/mcp")
             appendLine("服务:  ${if (McpServer.running) "运行中 ✅" else "未启动"}")
+            val bootRestoreState = when {
+                GatewayService.bootChoiceSaveUnconfirmed -> "UNKNOWN（选择保存未确认）"
+                GatewayService.resumeAfterBoot(this@MainActivity) -> "已开启"
+                else -> "未开启"
+            }
+            appendLine("开机恢复: $bootRestoreState")
             appendLine("无障碍: ${if (GatewayA11yService.instance != null) "✅" else "未开启"}")
             appendLine("输入法: ${if (Gateway.imeEnabled()) "已启用 ✅" else "未启用"}")
             appendLine("悬浮窗: ${if (Settings.canDrawOverlays(this@MainActivity)) "✅" else "未授权"}")
