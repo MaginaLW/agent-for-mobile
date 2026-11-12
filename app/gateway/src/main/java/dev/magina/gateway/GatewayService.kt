@@ -15,13 +15,37 @@ class GatewayService : Service() {
     companion object {
         private const val CHANNEL_ID = "gateway"
         private const val NOTIF_ID = 1
+        private const val RESUME_AFTER_BOOT = "resume_after_boot"
+
+        var bootChoiceSaveUnconfirmed = false
+            private set
+
+        fun resumeAfterBoot(context: Context): Boolean =
+            !bootChoiceSaveUnconfirmed && context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+                .getBoolean(RESUME_AFTER_BOOT, false)
+
+        private fun rememberRunChoice(context: Context, enabled: Boolean) {
+            // commit失败时SharedPreferences的内存也可能已变化；UI不能拿它冒充落盘成功。
+            bootChoiceSaveUnconfirmed = true
+            check(
+                context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
+                    .edit().putBoolean(RESUME_AFTER_BOOT, enabled).commit(),
+            ) { "网关开机恢复选择保存失败" }
+            bootChoiceSaveUnconfirmed = false
+        }
 
         fun start(context: Context) {
+            rememberRunChoice(context, true)
             context.startForegroundService(Intent(context, GatewayService::class.java))
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, GatewayService::class.java))
+            try {
+                rememberRunChoice(context, false)
+            } finally {
+                // 即使保存失败也先停止当前服务；错误仍向调用方报告，不假称下次开机已禁用。
+                context.stopService(Intent(context, GatewayService::class.java))
+            }
         }
     }
 
