@@ -156,6 +156,15 @@
 - **mobile-mcp 截图是缩放图**（约 360×800），click 吃物理坐标（1260×2800），直接按截图坐标点必偏 ×3.5；先 `get_screen_size` 换算。网关坐标主权在执行器侧，无此问题。
 - 黑屏用 `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防靠「充电时屏幕不休眠」+ 临时关锁屏。
 
+## 本地 AVD 开机恢复与故障注入证据
+
+适用于固定APP6978656、API36本地BOOT台架（2026-11-12）；不外推PA2553或未来模拟器/ADB版本。依据：[开机恢复记录](../../runs/2026-11-12-网关开机恢复离线.md#固定候选完整门与-api-36-运行证据)。
+
+- **先分开传输/模拟器故障与BOOT结果**：run-01在内存层级唯一性处失败，host以 adb shell -tt 取得唯一完整hierarchy后仅内存解析，不落raw UI/token。run-02真实reboot后模拟器原生崩溃；固定APP/验收不变、仅GPU请求software改swiftshader的新run-03完成三次真实重启。单轮结果不支持扫描更多参数或归因某驱动。
+- **默认未选、Start开启、Main Stop分别验证**：先正常打开新安装，避免默认Stopped掩盖BOOT；每次真重启核新boot身份，以服务/health独立读回，恢复路径在打开Main前核，避免手动启动伪装自启。force-stop不等于Main Stop。run-03已覆盖该平台三分支。
+- **保存故障/恢复/持久性分开**：choice-failure-01中Start保存失败保持停态、Stop保存失败仍停当前服务，UI均UNKNOWN；mode两次恢复/读回仅证明恢复子集。最终reboot客户端超时，整轮FAIL、停止持久性未验，不借run-03回填。
+- **主动Kill不是自然崩溃**：choice-failure-01收尾前emulator/server仍活跃，natural_exit_code空，Kill后-1仅属after_cleanup；run-02既有MDMP非内存头/目录访问异常才支持原生崩溃结论。进程/端口释放不等于数据清理，四轮cleanup_proven=false保留。
+
 ## Windows 批处理与离线套件
 
 - **隔离工作树复制Gradle缓存的长路径（2026-11-12）**：在较长的managed worktree路径下，Python标准copytree可对超过260字符的目标报不存在；本轮只读源模块/wrapper缓存、目标resolve核实仍位于当前工作树后，以Windows长路径前缀补齐本任务部分产物成功。未修改全局LongPaths设置，不把配置、凭据或keystore混入缓存复制。依据：[开机恢复离线记录](../../runs/2026-11-12-网关开机恢复离线.md)；这是缓存准备经验，不是设备或开机行为证明。
