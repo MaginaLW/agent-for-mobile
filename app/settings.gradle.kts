@@ -21,5 +21,8 @@ tabletC1bIsolatedBuild?.let { value ->
 }
 if (tabletC1bIsolatedBuild != "true") {
     include(":gateway")
+    if (providers.gradleProperty("localTestbench").orNull == "true") {
+        include(":test-target")
+    }
 }
 include(":tablet-c1b-probe")

@@ -196,6 +196,62 @@ class SafetyGateTest {
     }
 
     @Test
+    fun `a successful dangerous call never authorizes the next call`() {
+        var confirmerCalls = 0
+        var executorCalls = 0
+        var contextReads = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { ++confirmerCalls == 1 },
+            contextProvider = { contextReads++; initialContext },
+            onExecutionFailure = { fail("拒绝不是执行失败") },
+        )
+
+        gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+        expectGatewayError(ErrorCode.E_BLOCKED) {
+            gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+        }
+
+        assertEquals("第二次调用必须获得自己的决定", 2, confirmerCalls)
+        assertEquals("第一次允许不能成为可重放令牌", 1, executorCalls)
+        assertEquals("第二次拒绝后不得继续复核或执行", 3, contextReads)
+    }
+
+    @Test
+    fun `context reacquisition failure after approval terminates as stale without execution`() {
+        var contextReads = 0
+        var confirmerCalls = 0
+        var staleRecords = 0
+        var executorCalls = 0
+        var successCalls = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { confirmerCalls++; true },
+            contextProvider = {
+                if (++contextReads == 1) initialContext else error("目标来源已失效")
+            },
+            onExecutionFailure = { fail("复核失败不得记成动作执行失败") },
+            afterExecutionSuccess = { _, _ -> successCalls++ },
+            onStaleAfterApproval = { tool, before ->
+                assertEquals("press_key", tool)
+                assertSame(initialContext, before)
+                staleRecords++
+            },
+        )
+
+        val error = expectGatewayError(ErrorCode.E_STALE_REF) {
+            gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+        }
+
+        assertEquals("safety", error.channel)
+        assertEquals(1, confirmerCalls)
+        assertEquals(2, contextReads)
+        assertEquals(1, staleRecords)
+        assertEquals(0, executorCalls)
+        assertEquals(0, successCalls)
+    }
+
+    @Test
     fun `after confirmation hook runs only after allow and before final context read`() {
         val order = mutableListOf<String>()
         var reads = 0

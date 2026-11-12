@@ -28,6 +28,8 @@ pwsh -NoProfile -File scripts/run-p0-safety-smoke.ps1 -Legs Allow,Stale,Deny -Ex
 
 `-Provision` 会安装 debug APK、设置可机械建立的权限/无障碍/IME/前台服务与端口转发，经 `run-as` 在内存中读取私有 token 并同步 gitignored 本地配置。无法机械建立的设备或厂商能力会返回 `setup-fail`；当次运行停止，不要求用户现场接手设置后续跑。
 
+安装前由 A 提醒现场用户，ROM 要求的安装确认由用户在设备上完成。安装调用不设自动超时，父层腿循环与 dispatch/确认 deadline 在安装准备结束后才开始；普通读取与就绪时限不变。`TimeoutSec 0` 仅允许用于安装，不允许读取借此无限等待。此等待修正只经离线子进程和假设备路径验证，不授予再次安装或重跑旧轮；实际运行仍需适用的固定候选与就位后许可。
+
 ## 3. 用户监督步骤
 
 ### 3.0 跑前必需：手动把微信停在「文件传输助手」会话页

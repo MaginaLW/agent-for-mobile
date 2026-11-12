@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="target_title" type="id" />
+    <item name="target_search_input" type="id" />
+    <item name="target_search_focus" type="id" />
+    <item name="target_composer" type="id" />
+    <item name="target_send" type="id" />
+    <item name="target_action_count" type="id" />
+</resources>

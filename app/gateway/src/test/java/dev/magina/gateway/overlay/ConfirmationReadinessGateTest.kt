@@ -91,6 +91,55 @@ class ConfirmationReadinessGateTest {
         assertEquals(ConfirmationReadinessGate.State.FAILED, gate.state())
     }
 
+    @Test
+    fun `failure from every reachable state rejects all late readiness events`() {
+        ConfirmationReadinessGate.State.entries.forEach { beforeFailure ->
+            val gate = gateAt(beforeFailure)
+            assertEquals(beforeFailure, gate.state())
+
+            gate.fail()
+
+            assertFalse("$beforeFailure 失败后不能重新登记", gate.registerFrameCommit())
+            assertFalse("$beforeFailure 失败后不能接受迟到绘制", gate.observeDraw())
+            expectIllegalState { gate.frameCommitted() }
+            expectIllegalState { gate.beginEvidence() }
+            expectIllegalState { gate.evidenceReady() }
+            expectIllegalState { gate.enableButtons() }
+            gate.fail()
+            assertEquals(ConfirmationReadinessGate.State.FAILED, gate.state())
+        }
+    }
+
+    private fun gateAt(state: ConfirmationReadinessGate.State): ConfirmationReadinessGate =
+        ConfirmationReadinessGate().also { gate ->
+            when (state) {
+                ConfirmationReadinessGate.State.ATTACHED -> Unit
+                ConfirmationReadinessGate.State.COMMIT_REGISTERED -> gate.registerFrameCommit()
+                ConfirmationReadinessGate.State.DRAW_OBSERVED -> {
+                    gate.registerFrameCommit()
+                    gate.observeDraw()
+                }
+                ConfirmationReadinessGate.State.COMMIT_OBSERVED -> {
+                    gate.registerFrameCommit()
+                    gate.frameCommitted()
+                }
+                else -> {
+                    gate.registerFrameCommit()
+                    gate.observeDraw()
+                    gate.frameCommitted()
+                    if (state == ConfirmationReadinessGate.State.FAILED) {
+                        gate.fail()
+                    } else if (state != ConfirmationReadinessGate.State.FRAME_COMMITTED) {
+                        gate.beginEvidence()
+                        if (state != ConfirmationReadinessGate.State.EVIDENCE_PENDING) {
+                            gate.evidenceReady()
+                            if (state == ConfirmationReadinessGate.State.BUTTONS_ENABLED) gate.enableButtons()
+                        }
+                    }
+                }
+            }
+        }
+
     private fun drawnGate(): ConfirmationReadinessGate = ConfirmationReadinessGate().also {
         it.registerFrameCommit()
         it.observeDraw()

@@ -1844,6 +1844,56 @@ try {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.State 'dispatch.log'))) '健康探测失败后仍启动了 dispatch。'
     }
 
+    Test-Case 'P0 安装等待：零超时跨真实子进程保留现场等待' {
+        . $SourceProvisioner
+        $waitRoot = [IO.Path]::GetFullPath((Join-Path $SourceRepoRoot '.checks/reduce-manual-20261111/p0-wait'))
+        $root = [IO.Path]::GetFullPath((Join-Path $waitRoot ([guid]::NewGuid().ToString('N'))))
+        Assert-True ($root.StartsWith($waitRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) '安装等待 fixture 越界。'
+        [void](New-Item -ItemType Directory -Path $root -Force)
+        $script:TestRoots.Add($root)
+        $fakeAdb = Join-Path $root 'fake-adb.ps1'
+        [IO.File]::WriteAllText($fakeAdb, @'
+Start-Sleep -Milliseconds 1800
+[IO.File]::WriteAllText($args[-1], 'completed')
+'Success'
+'@, [Text.UTF8Encoding]::new($false))
+        $marker = Join-Path $root 'install-completed.txt'
+        $session = [pscustomobject]@{ AdbPath=$fakeAdb; Serial='FAKESERIAL01' }
+        $result = Invoke-P0DeviceCommand -Session $session -Arguments @('install','-r',$marker) -Operation '安装等待 fixture' -TimeoutSec 0
+        Assert-True ($result.ExitCode -eq 0 -and $result.Stdout.Trim() -ceq 'Success') '安装零超时未等待真实子进程完成。'
+        Assert-True ((Get-Content -LiteralPath $marker -Raw) -ceq 'completed') '安装等待未到达子进程后验。'
+    }
+
+    Test-Case 'P0 安装等待：普通读取仍限时且不得请求无限等待' {
+        . $SourceProvisioner
+        $waitRoot = [IO.Path]::GetFullPath((Join-Path $SourceRepoRoot '.checks/reduce-manual-20261111/p0-wait'))
+        $root = [IO.Path]::GetFullPath((Join-Path $waitRoot ([guid]::NewGuid().ToString('N'))))
+        Assert-True ($root.StartsWith($waitRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) '读取等待 fixture 越界。'
+        [void](New-Item -ItemType Directory -Path $root -Force)
+        $script:TestRoots.Add($root)
+        $fakeAdb = Join-Path $root 'fake-adb.ps1'
+        [IO.File]::WriteAllText($fakeAdb, @'
+Start-Sleep -Milliseconds 1800
+[IO.File]::WriteAllText($args[-1], 'completed')
+'Success'
+'@, [Text.UTF8Encoding]::new($false))
+        $marker = Join-Path $root 'read-completed.txt'
+        $session = [pscustomobject]@{ AdbPath=$fakeAdb; Serial='FAKESERIAL01' }
+        $message = ''
+        try { [void](Invoke-P0DeviceCommand -Session $session -Arguments @('shell','getprop',$marker) -Operation '读取等待 fixture' -TimeoutSec 1) }
+        catch { $message = $_.Exception.Message }
+        Assert-True ($message -ceq '读取等待 fixture 超时。') '普通读取的一秒预算失效。'
+        Assert-True (-not (Test-Path -LiteralPath $marker)) '超时读取仍执行到子进程后验。'
+        $message = ''
+        try { [void](Invoke-P0DeviceCommand -Session $session -Arguments @('shell','getprop',$marker) -Operation '读取等待 fixture' -TimeoutSec 0) }
+        catch { $message = $_.Exception.Message }
+        Assert-True ($message -ceq '只有安装调用可以不设置自动超时。') '非安装调用获得无限等待。'
+        $message = ''
+        try { [void](Invoke-P0DeviceCommand -Session $session -Arguments @('install','-r',$marker) -Operation '负数等待 fixture' -TimeoutSec -1) }
+        catch { $message = $_.Exception.Message }
+        Assert-True (-not [string]::IsNullOrWhiteSpace($message)) '负数超时意外变成无限等待。'
+    }
+
     Test-Case '无障碍仅 enabled 但未出现在 Bound services 时零付费派单' {
         . $SourceProvisioner
         $component = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'

@@ -82,6 +82,8 @@
 
 ## 自有零 UI IME
 
+- **区分 SET_TEXT 与真实 IME（API 36 AVD，2026-11-12 实测）**：`type_text` 省略 ref 仍会优先 SET_TEXT，默认 IME 已切换或返回 OK 都不是 commitText 证据。合成 ime-only EditText 仅拒绝 SET_TEXT、保留普通 InputConnection，run-07 取得真实 `data.channel=ime_commit`、committed/verified=true、中文精确读回，独立快照相符且实际拒绝计数 1；外层审计仍为 a11y。原 default/enabled（含 subtype）恢复并逐字读回。适用于隔离 AVD 的通道回归，不证明 PA2553/微信或异常路径零 OCR。依据：[run-07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)。
+
 - **`ime_visible` / `keyboard_state.visible` 在自有 IME 下恒为 false**（2026-07-25）：`GatewayIme.onEvaluateInputViewShown()` 有意返回 false，永不创建 `TYPE_INPUT_METHOD` 窗口。拿它当"输入会话是活的"的代理，已准备目标就永远记录不成功，也不能用它"佐证键盘没弹起"。**教训：选活性/可见性代理指标时，先确认它在自家组件架构下可能为真。**
 - **替换判据**：① `ImeBridge.session()` 非空且 InputConnection 可用；② 会话 `EditorInfo.packageName` 等于前台包（需单独留存 `sessionPackage`）；③ 降级链不走"已聚焦"短路，必须亲手执行已校验的盲点，打字后 OCR 读回。**"聚焦前后 session id 必须变化"不成立**：微信输入框键盘收起后仍长期持有活连接，再点一次不触发 `onStartInput`。
 - **#23 `performEditorAction()` 返回 true 不代表 App 做了任何事**（2026-07-26）：只表示调用投递到了活着的输入连接。发送类危险动作的结果必须由后验决定，不能由"通道调用被受理"决定。
@@ -124,6 +126,8 @@
 
 ## 监督式真机跑测控制面
 
+- **安装会话丢失时保留 UNKNOWN（F3-P01，2026-11-12）**：原句柄不可访问后，只读核宿主进程/监听与已有原件；旧 manifest 的 RUNNING 不证明仍在运行，无进程/无监听也不证明设备装包成功或失败。原 manifest 保留，补充观察另存；区分已落盘 SDK=13 与已启动但无结果的第 14 次安装，未记录的退出码/结束时间/时长不补零。原轮冻结，不因无自动超时、剩余预算或 C1b A10 模板自动恢复/补后验。依据：[本轮归档](../../runs/2026-11-11-离线减负实施.md#f3-p01安装会话丢失后的-unknown-冻结归档)，只核宿主，没有新增设备命令。
+
 - **确认状态可观察不等于可写**：debug runner 只用 `run-as` 写一次性 `test-control.json`（字段严格校验、不含 allowed/denied），PC 只读 `test-confirmation-state.json`；决定只来自手机按钮回调，不加"测试方便"的 decision 写接口。release 用 no-op 控制面。token、确认状态、截图不经 exported provider/网络接口；外部命令异常不得拼接 adb stdout。
 - **危险 Enter 绑定输入证据与业务目标**：`type_text` 后登记短 TTL 证据（预览、长度、SHA-256、焦点指纹），准备宏另存 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`，只沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 先使其失效；Enter 前后复核。audit 只记长度/哈希不落正文。
 - **同一确认要有机械关联键**：12 位 confirm ID 同时显示在卡片、写入 confirmation state、绑定该卡截图；不能靠"时间接近"配对。
@@ -143,15 +147,46 @@
 
 ## adb / uiautomator 工具链
 
+- **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](../../runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
+
+- **Windows/ADB 37.0.1 的本地 AVD 隔离（2026-11-12 实测）**：只传随机不存在的 `--one-device` 不足以证明 USB 排除，run-06 私有表实际列出 PA2553 并在 shell 前拒绝。run-07 改用官方初始化门 `ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动 emulator 前严格要求只有标准表头，后续仅准预期 emulator；在主机 PnP 仍有实体 USB Present/OK 的条件下通过了完整 AVD/IME 链。不要忽略未知行或把 binary 含环境键当执行证据；原过滤失效唯一原因未定。依据：[实施记录 run-06/07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)及[台架规程](../../runbooks/本地测试台.md)，不外推未来版本。
+
 - **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类正常）。截图+视觉兜底是刚需；自研 AccessibilityService 直读事件流可绕开 idle 等待。
 - 软键盘弹出导致坐标错位（M0 两次误触主因之一）→ 键盘状态感知 + 点击前二次校验（网关已内建）。
 - **mobile-mcp 截图是缩放图**（约 360×800），click 吃物理坐标（1260×2800），直接按截图坐标点必偏 ×3.5；先 `get_screen_size` 换算。网关坐标主权在执行器侧，无此问题。
 - 黑屏用 `adb shell input keyevent KEYCODE_WAKEUP` 点亮；预防靠「充电时屏幕不休眠」+ 临时关锁屏。
 
+## 本地 AVD 开机恢复与故障注入证据
+
+适用于固定APP6978656、API36本地BOOT台架（2026-11-12）；不外推PA2553或未来模拟器/ADB版本。依据：[开机恢复记录](../../runs/2026-11-12-网关开机恢复离线.md#固定候选完整门与-api-36-运行证据)。
+
+- **先分开传输/模拟器故障与BOOT结果**：run-01在内存层级唯一性处失败，host以 adb shell -tt 取得唯一完整hierarchy后仅内存解析，不落raw UI/token。run-02真实reboot后模拟器原生崩溃；固定APP/验收不变、仅GPU请求software改swiftshader的新run-03完成三次真实重启。单轮结果不支持扫描更多参数或归因某驱动。后续最小补缺stop-persistence-01实际Vulkan/GLES均SwiftShader仍在重启后自然访问冲突退出；这是稳定性反证，不能称切GPU已经修复，原失败不自动续跑。
+- **默认未选、Start开启、Main Stop分别验证**：先正常打开新安装，避免默认Stopped掩盖BOOT；每次真重启核新boot身份，以服务/health独立读回，恢复路径在打开Main前核，避免手动启动伪装自启。force-stop不等于Main Stop。run-03已覆盖该平台三分支。
+- **保存故障/恢复/持久性分开**：choice-failure-01中Start保存失败保持停态、Stop保存失败仍停当前服务，UI均UNKNOWN；mode两次恢复/读回仅证明恢复子集。最终reboot客户端超时，整轮FAIL、停止持久性未验，不借run-03回填。
+- **主动Kill不是自然崩溃**：choice-failure-01收尾前emulator/server仍活跃，natural_exit_code空，Kill后-1仅属after_cleanup；run-02既有MDMP非内存头/目录访问异常才支持原生崩溃结论。进程/端口释放不等于数据清理，五轮cleanup_proven=false保留。
+
+## 有限签名与两点存活证据
+
+适用于2026-11-12 BOOT-SIGN-A01/F4-P01；依据：[本轮交叉基线与签名记录](../../runs/2026-11-12-网关开机恢复离线.md)。
+
+- Get-Command git可能返回多个Application；直接取Source后传[string]会拼接成不存在的可执行路径。明确选择单个Application再取Source；本次仅修此准备错误，原准入失败保留，不记作证书/签名尝试，不能自动换key或重置次数。
+- 同签名以公开证书匹配、官方verify及非签名ZIP载荷一致分别核定；本次542项相同只证明原输入载荷保留，不等于手机安装、BOOT或ROM通过。key只读占用与同一调用退出/输出截止保持，凭据不入记录。
+- 旧包F4-P01五分钟两点服务/绑定/health与samePID通过，只证明两点，不证明连续或长期存活，也不迁移到新BOOT包。签名PASS、旧包观察PASS、公开固定提交与未来手机许可分别记录。
+
 ## Windows 批处理与离线套件
+
+- **隔离工作树复制Gradle缓存的长路径（2026-11-12）**：在较长的managed worktree路径下，Python标准copytree可对超过260字符的目标报不存在；本轮只读源模块/wrapper缓存、目标resolve核实仍位于当前工作树后，以Windows长路径前缀补齐本任务部分产物成功。未修改全局LongPaths设置，不把配置、凭据或keystore混入缓存复制。依据：[开机恢复离线记录](../../runs/2026-11-12-网关开机恢复离线.md)；这是缓存准备经验，不是设备或开机行为证明。
 
 - **批处理里与 Unix 同名的 Windows 命令（`find`、`sort`、`echo`、`date`）一律写绝对路径**（2026-07-26）：从 Git Bash 拉起 pwsh 时 PATH 里 `/usr/bin` 在 `System32` 前，`find /v /c ""` 变成 Unix find，把 `/c` 当目录递归扫整个 C 盘直到超时。改 `%SystemRoot%\System32\find.exe` 后单条 36s → 8.7s。
 - **"耗时几乎无方差"是挂死的指纹，不是负载的指纹**：中位 34.8s / 最慢 35.4s ≈ 固定 30s 超时 + 真实耗时。看见方差极小先查"卡在哪个固定超时上"，别怪机器慢。
 - **对照实验要变一个变量，不是一个提交**：换提交跑基线只排除代码，两次都从同一种壳启动就带着同一个错误变量；定案靠同一份代码换启动方式跑。
 - 监督式 runner 离线套件（`p0-supervised-runner-offline.ps1`）对子进程冷启动敏感：与 gradle 全量编译、常驻 daemon 或杀软并发会成片假超时，判定结果前确认机器空闲（`scripts/check.ps1` 已在开跑前停 daemon；`check.ps1 -Clean` 清残留目录与日志）。fixture 墙钟预算是防挂死保险不是性能断言（已放宽到 60s）。
 - 已知偶发、未定位：单条用例子进程输出整个为空、耗时正常（非超时类）。再遇到先看 ExitCode 与 stderr 是否也为空，若是则查进程创建而非套件逻辑。
+
+## 真机BOOT的观察边界
+
+适用于2026-11-12固定APP6978656在PA2553的BOOT-PHONE-P02，依据：[三路径真机记录](../../runs/2026-11-12-网关开机恢复离线.md)。
+
+- 初始HTTP正证可复用既有自持forward/无代理无重定向HttpClient，要求200及精确ok；设备负证仍独立要求已知Connection refused，不能用host请求失败代替。P02三正/七负通过，不证明原P01的nc HTTP解析器已修，缺失子条件继续UNKNOWN。
+- 同签名更新可能延续旧START_STICKY服务；默认关闭应在首次真实重启、完成首次解锁且再次开Main前观察，不能以更新后仍运行直接判默认失效，也不能先Stop/force-stop清场制造默认通过。开启恢复同样在再次开Main前核目标服务/绑定/health。P02三次boot身份变化与读回覆盖默认/开启/停止三路径，不外推长期存活、其他ROM或保存故障持久性。
+- 自持forward/server/端口/锁收尾与手机数据清理分别记；本轮前者成立，后者false。最终GatewayService停止且重启不恢复是本轮有事实和读回的状态，无障碍仍启用并绑定，不等于全部组件关闭或全设备原状恢复。
