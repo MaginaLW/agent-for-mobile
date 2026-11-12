@@ -2,6 +2,8 @@ package dev.magina.gateway.mcp
 
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.os.Process
+import dev.magina.gateway.BuildConfig
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ApprovalChannel
@@ -29,6 +31,8 @@ import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.overlay.ConfirmOverlayWindowHost
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
 import dev.magina.gateway.tools.IntentTools
+import dev.magina.gateway.tools.IntentSendObservation
+import dev.magina.gateway.tools.createIntentSendObservation
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
 import dev.magina.gateway.testing.InactiveTestControlSession
@@ -40,6 +44,7 @@ import dev.magina.gateway.testing.TestForeground
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 class ToolSpec(
     val name: String,
@@ -53,6 +58,8 @@ class ToolSpec(
 class ToolResult(val envelope: JSONObject, val imageBase64: String? = null, val imageMime: String = "image/png")
 
 object ToolRegistry {
+
+    private val intentObservationProcessInstance by lazy { UUID.randomUUID().toString() }
 
     // ---- schema 构造小工具 ----
     private fun prop(type: String, desc: String, enum: List<String>? = null): JSONObject =
@@ -338,6 +345,7 @@ object ToolRegistry {
     private class CallScope(val toolName: String, val argsFingerprint: String) {
         /** 进审计 note 的安全轨迹；确认、复核、重试记录失败都往这上面追加。 */
         var safetyNote: String = ""
+        var intentObservation: IntentSendObservation? = null
 
         /** 上下文读了几次；>1 即确认后复核发生过。 */
         var contextReads: Int = 0
@@ -548,12 +556,16 @@ object ToolRegistry {
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
         val call = CallScope(toolName = name, argsFingerprint = SafetyPolicy.fingerprint(args))
+        call.intentObservation = createIntentSendObservation(
+            BuildConfig.DEBUG, name, auditId, Process::myPid,
+            { intentObservationProcessInstance }, SystemClock::elapsedRealtime,
+        )
         val auditArgs = sanitizeAuditArgs(name, args)
 
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
             Gateway.audit.write(
                 auditId, name, auditArgs, code, channel, SystemClock.elapsedRealtime() - start,
-                note = call.safetyNote,
+                note = call.safetyNote + call.intentObservation?.auditNote().orEmpty(),
             )
             return ToolResult(env, image)
         }
@@ -582,7 +594,7 @@ object ToolRegistry {
             val gate = newSafetyGate(call)
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
                 Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
-                val result = executeValidated(spec, frozenArgs, validatedContext)
+                val result = executeValidated(spec, frozenArgs, validatedContext, call.intentObservation)
                 runCatching { Gateway.retryGuard.recordSuccess(name, call.argsFingerprint) }
                     .onFailure { error ->
                         call.safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
@@ -737,7 +749,13 @@ object ToolRegistry {
         spec: ToolSpec,
         args: JSONObject,
         validatedContext: SafetyContext,
+        intentObservation: IntentSendObservation?,
     ): JSONObject = when (spec.name) {
+        "intent_send" -> IntentTools.intentSend(
+            args.getString("action"), args.optString("uri").ifEmpty { null },
+            args.optJSONObject("extras"), args.optString("package").ifEmpty { null },
+            args.optString("component").ifEmpty { null }, intentObservation,
+        )
         "ui_action" -> {
             val params = JSONObject()
                 .put("text", args.optString("text"))
