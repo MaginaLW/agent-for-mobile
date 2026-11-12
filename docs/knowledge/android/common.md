@@ -175,6 +175,8 @@
 
 ## Windows 批处理与离线套件
 
+- **许可中的 ISO 时间保持字符串（PowerShell 7.6.5，2026-11-12）**：`ConvertFrom-Json` 默认会把 ISO 时间转为 `System.DateTime`，让随后合法的字符串/时区校验误拒绝。字段合同要求原始字符串时显式使用 `-DateKind String`。本轮对原真实许可复现旧解析拒绝，并在实际授权校验 AST 片段中验证修正后通过；仅无 Run/缺许可负例通过不能覆盖有效许可解析。依据：[SCREEN-P01 记录](../../runs/2026-11-12-后续任务推进.md#screen-p01许可解析拒绝与新候选准备)，SDK0/截图0；这是离线解析修复，不证明设备运行通过。
+
 - **隔离工作树复制Gradle缓存的长路径（2026-11-12）**：在较长的managed worktree路径下，Python标准copytree可对超过260字符的目标报不存在；本轮只读源模块/wrapper缓存、目标resolve核实仍位于当前工作树后，以Windows长路径前缀补齐本任务部分产物成功。未修改全局LongPaths设置，不把配置、凭据或keystore混入缓存复制。依据：[开机恢复离线记录](../../runs/2026-11-12-网关开机恢复离线.md)；这是缓存准备经验，不是设备或开机行为证明。
 
 - **批处理里与 Unix 同名的 Windows 命令（`find`、`sort`、`echo`、`date`）一律写绝对路径**（2026-07-26）：从 Git Bash 拉起 pwsh 时 PATH 里 `/usr/bin` 在 `System32` 前，`find /v /c ""` 变成 Unix find，把 `/c` 当目录递归扫整个 C 盘直到超时。改 `%SystemRoot%\System32\find.exe` 后单条 36s → 8.7s。
