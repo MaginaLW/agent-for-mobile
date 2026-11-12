@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-12（已验减负成果及 Claude 退役经 PR #6 合入 main，脱敏后续记录经 PR #7 合入；单张微信截图初标已完成，原生来源/几何/同代与遮挡仍未证，S05/T-L1/P0 仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
+> 更新 2026-11-12（减负及脱敏记录经 PR #6–#8 合入 main，A06事实文档持续交付条款已加载；单张微信图初标完成，标准截图API不足以证明完整同代来源，S05/T-L1/P0 仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
 
 ## 一句话现状
 

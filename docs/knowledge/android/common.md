@@ -11,6 +11,16 @@
 - **无障碍 `takeScreenshot`（API 30+）节流有软硬两种形态**（V2352A / Android 16）：单发 32–37ms；~400ms 间隔连发不报错而是**延迟到 ~750ms 才返回**，冷却 ~2s 回落；<300ms 的更紧连发会**硬报** `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`。网关内部视觉通道等 ~900ms 重试一次吸收；`screen_capture` 工具向大脑透出 `E_RATE_LIMITED`（冷却参考 ~800ms）。
 - **#22 Android 11+ `run-as` 读不了自己的 external files 目录，普通 `adb shell` 反而读得到**（Android 16，2026-07-26）：`run-as` 跑在 shell 的挂载命名空间里，对 `/sdcard/Android/data` 一律拒绝 app uid。**内部 `filesDir` 读写仍必须走 `run-as`（相对路径 `files/...`），external files 走普通 `adb shell`，两者不能混用一种写法。** 附带坑：`adb exec-out` 会把设备侧 stderr 一并写进重定向目标，`Permission denied` 会冒充成文件内容；拉取类命令不要图省事加 `-AllowFailure`。
 
+## 原生窗口截图的同代保证（2026-11-12，查阅未实测）
+
+**适用条件**：普通第三方 AccessibilityService 使用API34+窗口定向截图，评估其能否满足[完整视觉合同](../../specs/2026-11-01-平板window-pane视觉证据合同-design.md)；本条是固定AOSP参考与官方API查阅，不是vivo固件证明。
+
+固定 `99b01a65cc4c104933788b3143285ab6bae65827` 中，[客户端](https://github.com/aosp-mirror/platform_frameworks_base/blob/99b01a65cc4c104933788b3143285ab6bae65827/core/java/android/view/accessibility/AccessibilityInteractionClient.java#L1290)以interactionId配对请求，收到截图后用buffer、colorSpace和回调时的uptime构造公共结果；该时间不提供精确compositor采样时刻。[服务端](https://github.com/aosp-mirror/platform_frameworks_base/blob/99b01a65cc4c104933788b3143285ab6bae65827/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L1348)的两条截图分支都没有向普通应用返回frame/layout事务或同代transform；内部surface/UID不等于公开能力。
+
+**有效边界**：[ScreenshotResult](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService.ScreenshotResult)公共返回仅buffer、色彩和时间；window事件经过过滤/Handler派发且可按type合并，timeout0不提供全变化覆盖或原子屏障。transition time只描述bounds变化，事件计数和前后相等可用于发现差异，不能证明采集期间无变化。定向图可避开无障碍overlay，也不能据此证明确认卡或实际合成画面可见。
+
+**验证依据**：只查上述固定客户端、实际服务端、定位用InteractionController及隐藏ScreenCapture四文件和官方文档，见[本轮核定](../../runs/2026-11-12-后续任务推进.md#标准截图api的完整同代来源核定)。原S04窄来源对应可复用；对现行完整geometry/epoch/失效合同，当前标准API路线NO-GO。该结论不排除未来合作来源，未新增设备调用或更改合同。
+
 ## Mika 独立后台屏参考
 
 🔵 未实测。
