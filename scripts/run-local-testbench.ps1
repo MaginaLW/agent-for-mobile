@@ -246,6 +246,25 @@ function Open-BenchRoute([string]$Route){
     $summary.routes_verified+=,$Route
     if($R5ObservationOnly){$script:r5Routes[$Route]=$opened}
 }
+function Wait-BenchHumanReady {
+    $ready=Join-Path $script:output 'human-ready'
+    $cancel=Join-Path $script:output 'human-cancel'
+    Set-BenchPhase 'await_human_ready'
+    Write-Host '请现场用户先盯住本轮模拟器窗口，再由协调方记录本轮就绪或取消；就绪只安排显示确认卡，不是允许危险动作。Android确认卡仍须本人点击。'
+    while($true){
+        Assert-BenchRemaining 150
+        foreach($signal in @($cancel,$ready)){
+            if(Test-Path -LiteralPath $signal){
+                Assert-Bench (Test-Path -LiteralPath $signal -PathType Leaf) 'human_ready_signal_not_leaf'
+                Assert-Bench (-not((Get-Item -LiteralPath $signal -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) 'human_ready_signal_reparse_point'
+                if($signal -ceq $cancel){throw 'human_ready_cancelled'}
+                Set-BenchPhase 'human_ready_received'
+                return
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
 function Invoke-BenchHumanAllow {
     Open-BenchRoute 'conversation'
     $before=Get-BenchSnapshot 'human-allow-before'
@@ -491,6 +510,7 @@ try{
     if(-not $R5ObservationOnly){$requiredTools+=@('ui_snapshot','ui_action')}
     if($ImeProbe){$requiredTools+=,'type_text'}
     foreach($required in $requiredTools){Assert-Bench ($tools.tools.name -ccontains $required) 'required_gateway_tool_missing'}
+    if($HumanAllowProbe){Wait-BenchHumanReady}
     if($R5ObservationOnly){
         $processBefore=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-before'
         Assert-Bench ($processBefore -cmatch '^[1-9][0-9]{0,8}$') 'r5_process_identity_ambiguous'
