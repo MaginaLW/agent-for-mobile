@@ -465,11 +465,6 @@ try{
     [void](Invoke-BenchAdb @('shell','cmd','appops','set','dev.magina.gateway','SYSTEM_ALERT_WINDOW','allow') 'owned-overlay-permission')
     [void](Invoke-BenchAdb @('shell','am','start','-n','dev.magina.gateway/.MainActivity') 'initialize-owned-gateway')
     [void](Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','am','start-foreground-service','--user','0','-n','dev.magina.gateway/.GatewayService') 'start-owned-gateway-service')
-    $prefs=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cat','shared_prefs/gateway.xml') 'owned-credential-in-memory' 20 -Sensitive
-    $prefsXml=[xml]$prefs
-    $token=[string]$prefsXml.SelectSingleNode('/map/string[@name="token"]').InnerText
-    Assert-Bench ($token -cmatch '^[0-9a-f]{32}$') 'owned_gateway_credential_unavailable'
-    $prefs=$null; $prefsXml=$null
     [void](Invoke-BenchAdb @('forward','--no-rebind',"tcp:$HttpPort",'tcp:8848') 'owned-forward')
     $forwardAdded=$true
     $client=[Net.Http.HttpClient]::new();$client.Timeout=[Threading.Timeout]::InfiniteTimeSpan
@@ -481,6 +476,11 @@ try{
         Start-Sleep -Seconds 1
     }
     Assert-Bench $healthy 'gateway_http_not_ready'
+    $prefs=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cat','shared_prefs/gateway.xml') 'owned-credential-in-memory' 20 -Sensitive
+    $prefsXml=[xml]$prefs
+    $token=[string]$prefsXml.SelectSingleNode('/map/string[@name="token"]').InnerText
+    Assert-Bench ($token -cmatch '^[0-9a-f]{32}$') 'owned_gateway_credential_unavailable'
+    $prefs=$null; $prefsXml=$null
     $touchSetting=Invoke-BenchAdb @('shell','settings','get','secure','touch_exploration_enabled') 'touch-exploration-setting'
     $summary.touch_exploration_setting=if($touchSetting -cin @('0','1')){$touchSetting}else{'UNKNOWN'}
     Set-BenchPhase 'real_mcp_chain'
