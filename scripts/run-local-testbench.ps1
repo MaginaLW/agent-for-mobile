@@ -23,7 +23,8 @@ param(
     [switch]$PrepareOnly,
     [switch]$Run,
     [switch]$ImeProbe,
-    [switch]$R5ObservationOnly
+    [switch]$R5ObservationOnly,
+    [switch]$HumanAllowProbe
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3.0
@@ -51,8 +52,9 @@ $summary=[ordered]@{
     initial_isolated_device_table_empty='UNKNOWN'
     physical_device_commands=0; approval_injected=$false; token_logged=$false
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
-    verification_scope=$(if($R5ObservationOnly){'r5_observation_only'}else{'full_testbench'})
+    verification_scope=$(if($HumanAllowProbe){'human_allow_only'}elseif($R5ObservationOnly){'r5_observation_only'}else{'full_testbench'})
     r5_observation_verified=$false
+    human_allow_requested=[bool]$HumanAllowProbe; human_allow_verified=$false
     touch_exploration_setting='UNKNOWN'; touch_exploration_enabled='UNKNOWN'
     input_focus_before='UNKNOWN'; input_focus_after_focus_probe='UNKNOWN'
     accessibility_focus_result='UNKNOWN'; accessibility_focus_negative_verified=$false
@@ -211,7 +213,12 @@ function Get-BenchSnapshot([string]$Name){
     Assert-BenchForeground ($Name+'-foreground')
     $snapshot=Invoke-BenchTool 'ui_snapshot' @{scope='full'} $Name
     Assert-BenchToolOk $snapshot
+    if($HumanAllowProbe){Assert-Bench ($snapshot.ctx.app -is [string]) 'human_allow_snapshot_foreground_unknown'}
     Assert-Bench ($snapshot.ctx.app -ceq 'dev.magina.testtarget') 'snapshot_foreground_changed'
+    if($HumanAllowProbe){
+        Assert-Bench ($snapshot.ctx.foreground_known -is [bool] -and $snapshot.ctx.foreground_known) 'human_allow_snapshot_foreground_unknown'
+        Assert-Bench ($snapshot.data.truncated -is [bool] -and -not $snapshot.data.truncated) 'human_allow_snapshot_truncated'
+    }
     return $snapshot.data
 }
 function Find-BenchInput($Snapshot){
@@ -225,7 +232,10 @@ function Get-BenchBooleanState($Snapshot,[string]$Prefix){
     return $matches[0].text -ceq ($Prefix+'true')
 }
 function Get-BenchCount($Snapshot){
-    $matches=@($Snapshot.elements|Where-Object {$_.text -cmatch '^本地发送回调次数：[0-9]+$' -and $_.source -ceq 'a11y'})
+    $matches=@($Snapshot.elements|Where-Object {
+        (-not $HumanAllowProbe -or ($_.text -is [string] -and $_.source -is [string])) -and
+        $_.text -cmatch '^本地发送回调次数：[0-9]+$' -and $_.source -ceq 'a11y'
+    })
     Assert-Bench ($matches.Count -eq 1) 'target_callback_count_unavailable'
     return [int]($matches[0].text -replace '^本地发送回调次数：','')
 }
@@ -235,6 +245,51 @@ function Open-BenchRoute([string]$Route){
     Assert-BenchForeground ('route-'+$Route+'-foreground')
     $summary.routes_verified+=,$Route
     if($R5ObservationOnly){$script:r5Routes[$Route]=$opened}
+}
+function Invoke-BenchHumanAllow {
+    Open-BenchRoute 'conversation'
+    $before=Get-BenchSnapshot 'human-allow-before'
+    $summary.callback_count_before=Get-BenchCount $before
+    Assert-Bench ($summary.callback_count_before -eq 0) 'human_allow_counter_not_zero_before'
+    $buttons=@($before.elements|Where-Object {$_.text -is [string] -and $_.text -ceq '发送（仅本地计数）' -and
+        $_.role -is [string] -and $_.role -ceq 'button' -and $_.source -is [string] -and $_.source -ceq 'a11y'})
+    Assert-Bench ($buttons.Count -eq 1) 'human_allow_button_not_unique'
+    $ref=$buttons[0].ref
+    Assert-Bench ($ref -is [string] -and -not [string]::IsNullOrWhiteSpace($ref)) 'human_allow_button_ref_missing'
+    Assert-BenchRemaining 120
+    Set-BenchPhase 'await_human_allow'
+    Write-Host '请现场用户仅在模拟器内实际可见的 Android 确认卡核对并点击允许；PC答复不构成决定，Agent不得点击确认。'
+    $allowed=Invoke-BenchTool 'ui_action' @{ref=$ref;action='click'} 'human-allowed-click' 100
+    Assert-BenchToolOk $allowed
+    Assert-Bench ($allowed.ok -is [bool] -and $allowed.ok -and $allowed.data.done -is [bool] -and $allowed.data.done -and
+        $allowed.ctx.app -is [string] -and $allowed.ctx.app -ceq 'dev.magina.testtarget' -and
+        $allowed.ctx.foreground_known -is [bool] -and $allowed.ctx.foreground_known) 'human_allow_response_invalid'
+    $summary.confirmation_result='allowed_pending_audit'
+    $after=Get-BenchSnapshot 'human-allow-after'
+    $summary.callback_count_after=Get-BenchCount $after
+    Assert-Bench ($summary.callback_count_after -eq 1) 'human_allow_callback_count_not_one'
+    return @{Response=$allowed;Ref=$ref}
+}
+function Assert-BenchHumanAllowAudit($Audit,$Invocation){
+    $response=$Invocation.Response
+    Assert-Bench ($response.audit_id -is [string] -and $response.audit_id -cmatch '^a-[0-9]{6}$') 'human_allow_response_audit_id_invalid'
+    $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+    Assert-Bench ($entries.Count -eq 1) 'human_allow_audit_missing_or_duplicate'
+    $entry=$entries[0]
+    Assert-Bench ($entry.id -is [string] -and $entry.tool -is [string] -and $entry.tool -ceq 'ui_action' -and
+        $entry.result -is [string] -and $entry.result -ceq 'OK' -and $entry.channel -is [string] -and $entry.channel -ceq 'a11y' -and
+        $entry.args -is [pscustomobject] -and $entry.args.action -is [string] -and $entry.args.action -ceq 'click' -and
+        $entry.args.ref -is [string] -and $entry.args.ref -ceq $Invocation.Ref) 'human_allow_audit_call_mismatch'
+    Assert-Bench (@($Audit|Where-Object tool -CEQ 'ui_action').Count -eq 1) 'human_allow_extra_action_audit'
+    Assert-Bench ($entry.note -is [string]) 'human_allow_audit_note_invalid'
+    $tokens=@($entry.note -split ';')
+    $decisions=@($tokens|Where-Object { $_.StartsWith('confirmation=',[StringComparison]::Ordinal) })
+    $channels=@($tokens|Where-Object { $_.StartsWith('decided_via=',[StringComparison]::Ordinal) })
+    $contexts=@($tokens|Where-Object { $_.StartsWith('context=',[StringComparison]::Ordinal) })
+    Assert-Bench ($decisions.Count -eq 2 -and @($decisions|Where-Object {$_ -ceq 'confirmation=requested'}).Count -eq 1 -and
+        @($decisions|Where-Object {$_ -ceq 'confirmation=allowed'}).Count -eq 1 -and
+        $channels.Count -eq 1 -and $channels[0] -ceq 'decided_via=overlay' -and
+        $contexts.Count -ge 1 -and @($contexts|Where-Object {$_ -cne 'context=rechecked'}).Count -eq 0) 'human_allow_decision_not_proven'
 }
 function Assert-BenchR5Observations($Audit,$Routes,[int]$ProcessId){
     Assert-Bench ($ProcessId -gt 0 -and $Routes.Count -eq 3) 'r5_route_or_process_missing'
@@ -300,6 +355,7 @@ New-Item -ItemType Directory -Path $output -Force|Out-Null
 try{
     Assert-Bench (-not($Run -and $PrepareOnly)) 'run_and_prepare_only_conflict'
     Assert-Bench (-not($R5ObservationOnly -and $ImeProbe)) 'r5_observation_and_ime_probe_conflict'
+    Assert-Bench (-not($HumanAllowProbe -and ($R5ObservationOnly -or $ImeProbe))) 'human_allow_mode_conflict'
     Assert-Bench ($ConsolePort%2 -eq 0 -and $RuntimeSeconds -ge $BootTimeoutSeconds+180) 'invalid_ports_or_runtime_budget'
     if($ImeProbe){Assert-Bench ($RuntimeSeconds -ge $BootTimeoutSeconds+300) 'ime_probe_requires_additional_runtime_budget'}
     $ports=@($AdbServerPort,$ConsolePort,($ConsolePort+1),$HttpPort)
@@ -370,7 +426,10 @@ try{
     Assert-Bench (@(Get-BenchDeviceRows $initialDevices).Count -eq 0) 'isolated_adb_not_empty_before_emulator'
     $summary.initial_isolated_device_table_empty=$true
     Set-BenchPhase 'start_emulator'
-    $emulator=Start-BenchProcess $emulatorExe @('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)",'-no-window','-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
+    $emulatorArguments=@('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)")
+    if(-not $HumanAllowProbe){$emulatorArguments+=,'-no-window'}
+    $emulatorArguments+=@('-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
+    $emulator=Start-BenchProcess $emulatorExe $emulatorArguments
     $summary.emulator_pid=$emulator.Process.Id
     $bootLimit=$clock.Elapsed.TotalSeconds+$BootTimeoutSeconds
     $online=$false
@@ -438,6 +497,8 @@ try{
         foreach($route in @('list','search','conversation')){Open-BenchRoute $route}
         $processAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-after'
         Assert-Bench ($processAfter -ceq $processBefore) 'r5_process_identity_changed'
+    }elseif($HumanAllowProbe){
+        $humanAllowed=Invoke-BenchHumanAllow
     }else{
     Open-BenchRoute 'list'
     [void](Get-BenchSnapshot 'list-snapshot')
@@ -541,6 +602,9 @@ try{
     if($R5ObservationOnly){
         Assert-BenchR5Observations $audit $script:r5Routes ([int]$processBefore)
         $summary.r5_observation_verified=$true
+    }elseif($HumanAllowProbe){
+        Assert-BenchHumanAllowAudit $audit $humanAllowed
+        $summary.human_allow_verified=$true; $summary.confirmation_result='allowed'
     }else{
     $blocked=@($audit|Where-Object id -CEQ $denied.audit_id)
     Assert-Bench ($blocked[0].tool -ceq 'ui_action' -and $blocked[0].result -ceq 'E_CONFIRM_TIMEOUT') 'timeout_audit_mismatch'
