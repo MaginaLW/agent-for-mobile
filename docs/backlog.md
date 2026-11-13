@@ -51,7 +51,7 @@
 | 工作 | 已完成的增量 | 尚缺的决定或证据 |
 |---|---|---|
 | 单帧视觉离线评审 | [八类合同关系、十一类反例及源码复用核对](runs/2026-11-12-单帧视觉离线评审.md)；已区分完整执行链与独立感知研究 | 当前能力不能补齐原生身份、geometry、IME、触达和阶段有效性。没有可仅靠离线编码解阻的必要后继；只读研究不能替代完整T-L1，无具体新增研究问题不造框架或重采 |
-| R5验收范围离线评审 | A01补充已落入正式核定/Mika任务4；应用2eb3e89完整门19/19、观测专项Debug/Release各9项；新host e930aa6专项26/26、独审无阻断。A06单次API36三路由/审计note关联126秒PASS，见[记录](runs/2026-11-13-R5失败语义离线观测.md#a06独立android路由审计观测子项通过)；源码仍草稿PR #13 | A05焦点标签匹配0/fg_elements=0及完整链失败保持冻结；A06不涉及普通输入/确认，未取得Android timeout/no_a11y、第三方强负例或四项独立来源。两轮均已消费，不重跑/补SDK，整体R5仍开放 |
+| R5验收范围离线评审 | A01补充已落入正式核定/Mika任务4；应用2eb3e89完整门19/19、观测专项Debug/Release各9项；host e930aa6专项26/26、独审无阻断。A06三路由/审计note关联126秒PASS；后续A11已取得自有受控timeout/E_VERIFY_FAIL的Android证据，见下方通用子项。源码仍草稿PR #13 | A05焦点标签匹配0/fg_elements=0及完整链失败保持冻结；A06不涉及普通输入/确认。自有受控超时不补齐no_a11y、原第三方强负例或四项独立来源；旧轮均消费，不重跑/补SDK，整体R5仍开放 |
 | 后续P0准备 | 取证修复已在独立 `codex/p0-evidence-refresh` 选择性移植，固定源07f2a82完整门19/19；用户A03批准固定75410cf推送及[草稿PR #12](https://github.com/MaginaLW/agent-for-mobile/pull/12)，head/base及未合并状态已核 | 本地R5支线不带入P0源码；仍未真机、未合main，无新C批次或设备许可，不将PR #12离线证据当R5或当前树已修复证据 |
 | 自有AVD Allow子项（不依赖微信） | A10固定1fe43f8通过一次自动化UI链：ready前qemu激活成功，真实卡一次computer-use允许，同次响应/原audit/计数0→1，250秒exit0；资源收尾通过、数据清理未证，见[结果](runs/2026-11-13-人控允许台架离线准备.md#a10唯一新轮自动化ui-allow子项通过) | 实际actor=assistant_computer_use，真人Allow仍未测试；原human_allow字段不构成真人证明。A07–A09失败冻结不回填，A10许可已消费，无待执行新轮；不关闭微信P0/Stale/T-L1或R5强负例，卡原60秒/正式人控规则保持 |
 | 通用失败与Stale后继（微信后置） | A11受控R5 134秒PASS保留；A12缺audit marker的失败冻结不改。新producer固定3a6702e完整门19/19，Debug653/Release451；A13另获许可后固定3773944/新双APK，自有Stale自动化UI链299秒PASS，原Gate拒绝/原audit含context复核/后台同实例0→0及资源收尾均通过，见[结果](runs/2026-11-14-Stale复核审计修复.md#a13新源自有stale自动化ui链通过) | 本批通用自有子项已补齐，实际actor为assistant_computer_use、真人未测试，数据清理未证。A13已消费，不追加AVD或重跑R5；原微信、第三方强负例、整体P0/T-L1及生产前置未关闭 |
