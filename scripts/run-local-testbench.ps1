@@ -22,7 +22,8 @@ param(
     [ValidateRange(240,3600)][int]$RuntimeSeconds=900,
     [switch]$PrepareOnly,
     [switch]$Run,
-    [switch]$ImeProbe
+    [switch]$ImeProbe,
+    [switch]$R5ObservationOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3.0
@@ -36,6 +37,7 @@ $imeProbeText='台架中文输入甲乙'
 $gatewayImeComponent='dev.magina.gateway/.ime.GatewayIme'
 $gatewayImeIds=@($gatewayImeComponent,'dev.magina.gateway/dev.magina.gateway.ime.GatewayIme')
 $script:commandIndex=0; $script:rpcId=0; $script:auditIds=[Collections.Generic.List[string]]::new()
+$script:r5Routes=[ordered]@{}
 $script:phase='preflight'
 $summary=[ordered]@{
     schema='local-testbench/v1'; status='failed'; mode=$(if($Run){'run'}else{'preflight'})
@@ -49,6 +51,8 @@ $summary=[ordered]@{
     initial_isolated_device_table_empty='UNKNOWN'
     physical_device_commands=0; approval_injected=$false; token_logged=$false
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
+    verification_scope=$(if($R5ObservationOnly){'r5_observation_only'}else{'full_testbench'})
+    r5_observation_verified=$false
     touch_exploration_setting='UNKNOWN'; touch_exploration_enabled='UNKNOWN'
     input_focus_before='UNKNOWN'; input_focus_after_focus_probe='UNKNOWN'
     accessibility_focus_result='UNKNOWN'; accessibility_focus_negative_verified=$false
@@ -230,6 +234,48 @@ function Open-BenchRoute([string]$Route){
     Assert-BenchToolOk $opened
     Assert-BenchForeground ('route-'+$Route+'-foreground')
     $summary.routes_verified+=,$Route
+    if($R5ObservationOnly){$script:r5Routes[$Route]=$opened}
+}
+function Assert-BenchR5Observations($Audit,$Routes,[int]$ProcessId){
+    Assert-Bench ($ProcessId -gt 0 -and $Routes.Count -eq 3) 'r5_route_or_process_missing'
+    $instance=$null
+    $previousEnd=-1L
+    $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach($route in @('list','search','conversation')){
+        $response=$Routes[$route]
+        Assert-Bench ($null -ne $response -and $response.ok -is [bool] -and $response.ok -and
+            $response.data.sent -is [bool] -and $response.data.sent -and $response.data.target_package -ceq 'dev.magina.testtarget' -and
+            $response.data.foreground_verified -is [bool] -and $response.data.foreground_verified -and $response.data.verification_status -ceq 'verified' -and
+            $response.data.verification_scope -ceq 'package') 'r5_route_response_unverified'
+        Assert-Bench ($response.audit_id -cmatch '^a-[0-9]{6}$' -and $ids.Add($response.audit_id)) 'r5_route_audit_id_invalid'
+        $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+        Assert-Bench ($entries.Count -eq 1) 'r5_audit_missing_or_duplicate'
+        $entry=$entries[0]
+        Assert-Bench ($entry.tool -ceq 'intent_send' -and $entry.result -ceq 'OK' -and $entry.channel -ceq 'intent' -and
+            $entry.args.action -ceq 'android.intent.action.VIEW' -and $entry.args.package -ceq 'dev.magina.testtarget' -and
+            $entry.args.uri -ceq ('agent-testbench://target/'+$route)) 'r5_audit_route_mismatch'
+        $marker=';r5_observation='
+        Assert-Bench ($entry.note -is [string] -and [regex]::Matches($entry.note,[regex]::Escape($marker)).Count -eq 1) 'r5_note_missing_or_duplicate'
+        try{$observation=ConvertFrom-Json -InputObject $entry.note.Substring($entry.note.IndexOf($marker)+$marker.Length) -AsHashtable -Depth 10 -DateKind String}catch{throw 'r5_note_invalid_json'}
+        Assert-Bench ($observation -is [Collections.IDictionary] -and $observation.Count -eq 12) 'r5_note_invalid_schema'
+        Assert-Bench ($observation['v'] -is [long] -and $observation['v'] -eq 1 -and
+            $observation['available'] -is [bool] -and $observation['available'] -and $observation['audit_id'] -ceq $response.audit_id -and
+            $observation['pid'] -is [long] -and $observation['pid'] -eq $ProcessId -and
+            $observation['process_instance'] -is [string] -and
+            $observation['process_instance'] -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') 'r5_note_identity_unverified'
+        if($null -eq $instance){$instance=$observation['process_instance']}
+        Assert-Bench ($observation['process_instance'] -ceq $instance) 'r5_process_instance_changed'
+        Assert-Bench ($observation['dispatch'] -ceq 'returned' -and $observation['poll'] -ceq 'hit' -and
+            $observation['checks'] -is [long] -and $observation['checks'] -gt 0) 'r5_note_not_positive_landing'
+        $times=@('dispatch_entered_ms','dispatch_returned_ms','poll_start_ms','poll_end_ms')
+        $last=$previousEnd
+        foreach($name in $times){
+            $value=$observation[$name]
+            Assert-Bench ($value -is [long] -and $value -ge 0 -and $value -ge $last) 'r5_note_time_order_invalid'
+            $last=$value
+        }
+        $previousEnd=$last
+    }
 }
 function Restore-BenchIme {
     Assert-Bench ($null -ne $script:imeState -and $emulatorVerified) 'ime_restore_original_state_unavailable'
@@ -253,6 +299,7 @@ Assert-Bench (-not(Test-Path -LiteralPath $output)) 'output_directory_already_ex
 New-Item -ItemType Directory -Path $output -Force|Out-Null
 try{
     Assert-Bench (-not($Run -and $PrepareOnly)) 'run_and_prepare_only_conflict'
+    Assert-Bench (-not($R5ObservationOnly -and $ImeProbe)) 'r5_observation_and_ime_probe_conflict'
     Assert-Bench ($ConsolePort%2 -eq 0 -and $RuntimeSeconds -ge $BootTimeoutSeconds+180) 'invalid_ports_or_runtime_budget'
     if($ImeProbe){Assert-Bench ($RuntimeSeconds -ge $BootTimeoutSeconds+300) 'ime_probe_requires_additional_runtime_budget'}
     $ports=@($AdbServerPort,$ConsolePort,($ConsolePort+1),$HttpPort)
@@ -381,9 +428,17 @@ try{
     $initialized=Invoke-BenchRpc 'initialize' @{protocolVersion='2025-03-26';capabilities=@{};clientInfo=@{name='local-testbench';version='1'}} 'initialize'
     Assert-Bench ($initialized.protocolVersion -ceq '2025-03-26') 'mcp_protocol_mismatch'
     $tools=Invoke-BenchRpc 'tools/list' @{} 'tools-list'
-    $requiredTools=@('foreground_app','intent_send','ui_snapshot','ui_action')
+    $requiredTools=@('foreground_app','intent_send')
+    if(-not $R5ObservationOnly){$requiredTools+=@('ui_snapshot','ui_action')}
     if($ImeProbe){$requiredTools+=,'type_text'}
     foreach($required in $requiredTools){Assert-Bench ($tools.tools.name -ccontains $required) 'required_gateway_tool_missing'}
+    if($R5ObservationOnly){
+        $processBefore=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-before'
+        Assert-Bench ($processBefore -cmatch '^[1-9][0-9]{0,8}$') 'r5_process_identity_ambiguous'
+        foreach($route in @('list','search','conversation')){Open-BenchRoute $route}
+        $processAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-after'
+        Assert-Bench ($processAfter -ceq $processBefore) 'r5_process_identity_changed'
+    }else{
     Open-BenchRoute 'list'
     [void](Get-BenchSnapshot 'list-snapshot')
     Open-BenchRoute 'search'
@@ -471,6 +526,7 @@ try{
         Restore-BenchIme
         $summary.ime_probe_status='input_and_restore_verified_pending_audit'
     }
+    }
     Set-BenchPhase 'collect_audit'
     $auditFiles=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','ls','files/audit') 'audit-file-list'
     $lines=[Collections.Generic.List[string]]::new()
@@ -482,6 +538,10 @@ try{
     [IO.File]::WriteAllText((Join-Path $output 'audit.jsonl'),($lines -join "`n")+"`n",$encoding)
     $audit=@($lines|ForEach-Object {$_|ConvertFrom-Json -Depth 30 -DateKind String})
     foreach($id in $script:auditIds){Assert-Bench (@($audit|Where-Object id -CEQ $id).Count -eq 1) 'audit_id_missing_or_duplicate'}
+    if($R5ObservationOnly){
+        Assert-BenchR5Observations $audit $script:r5Routes ([int]$processBefore)
+        $summary.r5_observation_verified=$true
+    }else{
     $blocked=@($audit|Where-Object id -CEQ $denied.audit_id)
     Assert-Bench ($blocked[0].tool -ceq 'ui_action' -and $blocked[0].result -ceq 'E_CONFIRM_TIMEOUT') 'timeout_audit_mismatch'
     $focusEntry=@($audit|Where-Object id -CEQ $focused.audit_id)[0]
@@ -496,6 +556,7 @@ try{
             $null -eq $imeEntry.args.PSObject.Properties['text']) 'ime_commit_audit_mismatch'
         Assert-Bench ($summary.ime_restore_verified -ceq $true) 'ime_restore_unproven'
         $summary.ime_audit_verified=$true; $summary.ime_probe_status='passed'
+    }
     }
     $summary.audit_verified=$true; $summary.status='passed'
 }catch{
