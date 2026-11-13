@@ -175,6 +175,8 @@
 
 - **前景激活超时与元数据可读分开（2026-11-13，A11）**：Stale新轮唯一activate_window超时后，ready前cancel实际保持0 intent_send/ui_action，未进入卡或安全拒绝；这是协调屏障的实证，不是Stale通过。冻结后list_windows能响应且原AVD已不存在，只证明元数据查询层可用，不证明先前激活未生效、当前锁屏状态或qemu已修。用户另报告当时存在锁屏/桌面切换，与问题相容而非唯一根因证明；新轮应先明确未锁定同一交互桌面条件，不能由Agent改系统设置或续用旧许可。依据：[A11记录](../../runs/2026-11-13-通用失败与失效验证.md#a11两独立新轮受控r5通过stale发卡前取消)，无额外SDK/截图。
 
+- **复核进入事件不能只写在解析成功之后（2026-11-14，A12/源码/JVM）**：HOME后旧ref解析抛错，原Gate仍按二次获取失败返回E_STALE_REF，但ToolRegistry旧also尾部marker不会执行，导致实际安全拒绝与台架审计要求脱节。复用CallScope在二次reader进入前记原context=rechecked，异常原样传给原Gate；首读失败/拒绝/未二读无marker，事件本身不保证一致或成功。实际producer与原Gate的Debug/Release专项证明拒绝时handler/success仍0；host不放宽，旧A12继续失败冻结，新Android效果未验。依据：[修复记录](../../runs/2026-11-14-Stale复核审计修复.md)。
+
 - **启动请求与token就绪分开（2026-11-13，源码/离线）**：适用于本地台架启动gateway后从私有偏好文件读取凭据。Activity/服务命令返回只说明请求已提交；现应用TokenStore同步commit完成后才把token交给McpServer，后者才开放health。因此复用原forward和有界health正例作为一次敏感读取前置，不增加敏感重读、固定延时或新权限。源码核定与启动顺序回归见[人控轮后的核定](../../runs/2026-11-13-人控允许台架离线准备.md#失败后的源码核定)。A07只有敏感读取非零退出的证据，不能据该顺序缺口断言它必因时序，也不能把离线修复称为真实故障已解决。
 
 - **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](../../runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
