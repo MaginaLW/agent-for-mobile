@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-14（微信后置；A11受控R5语义PASS；A12审计缺复核marker仍失败冻结；新producer修复固定3a6702e已通过19/19完整离线门并冻结新双APK，尚未经Android验证；PR #12/#13保持草稿，完整来源/T-L1、微信P0与R5强负例仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
+> 更新 2026-11-14（微信后置；A11受控R5语义PASS；A12仍失败冻结；新producer固定3a6702e完整门19/19，A13固定3773944自有Stale自动化UI链299秒PASS；PR #12/#13保持草稿，完整来源/T-L1、微信P0与R5强负例仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
 
 11-13 用户确认暂无新的失败记录或来源线索，并提出先跳过微信。本轮将微信相关的来源、布局及T-L1阻塞调查后置，保留未通过状态，不继续采图或追加该链运行；下一步只筛选不依赖微信的工作。该排期调整不把其他App、原第三方R5反例、通用来源门或P0安全验收一并视为通过，也不构成新设备许可。
 
@@ -10,7 +10,9 @@
 
 用户随后采纳的[通用后继已完成A11两轮](docs/runs/2026-11-13-通用失败与失效验证.md#a11两独立新轮受控r5通过stale发卡前取消)：固定host a588e87、应用/driver源a035ce2及新双APK，R5真实一次正常分派、poll timeout（13次检查）、E_VERIFY_FAIL/原audit/新增唯一接收记录对应，134秒PASS。Stale在ready前一次computer-use窗口激活超时，按许可写cancel，222秒exit1；intent_send/ui_action各0、Allow点击0，未到Stale路由/卡/判据，前后计数UNKNOWN。用户补充当时存在锁屏或桌面切换，属现场报告、非唯一根因证明。两轮自持进程/四端口收尾通过、数据清理未证，许可均消费。当时只准备交互桌面就绪条件下的新Stale范围，其后A12结果见下；不改Windows设置、不重跑R5，原第三方强负例、微信P0、完整T-L1和生产接线不由本结果放行。
 
-随后A12另获一次许可并确认桌面就绪：固定74aa34e/原a035ce2双APK，窗口激活与一次实际overlay允许均成功，原Gate返回E_STALE_REF/safety、后台同实例0→0；但audit缺context=标记，257秒collect_audit失败冻结，原false标记不改，资源收尾通过。已从原件和源码定位二次上下文解析抛错会跳过旧marker写入；最小修复只补审计producer的进入事件，不改host/安全判据，见[11-14记录](docs/runs/2026-11-14-Stale复核审计修复.md)。新固定源3a6702e完整离线门19/19、922.981秒exit0，Debug653/Release451且失败/错误/跳过0；同一clean源8秒离线构建并冻结新双APK。新Android运行及桌面条件仍缺独立许可，A12不恢复，R5不重跑。
+随后A12另获一次许可并确认桌面就绪：固定74aa34e/原a035ce2双APK，窗口激活与一次实际overlay允许均成功，原Gate返回E_STALE_REF/safety、后台同实例0→0；但audit缺context=标记，257秒collect_audit失败冻结，原false标记不改，资源收尾通过。已从原件和源码定位二次上下文解析抛错会跳过旧marker写入；最小修复只补审计producer的进入事件，不改host/安全判据，见[11-14记录](docs/runs/2026-11-14-Stale复核审计修复.md)。新固定源3a6702e完整离线门19/19、922.981秒exit0，Debug653/Release451且失败/错误/跳过0；同一clean源8秒离线构建并冻结新双APK。
+
+A13获独立许可并重新确认桌面就绪后，固定clean host3773944/构建源3a6702e及新双APK完成一次自有API36 Stale链，299秒exit0。唯一窗口激活后发ready，实际Android卡一次computer-use允许，原Gate返回E_STALE_REF/safety/nonretryable；对应唯一audit含原确认与context=rechecked，后台同实例计数0→0。stale_allow_verified、stale_target_callback_zero_verified、audit_verified均true，进程/四端口收尾通过，数据保留且清理未证。实际actor=assistant_computer_use，真人未测试；许可已消费，无待执行新轮，R5未重跑，A12不恢复。通用自有子项已补齐，原微信、第三方强负例、完整来源/T-L1与生产接线仍待各自前置。
 
 按用户要求完成[阻塞处理调查并收尾](docs/runs/2026-11-12-阻塞处理调查与收尾.md)：合作来源不是唯一值得评估的方向；视觉侧建议先离线评审同一合成帧的感知方案与残余风险，R5侧先区分原产品的“未获正向验证”与后期强负向取证设计。MediaProjection、稳定性等待、shell等待回执都不能直接补齐现行门禁。本轮未改合同、代码或设备状态，不自动实施上述建议。
 
