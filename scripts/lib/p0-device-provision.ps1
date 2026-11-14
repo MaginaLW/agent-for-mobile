@@ -1049,7 +1049,11 @@ function Get-P0AuditCursor {
     $dayProbe = Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('shell','date','+%Y%m%d') -Operation '读取设备审计日期' -AllowFailure
     $day = $dayProbe.Stdout.Trim()
-    if ($dayProbe.ExitCode -ne 0 -or $day -notmatch '^\d{8}$') { throw '无法建立 gateway 审计游标。' }
+    $parsedDay = [datetime]::MinValue
+    if ($dayProbe.ExitCode -ne 0 -or -not [datetime]::TryParseExact($day, 'yyyyMMdd',
+        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedDay)) {
+        throw '无法建立 gateway 审计游标：设备日期不可核定。'
+    }
     # 审计已迁到内部 filesDir，因此这里是 **run-as 相对路径**，不是 /sdcard 绝对路径。
     # Android 11+ 的 `run-as` 跑在 shell 的挂载命名空间里，对 /sdcard/Android/data/<pkg>
     # 一律 Permission denied（本机 Android 16 实测），而内部 filesDir 恰恰只能走 run-as +
@@ -1059,8 +1063,13 @@ function Get-P0AuditCursor {
     $probe = Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('exec-out','run-as',$script:P0PackageName,'wc','-l',$path) `
         -Operation '读取 gateway 审计游标' -AllowFailure
-    $lineCount = 0
-    if ($probe.ExitCode -eq 0 -and $probe.Stdout -match '^\s*(\d+)') { $lineCount = [int64]$Matches[1] }
+    $lineCount = [int64]0
+    $pattern = '\A[ \t]*([0-9]+)(?:[ \t]+' + [regex]::Escape($path) + ')?[ \t]*(?:\r?\n)?\z'
+    $match = [regex]::Match([string]$probe.Stdout, $pattern)
+    if ($probe.ExitCode -ne 0 -or -not $match.Success -or
+        -not [int64]::TryParse($match.Groups[1].Value, [ref]$lineCount) -or $lineCount -eq [int64]::MaxValue) {
+        throw '无法建立 gateway 审计游标：当天审计文件缺失、不可读或行数无效；先检查审计前置，不得假设为零。'
+    }
     [pscustomobject]@{ Day = $day; Path = $path; LineCount = $lineCount }
 }
 
@@ -1087,7 +1096,18 @@ function Save-P0AuditIncrement {
     $dayProbe = Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('shell','date','+%Y%m%d') -Operation '复核设备审计日期' -AllowFailure
     $today = $dayProbe.Stdout.Trim()
-    if ($dayProbe.ExitCode -ne 0 -or $today -notmatch '^\d{8}$' -or $today -ceq [string]$Cursor.Day) { return }
+    $parsedToday = [datetime]::MinValue
+    $parsedCursorDay = [datetime]::MinValue
+    if ($dayProbe.ExitCode -ne 0 -or -not [datetime]::TryParseExact($today, 'yyyyMMdd',
+        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedToday) -or
+        -not [datetime]::TryParseExact([string]$Cursor.Day, 'yyyyMMdd',
+        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedCursorDay)) {
+        throw '审计结束日期无法核定；危险动作可能已执行，不得重试或换路。'
+    }
+    if ($today -ceq [string]$Cursor.Day) { return }
+    if ($parsedToday.Date -ne $parsedCursorDay.Date.AddDays(1)) {
+        throw '审计日期跨度无法核定；危险动作可能已执行，不得重试或换路。'
+    }
 
     $rolled = "files/audit/$today.jsonl"
     $tail = Join-Path ([IO.Path]::GetTempPath()) ("p0-audit-rollover-" + [guid]::NewGuid().ToString('N') + '.jsonl')

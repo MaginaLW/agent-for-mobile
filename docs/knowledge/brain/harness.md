@@ -335,6 +335,7 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
   别靠改成 `[object]` 或放宽 regex。
 - **函数会枚举返回的数组**：`return $bytes` 在调用方变成 `Object[]`（1 元素时变标量），`Buffer.BlockCopy` 报错。
   保留数组身份用 `return ,$bytes`（AST 是单元素 `ArrayLiteralAst`，不是 `UnaryExpressionAst`）；别用 cast 或 `@()` 代替。
+  对验收所需的闭合JSON类型，直接读取 `PSObject.Properties['data'].Value` 及状态属性原值，再检查对象/字符串类型；先经过函数输出或转字符串，可能把单元素数组降成看似合法的值。验证依据：[P0取证移植](../../runs/2026-11-12-P0取证修复离线移植.md)的真实runner模拟子进程反例已拒绝数组状态及数组data，范围限主机离线判据，不证明设备端图像或决定正确。
 - **未接收的 `$task.GetAwaiter().GetResult()` 会向 stdout 写 `VoidTaskResult`**；协议 stdout 须为空时用 `$null = ...`。
 - **字符串字面 `\n` 不是 LF**：拼到 JSON 后就不是 strict JSON；写出后要严格 round-trip parse。
 - **`if`/`else` 之间误插语句，Parser 仍可能零错误**（`else` 被当普通命令）。Parser0 不等于控制结构正确，门脚本要实际跑到汇总。
