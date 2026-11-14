@@ -4,6 +4,7 @@
 
 ## 调试与注入
 
+- **启用和客户端登记不替代绑定证据（PA2553，2026-11-14）**：适用于任务前置只核到enabled成员存在、dump其他段也提及目标包的情况。按唯一User state分别解释Bound、Enabled、Binding/Crashed及Registered clients；客户端字符串命中不算服务绑定，空crashed不排除历史异常。A18现有helper正常识别完整Bound段但未匹配目标，拒绝与原件一致，无格式修复证据；仅保留该次绑定未证，不能推导撤权、原因、持续时长或当前状态。依据：[A18原件离线复核与固定Android16字段来源](../../runs/2026-11-14-小红书单窗口只读准备.md#a18新阅读链在无障碍绑定前置冻结)，未为沉淀追加设备采样。
 - **既有包/配置先读再复用（PA2553，2026-11-11 实测）**：F1-P01 在固定 `93b850213b1b4c9bfb2de53ef2abeee3a5a306c2` 制品上核 base APK 字节匹配，再间隔约 10 秒读取两点 awake/keyguard、网关 enabled 与系统 Bound services、保屏设置，均匹配，不必重复安装或重开权限。默认仍是 vivo IME，不能因此认定 GatewayIme 活跃。有效做法是复用同包身份、区分 enabled/bound 与 IME 配置；不是每轮先写 enabled 列表，不外推到 probe、长期存活或重启。依据：[F1-P01 实施记录](../../runs/2026-11-11-离线减负实施.md#f1-p01既有真机配置只读复用通过)，本轮许可已消费，未来读取仍按适用准入。
 
 - **「USB 模拟点击」开关必开**，否则注入报 SecurityException；开了之后 tap/swipe 正常。

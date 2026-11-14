@@ -1,5 +1,7 @@
 # 项目状态
 
+11-14 A18唯一新阅读链已失败冻结：固定5492b82，在identity/gateway_a11y_not_ready停止，13SDK、读2.7733337秒/driver8.233706秒；目标仍在enabled，真实helper识别的完整Bound段未匹配目标，Binding/Crashed为空，Registered clients不算绑定。无解析漏判证据，不改源码；未绑定原因、持续时长及当前状态未知，不能称权限撤销。HTTP/token/服务启动/dispatch/模型/搜索/阅读/OCR均0，笔记0条，本轮Job归零及自持server/5037/lease收尾通过；许可消费，不重试，用户无需维持现场。A19窄后验规则已独立[PR #16](https://github.com/MaginaLW/agent-for-mobile/pull/16)合main7852181并同步正式入口，不能用于本次无障碍就绪调查或业务重试；源码PR #13仍草稿。见[A18结果](docs/runs/2026-11-14-小红书单窗口只读准备.md#a18新阅读链在无障碍绑定前置冻结)。
+
 11-14 A17独立只读后验已完成：固定dd87419、软件b77e210，身份/在机包匹配，GatewayService本次快照ABSENT；8client+1server、读1.601818秒、driver7.1204044秒，根exit0/外层Job归零及关闭、自持server/5037/lease收尾均通过。没有服务写入、token、HTTP、模型或业务；仅证明本次快照，旧P02后代UNKNOWN不改判，ready_for_dispatch=false。现场阶段结束，无需继续保持连接或亮屏。下一步准备有外层Job及独立停止后验的新公开阅读候选，再核具体范围；本次不自动重发旧任务。见[A17记录](docs/runs/2026-11-14-小红书单窗口只读准备.md#a17独立服务只读后验完成)。
 
 11-14 后续离线推进已完成：固定clean软件b77e210完整门19/19、1057.875秒exit0，覆盖动态配置timeout修复；本轮未运行设备或真实模型。固定Android16 AOSP已解释stop-service的“Service stopped”与exit255可同时出现，但该返回不证明服务记录消失或当前已停。P02缺逐探针/外层Job身份收据，旧派单后代UNKNOWN保持。已准备一次独立只读服务后验：8client+1server、累计读120秒，不启动或停止服务、不读取token或派发业务；实际解析8/8及外层Job非零根/残余子进程离线收尾通过，现场后验尚未许可或执行。下一步先核本次后验范围和现场连接，再据结果决定后继；不恢复A15/P02或取得第三轮业务预算。见[本轮核定](docs/runs/2026-11-14-小红书单窗口只读准备.md#后续离线收尾核定与候选检查)。
