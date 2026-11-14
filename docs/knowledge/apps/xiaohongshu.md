@@ -2,6 +2,8 @@
 
 > 来源：M0 实测（2026-07-16，vivo V2352A）。
 
+上述来源只覆盖历史设备。2026-07-17的旧open_uri曾返回E_VERIFY_FAIL，不能由深链正表推定当前PA2553、当前App版本或intent_send可用。2026-11-14已按用户选择开始[单窗口只读准备](../../runs/2026-11-14-小红书单窗口只读准备.md)，当前安装/登录/树可读性及落地效果未核；ui_snapshot可能自动本地OCR，不承诺a11y-only。
+
 - **深链一步顶十步**：`xhsdiscover://search/result?keyword=<urlencoded>` 直达搜索结果，完全绕开「点搜索框+中文输入」（✅ 已实测，[deeplinks.md](deeplinks.md) 正表）。
 - a11y 树可用（M0 任务 3 全程树/深链完成，未依赖视觉）。
 - 返回列表后 feed 位置精准恢复：「进详情→返回→进下一条」多步模式可行。
