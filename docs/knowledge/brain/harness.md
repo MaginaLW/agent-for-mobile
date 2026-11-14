@@ -20,7 +20,14 @@
 
 - 适用条件：网关配置由token同步helper动态生成，再交给Codex派单。模板可用、health和MCP ping通过，仍不能证明动态配置满足派单消费者。
 - 有效做法：复用现有模板的数值timeout=420000，让真实Set-P0GatewayConfigToken产物直接进入New-DispatchCodexLaunchSpec验证；保留消费者的正数/类型校验及token只进敏感环境。服务stop即使含“Service stopped”，非零返回且缺后验仍保留UNKNOWN，不补成全收尾。
-- 验证依据：A16/P02在模型启动前因动态配置缺timeout冻结，无搜索/OCR；离线新增真实producer→consumer回归先复现同错，最小修复后Codex定向12/12通过。原轮不恢复，真机新修复及完整门未验，见[记录](../../runs/2026-11-14-小红书单窗口只读准备.md#a16p02模型启动前配置拒绝与离线修复)。
+- 验证依据：A16/P02在模型启动前因动态配置缺timeout冻结，无搜索/OCR；真实producer→consumer回归先复现同错，最小修复后Codex定向12/12通过，后续固定b77e210完整离线门19/19、1057.875秒exit0覆盖该修复。原轮不恢复，仍无新设备或真实模型实证，见[后续核定](../../runs/2026-11-14-小红书单窗口只读准备.md#后续离线收尾核定与候选检查)。
+
+## 服务停止回执与派单后代须分别取证（2026-11-14）
+
+- 适用条件：Android16的stop-service打印“Service stopped”但exit255，或派单在模型启动前拒绝配置后只留下根进程退出结果。
+- 有效做法：先核固定命令实现。AOSP android-16.0.0_r1的runStopService收到停止接口结果1后打印该文字，仍return -1；不能套用普通exit0判据解释其语义，也不能只接受255，因为未运行/错误分支同样返回-1。现有通用SDK严格门保持，停止回执和服务不存在的独立后验分别记录；vivo当前实现及状态不能从AOSP推定。
+- 主机边界：New-DispatchCodexLaunchSpec先运行官方CLI版本探针，再校验timeout。模型0不等于没有主机子进程；旧轮缺逐探针/根Job绑定时保留UNKNOWN。新候选可复用既有Job与启动gate，在入口放行前绑定并记录ActiveProcesses归零；非零根退出与任务成功分开报告。
+- 验证依据：[本轮核定](../../runs/2026-11-14-小红书单窗口只读准备.md#后续离线收尾核定与候选检查)包含固定官方源码、原双流范围及一次无害fixture：根exit7后实际残余子进程被本轮Job收口到0。只证明该离线路径，不补旧P02收尾，也不授予新设备或业务许可。
 
 ## 执行器工具面：`--allowedTools` 不是限制，`--disallowedTools` 是手写枚举（2026-07-26 / 07-31）
 
