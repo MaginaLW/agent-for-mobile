@@ -10,6 +10,12 @@
 - 有效做法：P0 复用 `Read-DispatchTraceTranscript` 解析 Codex 事件，再沿用已有调用顺序、结果数和完成时序判据；fake runner 必须产生真实大脑 schema。下方 Claude CLI 经验保留为已退役路线的历史资料，不作为当前调用指南。
 - 验证依据：本轮 13 个现有定向用例通过，包含 Codex `item.*` 到 manifest 的 Allow/Stale 闭环与 ledger、顺序、JSON/audit 等反例；源码与过滤用例在 `scripts/tests/dispatch-offline.ps1`、`scripts/tests/p0-supervised-runner-offline.ps1`。证据限离线 fake，不代表设备或真实模型验收。
 
+## 官方CLI更新与精确版本准入（2026-11-14）
+
+- 适用条件：桌面官方CLI升级后，真实dispatch在版本解析处拒绝，而DryRun仍能组装任务。当前实例是0.167.0-alpha.4.1；放在项目内的旧CLI不会被只枚举官方bin目录的resolver自动采用，不通过更改目录或绕过签名来解阻。
+- 有效做法：核本机官方签名、隔离帮助/feature列表及固定版本源码的实际配置/工具构造，再只加入被核过的精确契约；保留文件guard/hash、官方root、环境隔离和已有禁用。0.167分支额外禁用sleep_tool；不以帮助存在或关闭几个feature声称原生utilities/扩展贡献已被穷尽枚举。
+- 验证依据：既有fake CLI真实消费回归11项一次通过，覆盖新旧版本选择、隔离argv/环境、随机bearer不入argv及未知版本拒绝；实际认证、远端metadata和MCP/设备链仍另验。见[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#官方cli精确版本兼容候选)。
+
 ## 执行器工具面：`--allowedTools` 不是限制，`--disallowedTools` 是手写枚举（2026-07-26 / 07-31）
 
 - **`--allowedTools` 只是免确认名单，不阻止任何工具。** 07-26 Allow 腿实锤执行器在本机跑了
