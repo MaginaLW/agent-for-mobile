@@ -177,6 +177,8 @@
 
 - **复核进入事件不能只写在解析成功之后（2026-11-14，A12/源码/JVM/A13自有API36）**：HOME后旧ref解析抛错，原Gate仍按二次获取失败返回E_STALE_REF，但ToolRegistry旧also尾部marker不会执行，导致实际安全拒绝与台架审计要求脱节。复用CallScope在二次reader进入前记原context=rechecked，异常原样传给原Gate；首读失败/拒绝/未二读无marker，事件本身不保证一致或成功。实际producer与原Gate的Debug/Release专项证明拒绝时handler/success仍0；A13另获许可，以固定3a6702e新制品实际卡允许后验证原Gate拒绝、原audit含复核事件、后台同实例计数0→0及收尾，299秒通过。host不放宽，旧A12继续失败冻结；仅自动化UI自有子项，不外推真人、第三方ROM或生产。依据：[修复记录](../../runs/2026-11-14-Stale复核审计修复.md)。
 
+- **源侧字段过滤仍须保留语义来源（2026-11-14，A14既存原件）**：对window/activity dump非锚定匹配mRotation或mWindowingMode会选中多个嵌套历史配置，多条打印条件还会重复同一行；将display信息压成无来源数字又会丢失base/override/current区别。A14保存材料因此仍为rotation ambiguous，离线锚定减少噪声也未消除已丢来源的0/1冲突。不能删除冲突或推造scope来宣布姿态已知；保留原NOT_READY，按下一实际动作所需证据核定最小新来源，不为整理材料补采。依据：[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#a14只读检查完成但未就绪)。
+
 - **启动请求与token就绪分开（2026-11-13，源码/离线）**：适用于本地台架启动gateway后从私有偏好文件读取凭据。Activity/服务命令返回只说明请求已提交；现应用TokenStore同步commit完成后才把token交给McpServer，后者才开放health。因此复用原forward和有界health正例作为一次敏感读取前置，不增加敏感重读、固定延时或新权限。源码核定与启动顺序回归见[人控轮后的核定](../../runs/2026-11-13-人控允许台架离线准备.md#失败后的源码核定)。A07只有敏感读取非零退出的证据，不能据该顺序缺口断言它必因时序，也不能把离线修复称为真实故障已解决。
 
 - **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](../../runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
