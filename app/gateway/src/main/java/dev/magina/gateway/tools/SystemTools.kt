@@ -257,17 +257,50 @@ object SystemTools {
         pkg: String,
         acceptableActivities: List<String>,
         timeoutMs: Long,
+    ): Boolean = waitForegroundLanding(pkg, acceptableActivities, timeoutMs, null)
+
+    internal fun waitForegroundLanding(
+        pkg: String,
+        acceptableActivities: List<String>,
+        timeoutMs: Long,
+        observation: IntentSendObservation?,
     ): Boolean {
-        val a11y = GatewayA11yService.instance ?: return false
-        val start = SystemClock.elapsedRealtime()
-        while (SystemClock.elapsedRealtime() - start < timeoutMs) {
-            if (isAcceptableLanding(
-                    a11y.foregroundPackage(), a11y.foregroundActivity(), pkg, acceptableActivities,
-                )
-            ) return true
-            SystemClock.sleep(200)
+        val a11y = GatewayA11yService.instance
+        return pollForegroundLanding(
+            timeoutMs = timeoutMs,
+            matches = a11y?.let { service -> {
+                isAcceptableLanding(service.foregroundPackage(), service.foregroundActivity(), pkg, acceptableActivities)
+            } },
+            clock = SystemClock::elapsedRealtime,
+            sleep = SystemClock::sleep,
+            observation = observation,
+        )
+    }
+}
+
+/** 原前台轮询的可测试边界；研究时钟/写入失败不参与实际判定。checks 仅计已完成的读取。 */
+internal fun pollForegroundLanding(
+    timeoutMs: Long,
+    matches: (() -> Boolean)?,
+    clock: () -> Long,
+    sleep: (Long) -> Unit,
+    observation: IntentSendObservation? = null,
+): Boolean {
+    if (matches == null) { observation?.noA11y(); return false }
+    val start = clock()
+    observation?.pollStarted(start)
+    try {
+        while (clock() - start < timeoutMs) {
+            val hit = matches()
+            observation?.checked()
+            if (hit) { observation?.pollFinished("hit"); return true }
+            sleep(200)
         }
+        observation?.pollFinished("timeout")
         return false
+    } catch (error: Throwable) {
+        observation?.pollFinished("interrupted")
+        throw error
     }
 }
 

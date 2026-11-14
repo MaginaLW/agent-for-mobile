@@ -2,6 +2,8 @@ package dev.magina.gateway.mcp
 
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.os.Process
+import dev.magina.gateway.BuildConfig
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ApprovalChannel
@@ -29,6 +31,8 @@ import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.overlay.ConfirmOverlayWindowHost
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
 import dev.magina.gateway.tools.IntentTools
+import dev.magina.gateway.tools.IntentSendObservation
+import dev.magina.gateway.tools.createIntentSendObservation
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
 import dev.magina.gateway.testing.InactiveTestControlSession
@@ -40,6 +44,7 @@ import dev.magina.gateway.testing.TestForeground
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 class ToolSpec(
     val name: String,
@@ -53,6 +58,8 @@ class ToolSpec(
 class ToolResult(val envelope: JSONObject, val imageBase64: String? = null, val imageMime: String = "image/png")
 
 object ToolRegistry {
+
+    private val intentObservationProcessInstance by lazy { UUID.randomUUID().toString() }
 
     // ---- schema 构造小工具 ----
     private fun prop(type: String, desc: String, enum: List<String>? = null): JSONObject =
@@ -331,15 +338,15 @@ object ToolRegistry {
     /**
      * 一次工具调用期间、安全门几个回调之间共享的可变状态。
      *
-     * 提出来只为把 `callInternal` 里那段 78 行的 [SafetyGate] 构造搬进 [newSafetyGate]——
-     * 原来这些是局部 `var`，闭包直接捕获；换成字段后捕获的是同一个对象，可见性与写入顺序
-     * 与之前逐字相同。**字段语义一个都没改。**
+     * [newSafetyGate] 的回调共享同一个对象。上下文复核标记在进入读取时记录，
+     * 包括读取失败的情况；标记不代表解析成功或确认前后的证据匹配。
      */
-    private class CallScope(val toolName: String, val argsFingerprint: String) {
+    internal class CallScope(val toolName: String, val argsFingerprint: String) {
         /** 进审计 note 的安全轨迹；确认、复核、重试记录失败都往这上面追加。 */
         var safetyNote: String = ""
+        var intentObservation: IntentSendObservation? = null
 
-        /** 上下文读了几次；>1 即确认后复核发生过。 */
+        /** 进入上下文读取几次；>1 即确认后复核发生过，不表示解析成功或证据匹配。 */
         var contextReads: Int = 0
         var testSession: TestControlSession = InactiveTestControlSession
         var testAttempt: TestConfirmationAttempt? = null
@@ -353,6 +360,17 @@ object ToolRegistry {
         var staleKey: String = ""
         var targetLabel: String = ""
         var inputPreview: String? = null
+
+        fun readContext(reader: () -> SafetyContext): SafetyContext {
+            contextReads += 1
+            if (contextReads > 1) safetyNote += ";context=rechecked"
+            return reader().also { resolved ->
+                if (contextReads == 1) {
+                    // policy.assess 尚未定档；沿用 fail-safe 的 I 级键，且不让复核覆盖初始键。
+                    captureApprovalScope(resolved, null)
+                }
+            }
+        }
 
         fun captureApprovalScope(context: SafetyContext, riskTier: RiskTier?) {
             if (staleKey.isNotEmpty()) return
@@ -376,8 +394,7 @@ object ToolRegistry {
     }
 
     /**
-     * 装配这一次调用的安全门。纯搬运：策略、五个回调的内容与顺序与拆分前逐字一致，
-     * 只是把捕获局部 `var` 换成读写 [CallScope] 的字段。
+     * 装配这一次调用的安全门，回调之间通过 [CallScope] 共享状态。
      */
     private fun newSafetyGate(call: CallScope): SafetyGate = SafetyGate(
         policy = SafetyPolicy(
@@ -452,15 +469,7 @@ object ToolRegistry {
             }
         },
         contextProvider = { frozenArgs ->
-            call.contextReads += 1
-            safetyContext(call.toolName, frozenArgs).also { resolved ->
-                if (call.contextReads == 1) {
-                    // 档位此刻还没算出来（policy.assess 在这之后），按同一条 fail-safe 规则先按 I 级
-                    // 定键：键只用于把"同一个语义动作的多次重试"串起来，档位在重试之间不会变。
-                    call.captureApprovalScope(resolved, null)
-                }
-                if (call.contextReads > 1) call.safetyNote += ";context=rechecked"
-            }
+            call.readContext { safetyContext(call.toolName, frozenArgs) }
         },
         onExecutionFailure = { error ->
             if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
@@ -548,12 +557,16 @@ object ToolRegistry {
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
         val call = CallScope(toolName = name, argsFingerprint = SafetyPolicy.fingerprint(args))
+        call.intentObservation = createIntentSendObservation(
+            BuildConfig.DEBUG, name, auditId, Process::myPid,
+            { intentObservationProcessInstance }, SystemClock::elapsedRealtime,
+        )
         val auditArgs = sanitizeAuditArgs(name, args)
 
         fun finish(env: JSONObject, code: String, channel: String, image: String? = null): ToolResult {
             Gateway.audit.write(
                 auditId, name, auditArgs, code, channel, SystemClock.elapsedRealtime() - start,
-                note = call.safetyNote,
+                note = call.safetyNote + call.intentObservation?.auditNote().orEmpty(),
             )
             return ToolResult(env, image)
         }
@@ -582,7 +595,7 @@ object ToolRegistry {
             val gate = newSafetyGate(call)
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
                 Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
-                val result = executeValidated(spec, frozenArgs, validatedContext)
+                val result = executeValidated(spec, frozenArgs, validatedContext, call.intentObservation)
                 runCatching { Gateway.retryGuard.recordSuccess(name, call.argsFingerprint) }
                     .onFailure { error ->
                         call.safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
@@ -737,7 +750,13 @@ object ToolRegistry {
         spec: ToolSpec,
         args: JSONObject,
         validatedContext: SafetyContext,
+        intentObservation: IntentSendObservation?,
     ): JSONObject = when (spec.name) {
+        "intent_send" -> IntentTools.intentSend(
+            args.getString("action"), args.optString("uri").ifEmpty { null },
+            args.optJSONObject("extras"), args.optString("package").ifEmpty { null },
+            args.optString("component").ifEmpty { null }, intentObservation,
+        )
         "ui_action" -> {
             val params = JSONObject()
                 .put("text", args.optString("text"))

@@ -107,12 +107,13 @@ function Get-DispatchCodexVersionContract {
     )
 
     # 这里是经证据锁定的精确 allowlist，不是 semver 范围：0.147.0 是原验证
-    # 基线；0.149.0 是官方 stable，alpha.4.1 是 2026-08-22 桌面应用实际 bundled CLI。
+    # 基线；0.149.0 是官方 stable；0.167.0-alpha.4.1 经本机帮助、固定源码与消费路径核定。
     # 未实测的 0.148/0.150、未来 patch/alpha、其他预发标签和额外诊断行一律 fail closed。
     switch -CaseSensitive ($VersionOutput) {
         'codex-cli 0.147.0' { return '0.147' }
         'codex-cli 0.149.0' { return '0.149' }
         'codex-cli 0.149.0-alpha.4.1' { return '0.149' }
+        'codex-cli 0.167.0-alpha.4.1' { return '0.167' }
         default { return $null }
     }
 }
@@ -124,6 +125,7 @@ function Select-DispatchCodexExecutableCandidate {
     # 优先级是已审过的 CLI 契约顺序，不能拿安装目录随机 hash、mtime 或枚举顺序代替。
     $supportedOrder = @(
         'codex-cli 0.149.0',
+        'codex-cli 0.167.0-alpha.4.1',
         'codex-cli 0.149.0-alpha.4.1',
         'codex-cli 0.147.0'
     )
@@ -848,6 +850,9 @@ function New-DispatchCodexLaunchSpec {
     else {
         # 0.149 已将 view_image 暴露为 stable feature；旧 0.147 residual 不再适用。
         $disabledFeatures += 'view_image'
+    }
+    if ($codexVersionContract -ceq '0.167') {
+        $disabledFeatures += 'sleep_tool'
     }
     foreach ($argument in @(
         'exec','--json','--ephemeral','--ignore-user-config','--ignore-rules','--strict-config',

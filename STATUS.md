@@ -1,12 +1,38 @@
 # 项目状态
 
-> 更新 2026-11-12（减负及脱敏记录经 PR #6–#8 合入 main，A06事实文档持续交付条款已加载；单张微信图初标完成，标准截图API不足以证明完整同代来源，S05/T-L1/P0 仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
+本阶段已按用户要求收尾，当前无待执行设备、模型或诊断轮，不需要保持USB连接、解锁或亮屏。本次仅更新文档，不新增SDK、gateway HTTP、执行器模型、截图/OCR、配置或设备操作，也不清理冻结原件。
+
+当前业务阻塞为A18的无障碍绑定前置：固定5492b82在gateway_a11y_not_ready冻结，13SDK、笔记0条；该次enabled含目标，但绑定未证实，未见helper解析漏判。原因、持续时长和现在状态未知，不称权限撤销，不改源码、延长等待或自动重绑。A18及剩余17SDK不恢复；详情和下一步见[最终收尾与后续接力](docs/runs/2026-11-14-小红书单窗口只读准备.md#最终收尾与后续接力)。
+
+已完成软件b77e210完整离线门19/19及A17独立服务快照ABSENT，A17/A18自持资源及Job收尾通过；它们不回填旧P02后代UNKNOWN。A19规则[PR #16](https://github.com/MaginaLW/agent-for-mobile/pull/16)已合main7852181并同步正式入口；[源码PR #13](https://github.com/MaginaLW/agent-for-mobile/pull/13)仍草稿，未合main或部署。A19仅覆盖有限收尾后验，不用于A18绑定就绪调查或业务重试。
+
+> 更新 2026-11-14（微信后置；A11受控R5语义PASS；A12仍失败冻结；新producer固定3a6702e完整门19/19，A13固定3773944自有Stale自动化UI链299秒PASS；PR #12/#13保持草稿，完整来源/T-L1、微信P0与R5强负例仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
+
+以下保留历史成果和未通过边界；当前接力以[最终收尾记录](docs/runs/2026-11-14-小红书单窗口只读准备.md#最终收尾与后续接力)为准，不恢复历史轮次。
+
+11-13 用户确认暂无新的失败记录或来源线索，并提出先跳过微信。本轮将微信相关的来源、布局及T-L1阻塞调查后置，保留未通过状态，不继续采图或追加该链运行；下一步只筛选不依赖微信的工作。该排期调整不把其他App、原第三方R5反例、通用来源门或P0安全验收一并视为通过，也不构成新设备许可。
+
+不依赖微信的[自有AVD自动化UI Allow子项](docs/runs/2026-11-13-人控允许台架离线准备.md#a10唯一新轮自动化ui-allow子项通过)已按新单次许可完成：固定host 1fe43f8、原2eb3e89应用/冻结双APK，发ready前唯一绑定并一次激活本轮qemu成功；卡出现后computer-use观察正确合成目标/卡，点击一次“允许本次”。250秒exit0，同次响应/唯一原audit与计数0→1匹配，自持资源/四端口收尾通过，数据清理未证。实际actor为assistant_computer_use；raw human_allow_verified=true只是原人控driver的字段，不构成真人证据，真人Allow仍未测试。A07凭据失败根因UNKNOWN，A08/A09超时继续冻结；A10不倒推旧故障唯一原因，不改Android卡原60秒或正式人控规则。该许可已消费，无待执行AVD轮，原微信P0/Stale/T-L1与R5强负例仍开放。
 
 当前全链推进受来源能力阻塞：用户已确认没有可提供的目标App源码或厂商/平台合作接口，继续使用现有微信和PA2553；不再把合作来源作为已具备的后续前置。标准API完整同代来源核定已经PR #9合入，当前无可验证的T-L1解阻路线，R5及P0/生产接线保留各自阻塞。无需继续保持USB独占、亮屏或布局；旧截图许可已消费，不重拍、不提权或自行改合同。完整目标未达成，恢复需新的可验证来源方案或明确的项目范围决定，不能以重复归档替代进展。
 
+用户随后采纳的[通用后继已完成A11两轮](docs/runs/2026-11-13-通用失败与失效验证.md#a11两独立新轮受控r5通过stale发卡前取消)：固定host a588e87、应用/driver源a035ce2及新双APK，R5真实一次正常分派、poll timeout（13次检查）、E_VERIFY_FAIL/原audit/新增唯一接收记录对应，134秒PASS。Stale在ready前一次computer-use窗口激活超时，按许可写cancel，222秒exit1；intent_send/ui_action各0、Allow点击0，未到Stale路由/卡/判据，前后计数UNKNOWN。用户补充当时存在锁屏或桌面切换，属现场报告、非唯一根因证明。两轮自持进程/四端口收尾通过、数据清理未证，许可均消费。当时只准备交互桌面就绪条件下的新Stale范围，其后A12结果见下；不改Windows设置、不重跑R5，原第三方强负例、微信P0、完整T-L1和生产接线不由本结果放行。
+
+随后A12另获一次许可并确认桌面就绪：固定74aa34e/原a035ce2双APK，窗口激活与一次实际overlay允许均成功，原Gate返回E_STALE_REF/safety、后台同实例0→0；但audit缺context=标记，257秒collect_audit失败冻结，原false标记不改，资源收尾通过。已从原件和源码定位二次上下文解析抛错会跳过旧marker写入；最小修复只补审计producer的进入事件，不改host/安全判据，见[11-14记录](docs/runs/2026-11-14-Stale复核审计修复.md)。新固定源3a6702e完整离线门19/19、922.981秒exit0，Debug653/Release451且失败/错误/跳过0；同一clean源8秒离线构建并冻结新双APK。
+
+A13获独立许可并重新确认桌面就绪后，固定clean host3773944/构建源3a6702e及新双APK完成一次自有API36 Stale链，299秒exit0。唯一窗口激活后发ready，实际Android卡一次computer-use允许，原Gate返回E_STALE_REF/safety/nonretryable；对应唯一audit含原确认与context=rechecked，后台同实例计数0→0。stale_allow_verified、stale_target_callback_zero_verified、audit_verified均true，进程/四端口收尾通过，数据保留且清理未证。实际actor=assistant_computer_use，真人未测试；许可已消费，无待执行新轮，R5未重跑，A12不恢复。通用自有子项已补齐，原微信、第三方强负例、完整来源/T-L1与生产接线仍待各自前置。
+
 按用户要求完成[阻塞处理调查并收尾](docs/runs/2026-11-12-阻塞处理调查与收尾.md)：合作来源不是唯一值得评估的方向；视觉侧建议先离线评审同一合成帧的感知方案与残余风险，R5侧先区分原产品的“未获正向验证”与后期强负向取证设计。MediaProjection、稳定性等待、shell等待回执都不能直接补齐现行门禁。本轮未改合同、代码或设备状态，不自动实施上述建议。
 
+用户随后要求“按照建议和串并联关系完成任务”。两项并行离线评审已形成：[单帧视觉](docs/runs/2026-11-12-单帧视觉离线评审.md)逐项比较八类证据关系并列出十一类反例；[R5验收范围](docs/runs/2026-11-12-R5验收范围离线评审.md)核对真实调用及现有测试路径，区分产品失败语义与强负向命题。单帧研究不能替代完整T-L1；R5较窄子项即使通过，也不关闭原第三方负例及强取证缺口。现有来源仍不能由纯离线编码补齐；完整目标继续保留，后续A01仅解除失败语义观测候选的准备依赖，见下，不是完整保证范围已全部实现。
+
+本批五份文档已完成源码关键点复核、工作树/index空白与凭据检查、提交内容双视图离线测试41/41及175个本地链接目标核对；这些是文档门，不是Android、图像或真机验收。后续用户明确批准本轮A01/A03：A03包含A02原五份文档，固定75410cf已推送并创建[草稿PR #12](https://github.com/MaginaLW/agent-for-mobile/pull/12)，head/base及未合并状态已核，不再待A02答复。P0固定源07f2a82的完整离线门19/19仅证明该候选；当前R5分支不带入其host修复祖先。
+
+A01的最小补充已落入[R5核定](docs/runs/2026-11-01-R5独立取证可行性核定.md#11-13-采纳的补充产品失败语义子项)和Mika任务4，原第三方反例/四项强来源保留，整体R5不关闭。应用固定源2eb3e89完整离线门19/19、0失败/跳过，Debug637/Release441项通过，新增专项各9项、独审无阻断。A04持续草稿规则经独立[PR #14](https://github.com/MaginaLW/agent-for-mobile/pull/14)合main dea037f并同步本入口；[源码PR #13](https://github.com/MaginaLW/agent-for-mobile/pull/13)保持草稿，不转正式、不合main。A06另获单次许可后，固定clean host e930aa6复用原冻结双APK完成自有API36三路由/审计观测子项：126秒exit0，三条响应/唯一审计行及新增note的ID/PID/进程实例/时序匹配，returned/hit、checks分别8/1/1。原A05完整链116秒失败、焦点标签匹配0及fg_elements=0仍冻结，不回填或补SDK。两轮资源收尾均不证明应用数据清理；A06不涉及普通输入/确认，也未补Android timeout/no_a11y、系统独立来源或第三方强负例。详见[记录](docs/runs/2026-11-13-R5失败语义离线观测.md#a06独立android路由审计观测子项通过)。完整视觉来源、真实P0及生产接线阻塞不变。
+
 ## 一句话现状
+
+A05后的默认关闭R5ObservationOnly入口已完成26项无SDK专项和A06真实Android合成正例，原默认UI/审计/catch/finally及Android输入未变。A06仅证明调用内正向分派/轮询/审计关联；runtime_acceptance、production_execution_grant、cleanup_proven均false，许可已消费。原控件缺失原因、完整台架及强负例不因子项通过而关闭；无当前待执行的设备轮，未来运行须重新核定具体范围与许可。
 
 减少人工介入§10原定阶段已完成；已验减负成果及后续准备经 [PR #6](https://github.com/MaginaLW/agent-for-mobile/pull/6) 合入 main `c048f5b71b5ae657cbd9e82dab652f048b1d7885`，本地/远端和文件树均已核对，完整离线门 19/19。BOOT 验收末态为 GatewayService 停止、开机恢复关闭、无障碍仍启用并绑定；这是历史末态，本轮未再读取设备。阶段结论与保留缺口见[§10.5收尾](docs/specs/2026-11-11-减少人工介入总体思路-design.md#105-本阶段收尾2026-11-12)。
 

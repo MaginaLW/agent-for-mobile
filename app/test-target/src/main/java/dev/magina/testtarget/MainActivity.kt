@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Process
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityManager
@@ -18,10 +20,14 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONObject
+import java.util.UUID
 
 /** Synthetic, offline UI. No permission, account, network, provider, or approval channel. */
 class MainActivity : Activity() {
     private lateinit var content: LinearLayout
+    private val activityInstance by lazy { UUID.randomUUID().toString() }
+    private var stalePageGeneration = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,7 +48,7 @@ class MainActivity : Activity() {
             else -> null
         }
         show(when (route) {
-            "list", "search", "conversation", "opaque", "degenerate", "ime", "ime-only" -> route
+            "list", "search", "conversation", "stale-conversation", "opaque", "degenerate", "ime", "ime-only" -> route
             else -> "invalid"
         })
     }
@@ -85,6 +91,7 @@ class MainActivity : Activity() {
                 focusState.text = "输入框焦点：${search.hasFocus()}"
             }
             "conversation", "ime" -> conversation(showIme = route == "ime")
+            "stale-conversation" -> conversation(showIme = false, recordStaleCallbacks = true)
             "ime-only" -> imeOnly()
             "opaque" -> {
                 label("下方内容使用 Canvas 绘制；子树不向无障碍暴露文字。")
@@ -98,14 +105,29 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun conversation(showIme: Boolean) {
+    private fun conversation(showIme: Boolean, recordStaleCallbacks: Boolean = false) {
         label("测试联系人甲")
         label("合成消息：列表中的同名项不能代替当前会话标题。")
         val editor = input("输入测试消息", R.id.target_composer)
         var actionCount = 0
+        val staleState = if (recordStaleCallbacks) {
+            stalePageGeneration += 1
+            JSONObject()
+                .put("schema", 1)
+                .put("process_id", Process.myPid())
+                .put("activity_instance", activityInstance)
+                .put("page_generation", stalePageGeneration)
+                .put("page_generated_elapsed_realtime_ms", SystemClock.elapsedRealtime())
+                .put("callback_count", actionCount)
+                .also(::writeStaleCallbackState)
+        } else null
         val count = label("本地发送回调次数：0", R.id.target_action_count)
         button("发送（仅本地计数）", R.id.target_send) {
             actionCount += 1
+            staleState?.let {
+                it.put("callback_count", actionCount)
+                writeStaleCallbackState(it)
+            }
             count.text = "本地发送回调次数：$actionCount"
         }
         if (showIme) {
@@ -114,6 +136,12 @@ class MainActivity : Activity() {
                 (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
                     .showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
             }
+        }
+    }
+
+    private fun writeStaleCallbackState(state: JSONObject) {
+        openFileOutput("stale-callback-state.json", MODE_PRIVATE).bufferedWriter().use {
+            it.write(state.toString())
         }
     }
 

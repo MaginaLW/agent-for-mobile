@@ -10,6 +10,25 @@
 - 有效做法：P0 复用 `Read-DispatchTraceTranscript` 解析 Codex 事件，再沿用已有调用顺序、结果数和完成时序判据；fake runner 必须产生真实大脑 schema。下方 Claude CLI 经验保留为已退役路线的历史资料，不作为当前调用指南。
 - 验证依据：本轮 13 个现有定向用例通过，包含 Codex `item.*` 到 manifest 的 Allow/Stale 闭环与 ledger、顺序、JSON/audit 等反例；源码与过滤用例在 `scripts/tests/dispatch-offline.ps1`、`scripts/tests/p0-supervised-runner-offline.ps1`。证据限离线 fake，不代表设备或真实模型验收。
 
+## 官方CLI更新与精确版本准入（2026-11-14）
+
+- 适用条件：桌面官方CLI升级后，真实dispatch在版本解析处拒绝，而DryRun仍能组装任务。当前实例是0.167.0-alpha.4.1；放在项目内的旧CLI不会被只枚举官方bin目录的resolver自动采用，不通过更改目录或绕过签名来解阻。
+- 有效做法：核本机官方签名、隔离帮助/feature列表及固定版本源码的实际配置/工具构造，再只加入被核过的精确契约；保留文件guard/hash、官方root、环境隔离和已有禁用。0.167分支额外禁用sleep_tool；不以帮助存在或关闭几个feature声称原生utilities/扩展贡献已被穷尽枚举。
+- 验证依据：既有fake CLI真实消费回归11项一次通过，覆盖新旧版本选择、隔离argv/环境、随机bearer不入argv及未知版本拒绝；实际认证、远端metadata和MCP/设备链仍另验。见[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#官方cli精确版本兼容候选)。
+
+## 动态网关配置须验证真实消费路径（2026-11-14）
+
+- 适用条件：网关配置由token同步helper动态生成，再交给Codex派单。模板可用、health和MCP ping通过，仍不能证明动态配置满足派单消费者。
+- 有效做法：复用现有模板的数值timeout=420000，让真实Set-P0GatewayConfigToken产物直接进入New-DispatchCodexLaunchSpec验证；保留消费者的正数/类型校验及token只进敏感环境。服务stop即使含“Service stopped”，非零返回且缺后验仍保留UNKNOWN，不补成全收尾。
+- 验证依据：A16/P02在模型启动前因动态配置缺timeout冻结，无搜索/OCR；真实producer→consumer回归先复现同错，最小修复后Codex定向12/12通过，后续固定b77e210完整离线门19/19、1057.875秒exit0覆盖该修复。原轮不恢复，仍无新设备或真实模型实证，见[后续核定](../../runs/2026-11-14-小红书单窗口只读准备.md#后续离线收尾核定与候选检查)。
+
+## 服务停止回执与派单后代须分别取证（2026-11-14）
+
+- 适用条件：Android16的stop-service打印“Service stopped”但exit255，或派单在模型启动前拒绝配置后只留下根进程退出结果。
+- 有效做法：先核固定命令实现。AOSP android-16.0.0_r1的runStopService收到停止接口结果1后打印该文字，仍return -1；不能套用普通exit0判据解释其语义，也不能只接受255，因为未运行/错误分支同样返回-1。现有通用SDK严格门保持，停止回执和服务不存在的独立后验分别记录；vivo当前实现及状态不能从AOSP推定。
+- 主机边界：New-DispatchCodexLaunchSpec先运行官方CLI版本探针，再校验timeout。模型0不等于没有主机子进程；旧轮缺逐探针/根Job绑定时保留UNKNOWN。新候选可复用既有Job与启动gate，在入口放行前绑定并记录ActiveProcesses归零；非零根退出与任务成功分开报告。
+- 验证依据：[本轮核定](../../runs/2026-11-14-小红书单窗口只读准备.md#后续离线收尾核定与候选检查)包含固定官方源码、原双流范围及一次无害fixture：根exit7后实际残余子进程被本轮Job收口到0。只证明该离线路径，不补旧P02收尾，也不授予新设备或业务许可。
+
 ## 执行器工具面：`--allowedTools` 不是限制，`--disallowedTools` 是手写枚举（2026-07-26 / 07-31）
 
 - **`--allowedTools` 只是免确认名单，不阻止任何工具。** 07-26 Allow 腿实锤执行器在本机跑了
