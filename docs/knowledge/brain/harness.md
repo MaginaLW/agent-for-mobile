@@ -16,6 +16,12 @@
 - 有效做法：核本机官方签名、隔离帮助/feature列表及固定版本源码的实际配置/工具构造，再只加入被核过的精确契约；保留文件guard/hash、官方root、环境隔离和已有禁用。0.167分支额外禁用sleep_tool；不以帮助存在或关闭几个feature声称原生utilities/扩展贡献已被穷尽枚举。
 - 验证依据：既有fake CLI真实消费回归11项一次通过，覆盖新旧版本选择、隔离argv/环境、随机bearer不入argv及未知版本拒绝；实际认证、远端metadata和MCP/设备链仍另验。见[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#官方cli精确版本兼容候选)。
 
+## 动态网关配置须验证真实消费路径（2026-11-14）
+
+- 适用条件：网关配置由token同步helper动态生成，再交给Codex派单。模板可用、health和MCP ping通过，仍不能证明动态配置满足派单消费者。
+- 有效做法：复用现有模板的数值timeout=420000，让真实Set-P0GatewayConfigToken产物直接进入New-DispatchCodexLaunchSpec验证；保留消费者的正数/类型校验及token只进敏感环境。服务stop即使含“Service stopped”，非零返回且缺后验仍保留UNKNOWN，不补成全收尾。
+- 验证依据：A16/P02在模型启动前因动态配置缺timeout冻结，无搜索/OCR；离线新增真实producer→consumer回归先复现同错，最小修复后Codex定向12/12通过。原轮不恢复，真机新修复及完整门未验，见[记录](../../runs/2026-11-14-小红书单窗口只读准备.md#a16p02模型启动前配置拒绝与离线修复)。
+
 ## 执行器工具面：`--allowedTools` 不是限制，`--disallowedTools` 是手写枚举（2026-07-26 / 07-31）
 
 - **`--allowedTools` 只是免确认名单，不阻止任何工具。** 07-26 Allow 腿实锤执行器在本机跑了

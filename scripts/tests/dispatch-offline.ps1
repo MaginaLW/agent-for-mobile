@@ -929,6 +929,34 @@ public static class Program {
         }
     }
 
+    Test-Case 'P0配置producer生成的网关配置可被Codex真实消费者接受' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-device-provision.ps1')
+        $configPath = Join-Path $SentinelDir 'provisioned-gateway.json'
+        $session = [pscustomobject]@{
+            ConfigPath = $configPath
+            PrivateTemporaryFiles = [Collections.Generic.List[string]]::new()
+            CleanupIssues = [Collections.Generic.List[string]]::new()
+        }
+        Set-P0GatewayConfigToken -Session $session -Token $testBearer
+        $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
+            -ScriptsRoot (Join-Path $RepoRoot 'scripts')
+        $spec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+            -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1'
+        try {
+            Assert-True ($spec.Arguments -contains 'mcp_servers.gateway.tool_timeout_sec=420') `
+                'P0配置的工具超时未沿用现有模板的420秒。'
+            Assert-NotMatches ($spec.Arguments -join "`n") ([regex]::Escape($testBearer))
+        }
+        finally {
+            foreach ($key in @($spec.SensitiveEnvironment.Keys)) {
+                $spec.SensitiveEnvironment[$key] = $null
+                [void]$spec.SensitiveEnvironment.Remove($key)
+            }
+            Remove-Item -LiteralPath $configPath -Force
+        }
+    }
+
     Test-Case 'Codex MCP 配置拒绝顶层与字段的单元素数组降维' {
         $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
             -ScriptsRoot (Join-Path $RepoRoot 'scripts')

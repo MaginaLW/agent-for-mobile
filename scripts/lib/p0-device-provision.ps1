@@ -198,6 +198,7 @@ function Set-P0GatewayConfigToken {
             gateway = [ordered]@{
                 type = 'http'
                 url = 'http://127.0.0.1:8848/mcp'
+                timeout = 420000
                 headers = [ordered]@{ Authorization = "Bearer $Token" }
             }
         }

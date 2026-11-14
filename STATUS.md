@@ -1,6 +1,6 @@
 # 项目状态
 
-11-14 小红书A15已获一次许可并执行：固定d294e56/软件1886d15/在机6978656，22SDK、15.525秒，在机身份、前台小红书及一次公开health通过；服务记录新增caller后缀未被私有解析器接受，原轮FROZEN。token/config/模型/搜索/OCR均未发生；转发/server/5037/lease已释放，但已启动服务未发stop、恢复未证，不能称全部收尾。P02仅离线修该解析缺陷，实际原件与必要拒绝回归7/7通过，并准备只在新鲜同Record/PID时接管A15残余服务；尚未新运行。主机CLI修复的1886d15完整门19/19复用，原A14/A15不改判，见[记录](docs/runs/2026-11-14-小红书单窗口只读准备.md)。微信及原R5/T-L1/P0保持后置/未通过；用户已获知可释放现场及必要时本人Stop网关，实际是否Stop未核。
+11-14 用户A16采纳日常公开只读持续条款并批准P02；独立[规则PR #15](https://github.com/MaginaLW/agent-for-mobile/pull/15)已普通合main dbdcf6d，源码PR #13仍留草稿。固定host8a90db2/软件1886d15/在机6978656的P02已执行并冻结：服务解析及A15同实例接管、health/token配置/MCP ping通过，但dispatch在模型启动前因配置producer缺少正数timeout拒绝。28SDK、23.387秒；累计两轮50SDK、38.912秒、模型/搜索/阅读/OCR均0，任务未完成。配置/转发/server/5037/lease收尾通过；服务stop有Android停止确认但exit255、无后验，服务恢复和派单后代归零仍未证。已仅离线补配置timeout，真实producer→consumer缺陷先复现、修后定向12/12；旧1886d15的19/19不外推为新修复完整门。两轮及一次dispatch均已消费，不补SDK或第三轮，后续先解决服务状态与新范围，见[记录](docs/runs/2026-11-14-小红书单窗口只读准备.md#a16p02模型启动前配置拒绝与离线修复)。用户可正常使用平板；微信及原R5/T-L1/P0边界保持。
 
 > 更新 2026-11-14（微信后置；A11受控R5语义PASS；A12仍失败冻结；新producer固定3a6702e完整门19/19，A13固定3773944自有Stale自动化UI链299秒PASS；PR #12/#13保持草稿，完整来源/T-L1、微信P0与R5强负例仍开放）。本页只写现在在哪、卡在哪、下一步；待办、需要用户的事项和有效决定见 [backlog](docs/backlog.md)，过程证据见 docs/runs/。精简前全文用 git show aa126dd:STATUS.md 查看，更早历史见[状态归档](docs/status-archive.md)。
 
