@@ -978,7 +978,7 @@ if ($scenario -ne 'missing_ledger') {
             $legacyName
         }
         'ledger_wrong_brain' {
-            $wrongName = "$traceStamp-$Slug-$Executor-claude-leg1.jsonl"
+            $wrongName = "$traceStamp-$Slug-$Executor-other-leg1.jsonl"
             Copy-Item -LiteralPath $tracePath -Destination (Join-Path $traceDir $wrongName)
             $wrongName
         }
@@ -1187,9 +1187,9 @@ try {
         Assert-True ($evidenceAfter -eq $evidenceBefore) 'DryRun 写入了 evidence。'
         $retired = & $PwshPath -NoProfile -File $SourceRunner -Legs Allow -Brain claude `
             -AdbPath 'definitely-missing-adb' -DispatchPath 'definitely-missing-dispatch' 2>&1
-        Assert-True ($LASTEXITCODE -ne 0) '监督式 runner 接受了退役 Claude 请求。'
-        Assert-Contains ($retired -join "`n") 'Claude 执行已退役'
-        Assert-True (-not (Test-Path -LiteralPath $lockPath)) '退役 Claude 请求创建了设备锁。'
+        Assert-True ($LASTEXITCODE -ne 0) '监督式 runner 接受了非 codex brain 请求。'
+        Assert-Contains ($retired -join "`n") 'Brain'
+        Assert-True (-not (Test-Path -LiteralPath $lockPath)) '非 codex brain 请求创建了设备锁。'
     }
 
     Test-Case 'health probe 兼容 PowerShell 7.0 且 runner 使用跨 worktree 主机级租约' {
@@ -1801,10 +1801,10 @@ try {
             '读取返回时已到原截止时间的 allowed，不得保存为通过或延长确认窗口。'
     }
 
-    Test-Case 'Claude ToolSearch 事件不得冒充 Codex trace' {
+    Test-Case '非 Codex 格式的 ToolSearch 事件不得冒充 Codex trace' {
         $fixture = New-Fixture trace_tool_search
         $result = Invoke-FixtureRunner $fixture @('Allow')
-        Assert-True ($result.ExitCode -ne 0) "旧 Claude 事件被当成 Codex 接受：`n$($result.Text)"
+        Assert-True ($result.ExitCode -ne 0) "非 Codex 事件被当成 Codex 接受：`n$($result.Text)"
         Assert-Contains $result.Text 'trace'
     }
 
@@ -2412,7 +2412,7 @@ PODENY-DCA2222F6441|72|2117|472|32
         # 真写一行看看：成本列**留空而不是填 0**——token 确实烧了，只是没机会汇报，填 0 是假数据。
         $ledger = Join-Path ([IO.Path]::GetTempPath()) ("agent-mobile-ledger-" + [guid]::NewGuid().ToString('N') + '.csv')
         try {
-            Add-P0LedgerRow -LedgerPath $ledger -Slug 'p0-safety-deny-x' -Leg 1 -Brain 'claude' -Model '' `
+            Add-P0LedgerRow -LedgerPath $ledger -Slug 'p0-safety-deny-x' -Leg 1 -Brain 'codex' -Model '' `
                 -Result 'aborted' -Note 'runner 提前终止 | expected=denied observed=allowed' -FailReason 'decision-mismatch'
             $rows = @(Import-Csv -LiteralPath $ledger)
             Assert-True ($rows.Count -eq 1) '应恰好写入一行。'

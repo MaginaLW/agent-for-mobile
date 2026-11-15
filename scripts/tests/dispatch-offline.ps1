@@ -23,7 +23,7 @@ if (-not (Test-Path -LiteralPath $SourceDispatchPath -PathType Leaf)) {
 
 $FakeBin = Join-Path $TestRoot 'bin'
 $SentinelDir = Join-Path $TestRoot 'sentinels'
-$ExternalTools = @('adb', 'npx', 'claude', 'codex')
+$ExternalTools = @('adb', 'npx', 'codex')
 $script:Passed = 0
 $script:Failed = 0
 
@@ -331,7 +331,7 @@ function Test-Case {
 
 function Invoke-TranscriptFixture {
     param(
-        [Parameter(Mandatory)][ValidateSet('claude','codex')][string]$Brain,
+        [Parameter(Mandatory)][ValidateSet('codex')][string]$Brain,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines,
         [switch]$AllowPartial
     )
@@ -438,7 +438,7 @@ exit /b 97
 '@
     Set-Content -LiteralPath (Join-Path $FakeBin 'adb.cmd') -Value $fakeAdb -Encoding ascii
 
-    foreach ($tool in @('npx', 'claude', 'codex')) {
+    foreach ($tool in @('npx', 'codex')) {
         $fakeTool = @"
 @echo off
 >>"%DISPATCH_TEST_SENTINEL_DIR%\$tool-called.txt" echo %*
@@ -446,14 +446,6 @@ exit /b 97
 "@
         Set-Content -LiteralPath (Join-Path $FakeBin "$tool.cmd") -Value $fakeTool -Encoding ascii
     }
-    $fakeClaude = @'
-@echo off
->>"%DISPATCH_TEST_SENTINEL_DIR%\claude-called.txt" echo %*
->"%DISPATCH_TEST_SENTINEL_DIR%\claude-lock-env.txt" echo [%AGENT_MOBILE_DEVICE_LOCK_LEASE%]
-echo {"type":"result","subtype":"success","result":"\u7ed3\u679c\uff1a\u6210\u529f","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1,"total_cost_usd":0}
-exit /b 0
-'@
-    Set-Content -LiteralPath (Join-Path $FakeBin 'claude.cmd') -Value $fakeClaude -Encoding ascii
 
     # 真正启动一个完全离线的 fake codex.exe，锁住 argv/stdin/env/JSONL/exit-code 契约；
     # 生产 resolver 没有测试后门，只有 TEMP fixture 的调用点被显式注入 executable+version override。
@@ -625,18 +617,6 @@ public static class Program {
         $codexSpecNeedle,
         "$codexSpecNeedle -CodexExecutableOverride '$($fakeCodexExe -replace "'","''")' " +
             "-CodexVersionOverride 'codex-cli 0.149.0'"
-    )
-    # 仅 TEMP fixture 暴露一个可执行文件路径 seam，用于证明 .cmd/.bat 的 executable
-    # 自身含 shell 元字符时也在 CreateProcess 前 fail closed；生产脚本没有该后门。
-    $claudeExecutableNeedle = '$brainExecutable = [string]$claudeBin.Source'
-    Assert-True $fixtureDispatchSource.Contains($claudeExecutableNeedle, [StringComparison]::Ordinal) `
-        '测试设施错误：无法定位 Claude executable seam。'
-    $fixtureDispatchSource = $fixtureDispatchSource.Replace(
-        $claudeExecutableNeedle,
-        $claudeExecutableNeedle + "`n" +
-            '        if (-not [string]::IsNullOrWhiteSpace($env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE)) {' + "`n" +
-            '            $brainExecutable = [string]$env:DISPATCH_TEST_CLAUDE_EXECUTABLE_OVERRIDE' + "`n" +
-            '        }'
     )
     $preserveNeedle = '$preserveEnvironmentNames = @()'
     Assert-True $fixtureDispatchSource.Contains($preserveNeedle, [StringComparison]::Ordinal) `
@@ -1068,70 +1048,21 @@ public static class Program {
         }
     }
 
-    Test-Case 'Claude gateway 结果同样要求 boolean ok=true' {
-        $prefix = @(
-            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"mcp__gateway__foreground_app","input":{}}]}}',
-            '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":[{"type":"text","text":"{\"ok\":false}"}],"is_error":false}]}}',
-            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1,"total_cost_usd":0}'
-        )
-        $transcript = Invoke-TranscriptFixture -Brain claude -Lines $prefix
-        Assert-True ($transcript.Calls.Count -eq 1 -and $transcript.Calls[0].Outcome -ceq 'failed') `
-            'Claude gateway 的 ok=false 被当作成功调用。'
-
-        $badBoolean = @($prefix)
-        foreach ($badIsError in @('"false"','[false]')) {
-            $badBoolean[1] = "{`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"call-1`",`"content`":[{`"type`":`"text`",`"text`":`"{\`"ok\`":true}`"}],`"is_error`":$badIsError}]}}"
-            $rejected = $false
-            try { $null = Invoke-TranscriptFixture -Brain claude -Lines $badBoolean }
-            catch { $rejected = $true }
-            Assert-True $rejected "Claude tool_result 的非 boolean is_error 被接受：$badIsError"
-        }
-
-        $badCost = @($prefix)
-        $badCost[2] = '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"total_cost_usd":[0]}'
-        $costRejected = $false
-        try { $null = Invoke-TranscriptFixture -Brain claude -Lines $badCost }
-        catch { $costRejected = $true }
-        Assert-True $costRejected 'Claude total_cost_usd 单元素数组被降维接受。'
-
-        foreach ($badTerminal in @(
-            '{"type":"result","subtype":"success","result":"结果：成功","num_turns":1,"total_cost_usd":0}',
-            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"total_cost_usd":0}',
-            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"total_cost_usd":0}',
-            '{"type":"result","subtype":"success","result":"结果：成功","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0},"num_turns":1}'
-        )) {
-            $missingAccounting = @($prefix)
-            $missingAccounting[2] = $badTerminal
-            $rejected = $false
-            try { $null = Invoke-TranscriptFixture -Brain claude -Lines $missingAccounting }
-            catch { $rejected = $true }
-            Assert-True $rejected "Claude success 缺少完整 usage/num_turns/total_cost_usd 却被接受：$badTerminal"
-        }
-
-        $failureWithoutAccounting = @($prefix)
-        $failureWithoutAccounting[2] = `
-            '{"type":"result","subtype":"error","result":"结果：失败"}'
-        $failureTranscript = Invoke-TranscriptFixture -Brain claude -Lines $failureWithoutAccounting
-        Assert-True (-not $failureTranscript.Terminal.Success -and
-            $null -eq $failureTranscript.Usage.InputTokens -and $null -eq $failureTranscript.CostUsd) `
-            'Claude 失败终态被误要求 success-only 计量字段。'
-    }
-
-    Test-Case '退役 Claude 新请求在任何工具和仓库副作用前拒绝' {
+    Test-Case '非 codex brain 新请求在任何工具和仓库副作用前拒绝' {
         $effects = Get-RepoEffectState
         foreach ($preview in @($false, $true)) {
             $arguments = @('-Task','offline retired brain','-Slug','offline-retired',
                 '-Brain','claude','-Executor','gateway','-Model','sonnet&echo must-not-execute')
             if ($preview) { $arguments += '-DryRun' }
             $result = Invoke-Dispatch $arguments
-            Assert-True ($result.ExitCode -ne 0) '退役 Claude 新请求被接受。'
-            Assert-Contains $result.Text 'Claude 执行已退役'
+            Assert-True ($result.ExitCode -ne 0) '非 codex brain 新请求被接受。'
+            Assert-Matches $result.Text 'Brain'
             Assert-NoExternalTools $result
             Assert-NoRepoEffects $effects
         }
     }
 
-    Test-Case '退役 Claude 与缺少 brain 的旧 gateway 暂停件拒绝恢复且不消费' {
+    Test-Case '非 codex 与缺少 brain 的旧 gateway 暂停件拒绝恢复且不消费' {
         foreach ($brainLine in @('brain: claude', '')) {
             $retiredPause = Join-Path $TestRoot 'retired-gateway.pause.md'
             $raw = "slug: offline-retired-confirm`nleg: 1`nexecutor: gateway`n$brainLine`n---`n[AWAIT_CONFIRM]`nretired-body-must-not-leak"
@@ -1141,8 +1072,8 @@ public static class Program {
                 $arguments = @('-Confirm',$retiredPause,'-Brain','codex')
                 if ($preview) { $arguments += '-DryRun' }
                 $result = Invoke-Dispatch $arguments -InputText 'RESUME'
-                Assert-True ($result.ExitCode -ne 0) '旧 Claude 暂停件被恢复或改投 Codex。'
-                Assert-Contains $result.Text 'Claude 执行已退役'
+                Assert-True ($result.ExitCode -ne 0) '非 codex 暂停件被恢复或改投 Codex。'
+                Assert-Contains $result.Text '只接受 codex'
                 Assert-NotMatches $result.Text 'retired-body-must-not-leak'
                 Assert-True ([IO.File]::ReadAllText($retiredPause) -ceq $raw) '退役拒绝路径消费或重写了旧暂停件。'
                 Assert-NoExternalTools $result
@@ -1268,7 +1199,7 @@ public static class Program {
             foreach ($required in @('exec','--json','--ephemeral','--ignore-user-config','--strict-config','read-only')) {
                 Assert-Contains $argv $required
             }
-            Assert-NotMatches $argv '(?m)^--model\s*$|(?m)^sonnet\s*$|fixture-bearer-value-must-never-leak'
+            Assert-NotMatches $argv '(?m)^--model\s*$|fixture-bearer-value-must-never-leak'
             Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-cwd-empty.txt') -Raw).Trim() -ceq 'true') `
                 'Codex 没有在 repo 外的空 workspace 启动。'
             Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-secret-ok.txt') -Raw).Trim() -ceq 'true') `
@@ -1326,38 +1257,6 @@ public static class Program {
             Assert-NoExternalTools $result
             Assert-NoRepoEffects $before
         }
-    }
-
-    Test-Case 'MaxBudgetUsd 非正值与非有限值在任何外部调用前拒绝' {
-        foreach ($badBudget in @('0','-1','NaN','Infinity','-Infinity')) {
-            $result = Invoke-Dispatch @(
-                '-Task','offline budget guard','-Slug','offline-budget','-MaxBudgetUsd',$badBudget
-            )
-            Assert-True ($result.ExitCode -ne 0) "MaxBudgetUsd=$badBudget 不得进入预检或派单。"
-            Assert-Matches $result.Text 'MaxBudgetUsd|大于 0|有限数字'
-            Assert-NoExternalTools $result
-            Assert-NoRepoEffects $before
-        }
-    }
-
-    Test-Case '执行器拒绝名单覆盖本机 shell、派生执行体与汇报类工具' {
-        $src = Get-Content -LiteralPath $SourceDispatchPath -Raw -Encoding utf8
-        # 两个 shell 必须成对出现：本机是 Windows，只禁 Bash 等于没禁
-        # （2026-07-31 复查发现 PowerShell 一直漏在名单外）。
-        foreach ($shell in @('Bash', 'PowerShell')) {
-            Assert-Matches $src "'$shell'"
-        }
-        # 派生执行体会绕开本名单本身。
-        foreach ($spawner in @('Task', 'Agent', 'Workflow')) {
-            Assert-Matches $src "'$spawner'"
-        }
-        # 汇报/交互类：对驱动手机无用，一旦出现就会被 trace 审计判成越权，
-        # 在真人已点确认、危险动作已执行之后把整腿判死（2026-07-31 ReportFindings 实锤）。
-        foreach ($noise in @('ReportFindings', 'AskUserQuestion', 'TodoWrite')) {
-            Assert-Matches $src "'$noise'"
-        }
-        # ToolSearch 必须**不在**拒绝名单里：延迟注册的 MCP 工具要靠它加载 schema。
-        Assert-NotMatches $src "'ToolSearch'"
     }
 
     Test-Case '终态判据容忍 markdown 强调，且失败绝不落成成功' {
@@ -2041,7 +1940,7 @@ session_id: offline
         Assert-Contains $result.Text '预检失败'
         Assert-True (@($result.ToolCalls | Where-Object { $_ -match '^adb:' }).Count -eq 1) `
             '程序化 RESUME 应只能进入 fixture 的预检。'
-        Assert-True (@($result.ToolCalls | Where-Object { $_ -match '^(claude|codex|npx):' }).Count -eq 0) `
+        Assert-True (@($result.ToolCalls | Where-Object { $_ -match '^(codex|npx):' }).Count -eq 0) `
             '预检失败不应启动大脑。'
         . (Join-Path $RepoRoot 'scripts\lib\dispatch-pause.ps1')
         $consumed = Read-DispatchPauseDocument -Text ([IO.File]::ReadAllText($gatewayPause))

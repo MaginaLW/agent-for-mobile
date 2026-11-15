@@ -22,8 +22,7 @@
 
 - `dispatch.ps1 -Brain codex -Executor gateway` 走 ChatGPT 订阅通道，CLI JSONL 提供 token usage，
   但不提供可写入台账的单次 API 美元成本；因此 `cost_usd` 留空。
-- `-MaxBudgetUsd` 只传给 Claude CLI，且只接受大于 0 的有限数字。Codex 当前没有等价的美元硬上限，DryRun、提示词与结果摘要必须显示
-  “订阅通道/无 API 硬上限”，不能把默认 `$2` 冒充为 Codex 成本护栏。
+- Codex 没有美元硬上限，DryRun、提示词与结果摘要显示“订阅通道/无 API 硬上限”。原只服务 Claude 的 `-MaxBudgetUsd` 已于 2026-11-15 随 Claude 分支删除。
 - Codex 仍受 1–60 分钟墙钟、整棵 Job 进程树归零，以及 stdout 16 MiB / stderr 4 MiB 的机械上限约束。
 
 ## 结论（M0 发现 #12，可行性级别）
