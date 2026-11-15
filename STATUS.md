@@ -20,7 +20,11 @@
 
 1. 在平板上重新打开网关无障碍服务（必要时先关再开或重启），确认已绑定，再派一次小红书只读任务。
 2. 跑通后，用自研网关把 M0 的 5 个验收任务都跑一遍，和 M0 的 4.5/5 对比（M1 的验收标准）。
-3. 草稿 PR [#13](https://github.com/MaginaLW/agent-for-mobile/pull/13)（Codex 派单兼容与网关配置修复，派单要用）待决定是否合入 main；[#12](https://github.com/MaginaLW/agent-for-mobile/pull/12)（P0 取证修复）同样待定。
+3. 三个草稿 PR 待决定是否合入 main：[#13](https://github.com/MaginaLW/agent-for-mobile/pull/13)（Codex 派单兼容与网关配置修复，派单要用）→ [#17](https://github.com/MaginaLW/agent-for-mobile/pull/17)（过度建设精简，叠在 #13 之上，建议在 #13 之后合）；[#12](https://github.com/MaginaLW/agent-for-mobile/pull/12)（P0 取证修复）独立待定。
+
+## 2026-11-15 精简
+
+按用户要求处理过度建设（[PR #17](https://github.com/MaginaLW/agent-for-mobile/pull/17)）：删除平板双窗研究栈、M1 spike 探针和派单中已退役的 Claude 分支；STATUS/backlog/README/AGENTS 压缩，历史过程记录移出主树。跟踪文件 484 → 240，完整离线门 19 项约 15 分钟 → 9 项约 3.5 分钟，9/9 通过；未做真机验证。
 
 ## 已放弃或暂停
 

@@ -342,3 +342,9 @@ II 级点击。**接手他人写的待办，第一步是让它落到具体文件
 （子进程版本须等于父进程版本；严格校验单行 JSON、重复键、类型与计数等式；真实 skip 单独拒绝并提示所需能力；
 拒绝缺失/重复分片、零用例），`scripts/tests/check-summary-offline.ps1` 直接调用生产函数，不在 fixture 里另写一份 consumer。
 generic reader 与 helper 专属 strict reader 的数值规则不同（如合法的 `5.0` 阈值），按各自字段合同验证。
+
+## `.checks/` 会无界增长，按轮清理（2026-11-15）
+
+- **现象**：每轮运行把原件、AVD 副本、候选 worktree 都留在 `.checks/<轮次>/`，到 11-15 累计约 77 GB，其中单轮最多 23 GB。
+- **做法**：运行结论写进文档后，删除对应轮次目录；保留 `gradle-home`、`android-user-home`、`t` 以及仍在使用的驱动脚本目录。
+- **坑**：Codex 沙箱账户创建的 `tmp/hsperfdata_*` 目录对当前用户只读，普通删除报 Access denied；不改 ACL 或提权，留给用户以管理员身份处理。

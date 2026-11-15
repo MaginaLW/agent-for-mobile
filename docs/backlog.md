@@ -10,7 +10,7 @@
 | 1 | 让网关无障碍服务在 PA2553 上稳定绑定 | 派单前置检查不再报 `gateway_a11y_not_ready`；若 vivo 反复解绑，把规律和解法写进 [vivo 记录](knowledge/android/vivo-originos.md) |
 | 2 | 小红书只读任务跑通 | 经 `dispatch.ps1` 搜索并总结 5 条公开笔记，结果和台账行落盘 |
 | 3 | 自研网关跑完 M0 五任务 | 每个任务记录成败/步数/耗时/token；成功率 ≥ M0（4.5/5）即 M1 验收 |
-| 4 | 处理草稿 PR #13、#12 | 决定合入或关闭；合入前跑一次 `scripts/check.ps1` |
+| 4 | 处理草稿 PR #13、#17、#12 | 决定合入或关闭；#17 叠在 #13 之上，先处理 #13；合入前跑一次 `scripts/check.ps1` |
 | 5 | P0 真人确认 | 真机上由真人完成 Allow / Deny / Stale 各一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
 
 ## 2. 按需再做（有具体任务需要时才排）
@@ -20,6 +20,7 @@
 - 分享落地 activity 白名单：必须来自真机观测，没有观测就保持空。
 - 微信相关任务（发消息、发图）与平板双窗适配：已后置；若重启，先读 [平板知识](knowledge/android/tablet.md) 与 [微信知识](knowledge/apps/wechat.md)，从需要的最小能力做起，不恢复已删除的研究栈。
 - M3：宏系统「教一遍」、语音/分享入口、App 技能包。
+- 剩余可选精简：dispatch.ps1 的 mobile executor 现在只剩 DryRun 配置预览，可连同 configs/mobile-mcp.json 一起删；-Brain claude 现只报 PowerShell 英文参数错误，如需中文提示可加 ValidateSet 错误信息。
 
 ## 3. 有效决定
 
