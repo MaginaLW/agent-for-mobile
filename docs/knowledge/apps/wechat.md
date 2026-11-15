@@ -1,6 +1,6 @@
 # 微信（com.tencent.mm）
 
-> 来源：M0 起实测（vivo V2352A / Android 16，2026-07-16 起，各条注日期）。原始记录：[../../runs/2026-07-16-M0.md](../../runs/2026-07-16-M0.md)、[../../runs/2026-07-17-M1-spike.md](../../runs/2026-07-17-M1-spike.md)。
+> 来源：M0 起实测（vivo V2352A / Android 16，2026-07-16 起，各条注日期）。原始记录：[../../runs/2026-07-16-M0.md](../../runs/2026-07-16-M0.md)、[../../runs/2026-07-17-M1-spike.md](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-07-17-M1-spike.md)。
 
 ## 感知通道
 

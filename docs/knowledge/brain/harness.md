@@ -139,7 +139,7 @@ claude --mcp-config configs/mobile-mcp.json        # 交互式单跑
 
 ## 工序协调：A 直接问答，C 隔离验收（2026-09-08）
 
-现行协议见 [backlog §1–7](../../backlog.md)；旧 A/B/C 三会话协议见 [历史归档](../../backlog-archive.md)
+现行协议见 [backlog §1–7](../../backlog.md)；旧 A/B/C 三会话协议见 [历史归档](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/backlog-archive.md)
 （历史 B 道记录能证明用户作过决定，不要求另开 B 会话）。
 
 - **A 负责协调、离线开发与直接问答**；不可替代的用户选择由 A 收敛并取得真实答复，保留来源；子任务不能替用户授权。
@@ -269,7 +269,7 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 ## C1b：环境、全局 lease 与发布顺序都属于证据（2026-08-28）
 
 > 旧 C1b 主机证据链已于 2026-10-09 退役，现行入口 `scripts/run-tablet-c1b.ps1`，规程见
-> [C1b 规程](../../runbooks/T-L1-tablet-c1b.md)。旧主机链细节用 `git show 7a3b069:docs/runbooks/T-L1-tablet-layout-c1b-v1.md` 查看。下面是可复用教训，不恢复旧主机门。
+> [C1b 规程](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runbooks/T-L1-tablet-c1b.md)。旧主机链细节用 `git show 7a3b069:docs/runbooks/T-L1-tablet-layout-c1b-v1.md` 查看。下面是可复用教训，不恢复旧主机门。
 
 - **success 最后发布**：旧链将验证与 cleanup 一起纳入最终结果；读任何 runner 的成功摘要前，核对它实际覆盖的验证与清理，不由产物存在推断没有残留。
 - **产物存在不等于完成验证**（2026-08-29）：Gradle 出了 APK 不代表采集通过；现行 runner 还要验证 observation 与本次 HEAD、APK、T0、run_id 的绑定。
@@ -288,59 +288,59 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 - **适用条件**：包装现行 C1b runner，或分析 T0 写后 absent/session_not_found。原 runner 把自己关闭生产 lease 的返回值纳入成功条件；父进程一直持锁、子进程 join 时，子进程不能取得最后关闭成功，不能凭“都用了锁”认定组合正确。
 - **有效做法**：包装器先用真实 helper 做零设备的父子生命周期验证。本轮就位父锁释放后，子 runner 无继承 lease、独立取得原生产锁；如实保留这段锁间隙，由子 runner 对竞争和身份变化失败关闭。HostSmoke 仅验证宿主契约，不代替设备验收。
 - **会话判读**：provider 忽略 start 返回再 complete pending，可能丢掉 session_busy；controller 已记 consumed、尚未发布 active 时 begin 抛异常，也能使 rejectStart/status/abort 最终只有 session_not_found。原始 CLI 写入结束或 abort absent 都不证明接收字节完整、会话从未存在或清理完成。
-- **验证依据与限制**：[本轮核定](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)保存真实 helper HostSmoke，以及现有编译 controller/pending 的正常、busy、begin 异常三条零设备复现；只有后两条同真机签名，实际真机根因未定。真实 T0 的 factory 接受与 host stdin 等字节送达，只覆盖本地边界，未覆盖 ADB/adbd/provider 接收。
+- **验证依据与限制**：[本轮核定](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)保存真实 helper HostSmoke，以及现有编译 controller/pending 的正常、busy、begin 异常三条零设备复现；只有后两条同真机签名，实际真机根因未定。真实 T0 的 factory 接受与 host stdin 等字节送达，只覆盖本地边界，未覆盖 ADB/adbd/provider 接收。
 
-- **信息保留修复（11-01，离线）**：最近一次精确 key 的 ABSENT 启动拒绝仅用单槽保留，status/capture/result/abort 仍优先同 key 的实际 active/终态；下一 start、rejectStart、shutdown 清旧槽，不缓存成功或消费 busy 身份。有效 T0 后 begin 的 Exception 单独收口 failed/start_failed（gen0/empty tuple），Error 不吞；provider/pending 不改。两个旧实现真实红例分别定位 busy 原因丢失和 begin 异常丢失；最终候选及验证见[离线修复](../../runs/2026-11-01-C1b启动拒绝信息保留离线修复.md)，只证明这些路径可观测，不证明 51fe 真机根因。
+- **信息保留修复（11-01，离线）**：最近一次精确 key 的 ABSENT 启动拒绝仅用单槽保留，status/capture/result/abort 仍优先同 key 的实际 active/终态；下一 start、rejectStart、shutdown 清旧槽，不缓存成功或消费 busy 身份。有效 T0 后 begin 的 Exception 单独收口 failed/start_failed（gen0/empty tuple），Error 不吞；provider/pending 不改。两个旧实现真实红例分别定位 busy 原因丢失和 begin 异常丢失；最终候选及验证见[离线修复](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b启动拒绝信息保留离线修复.md)，只证明这些路径可观测，不证明 51fe 真机根因。
 
 ### C1b 原签名环境：先核元数据，再按精确范围消费凭据（2026-11-01）
 
-- **源码 proof 与 Git 字节（11-02，离线核验）**：构建 proof 的 `scanned_sources` / `scanned_build_inputs` 哈希来自检出文件原字节，不能直接与规范化 Git blob 哈希比较。部署交接首次在 LF blob 比较失败；定位到 `core.autocrlf=true` 后，以 `git cat-file --filters --path=<path> <固定SHA>:<path>` 按仓库检出规则读取，24 项全部匹配；另记录 consumer 的 blob/checkout 两种哈希。只在确认差异来自现有检出规则后使用，不任意归一化 proof、不改已签名输入，见[部署准备](../../runs/2026-11-02-诊断候选部署交接准备.md)。
-  11-04 补记：两个消费者原 LF 与 Git blob 相同，但冻结交接要求 CRLF。仅从上述既有过滤结果取得与历史 checkout 哈希严格匹配的字节后，Git stat 缓存仍因尺寸改变报 M，diff 却为空；普通 `--refresh` 未消除。确认无 WIP 且规范化 blob 相同后，只对两个精确路径 `git add -- <path>` 重读缓存；验明 index blob 不变、cached diff 空、status clean、九项依赖原字节匹配，再交 C。不得借此全库归一化或夹带原有暂存内容，见[本轮记录](../../runs/2026-11-04-诊断后验与窗口采集.md#单次-c1b-与诊断判读)。
-- **受限宿主的存在性假阴性（11-04，宿主核验）**：SDK 存在性检查返回 false，随后同一父目录枚举报 EPERM、CIM 报拒绝访问时，只能判“受限未核实”，不能直接安装或换路径。通过正式提权入口只读核同一 SDK/工具与 server owner；本轮确认原 SDK/JDK 已存在，未安装工具或更改系统权限。此结论只覆盖本轮权限边界，不保证其他缺失检查均是假阴性，见[宿主准备](../../runs/2026-11-04-诊断后验与窗口采集.md#本轮范围与宿主准备)。
+- **源码 proof 与 Git 字节（11-02，离线核验）**：构建 proof 的 `scanned_sources` / `scanned_build_inputs` 哈希来自检出文件原字节，不能直接与规范化 Git blob 哈希比较。部署交接首次在 LF blob 比较失败；定位到 `core.autocrlf=true` 后，以 `git cat-file --filters --path=<path> <固定SHA>:<path>` 按仓库检出规则读取，24 项全部匹配；另记录 consumer 的 blob/checkout 两种哈希。只在确认差异来自现有检出规则后使用，不任意归一化 proof、不改已签名输入，见[部署准备](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-02-诊断候选部署交接准备.md)。
+  11-04 补记：两个消费者原 LF 与 Git blob 相同，但冻结交接要求 CRLF。仅从上述既有过滤结果取得与历史 checkout 哈希严格匹配的字节后，Git stat 缓存仍因尺寸改变报 M，diff 却为空；普通 `--refresh` 未消除。确认无 WIP 且规范化 blob 相同后，只对两个精确路径 `git add -- <path>` 重读缓存；验明 index blob 不变、cached diff 空、status clean、九项依赖原字节匹配，再交 C。不得借此全库归一化或夹带原有暂存内容，见[本轮记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-04-诊断后验与窗口采集.md#单次-c1b-与诊断判读)。
+- **受限宿主的存在性假阴性（11-04，宿主核验）**：SDK 存在性检查返回 false，随后同一父目录枚举报 EPERM、CIM 报拒绝访问时，只能判“受限未核实”，不能直接安装或换路径。通过正式提权入口只读核同一 SDK/工具与 server owner；本轮确认原 SDK/JDK 已存在，未安装工具或更改系统权限。此结论只覆盖本轮权限边界，不保证其他缺失检查均是假阴性，见[宿主准备](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-04-诊断后验与窗口采集.md#本轮范围与宿主准备)。
 - **一次覆盖的超时清理（11-02，离线审查及 AST 验证）**：当同一个宿主 helper 会运行 `adb start-server` 时，进程树终止可能带走刚派生的 server，不能同时声称“只结束本次客户端”。本轮改为零参数 `Kill()`，以实际 helper AST 和 `Kill(true)` 负例核对；原生超时后仍冻结且不补读，不据客户端终止推断设备安装已停止，见同一部署准备记录。
-- **冷启动 TEMP 与生产哨兵分离（11-02，宿主失败及离线对照）**：要求生产 `tmp` 不存在的 wrapper，不能把该目录预设为冷启动 PowerShell 的 TEMP/TMP。A04 在 claim/SDK 前因此冻结；四案离线对照中，直启和 ProcessStartInfo 的 missing TEMP 均在子脚本首观测前创建目录，中性既有 bootstrap 两案均不污染目标。使用独立区内启动临时目录，生产 tmp 仅在 claim 后创建；冷启动演练也必须覆盖实际 launcher。原轮具体创建函数未取证，不删除目录后续跑，见[冻结与诊断](../../runs/2026-11-02-诊断候选安装前核验冻结.md)。
-  本轮 R2 随后按新卡批准实际七读通过，父/子 exit 0、SDK 7 / server 启动 0、claim 保留且锁释放，补证独立 bootstrap 在该次真实启动路径有效；只证明本次采样条件，不证明未来连续状态或所有环境，见[安装就位报告](../../runs/2026-11-02-诊断候选安装就位报告.md)。
-- **后验 observed 与尝试计数分开（11-02，离线修复验证）**：新只读状态包装器的 provider 计数在调用/解析前递增，不能用它推导已观察到 a11y 元数据。父回执仅在存在已成功解析、ready 为 Boolean 的 status 时标 observed；ready=false 也有效，超时/schema 拒绝或字符串 false 均不是。七项父映射反例及实际冷启动通过，原安装仍冻结、真机后验未运行，见[覆盖冻结与后验准备](../../runs/2026-11-02-诊断候选覆盖冻结与后验准备.md)。
-- **新输入的 once 与卡一致性（11-02，synthetic 验证）**：新候选必须生成新输入和范围卡，旧许可/归档不重跑。卡的 candidate/challenge/input/target/精确凭据组与实际执行常量须同时校验，不能只验卡文件哈希。生产占位用 `CreateNew` 在任何真实凭据访问前原子创建，失败保留；检查目录再建目录不足以防并发。九项卡篡改和两子进程竞争已离线验证，见[本轮准备](../../runs/2026-11-02-诊断候选签名与验收准备.md)；准备时真实凭据未使用，该经验不授予签名许可。
+- **冷启动 TEMP 与生产哨兵分离（11-02，宿主失败及离线对照）**：要求生产 `tmp` 不存在的 wrapper，不能把该目录预设为冷启动 PowerShell 的 TEMP/TMP。A04 在 claim/SDK 前因此冻结；四案离线对照中，直启和 ProcessStartInfo 的 missing TEMP 均在子脚本首观测前创建目录，中性既有 bootstrap 两案均不污染目标。使用独立区内启动临时目录，生产 tmp 仅在 claim 后创建；冷启动演练也必须覆盖实际 launcher。原轮具体创建函数未取证，不删除目录后续跑，见[冻结与诊断](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-02-诊断候选安装前核验冻结.md)。
+  本轮 R2 随后按新卡批准实际七读通过，父/子 exit 0、SDK 7 / server 启动 0、claim 保留且锁释放，补证独立 bootstrap 在该次真实启动路径有效；只证明本次采样条件，不证明未来连续状态或所有环境，见[安装就位报告](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-02-诊断候选安装就位报告.md)。
+- **后验 observed 与尝试计数分开（11-02，离线修复验证）**：新只读状态包装器的 provider 计数在调用/解析前递增，不能用它推导已观察到 a11y 元数据。父回执仅在存在已成功解析、ready 为 Boolean 的 status 时标 observed；ready=false 也有效，超时/schema 拒绝或字符串 false 均不是。七项父映射反例及实际冷启动通过，原安装仍冻结、真机后验未运行，见[覆盖冻结与后验准备](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-02-诊断候选覆盖冻结与后验准备.md)。
+- **新输入的 once 与卡一致性（11-02，synthetic 验证）**：新候选必须生成新输入和范围卡，旧许可/归档不重跑。卡的 candidate/challenge/input/target/精确凭据组与实际执行常量须同时校验，不能只验卡文件哈希。生产占位用 `CreateNew` 在任何真实凭据访问前原子创建，失败保留；检查目录再建目录不足以防并发。九项卡篡改和两子进程竞争已离线验证，见[本轮准备](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-02-诊断候选签名与验收准备.md)；准备时真实凭据未使用，该经验不授予签名许可。
 - **本轮真实验证补记**：用户批准对应 A01 后，固定 `597ca8b` 的 local 一组实际完成证书检查、签名、验签各一次，三调用 exit 0 / stderr 0，5 个 ZIP entry 内容等价，claim 保留。只补充这次已授权执行的证据，不修改旧准备收据、不授予再次使用凭据或设备部署权限，见同一阶段记录。
 
 - **适用条件与做法**：工作区或 Git producer 中没有签名入口，不等于原密钥丢失。用户选择保留旧安装后，先在标准 Android 用户配置目录核文件元数据；本轮找到两组存量库及配套口令文件。真实凭据使用另经精确输入/工具/范围卡批准，首次证书匹配即停止其他组，仅签固定输入一次，不复制库/口令或导出私钥。
 - **工具边界**：SDK 包装器的相对 JAR 路径须按仓库既有规范解析为绝对工具路径，不能让调用 cwd 决定目标；真实 synthetic fixture 失败后修正并验证。apksigner 对同一单行口令文件重复声明 ks-pass/key-pass，会在第二次读取遇 EOF；本轮 synthetic 核实后使用工具默认 store-password reuse、封闭 stdin，未复制或落盘口令。该做法仅覆盖已验证的这组库，不假设任意 store/key 密码相同。
-- **验证依据**：[本轮核定](../../runs/2026-11-01-C1b原签名环境核定.md)的 synthetic-r4、独立审查和实际一次签名均完成：local 证书匹配旧缓存，三个原生调用 exit 0，五个 ZIP entry 内容零例外相等，密码未入 wrapper/参数值/环境/日志/新文件。只证明原签名可用与 payload 不变，不证明当前设备包、覆盖可行性或无障碍持续；原 14/25 离线证据无需因纯签名重跑。
+- **验证依据**：[本轮核定](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b原签名环境核定.md)的 synthetic-r4、独立审查和实际一次签名均完成：local 证书匹配旧缓存，三个原生调用 exit 0，五个 ZIP entry 内容零例外相等，密码未入 wrapper/参数值/环境/日志/新文件。只证明原签名可用与 payload 不变，不证明当前设备包、覆盖可行性或无障碍持续；原 14/25 离线证据无需因纯签名重跑。
 
-- **覆盖调用的未知效果（11-01，真机）**：本轮 install 原生 exit 0 但 stderr 非空，专属卡要求冻结；没有 post 包hash时，不能把失败门解释为“没安装”，也不能把exit0当安装已完成。stderr只保留字节数，不能猜其内容是SDK进度。保持原回执和冻结结果，不重发安装/回滚；另报就位并取得新授权，用只读hash单独核定新状态，不把后验回填旧卡。本轮新后验已实读新包hash并取得两个ready点，原安装卡仍保持failed；不把双点扩展为持续绑定或数据全量保留。详见[覆盖与后验记录](../../runs/2026-11-01-C1b同签名覆盖与只读后验核定.md)。
+- **覆盖调用的未知效果（11-01，真机）**：本轮 install 原生 exit 0 但 stderr 非空，专属卡要求冻结；没有 post 包hash时，不能把失败门解释为“没安装”，也不能把exit0当安装已完成。stderr只保留字节数，不能猜其内容是SDK进度。保持原回执和冻结结果，不重发安装/回滚；另报就位并取得新授权，用只读hash单独核定新状态，不把后验回填旧卡。本轮新后验已实读新包hash并取得两个ready点，原安装卡仍保持failed；不把双点扩展为持续绑定或数据全量保留。详见[覆盖与后验记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b同签名覆盖与只读后验核定.md)。
 
 ### C1b 准备路由与结果失败诊断（2026-11-01）
 
 - **适用条件**：为现行 C1b runner 准备只读就位来源，或分析 result_read 后复合锚点失败；不改变冻结观察的结论。
 - **有效做法**：准备来源的 URI/完整 argv 对照固定 runner 的实际 `New-C1bUri`、既有 helper 及 Provider 路由，不能只让 fake 复述手写路径。本轮 r1 错写 status 查询路径，HostSmoke 未发现；r2 独立合同对照后单次读取成功。主机结果诊断保持原 11 项短路比较，仅在字节数、严格 UTF-8 与 serial/nonce 隐私门后保存整个响应的字节数/哈希及闭合首失败字段；不保存失配值、原文或未通过锚点检查的 observation。摘要不证明来源有效或真实失配已修复。
-- **验证依据与限制**：[本轮验收与修复](../../runs/2026-11-01-C1b传输候选验收与结果绑定诊断.md)中，565 已越过 T0、两帧提交后结果绑定失败冻结，未保存 observation，实际失配仍未知；新 f983 定向 44/44、完整离线门 14/0/0，仅证明诊断契约。真实 controller 返回 observation 前会消费 active，会导致随后 abort absent；fake 须模拟此语义，不能把 absent 或无锁失败报告当作 provider 清理证明。不得补写旧证据或重跑旧卡。
+- **验证依据与限制**：[本轮验收与修复](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b传输候选验收与结果绑定诊断.md)中，565 已越过 T0、两帧提交后结果绑定失败冻结，未保存 observation，实际失配仍未知；新 f983 定向 44/44、完整离线门 14/0/0，仅证明诊断契约。真实 controller 返回 observation 前会消费 active，会导致随后 abort absent；fake 须模拟此语义，不能把 absent 或无锁失败报告当作 provider 清理证明。不得补写旧证据或重跑旧卡。
 
 ### C1b Windows 文本 stdin 与原始 T0 哈希（2026-11-01）
 
 - **适用条件**：Windows 主机用 shell -T 管道向 C1b 写 T0，并按原始字节绑定上游哈希；.NET 二进制 fake 不能代表 CRT 文本读取边界。
-- **已验证现象**：[本轮记录](../../runs/2026-11-01-C1b结果绑定诊断候选验收.md)中，f983 真机首失配为 upstream_t0.artifact_sha256。原 T0 的 683 个 CRLF 经显式 UCRT text 读取后变为 LF，21,658 字节变为 20,975 字节，JSON 值相同而哈希不同；binary 读取保持原字节。既有 Android 编译 Factory/Pending/Model 在所测链中保留各自输入哈希，未复现提前擦零或别名。
+- **已验证现象**：[本轮记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b结果绑定诊断候选验收.md)中，f983 真机首失配为 upstream_t0.artifact_sha256。原 T0 的 683 个 CRLF 经显式 UCRT text 读取后变为 LF，21,658 字节变为 20,975 字节，JSON 值相同而哈希不同；binary 读取保持原字节。既有 Android 编译 Factory/Pending/Model 在所测链中保留各自输入哈希，未复现提前擦零或别名。
 - **有效做法**：原 T0 文件与哈希保持不变，stdin 只传标准单行 ASCII Base64，远端先成功设置 pipefail，再解码后交 content 写入。解码端和写端任一失败、任意输出仍停止，保留原 status 与必要 abort；完整有效数据已送达后解码器仍可能失败，不能以失败当作未创建会话。缺 shell protocol、pipefail 或 toybox base64 就失败，不回退或放宽哈希比较。
-- **验证范围**：ccc8cce 定向 50/50、完整离线门 14/0/0，另有实际宿主 POSIX 管道 5 例及 UCRT text/binary 对照；随后[单次真机验收](../../runs/2026-11-01-C1b原字节传输候选验收.md)复用现装包完成原 T0 写入、两帧和结果校验，upstream T0 原字节哈希及其余运行绑定全部匹配。只证明本轮链路可用；旧设备失配值及 SDK 分支仍未知，不认定旧轮实际收到 LF 版本或唯一原因，不重跑、不回填。
+- **验证范围**：ccc8cce 定向 50/50、完整离线门 14/0/0，另有实际宿主 POSIX 管道 5 例及 UCRT text/binary 对照；随后[单次真机验收](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b原字节传输候选验收.md)复用现装包完成原 T0 写入、两帧和结果校验，upstream T0 原字节哈希及其余运行绑定全部匹配。只证明本轮链路可用；旧设备失配值及 SDK 分支仍未知，不认定旧轮实际收到 LF 版本或唯一原因，不重跑、不回填。
 - **HostSmoke 附记**：本轮合成 EncodedCommand 子进程 exit 0、隔离锁已释放，仍因额外 CLIXML progress 违反精确 stderr 断言失败；保留原记录后，仅在新合成子进程设置 ProgressPreference，修订检查通过。真实 runner 的 stderr 门未改，不能把此做法推广成忽略真实错误输出。
 
 ### C1b 有效采集与不完整拓扑分开判定（2026-11-01，真机与源码查阅）
 
 - **适用条件**：runner exit 0、observation 合同有效且绑定匹配，但 inventory 截断或子树 opaque。先分别报告采集契约、窗口拓扑、树语义，不把 passed 扩成 T-L1/P0/execution 通过。
 - **有效做法**：四条已存窗口不是原始输入总数。当前 probe 的 maximumWindows=16，但 captureWindowShell 在 type/display/layer/touchable/active/focus/id 等读取失败时也可返回 null 并置 windowsTruncated；无原始失败字段时不能从截断猜测超限、具体读错或源代码缺陷。完整 root/零 child/零正几何/无读错且未耗尽预算的 opaque，须与 inventory 不完整分别保留；IME visible=false 也不能在 inventory 截断时判 hidden observed。
-- **验证依据**：[ccc8cce 本轮](../../runs/2026-11-01-C1b原字节传输候选验收.md)两帧各存两系统、两微信窗口，微信子树完整但 opaque，topology/semantic 均 false。锁释放与正常退出不独立证明 provider 已清理；不为补证重读设备或重跑一次性采集。
+- **验证依据**：[ccc8cce 本轮](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b原字节传输候选验收.md)两帧各存两系统、两微信窗口，微信子树完整但 opaque，topology/semantic 均 false。锁释放与正常退出不独立证明 provider 已清理；不为补证重读设备或重跑一次性采集。
 
 ### C1b T0 的无 PTY 写入与远端失败核验（2026-11-01）
 
 - **适用条件**：主机将加单引号的 URI 交给 ADB 写 T0；写完后 provider 仍 absent 时，不能先假定权限撤销或 controller 失败。AOSP 参考 exec-in 会再次转义 argv，保留原来的字面引号，且只完成 stdin 复制便可返回。
 - **有效做法**：本轮改用标准 `shell -T content write`，由 shell 消耗原有引号、禁用 PTY，stdin EOF 后继续读取 stdout/stderr/退出状态；没有 shell protocol 就失败，不回退。content 捕获异常可能仍 exit 0，所以非零退出、任何 stdout 或 stderr（含空白）均拒绝；只记长度，不写可能回显 URI/nonce 的原文，随后仍核 status 的完整会话绑定。输出长度中 stderr 是已解码字符串再转 UTF-8 的大小，不声称是任意坏编码的原始字节数。
-- **验证依据与限制**：[本轮修复](../../runs/2026-11-01-C1b主机T0传输离线修复.md)记录旧成功路径在修正后的 fake 中以 T0 absent 变红，候选 565bcf1 针对性 29/29、完整门 14/0/0；包括完整 stdin 字节一致、五类写入失败不采帧，以及已建会话后报错仍 abort。fake 仅模拟受限 argv 与主机 stdin/EOF，既有独立 POSIX 复现也只证明参考契约；没有真实 ADB/adbd/ROM 验收，不能认定旧真机唯一根因或关闭 T-L1。
+- **验证依据与限制**：[本轮修复](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b主机T0传输离线修复.md)记录旧成功路径在修正后的 fake 中以 T0 absent 变红，候选 565bcf1 针对性 29/29、完整门 14/0/0；包括完整 stdin 字节一致、五类写入失败不采帧，以及已建会话后报错仍 abort。fake 仅模拟受限 argv 与主机 stdin/EOF，既有独立 POSIX 复现也只证明参考契约；没有真实 ADB/adbd/ROM 验收，不能认定旧真机唯一根因或关闭 T-L1。
 
 ### 存量诊断的空结果先核时钟与覆盖（2026-11-01）
 
 - **适用条件**：用主机 UTC 故障窗过滤 Android crash buffer。先核定目标包的 user0 UID 和独占映射，原文仅内存处理，落盘只留异常类、允许的栈符号及有界退出元数据，不保存日志正文、消息、线程名或内容指纹。
 - **有效做法与边界**：主机 epoch 下界未经历史设备钟关联时，零字节只能说明该查询为空，不能排除异常；设备本地 exit-info 时间无时区时不转成 UTC，更不能用历史强停记录归因本次。一次当前 epoch 采样也仅给当前偏移区间，不证明历史连续或事件关联。需要改变时间筛选须另定范围与开跑令，不机械重读原查询。
-- **验证依据**：[本轮存量诊断](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)九条读取成功且锁释放，crash 原文为零字节，历史 clock mapping 未证明，两个历史 exit-info 记录未与采集事务关联；没有“不曾崩溃”的结论。
+- **验证依据**：[本轮存量诊断](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)九条读取成功且锁释放，crash 原文为零字节，历史 clock mapping 未证明，两个历史 exit-info 记录未与采集事务关联；没有“不曾崩溃”的结论。
 
 ## PowerShell 坑（2026-08-30 起，固定 7.6.x 实测）
 
@@ -395,26 +395,26 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 
 - **适用条件**：PowerShell 宿主以 `ConstrainedLanguage` 运行，或构建依赖环境未注入；项目脚本需要 .NET 类型、进程和文件 API。仅换成项目钉定的 `pwsh.exe` 不保证获得 `FullLanguage`，先核对实际语言模式，按宿主权限流程运行已授权的本地检查。
 - **有效做法**：本轮将已有 Gradle 缓存的 `caches/modules-2` 与 `wrapper/dists` 复制到区内 `.checks/gradle-home`，只对检查子进程设置 `GRADLE_USER_HOME`、`TEMP/TMP`（`.checks/t`）及 JDK/SDK 路径；保留项目原有 `--offline`、`--no-daemon`、进程内 Kotlin 编译和严格依赖校验。缓存副本可复用，不复制全局 Gradle 配置或凭据。
-- **验证依据**：固定候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 的完整门实际退出 0、14/14 通过，Android 219 个任务成功。此结论只证明本轮已有依赖足够，不保证任意缓存或缺失依赖也可离线构建。命令、日志和收据见[补验记录](../../runs/2026-11-01-安全验收候选离线补验.md)。
+- **验证依据**：固定候选 `dc13f1c233c8a1ef0feb40aa9b04c6c2f1bf55ae` 的完整门实际退出 0、14/14 通过，Android 219 个任务成功。此结论只证明本轮已有依赖足够，不保证任意缓存或缺失依赖也可离线构建。命令、日志和收据见[补验记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-安全验收候选离线补验.md)。
 
 ### 同名应用命令可能返回多个程序（2026-11-01，纯宿主验证）
 
 - **适用条件**：PowerShell 用 `Get-Command <name> -CommandType Application` 的 `.Source` 作为单个原生程序路径。本机 Git 和 Node 各返回两个结果；不能假定查询只返回一个。
 - **有效做法**：保留 PATH 优先顺序，显式 `Select-Object -First 1 -ExpandProperty Source`，再传给进程启动器。一次性设备任务前，用相同函数做不接触设备的最小宿主检查；语法检查、解析器样例和静态审查不覆盖进程启动。
-- **验证依据**：[恢复观察续记](../../runs/2026-11-01-C1b底层源码与安全中心静态归因.md#7-恢复观察准备与宿主失败同日续记)的原轮在设备命令 0 条时失败；隔离原函数复现数组被合为无效程序路径。仅改单一路径选择后，固定 HEAD/clean 和 Node v24.20.0 查询成功，修订源码的纯宿主检查再次通过。没有执行修订观察入口或 ADB，不证明设备观察通过。
+- **验证依据**：[恢复观察续记](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b底层源码与安全中心静态归因.md#7-恢复观察准备与宿主失败同日续记)的原轮在设备命令 0 条时失败；隔离原函数复现数组被合为无效程序路径。仅改单一路径选择后，固定 HEAD/clean 和 Node v24.20.0 查询成功，修订源码的纯宿主检查再次通过。没有执行修订观察入口或 ADB，不证明设备观察通过。
 
 ### Git Schannel 的凭据环境差异（2026-11-01，只读查询验证）
 
 - **适用条件**：受限执行环境中 Git HTTPS 查询报 `AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)`，而目标远端已核实。这个信号不能直接判为远端凭据过期。
 - **有效做法**：保留错误、核对不含嵌入凭据的目标，按宿主权限流程在获准上下文执行同一个只读 `git ls-remote --heads origin refs/heads/main`，以区分权限上下文与实际远端故障；不关闭 SSL 校验、不改全局配置、不输出凭据。该方法不是脚本自动提权或所有认证错误的通用重试。
-- **验证依据**：本轮受限上下文查询退出 128、报上述 Schannel 错误；获准宿主上下文的同一查询退出 0，返回与本地远端跟踪指针一致的 SHA。只证明这次查询的凭据环境差异，后续推送须独立核验结果，见[执行记录](../../runs/2026-11-01-Mika借鉴解阻离线执行.md)。
+- **验证依据**：本轮受限上下文查询退出 128、报上述 Schannel 错误；获准宿主上下文的同一查询退出 0，返回与本地远端跟踪指针一致的 SHA。只证明这次查询的凭据环境差异，后续推送须独立核验结果，见[执行记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-Mika借鉴解阻离线执行.md)。
 
 ### R1 受控验收的宿主与证据边界（2026-11-01）
 
 - **适用条件**：验证 PC mobile Confirm 在执行器前阻断，需要来源、终止位置和无副作用证据，而不是复测手机确认卡。
 - **有效做法**：工具的获准宿主上下文不自动等于 Windows 管理员。本轮非管理员事件订阅取消，用户授权 RunAs 后同冻结脚本的宿主正控成功；这只证明本次环境差异，不认定取消的唯一原因。使用已知离线子进程正控，先确认观测可用，不把“没事件”直接当“没执行”。
 - **核验方法**：保留原始收据，按固定来源哈希、错误原件位置、终止点前后的实际控制流、暂停件及文件状态共同判读。中文抓取乱码会使精确文案匹配假阴性；对 PID/PPID/TIME_CREATED 复核能识别 PID 复用污染。不能把 conhost 等同执行器，也不能把临时准备单的额外“零后代”要求替换原验收契约。
-- **验证依据与限制**：[R1 本轮记录](../../runs/2026-11-01-R1原入口阻断验收.md)中原件 exit 1、定位第 111 行，三份 pause 和副作用状态一致，独立审查判原契约通过；观察器未全绿、无完整无丢事件保证。未重跑、未修原始收据；后续采集应先验证中文编码链并按进程实例/时间关联，不能宣称本轮已实现这些修复。
+- **验证依据与限制**：[R1 本轮记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-R1原入口阻断验收.md)中原件 exit 1、定位第 111 行，三份 pause 和副作用状态一致，独立审查判原契约通过；观察器未全绿、无完整无丢事件保证。未重跑、未修原始收据；后续采集应先验证中文编码链并按进程实例/时间关联，不能宣称本轮已实现这些修复。
 
 ## 待办条目写的"必须解决"，先确认它描述的东西存在（2026-09-02）
 
@@ -432,7 +432,7 @@ II 级点击。**接手他人写的待办，第一步是让它落到具体文件
 
 - 处置：把运行时**复制**到项目自控位置（`<repos-root>/_toolchain/powershell-7.6.5`）并冻结；迁移前原位复核 Authenticode，
   复制后逐文件重算 SHA 比对（不信任 `Copy-Item`），再编目。详见
-  [钉定 PowerShell 迁出自更新缓存](../../runs/2026-09-05-钉定PowerShell迁出自更新缓存.md)。
+  [钉定 PowerShell 迁出自更新缓存](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-09-05-钉定PowerShell迁出自更新缓存.md)。
 - **选钉定位置的判据**：这个路径由谁写？只要不是"只有本项目"，它就会漂。`~/.cache/**`、包管理器目录、IDE 自带运行时、
   `%TEMP%` 都不合格。
 
