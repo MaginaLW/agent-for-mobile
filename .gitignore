@@ -14,7 +14,7 @@ configs/gateway-mcp.json
 configs/.gateway-mcp.*.tmp
 configs/gateway-mcp.json.restore-*.tmp
 
-# Android 工程（app/ 网关、spikes/probe/ 探针）
+# Android 工程（app/）
 **/build/
 **/.gradle/
 **/.kotlin/
