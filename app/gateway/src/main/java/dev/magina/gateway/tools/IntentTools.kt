@@ -52,6 +52,13 @@ object IntentTools {
     }
 
     fun intentSend(action: String, uri: String?, extras: JSONObject?, pkg: String?, component: String?): JSONObject {
+        return intentSend(action, uri, extras, pkg, component, null)
+    }
+
+    internal fun intentSend(
+        action: String, uri: String?, extras: JSONObject?, pkg: String?, component: String?,
+        observation: IntentSendObservation?,
+    ): JSONObject {
         if (action !in ACTION_WHITELIST && !action.startsWith(SETTINGS_PREFIX)) throw GatewayError(
             ErrorCode.E_BLOCKED, "action「$action」不在白名单",
             fallback = "白名单：VIEW/SEND/SENDTO/MAIN/android.settings.*",
@@ -77,24 +84,33 @@ object IntentTools {
             intent.component = ComponentName(p, comp)
             componentPackage = p
         }
-        try {
-            ctx.startActivity(intent)
-        } catch (e: ActivityNotFoundException) {
-            throw GatewayError(ErrorCode.E_NOT_FOUND, "Intent 无接收方：$action", channel = "intent")
-        }
-        // 显式组件的包名是最终目标；不能拿可同时传入的 package 参数验证另一个 app。
-        val targetPackage = componentPackage ?: resolvedPackage
-        val acceptableActivities = expectedIntentLandingActivities(
-            isShareAction = action == Intent.ACTION_SEND,
-            component = component,
-            registeredShareLandingActivities = targetPackage?.let {
-                Gateway.skills.shareLandingActivities[it]
-            }.orEmpty(),
+        val context = ctx
+        return dispatchIntentSend(
+            observation,
+            startActivity = {
+                try {
+                    context.startActivity(intent)
+                } catch (e: ActivityNotFoundException) {
+                    throw GatewayError(ErrorCode.E_NOT_FOUND, "Intent 无接收方：$action", channel = "intent")
+                }
+            },
+            afterDispatch = {
+                // 显式组件的包名是最终目标；不能拿可同时传入的 package 参数验证另一个 app。
+                val targetPackage = componentPackage ?: resolvedPackage
+                val acceptableActivities = expectedIntentLandingActivities(
+                    isShareAction = action == Intent.ACTION_SEND,
+                    component = component,
+                    registeredShareLandingActivities = targetPackage?.let {
+                        Gateway.skills.shareLandingActivities[it]
+                    }.orEmpty(),
+                )
+                val verified = targetPackage?.let { target ->
+                    SystemTools.waitForegroundLanding(target, acceptableActivities, VERIFY_TIMEOUT_MS, observation)
+                }
+                if (targetPackage == null) observation?.noTarget()
+                finishIntentSend(targetPackage, verified, acceptableActivities)
+            },
         )
-        val verified = targetPackage?.let { target ->
-            SystemTools.waitForegroundLanding(target, acceptableActivities, VERIFY_TIMEOUT_MS)
-        }
-        return finishIntentSend(targetPackage, verified, acceptableActivities)
     }
 
     fun shareText(text: String, target: String?): JSONObject = share(
@@ -176,6 +192,82 @@ object IntentTools {
     }
 
     private const val VERIFY_TIMEOUT_MS = 3000L
+}
+
+/** 调用内研究轨迹；只保存应用内部事实，不能用来证明系统接收或整个窗口从未落地。 */
+internal class IntentSendObservation(
+    private val processId: Int,
+    private val processInstance: String,
+    private val auditId: String,
+    private val clock: () -> Long,
+) {
+    private var available = true
+    private var dispatch = "not_entered"
+    private var dispatchEnteredMs: Long? = null
+    private var dispatchReturnedMs: Long? = null
+    private var poll = "not_entered"
+    private var pollStartMs: Long? = null
+    private var pollEndMs: Long? = null
+    private var checks = 0
+
+    private inline fun record(body: () -> Unit) {
+        try { body() } catch (_: Throwable) { available = false }
+    }
+
+    fun dispatchEntered() = record { dispatch = "entered"; dispatchEnteredMs = clock() }
+    fun dispatchReturned() = record { dispatch = "returned"; dispatchReturnedMs = clock() }
+    fun dispatchFailed(error: Throwable) = record {
+        dispatch = when {
+            error is GatewayError && error.code == ErrorCode.E_NOT_FOUND -> "activity_not_found"
+            error is SecurityException -> "security_exception"
+            error is Exception -> "exception"
+            else -> "error"
+        }
+    }
+    fun pollStarted(startMs: Long) = record { poll = "incomplete"; pollStartMs = startMs }
+    fun checked() = record { checks += 1 }
+    fun pollFinished(reason: String) = record { pollEndMs = clock(); poll = reason }
+    fun noA11y() = record {
+        val at = clock()
+        pollStartMs = at; pollEndMs = at; poll = "no_a11y"
+    }
+    fun noTarget() = record { poll = "no_target" }
+
+    /** 固定键和值域，不记录异常正文、Intent 内容、原生身份或 UI 文本。序列化失败也不改变业务结果。 */
+    fun auditNote(): String = try {
+        ";r5_observation=" + JSONObject()
+            .put("v", 1).put("available", available)
+            .put("pid", processId).put("process_instance", processInstance).put("audit_id", auditId)
+            .put("dispatch", dispatch)
+            .put("dispatch_entered_ms", dispatchEnteredMs ?: JSONObject.NULL)
+            .put("dispatch_returned_ms", dispatchReturnedMs ?: JSONObject.NULL)
+            .put("poll", if (available) poll else "unavailable")
+            .put("poll_start_ms", pollStartMs ?: JSONObject.NULL)
+            .put("poll_end_ms", pollEndMs ?: JSONObject.NULL).put("checks", checks)
+    } catch (_: Throwable) { ";r5_observation=unavailable" }
+}
+
+/** Release 及其他工具不求取进程身份，也不建立研究状态；准备失败只导致观测缺失。 */
+internal fun createIntentSendObservation(
+    debug: Boolean, toolName: String, auditId: String,
+    processId: () -> Int, processInstance: () -> String, clock: () -> Long,
+): IntentSendObservation? = if (debug && toolName == "intent_send") {
+    runCatching { IntentSendObservation(processId(), processInstance(), auditId, clock) }.getOrNull()
+} else null
+
+/** 实际生产分派、轮询和原终态共用这条窄链；不重试、不吞业务异常。 */
+internal fun dispatchIntentSend(
+    observation: IntentSendObservation?, startActivity: () -> Unit, afterDispatch: () -> JSONObject,
+): JSONObject {
+    observation?.dispatchEntered()
+    try {
+        startActivity()
+    } catch (error: Throwable) {
+        observation?.dispatchFailed(error)
+        throw error
+    }
+    observation?.dispatchReturned()
+    return afterDispatch()
 }
 
 /** 分享三级降级用到的通道。`wireName` 是进结果 JSON 的那个值，改它等于改对外契约。 */

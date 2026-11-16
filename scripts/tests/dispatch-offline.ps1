@@ -725,7 +725,8 @@ public static class Program {
         foreach ($version in @(
             'codex-cli 0.147.0',
             'codex-cli 0.149.0',
-            'codex-cli 0.149.0-alpha.4.1'
+            'codex-cli 0.149.0-alpha.4.1',
+            'codex-cli 0.167.0-alpha.4.1'
         )) {
             Assert-True (Test-DispatchSupportedCodexVersion -VersionOutput $version) `
                 "已验证 Codex 版本被误拒：$version"
@@ -734,6 +735,9 @@ public static class Program {
             'codex-cli 0.150.0-alpha.1',
             'codex-cli 0.150.0',
             'codex-cli 0.149.1',
+            'codex-cli 0.167.0',
+            'codex-cli 0.167.0-alpha.4.2',
+            'codex-cli 0.167.1-alpha.4.1',
             "warning`ncodex-cli 0.149.0",
             'codex-cli 0.149.0 extra',
             ''
@@ -741,6 +745,8 @@ public static class Program {
             Assert-True (-not (Test-DispatchSupportedCodexVersion -VersionOutput $version)) `
                 "未验证或带污染的 Codex 版本被误放行：$version"
         }
+        Assert-True ((Get-DispatchCodexVersionContract 'codex-cli 0.167.0-alpha.4.1') -ceq '0.167') `
+            '新精确版本未使用独立契约。'
     }
 
     Test-Case 'Codex 版本探针 Assign 失败不遗留 suspended orphan' {
@@ -827,7 +833,7 @@ public static class Program {
     }
 
     Test-Case 'Codex 候选按显式契约优先级而不是 mtime 或随机目录名' {
-        $selection = Select-DispatchCodexExecutableCandidate -Candidates @(
+        $candidates = @(
             [pscustomobject]@{
                 Path = (Join-Path $TestRoot 'ffff-newer\codex.exe')
                 VersionOutput = 'codex-cli 0.147.0'
@@ -841,18 +847,38 @@ public static class Program {
                 LastWriteTimeUtc = [datetime]'2000-01-01'
             },
             [pscustomobject]@{
+                Path = (Join-Path $TestRoot 'current-alpha\codex.exe')
+                VersionOutput = 'codex-cli 0.167.0-alpha.4.1'
+                Sha256 = '67'
+            },
+            [pscustomobject]@{
+                Path = (Join-Path $TestRoot 'older-alpha\codex.exe')
+                VersionOutput = 'codex-cli 0.149.0-alpha.4.1'
+                Sha256 = '49A'
+            },
+            [pscustomobject]@{
                 Path = (Join-Path $TestRoot 'zzzz-unknown\codex.exe')
                 VersionOutput = 'codex-cli 0.150.0-alpha.1'
                 Sha256 = '50'
                 LastWriteTimeUtc = [datetime]'2100-01-01'
             }
         )
+        $selection = Select-DispatchCodexExecutableCandidate -Candidates $candidates
         Assert-True ($selection.VersionOutput -ceq 'codex-cli 0.149.0') `
             'mtime 更新的旧版/未知版盖过了显式 0.149 stable 优先级。'
         Assert-True ($selection.SelectedPath -like '*0000-older*') `
             '候选选择仍受随机目录名或 mtime 影响。'
         Assert-True ($selection.UnknownVersions -contains 'codex-cli 0.150.0-alpha.1') `
             '已知与未知候选并存时没有保留未知版本诊断。'
+        $withoutStable = @($candidates | Where-Object VersionOutput -CNE 'codex-cli 0.149.0')
+        Assert-True ((Select-DispatchCodexExecutableCandidate -Candidates $withoutStable).VersionOutput -ceq
+            'codex-cli 0.167.0-alpha.4.1') '新精确 alpha 没有排在旧 alpha/旧 stable 前。'
+        Assert-True ((Select-DispatchCodexExecutableCandidate -Candidates @(
+            $candidates | Where-Object VersionOutput -CEQ 'codex-cli 0.167.0-alpha.4.1'
+        )).Contract -ceq '0.167') '仅安装新精确 alpha 时无法选择。'
+        Assert-True ((Select-DispatchCodexExecutableCandidate -Candidates @(
+            $withoutStable | Where-Object VersionOutput -CNE 'codex-cli 0.167.0-alpha.4.1'
+        )).VersionOutput -ceq 'codex-cli 0.149.0-alpha.4.1') '旧 alpha 与0.147的原优先级改变。'
 
         $unknownOnlyRejected = $false
         try {
@@ -900,6 +926,34 @@ public static class Program {
                 [void]$spec.SensitiveEnvironment.Remove($key)
             }
             Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case 'P0配置producer生成的网关配置可被Codex真实消费者接受' {
+        . (Join-Path $SourceRepoRoot 'scripts\lib\p0-device-provision.ps1')
+        $configPath = Join-Path $SentinelDir 'provisioned-gateway.json'
+        $session = [pscustomobject]@{
+            ConfigPath = $configPath
+            PrivateTemporaryFiles = [Collections.Generic.List[string]]::new()
+            CleanupIssues = [Collections.Generic.List[string]]::new()
+        }
+        Set-P0GatewayConfigToken -Session $session -Token $testBearer
+        $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot `
+            -ScriptsRoot (Join-Path $RepoRoot 'scripts')
+        $spec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+            -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1'
+        try {
+            Assert-True ($spec.Arguments -contains 'mcp_servers.gateway.tool_timeout_sec=420') `
+                'P0配置的工具超时未沿用现有模板的420秒。'
+            Assert-NotMatches ($spec.Arguments -join "`n") ([regex]::Escape($testBearer))
+        }
+        finally {
+            foreach ($key in @($spec.SensitiveEnvironment.Keys)) {
+                $spec.SensitiveEnvironment[$key] = $null
+                [void]$spec.SensitiveEnvironment.Remove($key)
+            }
+            Remove-Item -LiteralPath $configPath -Force
         }
     }
 
@@ -1136,6 +1190,39 @@ public static class Program {
             }
             Assert-Contains (Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-prompt.txt') -Raw) `
                 'offline fake codex contract'
+
+            $fixtureBeforeNewVersion = [IO.File]::ReadAllText($DispatchPath)
+            $oldVersionSeam = "-CodexVersionOverride 'codex-cli 0.149.0'"
+            Assert-True ($fixtureBeforeNewVersion.Contains($oldVersionSeam)) '现有consumer版本seam缺失。'
+            $oldArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
+            Assert-NotMatches $oldArgv '(?m)^sleep_tool\r?$'
+            $oldBearerEnv = [regex]::Match($oldArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
+            try {
+                [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion.Replace(
+                    $oldVersionSeam, "-CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1'"))
+                $env:DISPATCH_TEST_CODEX_SCENARIO = 'success'
+                $newVersionResult = Invoke-Dispatch @(
+                    '-Task','offline fake codex contract','-Slug','offline-codex-current-alpha',
+                    '-Executor','gateway','-Brain','codex'
+                )
+                Assert-ExitCode $newVersionResult 0
+                Assert-Contains $newVersionResult.Text '派单结果：success'
+                Assert-NotMatches $newVersionResult.Text 'fixture-bearer-value-must-never-leak|must-not-reach-fake-codex'
+                $newArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
+                foreach ($required in @('exec','--json','--ephemeral','--ignore-user-config','--ignore-rules',
+                    '--strict-config','read-only','mcp_servers={}')) { Assert-Contains $newArgv $required }
+                Assert-Matches $newArgv '(?m)^--disable\r?\nsleep_tool\r?$'
+                Assert-Matches $newArgv 'mcp_servers\.gateway\.url="http://127\.0\.0\.1:8848/mcp"'
+                Assert-NotMatches $newArgv 'fixture-bearer-value-must-never-leak|(?m)^--model\s*$'
+                $newBearerEnv = [regex]::Match($newArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
+                Assert-True ($newBearerEnv.Length -gt 0 -and $newBearerEnv -cne $oldBearerEnv) `
+                    '新版本consumer未使用本次随机bearer环境键。'
+                foreach ($sentinel in @('codex-secret-ok.txt','codex-environment-ok.txt','codex-cwd-empty.txt')) {
+                    Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir $sentinel) -Raw).Trim() -ceq 'true') `
+                        "新版本consumer隔离检查失败：$sentinel"
+                }
+            }
+            finally { [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion) }
 
             foreach ($flood in @(
                 @{ Scenario='stdout-flood'; Slug='offline-codex-stdout-flood'; Cap=16L*1024L*1024L; Extension='.jsonl' },

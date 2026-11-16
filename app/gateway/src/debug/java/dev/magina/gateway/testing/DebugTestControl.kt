@@ -32,6 +32,7 @@ class DebugTestControl(
         private const val NONCE_FILE_NAME = "test-control-consumed-nonces"
         private const val MAX_FUTURE_MS = 5 * 60_000L
         private const val WECHAT_PACKAGE = "com.tencent.mm"
+        private const val TEST_TARGET_PACKAGE = "dev.magina.testtarget"
         private val TOKEN_PATTERN = Regex("[A-Za-z0-9._-]{8,128}")
     }
 
@@ -78,8 +79,10 @@ class DebugTestControl(
         val command = try {
             afterControlClaimed(claimedFile)
             parseAndValidate(claimedFile.readText(), attempt).also {
-                if (attempt.inputLength == null || attempt.inputLength < 0 ||
-                    attempt.inputSha256?.matches(Regex("^[0-9a-f]{64}$")) != true
+                // Enter 的短时输入证据仍必须完整；自有 click 没有输入提交，不伪造摘要。
+                if (!isTestTargetStale(it) &&
+                    (attempt.inputLength == null || attempt.inputLength < 0 ||
+                        attempt.inputSha256?.matches(Regex("^[0-9a-f]{64}$")) != true)
                 ) throw blocked("debug 确认输入摘要缺失或无效")
             }
         } catch (error: Throwable) {
@@ -193,7 +196,9 @@ class DebugTestControl(
         else started + foregroundTimeoutMs
         while (true) {
             val current = foreground()
-            if (current.known && current.packageName.isNotBlank() && current.packageName != WECHAT_PACKAGE) return
+            if (current.known && current.packageName.isNotBlank() &&
+                current.packageName != debug.command.initialPackage
+            ) return
             val remaining = deadline - monotonicClock()
             if (remaining <= 0) break
             sleep(minOf(50, remaining))
@@ -280,9 +285,14 @@ class DebugTestControl(
         }
     }
 
+    private fun isTestTargetStale(command: Command): Boolean =
+        command.tool == "ui_action" && command.action == "click" &&
+            command.initialPackage == TEST_TARGET_PACKAGE &&
+            command.leg == "stale" && command.staleAfterAllow
+
     private fun matches(command: Command, attempt: TestConfirmationAttempt): Boolean =
-        command.tool == "press_key" && command.action == "enter" &&
-            command.initialPackage == WECHAT_PACKAGE &&
+        ((command.tool == "press_key" && command.action == "enter" &&
+            command.initialPackage == WECHAT_PACKAGE) || isTestTargetStale(command)) &&
             command.tool == attempt.toolName && command.action == attempt.action &&
             command.initialPackage == attempt.initialPackage
 
@@ -313,6 +323,13 @@ class DebugTestControl(
             .put("time", Instant.ofEpochMilli(clock()).toString())
             .put("input_length", session.attempt.inputLength)
             .put("input_sha256", session.attempt.inputSha256)
+        // 新增场景绑定具体控制指令；既有微信证据形状保持不变。
+        if (isTestTargetStale(session.command)) {
+            json.put("leg", session.command.leg)
+                .put("nonce", session.command.nonce)
+                .put("action", session.command.action)
+                .put("initial_package", session.command.initialPackage)
+        }
         evidenceFile?.let { json.put("evidence_file", it) }
         // 决定来自哪条 surface。**只在真有生效决定时才写**：超时那次写成 "overlay" 会凭空
         // 造出一条"人在卡上点过"的假证据。runner 读不到该字段时记 unknown，不冒充任何一边。

@@ -22,7 +22,11 @@ param(
     [ValidateRange(240,3600)][int]$RuntimeSeconds=900,
     [switch]$PrepareOnly,
     [switch]$Run,
-    [switch]$ImeProbe
+    [switch]$ImeProbe,
+    [switch]$R5ObservationOnly,
+    [switch]$HumanAllowProbe,
+    [switch]$R5FailureProbe,
+    [switch]$StaleAllowProbe
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3.0
@@ -36,6 +40,7 @@ $imeProbeText='台架中文输入甲乙'
 $gatewayImeComponent='dev.magina.gateway/.ime.GatewayIme'
 $gatewayImeIds=@($gatewayImeComponent,'dev.magina.gateway/dev.magina.gateway.ime.GatewayIme')
 $script:commandIndex=0; $script:rpcId=0; $script:auditIds=[Collections.Generic.List[string]]::new()
+$script:r5Routes=[ordered]@{}
 $script:phase='preflight'
 $summary=[ordered]@{
     schema='local-testbench/v1'; status='failed'; mode=$(if($Run){'run'}else{'preflight'})
@@ -49,6 +54,12 @@ $summary=[ordered]@{
     initial_isolated_device_table_empty='UNKNOWN'
     physical_device_commands=0; approval_injected=$false; token_logged=$false
     routes_verified=@(); ordinary_actions_verified=@(); confirmation_result='UNKNOWN'
+    verification_scope=$(if($R5FailureProbe){'r5_failure_only'}elseif($StaleAllowProbe){'stale_allow_only'}elseif($HumanAllowProbe){'human_allow_only'}elseif($R5ObservationOnly){'r5_observation_only'}else{'full_testbench'})
+    r5_observation_verified=$false
+    human_allow_requested=[bool]$HumanAllowProbe; human_allow_verified=$false
+    r5_failure_requested=[bool]$R5FailureProbe; r5_failure_verified=$false; r5_strong_negative_verified=$false
+    stale_allow_requested=[bool]$StaleAllowProbe; stale_allow_verified=$false; stale_target_callback_zero_verified=$false
+    actor_attempt=$(if($StaleAllowProbe){'assistant_computer_use'}elseif($R5FailureProbe){'host_deterministic_mcp'}else{'unspecified'})
     touch_exploration_setting='UNKNOWN'; touch_exploration_enabled='UNKNOWN'
     input_focus_before='UNKNOWN'; input_focus_after_focus_probe='UNKNOWN'
     accessibility_focus_result='UNKNOWN'; accessibility_focus_negative_verified=$false
@@ -207,7 +218,12 @@ function Get-BenchSnapshot([string]$Name){
     Assert-BenchForeground ($Name+'-foreground')
     $snapshot=Invoke-BenchTool 'ui_snapshot' @{scope='full'} $Name
     Assert-BenchToolOk $snapshot
+    if($HumanAllowProbe -or $StaleAllowProbe){Assert-Bench ($snapshot.ctx.app -is [string]) 'human_allow_snapshot_foreground_unknown'}
     Assert-Bench ($snapshot.ctx.app -ceq 'dev.magina.testtarget') 'snapshot_foreground_changed'
+    if($HumanAllowProbe -or $StaleAllowProbe){
+        Assert-Bench ($snapshot.ctx.foreground_known -is [bool] -and $snapshot.ctx.foreground_known) 'human_allow_snapshot_foreground_unknown'
+        Assert-Bench ($snapshot.data.truncated -is [bool] -and -not $snapshot.data.truncated) 'human_allow_snapshot_truncated'
+    }
     return $snapshot.data
 }
 function Find-BenchInput($Snapshot){
@@ -221,7 +237,10 @@ function Get-BenchBooleanState($Snapshot,[string]$Prefix){
     return $matches[0].text -ceq ($Prefix+'true')
 }
 function Get-BenchCount($Snapshot){
-    $matches=@($Snapshot.elements|Where-Object {$_.text -cmatch '^本地发送回调次数：[0-9]+$' -and $_.source -ceq 'a11y'})
+    $matches=@($Snapshot.elements|Where-Object {
+        (-not($HumanAllowProbe -or $StaleAllowProbe) -or ($_.text -is [string] -and $_.source -is [string])) -and
+        $_.text -cmatch '^本地发送回调次数：[0-9]+$' -and $_.source -ceq 'a11y'
+    })
     Assert-Bench ($matches.Count -eq 1) 'target_callback_count_unavailable'
     return [int]($matches[0].text -replace '^本地发送回调次数：','')
 }
@@ -230,6 +249,290 @@ function Open-BenchRoute([string]$Route){
     Assert-BenchToolOk $opened
     Assert-BenchForeground ('route-'+$Route+'-foreground')
     $summary.routes_verified+=,$Route
+    if($R5ObservationOnly){$script:r5Routes[$Route]=$opened}
+}
+function Wait-BenchHumanReady {
+    $ready=Join-Path $script:output 'human-ready'
+    $cancel=Join-Path $script:output 'human-cancel'
+    Set-BenchPhase 'await_human_ready'
+    if(-not $HumanAllowProbe -and $StaleAllowProbe){
+        Write-Host '等待本轮获准的assistant_computer_use操作者盯住自有AVD窗口；ready只安排显示卡，真正允许仍须实际Android确认卡。'
+    }else{Write-Host '请现场用户先盯住本轮模拟器窗口，再由协调方记录本轮就绪或取消；就绪只安排显示确认卡，不是允许危险动作。Android确认卡仍须本人点击。'}
+    while($true){
+        Assert-BenchRemaining 150
+        foreach($signal in @($cancel,$ready)){
+            if(Test-Path -LiteralPath $signal){
+                Assert-Bench (Test-Path -LiteralPath $signal -PathType Leaf) 'human_ready_signal_not_leaf'
+                Assert-Bench (-not((Get-Item -LiteralPath $signal -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) 'human_ready_signal_reparse_point'
+                if($signal -ceq $cancel){throw 'human_ready_cancelled'}
+                Set-BenchPhase 'human_ready_received'
+                return
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+function Invoke-BenchHumanAllow {
+    Open-BenchRoute 'conversation'
+    $before=Get-BenchSnapshot 'human-allow-before'
+    $summary.callback_count_before=Get-BenchCount $before
+    Assert-Bench ($summary.callback_count_before -eq 0) 'human_allow_counter_not_zero_before'
+    $buttons=@($before.elements|Where-Object {$_.text -is [string] -and $_.text -ceq '发送（仅本地计数）' -and
+        $_.role -is [string] -and $_.role -ceq 'button' -and $_.source -is [string] -and $_.source -ceq 'a11y'})
+    Assert-Bench ($buttons.Count -eq 1) 'human_allow_button_not_unique'
+    $ref=$buttons[0].ref
+    Assert-Bench ($ref -is [string] -and -not [string]::IsNullOrWhiteSpace($ref)) 'human_allow_button_ref_missing'
+    Assert-BenchRemaining 120
+    Set-BenchPhase 'await_human_allow'
+    Write-Host '请现场用户仅在模拟器内实际可见的 Android 确认卡核对并点击允许；PC答复不构成决定，Agent不得点击确认。'
+    $allowed=Invoke-BenchTool 'ui_action' @{ref=$ref;action='click'} 'human-allowed-click' 100
+    Assert-BenchToolOk $allowed
+    Assert-Bench ($allowed.ok -is [bool] -and $allowed.ok -and $allowed.data.done -is [bool] -and $allowed.data.done -and
+        $allowed.ctx.app -is [string] -and $allowed.ctx.app -ceq 'dev.magina.testtarget' -and
+        $allowed.ctx.foreground_known -is [bool] -and $allowed.ctx.foreground_known) 'human_allow_response_invalid'
+    $summary.confirmation_result='allowed_pending_audit'
+    $after=Get-BenchSnapshot 'human-allow-after'
+    $summary.callback_count_after=Get-BenchCount $after
+    Assert-Bench ($summary.callback_count_after -eq 1) 'human_allow_callback_count_not_one'
+    return @{Response=$allowed;Ref=$ref}
+}
+function Assert-BenchHumanAllowAudit($Audit,$Invocation){
+    $response=$Invocation.Response
+    Assert-Bench ($response.audit_id -is [string] -and $response.audit_id -cmatch '^a-[0-9]{6}$') 'human_allow_response_audit_id_invalid'
+    $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+    Assert-Bench ($entries.Count -eq 1) 'human_allow_audit_missing_or_duplicate'
+    $entry=$entries[0]
+    Assert-Bench ($entry.id -is [string] -and $entry.tool -is [string] -and $entry.tool -ceq 'ui_action' -and
+        $entry.result -is [string] -and $entry.result -ceq 'OK' -and $entry.channel -is [string] -and $entry.channel -ceq 'a11y' -and
+        $entry.args -is [pscustomobject] -and $entry.args.action -is [string] -and $entry.args.action -ceq 'click' -and
+        $entry.args.ref -is [string] -and $entry.args.ref -ceq $Invocation.Ref) 'human_allow_audit_call_mismatch'
+    Assert-Bench (@($Audit|Where-Object tool -CEQ 'ui_action').Count -eq 1) 'human_allow_extra_action_audit'
+    Assert-Bench ($entry.note -is [string]) 'human_allow_audit_note_invalid'
+    $tokens=@($entry.note -split ';')
+    $decisions=@($tokens|Where-Object { $_.StartsWith('confirmation=',[StringComparison]::Ordinal) })
+    $channels=@($tokens|Where-Object { $_.StartsWith('decided_via=',[StringComparison]::Ordinal) })
+    $contexts=@($tokens|Where-Object { $_.StartsWith('context=',[StringComparison]::Ordinal) })
+    Assert-Bench ($decisions.Count -eq 2 -and @($decisions|Where-Object {$_ -ceq 'confirmation=requested'}).Count -eq 1 -and
+        @($decisions|Where-Object {$_ -ceq 'confirmation=allowed'}).Count -eq 1 -and
+        $channels.Count -eq 1 -and $channels[0] -ceq 'decided_via=overlay' -and
+        $contexts.Count -ge 1 -and @($contexts|Where-Object {$_ -cne 'context=rechecked'}).Count -eq 0) 'human_allow_decision_not_proven'
+}
+function Read-BenchR5Receipts([string]$Name){
+    $command="'if [ ! -e files ]; then printf R5_RECEIPTS_ABSENT; elif [ ! -d files ] || [ ! -x files ]; then exit 1; elif [ ! -e files/r5-finish-receipts.jsonl ]; then printf R5_RECEIPTS_ABSENT; else cat files/r5-finish-receipts.jsonl; fi'"
+    $raw=Invoke-BenchAdb @('shell','run-as','dev.magina.testtarget','sh','-c',$command) $Name
+    [string[]]$lines=@()
+    if($raw -cne 'R5_RECEIPTS_ABSENT'){$lines=@($raw -split '\r?\n'|Where-Object {-not [string]::IsNullOrWhiteSpace($_)})}
+    $rows=[Collections.Generic.List[object]]::new()
+    foreach($line in $lines){
+        try{$row=ConvertFrom-Json -InputObject $line -AsHashtable -Depth 10 -DateKind String}catch{throw 'r5_local_receipt_invalid_json'}
+        Assert-Bench ($row -is [Collections.IDictionary] -and $row.Count -eq 9 -and $row['schema'] -is [long] -and $row['schema'] -eq 1 -and
+            $row['source'] -is [string] -and $row['source'] -ceq 'test_target_onCreate' -and $row['scenario'] -is [string] -and $row['scenario'] -ceq 'r5_no_display_finish' -and
+            $row['nonce'] -is [string] -and $row['nonce'] -cmatch '^r5-[0-9a-f]{32}$' -and $row['package'] -is [string] -and $row['package'] -ceq 'dev.magina.testtarget' -and
+            $row['component'] -is [string] -and $row['component'] -ceq 'dev.magina.testtarget.R5NoDisplayActivity' -and $row['pid'] -is [long] -and $row['pid'] -gt 0 -and
+            $row['process_start_elapsed_realtime_ms'] -is [long] -and $row['process_start_elapsed_realtime_ms'] -ge 0 -and
+            $row['received_elapsed_realtime_ms'] -is [long] -and $row['received_elapsed_realtime_ms'] -ge $row['process_start_elapsed_realtime_ms']) 'r5_local_receipt_invalid'
+        $rows.Add($row)
+    }
+    return @{Lines=@($lines);Rows=$rows.ToArray()}
+}
+function Invoke-BenchR5Failure {
+    $fg=Invoke-BenchTool 'foreground_app' @{} 'r5-failure-baseline-foreground'
+    Assert-BenchToolOk $fg
+    Assert-Bench ($fg.ctx.app -is [string] -and $fg.ctx.app -ceq 'dev.magina.gateway' -and
+        $fg.ctx.foreground_known -is [bool] -and $fg.ctx.foreground_known) 'r5_failure_baseline_not_gateway'
+    $pidBefore=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-failure-process-before'
+    Assert-Bench ($pidBefore -cmatch '^[1-9][0-9]{0,8}$') 'r5_failure_process_invalid'
+    $before=Read-BenchR5Receipts 'r5-receipts-before'
+    $nonce='r5-'+[guid]::NewGuid().ToString('N')
+    Assert-Bench (@($before.Rows|Where-Object {$_['nonce'] -ceq $nonce}).Count -eq 0) 'r5_failure_nonce_preexists'
+    $uri='agent-testbench://r5/finish?nonce='+$nonce
+    Assert-BenchRemaining 120
+    Set-BenchPhase 'single_r5_failure_dispatch'
+    $response=Invoke-BenchTool 'intent_send' @{action='android.intent.action.VIEW';uri=$uri;package='dev.magina.testtarget'} 'r5-failure-intent' 25
+    Assert-Bench ($response.ok -is [bool] -and -not $response.ok -and $response.error -is [pscustomobject] -and
+        $response.error.code -is [string] -and $response.error.code -ceq 'E_VERIFY_FAIL' -and
+        $response.error.channel -is [string] -and $response.error.channel -ceq 'intent' -and $response.error.retryable -is [bool] -and -not $response.error.retryable -and
+        $null -eq $response.PSObject.Properties['data']) 'r5_failure_expected_error_not_observed'
+    $after=Read-BenchR5Receipts 'r5-receipts-after'
+    $pidAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-failure-process-after'
+    Assert-Bench ($pidAfter -ceq $pidBefore) 'r5_failure_process_changed'
+    Assert-Bench ($after.Lines.Count -eq $before.Lines.Count+1) 'r5_failure_receipt_increment_not_one'
+    for($index=0;$index -lt $before.Lines.Count;$index++){Assert-Bench ($after.Lines[$index] -ceq $before.Lines[$index]) 'r5_failure_receipt_history_changed'}
+    $received=@($after.Rows|Where-Object {$_['nonce'] -ceq $nonce})
+    Assert-Bench ($received.Count -eq 1 -and $after.Rows[-1]['nonce'] -ceq $nonce) 'r5_failure_receipt_nonce_mismatch'
+    return @{Response=$response;Uri=$uri;Receipt=$received[0];GatewayPid=[int]$pidBefore}
+}
+function Assert-BenchR5FailureAudit($Audit,$Invocation){
+    $response=$Invocation.Response
+    Assert-Bench ($response.audit_id -is [string] -and $response.audit_id -cmatch '^a-[0-9]{6}$') 'r5_failure_audit_id_invalid'
+    $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+    Assert-Bench ($entries.Count -eq 1) 'r5_failure_audit_missing_or_duplicate'
+    $entry=$entries[0]
+    Assert-Bench ($entry.id -is [string] -and $entry.tool -is [string] -and $entry.tool -ceq 'intent_send' -and
+        $entry.result -is [string] -and $entry.result -ceq 'E_VERIFY_FAIL' -and $entry.channel -is [string] -and $entry.channel -ceq 'intent' -and
+        $entry.args -is [pscustomobject] -and $entry.args.action -is [string] -and $entry.args.action -ceq 'android.intent.action.VIEW' -and
+        $entry.args.package -is [string] -and $entry.args.package -ceq 'dev.magina.testtarget' -and
+        $entry.args.uri -is [string] -and $entry.args.uri -ceq $Invocation.Uri -and $null -eq $entry.args.PSObject.Properties['component'] -and
+        @($Audit|Where-Object tool -CEQ 'intent_send').Count -eq 1) 'r5_failure_audit_call_mismatch'
+    $o=Read-BenchIntentObservation $entry $response.audit_id $Invocation.GatewayPid 'timeout'
+    Assert-Bench ($Invocation.Receipt['received_elapsed_realtime_ms'] -ge $o['dispatch_entered_ms'] -and
+        $Invocation.Receipt['received_elapsed_realtime_ms'] -le $o['poll_end_ms']) 'r5_failure_receipt_outside_call'
+}
+function Read-BenchIntentObservation($Entry,[string]$AuditId,[int]$ProcessId,[string]$Poll){
+    $marker=';r5_observation='
+    Assert-Bench ($Entry.note -is [string] -and [regex]::Matches($Entry.note,[regex]::Escape($marker)).Count -eq 1) 'intent_observation_missing_or_duplicate'
+    try{$o=ConvertFrom-Json -InputObject $Entry.note.Substring($Entry.note.IndexOf($marker)+$marker.Length) -AsHashtable -Depth 10 -DateKind String}catch{throw 'intent_observation_invalid_json'}
+    Assert-Bench ($o -is [Collections.IDictionary] -and $o.Count -eq 12 -and $o['v'] -is [long] -and $o['v'] -eq 1 -and
+        $o['available'] -is [bool] -and $o['available'] -and $o['audit_id'] -is [string] -and $o['audit_id'] -ceq $AuditId -and
+        $o['pid'] -is [long] -and $o['pid'] -eq $ProcessId -and $o['process_instance'] -is [string] -and
+        $o['process_instance'] -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -and
+        $o['dispatch'] -is [string] -and $o['dispatch'] -ceq 'returned' -and $o['poll'] -is [string] -and $o['poll'] -ceq $Poll -and
+        $o['checks'] -is [long] -and $o['checks'] -gt 0) 'intent_observation_invalid'
+    $last=0L
+    foreach($key in @('dispatch_entered_ms','dispatch_returned_ms','poll_start_ms','poll_end_ms')){
+        Assert-Bench ($o[$key] -is [long] -and $o[$key] -ge $last) 'intent_observation_time_invalid';$last=$o[$key]
+    }
+    return $o
+}
+function Read-BenchStaleCounter([string]$Name){
+    $raw=Invoke-BenchAdb @('shell','run-as','dev.magina.testtarget','cat','files/stale-callback-state.json') $Name
+    try{$r=ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 10 -DateKind String}catch{throw 'stale_counter_invalid_json'}
+    Assert-Bench ($r -is [Collections.IDictionary] -and $r.Count -eq 6 -and $r['schema'] -is [long] -and $r['schema'] -eq 1 -and
+        $r['process_id'] -is [long] -and $r['process_id'] -gt 0 -and $r['activity_instance'] -is [string] -and
+        $r['activity_instance'] -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -and
+        $r['page_generation'] -is [long] -and $r['page_generation'] -gt 0 -and $r['page_generated_elapsed_realtime_ms'] -is [long] -and
+        $r['page_generated_elapsed_realtime_ms'] -ge 0 -and $r['callback_count'] -is [long] -and $r['callback_count'] -eq 0) 'stale_counter_invalid_or_nonzero'
+    return $r
+}
+function Invoke-BenchStaleAllow {
+    $gatewayPid=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'stale-gateway-process-before'
+    Assert-Bench ($gatewayPid -cmatch '^[1-9][0-9]{0,8}$') 'stale_gateway_process_invalid'
+    $route=Invoke-BenchTool 'intent_send' @{action='android.intent.action.VIEW';uri='agent-testbench://target/stale-conversation';package='dev.magina.testtarget'} 'route-stale-conversation'
+    Assert-BenchToolOk $route
+    Assert-BenchForeground 'route-stale-conversation-foreground'
+    $summary.routes_verified+=,'stale-conversation'
+    $before=Get-BenchSnapshot 'stale-before'
+    $summary.callback_count_before=Get-BenchCount $before
+    Assert-Bench ($summary.callback_count_before -eq 0) 'stale_counter_not_zero_before'
+    $buttons=@($before.elements|Where-Object {$_.text -is [string] -and $_.text -ceq '发送（仅本地计数）' -and
+        $_.role -is [string] -and $_.role -ceq 'button' -and $_.source -is [string] -and $_.source -ceq 'a11y'})
+    Assert-Bench ($buttons.Count -eq 1 -and $buttons[0].ref -is [string] -and -not [string]::IsNullOrWhiteSpace($buttons[0].ref)) 'stale_button_not_unique'
+    $counter=Read-BenchStaleCounter 'stale-counter-before'
+    $targetPid=Invoke-BenchAdb @('shell','pidof','dev.magina.testtarget') 'stale-target-process-before'
+    Assert-Bench ($targetPid -cmatch '^[1-9][0-9]{0,8}$' -and [long]$targetPid -eq $counter['process_id']) 'stale_target_process_invalid'
+    $seconds=Invoke-BenchAdb @('shell','date','+%s') 'stale-device-clock'
+    Assert-Bench ($seconds -cmatch '^[1-9][0-9]{8,10}$') 'stale_device_clock_invalid'
+    $now=[long]$seconds*1000
+    $nonce='stale-'+[guid]::NewGuid().ToString('N')
+    $control=[ordered]@{run_id=$nonce;leg='stale';nonce=$nonce;expires_at_ms=($now+180000);tool='ui_action';action='click';initial_package='dev.magina.testtarget';stale_after_allow=$true}
+    Write-BenchJson 'stale-control.json' $control
+    $remote='/data/local/tmp/'+$nonce+'.json'
+    [void](Invoke-BenchAdb @('push',(Join-Path $script:output 'stale-control.json'),$remote) 'stale-control-upload')
+    [void](Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cp',$remote,'files/test-control.json') 'stale-control-install')
+    [void](Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','chmod','600','files/test-control.json') 'stale-control-mode')
+    [void](Invoke-BenchAdb @('shell','rm','-f',$remote) 'stale-control-temp-remove')
+    Assert-BenchRemaining 120
+    Set-BenchPhase 'await_stale_allow'
+    Write-Host '本轮actor=assistant_computer_use；仅在真实AVD确认卡允许一次，随后debug HOME应触发原安全门stale拒绝，不重发。'
+    $response=Invoke-BenchTool 'ui_action' @{ref=$buttons[0].ref;action='click'} 'stale-allowed-click' 100
+    Assert-Bench ($response.ok -is [bool] -and -not $response.ok -and $response.error -is [pscustomobject] -and
+        $response.error.code -is [string] -and $response.error.code -ceq 'E_STALE_REF' -and
+        $response.error.channel -is [string] -and $response.error.channel -ceq 'safety' -and
+        $response.error.retryable -is [bool] -and -not $response.error.retryable) 'stale_expected_error_not_observed'
+    $raw=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cat','files/test-confirmation-state.json') 'stale-confirm-state'
+    try{$state=ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 10 -DateKind String}catch{throw 'stale_confirmation_invalid_json'}
+    Assert-Bench ($state -is [Collections.IDictionary] -and $state.Count -eq 13 -and $state['run_id'] -is [string] -and $state['run_id'] -ceq $nonce -and
+        $state['nonce'] -is [string] -and $state['nonce'] -ceq $nonce -and $state['leg'] -is [string] -and $state['leg'] -ceq 'stale' -and
+        $state['tool'] -is [string] -and $state['tool'] -ceq 'ui_action' -and $state['action'] -is [string] -and $state['action'] -ceq 'click' -and
+        $state['initial_package'] -is [string] -and $state['initial_package'] -ceq 'dev.magina.testtarget' -and
+        $state['state'] -is [string] -and $state['state'] -ceq 'allowed' -and $state['decided_via'] -is [string] -and $state['decided_via'] -ceq 'overlay' -and
+        $state['confirm_id'] -is [string] -and $state['confirm_id'] -cmatch '^[0-9a-f]{12}$' -and
+        $state['evidence_file'] -is [string] -and $state['evidence_file'] -ceq ('confirmation-'+$state['confirm_id']+'.png') -and
+        $state['card_visible'] -is [bool] -and $state['card_visible'] -and $state['capture_attempts'] -is [long] -and $state['capture_attempts'] -gt 0 -and
+        $state['time'] -is [string]) 'stale_confirmation_binding_invalid'
+    $decidedAt=[DateTimeOffset]::MinValue
+    Assert-Bench ([DateTimeOffset]::TryParse($state['time'],[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$decidedAt) -and
+        $decidedAt.ToUnixTimeMilliseconds() -ge $now -and $decidedAt.ToUnixTimeMilliseconds() -lt $control.expires_at_ms) 'stale_confirmation_time_invalid'
+    $after=Read-BenchStaleCounter 'stale-counter-after'
+    foreach($key in @('process_id','activity_instance','page_generation','page_generated_elapsed_realtime_ms')){Assert-Bench ($after[$key] -ceq $counter[$key]) 'stale_target_instance_changed'}
+    $targetAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.testtarget') 'stale-target-process-after'
+    $gatewayAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'stale-gateway-process-after'
+    Assert-Bench ($targetAfter -ceq $targetPid -and $gatewayAfter -ceq $gatewayPid) 'stale_process_changed'
+    $summary.callback_count_after=0
+    return @{Response=$response;Ref=$buttons[0].ref;State=$state;Route=$route;GatewayPid=[int]$gatewayPid;Counter=$counter}
+}
+function Assert-BenchStaleAudit($Audit,$Invocation){
+    $response=$Invocation.Response
+    Assert-Bench ($response.audit_id -is [string] -and $response.audit_id -cmatch '^a-[0-9]{6}$') 'stale_audit_id_invalid'
+    $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+    Assert-Bench ($entries.Count -eq 1) 'stale_audit_missing_or_duplicate'
+    $entry=$entries[0]
+    Assert-Bench ($entry.id -is [string] -and $entry.tool -is [string] -and $entry.tool -ceq 'ui_action' -and
+        $entry.result -is [string] -and $entry.result -ceq 'E_STALE_REF' -and $entry.channel -is [string] -and $entry.channel -ceq 'safety' -and
+        $entry.args -is [pscustomobject] -and $entry.args.ref -is [string] -and $entry.args.ref -ceq $Invocation.Ref -and
+        $entry.args.action -is [string] -and $entry.args.action -ceq 'click' -and
+        @($Audit|Where-Object tool -CEQ 'ui_action').Count -eq 1) 'stale_audit_call_mismatch'
+    Assert-Bench ($entry.note -is [string]) 'stale_audit_note_invalid'
+    $tokens=@($entry.note -split ';')
+    Assert-Bench (@($tokens|Where-Object {$_ -ceq 'confirmation=allowed'}).Count -eq 1 -and
+        @($tokens|Where-Object {$_.StartsWith('confirmation=') -and $_ -cnotin @('confirmation=requested','confirmation=allowed')}).Count -eq 0 -and
+        @($tokens|Where-Object {$_ -ceq 'decided_via=overlay'}).Count -eq 1 -and
+        @($tokens|Where-Object {$_.StartsWith('decided_via=') -and $_ -cne 'decided_via=overlay'}).Count -eq 0 -and
+        @($tokens|Where-Object {$_ -ceq 'context=rechecked'}).Count -ge 1 -and
+        @($tokens|Where-Object {$_.StartsWith('context=') -and $_ -cne 'context=rechecked'}).Count -eq 0) 'stale_audit_decision_not_proven'
+    Assert-Bench ($Invocation.Route.audit_id -is [string] -and $Invocation.Route.audit_id -cmatch '^a-[0-9]{6}$') 'stale_route_audit_invalid'
+    $routes=@($Audit|Where-Object id -CEQ $Invocation.Route.audit_id)
+    Assert-Bench ($routes.Count -eq 1 -and $routes[0].id -is [string] -and $routes[0].tool -is [string] -and $routes[0].tool -ceq 'intent_send' -and
+        $routes[0].result -is [string] -and $routes[0].result -ceq 'OK' -and $routes[0].channel -is [string] -and $routes[0].channel -ceq 'intent' -and
+        $routes[0].args -is [pscustomobject] -and $routes[0].args.action -is [string] -and $routes[0].args.action -ceq 'android.intent.action.VIEW' -and
+        $routes[0].args.package -is [string] -and $routes[0].args.package -ceq 'dev.magina.testtarget' -and
+        $routes[0].args.uri -is [string] -and $routes[0].args.uri -ceq 'agent-testbench://target/stale-conversation' -and
+        $null -eq $routes[0].args.PSObject.Properties['component'] -and
+        @($Audit|Where-Object tool -CEQ 'intent_send').Count -eq 1) 'stale_route_audit_invalid'
+    $o=Read-BenchIntentObservation $routes[0] $Invocation.Route.audit_id $Invocation.GatewayPid 'hit'
+    Assert-Bench ($Invocation.Counter['page_generated_elapsed_realtime_ms'] -ge $o['dispatch_entered_ms'] -and
+        $Invocation.Counter['page_generated_elapsed_realtime_ms'] -le $o['poll_end_ms']) 'stale_counter_outside_route'
+}
+function Assert-BenchR5Observations($Audit,$Routes,[int]$ProcessId){
+    Assert-Bench ($ProcessId -gt 0 -and $Routes.Count -eq 3) 'r5_route_or_process_missing'
+    $instance=$null
+    $previousEnd=-1L
+    $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach($route in @('list','search','conversation')){
+        $response=$Routes[$route]
+        Assert-Bench ($null -ne $response -and $response.ok -is [bool] -and $response.ok -and
+            $response.data.sent -is [bool] -and $response.data.sent -and $response.data.target_package -ceq 'dev.magina.testtarget' -and
+            $response.data.foreground_verified -is [bool] -and $response.data.foreground_verified -and $response.data.verification_status -ceq 'verified' -and
+            $response.data.verification_scope -ceq 'package') 'r5_route_response_unverified'
+        Assert-Bench ($response.audit_id -cmatch '^a-[0-9]{6}$' -and $ids.Add($response.audit_id)) 'r5_route_audit_id_invalid'
+        $entries=@($Audit|Where-Object id -CEQ $response.audit_id)
+        Assert-Bench ($entries.Count -eq 1) 'r5_audit_missing_or_duplicate'
+        $entry=$entries[0]
+        Assert-Bench ($entry.tool -ceq 'intent_send' -and $entry.result -ceq 'OK' -and $entry.channel -ceq 'intent' -and
+            $entry.args.action -ceq 'android.intent.action.VIEW' -and $entry.args.package -ceq 'dev.magina.testtarget' -and
+            $entry.args.uri -ceq ('agent-testbench://target/'+$route)) 'r5_audit_route_mismatch'
+        $marker=';r5_observation='
+        Assert-Bench ($entry.note -is [string] -and [regex]::Matches($entry.note,[regex]::Escape($marker)).Count -eq 1) 'r5_note_missing_or_duplicate'
+        try{$observation=ConvertFrom-Json -InputObject $entry.note.Substring($entry.note.IndexOf($marker)+$marker.Length) -AsHashtable -Depth 10 -DateKind String}catch{throw 'r5_note_invalid_json'}
+        Assert-Bench ($observation -is [Collections.IDictionary] -and $observation.Count -eq 12) 'r5_note_invalid_schema'
+        Assert-Bench ($observation['v'] -is [long] -and $observation['v'] -eq 1 -and
+            $observation['available'] -is [bool] -and $observation['available'] -and $observation['audit_id'] -ceq $response.audit_id -and
+            $observation['pid'] -is [long] -and $observation['pid'] -eq $ProcessId -and
+            $observation['process_instance'] -is [string] -and
+            $observation['process_instance'] -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') 'r5_note_identity_unverified'
+        if($null -eq $instance){$instance=$observation['process_instance']}
+        Assert-Bench ($observation['process_instance'] -ceq $instance) 'r5_process_instance_changed'
+        Assert-Bench ($observation['dispatch'] -ceq 'returned' -and $observation['poll'] -ceq 'hit' -and
+            $observation['checks'] -is [long] -and $observation['checks'] -gt 0) 'r5_note_not_positive_landing'
+        $times=@('dispatch_entered_ms','dispatch_returned_ms','poll_start_ms','poll_end_ms')
+        $last=$previousEnd
+        foreach($name in $times){
+            $value=$observation[$name]
+            Assert-Bench ($value -is [long] -and $value -ge 0 -and $value -ge $last) 'r5_note_time_order_invalid'
+            $last=$value
+        }
+        $previousEnd=$last
+    }
 }
 function Restore-BenchIme {
     Assert-Bench ($null -ne $script:imeState -and $emulatorVerified) 'ime_restore_original_state_unavailable'
@@ -253,6 +556,9 @@ Assert-Bench (-not(Test-Path -LiteralPath $output)) 'output_directory_already_ex
 New-Item -ItemType Directory -Path $output -Force|Out-Null
 try{
     Assert-Bench (-not($Run -and $PrepareOnly)) 'run_and_prepare_only_conflict'
+    Assert-Bench (-not($R5ObservationOnly -and $ImeProbe)) 'r5_observation_and_ime_probe_conflict'
+    Assert-Bench (-not($HumanAllowProbe -and ($R5ObservationOnly -or $ImeProbe))) 'human_allow_mode_conflict'
+    if($R5FailureProbe -or $StaleAllowProbe){Assert-Bench (@(@($ImeProbe,$R5ObservationOnly,$HumanAllowProbe,$R5FailureProbe,$StaleAllowProbe)|Where-Object {$_}).Count -eq 1) 'negative_probe_mode_conflict'}
     Assert-Bench ($ConsolePort%2 -eq 0 -and $RuntimeSeconds -ge $BootTimeoutSeconds+180) 'invalid_ports_or_runtime_budget'
     if($ImeProbe){Assert-Bench ($RuntimeSeconds -ge $BootTimeoutSeconds+300) 'ime_probe_requires_additional_runtime_budget'}
     $ports=@($AdbServerPort,$ConsolePort,($ConsolePort+1),$HttpPort)
@@ -323,7 +629,11 @@ try{
     Assert-Bench (@(Get-BenchDeviceRows $initialDevices).Count -eq 0) 'isolated_adb_not_empty_before_emulator'
     $summary.initial_isolated_device_table_empty=$true
     Set-BenchPhase 'start_emulator'
-    $emulator=Start-BenchProcess $emulatorExe @('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)",'-no-window','-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
+    $emulatorArguments=@('-avd',$summary.avd_name,'-ports',"$ConsolePort,$($ConsolePort+1)")
+    if(-not $HumanAllowProbe){$emulatorArguments+=,'-no-window'}
+    $emulatorArguments+=@('-no-audio','-no-boot-anim','-no-snapshot','-memory','2048','-gpu','software','-no-metrics')
+    if($StaleAllowProbe){$emulatorArguments=$emulatorArguments.Where({$_ -cne '-no-window'})}
+    $emulator=Start-BenchProcess $emulatorExe $emulatorArguments
     $summary.emulator_pid=$emulator.Process.Id
     $bootLimit=$clock.Elapsed.TotalSeconds+$BootTimeoutSeconds
     $online=$false
@@ -359,11 +669,6 @@ try{
     [void](Invoke-BenchAdb @('shell','cmd','appops','set','dev.magina.gateway','SYSTEM_ALERT_WINDOW','allow') 'owned-overlay-permission')
     [void](Invoke-BenchAdb @('shell','am','start','-n','dev.magina.gateway/.MainActivity') 'initialize-owned-gateway')
     [void](Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','am','start-foreground-service','--user','0','-n','dev.magina.gateway/.GatewayService') 'start-owned-gateway-service')
-    $prefs=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cat','shared_prefs/gateway.xml') 'owned-credential-in-memory' 20 -Sensitive
-    $prefsXml=[xml]$prefs
-    $token=[string]$prefsXml.SelectSingleNode('/map/string[@name="token"]').InnerText
-    Assert-Bench ($token -cmatch '^[0-9a-f]{32}$') 'owned_gateway_credential_unavailable'
-    $prefs=$null; $prefsXml=$null
     [void](Invoke-BenchAdb @('forward','--no-rebind',"tcp:$HttpPort",'tcp:8848') 'owned-forward')
     $forwardAdded=$true
     $client=[Net.Http.HttpClient]::new();$client.Timeout=[Threading.Timeout]::InfiniteTimeSpan
@@ -375,15 +680,36 @@ try{
         Start-Sleep -Seconds 1
     }
     Assert-Bench $healthy 'gateway_http_not_ready'
+    $prefs=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','cat','shared_prefs/gateway.xml') 'owned-credential-in-memory' 20 -Sensitive
+    $prefsXml=[xml]$prefs
+    $token=[string]$prefsXml.SelectSingleNode('/map/string[@name="token"]').InnerText
+    Assert-Bench ($token -cmatch '^[0-9a-f]{32}$') 'owned_gateway_credential_unavailable'
+    $prefs=$null; $prefsXml=$null
     $touchSetting=Invoke-BenchAdb @('shell','settings','get','secure','touch_exploration_enabled') 'touch-exploration-setting'
     $summary.touch_exploration_setting=if($touchSetting -cin @('0','1')){$touchSetting}else{'UNKNOWN'}
     Set-BenchPhase 'real_mcp_chain'
     $initialized=Invoke-BenchRpc 'initialize' @{protocolVersion='2025-03-26';capabilities=@{};clientInfo=@{name='local-testbench';version='1'}} 'initialize'
     Assert-Bench ($initialized.protocolVersion -ceq '2025-03-26') 'mcp_protocol_mismatch'
     $tools=Invoke-BenchRpc 'tools/list' @{} 'tools-list'
-    $requiredTools=@('foreground_app','intent_send','ui_snapshot','ui_action')
+    $requiredTools=@('foreground_app','intent_send')
+    if(-not($R5ObservationOnly -or $R5FailureProbe)){$requiredTools+=@('ui_snapshot','ui_action')}
     if($ImeProbe){$requiredTools+=,'type_text'}
     foreach($required in $requiredTools){Assert-Bench ($tools.tools.name -ccontains $required) 'required_gateway_tool_missing'}
+    if($HumanAllowProbe){Wait-BenchHumanReady}
+    if($StaleAllowProbe){Wait-BenchHumanReady}
+    if($R5ObservationOnly){
+        $processBefore=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-before'
+        Assert-Bench ($processBefore -cmatch '^[1-9][0-9]{0,8}$') 'r5_process_identity_ambiguous'
+        foreach($route in @('list','search','conversation')){Open-BenchRoute $route}
+        $processAfter=Invoke-BenchAdb @('shell','pidof','dev.magina.gateway') 'r5-process-after'
+        Assert-Bench ($processAfter -ceq $processBefore) 'r5_process_identity_changed'
+    }elseif($HumanAllowProbe){
+        $humanAllowed=Invoke-BenchHumanAllow
+    }elseif($R5FailureProbe){
+        $r5Failure=Invoke-BenchR5Failure
+    }elseif($StaleAllowProbe){
+        $staleAllowed=Invoke-BenchStaleAllow
+    }else{
     Open-BenchRoute 'list'
     [void](Get-BenchSnapshot 'list-snapshot')
     Open-BenchRoute 'search'
@@ -471,6 +797,7 @@ try{
         Restore-BenchIme
         $summary.ime_probe_status='input_and_restore_verified_pending_audit'
     }
+    }
     Set-BenchPhase 'collect_audit'
     $auditFiles=Invoke-BenchAdb @('shell','run-as','dev.magina.gateway','ls','files/audit') 'audit-file-list'
     $lines=[Collections.Generic.List[string]]::new()
@@ -482,6 +809,19 @@ try{
     [IO.File]::WriteAllText((Join-Path $output 'audit.jsonl'),($lines -join "`n")+"`n",$encoding)
     $audit=@($lines|ForEach-Object {$_|ConvertFrom-Json -Depth 30 -DateKind String})
     foreach($id in $script:auditIds){Assert-Bench (@($audit|Where-Object id -CEQ $id).Count -eq 1) 'audit_id_missing_or_duplicate'}
+    if($R5ObservationOnly){
+        Assert-BenchR5Observations $audit $script:r5Routes ([int]$processBefore)
+        $summary.r5_observation_verified=$true
+    }elseif($HumanAllowProbe){
+        Assert-BenchHumanAllowAudit $audit $humanAllowed
+        $summary.human_allow_verified=$true; $summary.confirmation_result='allowed'
+    }elseif($R5FailureProbe){
+        Assert-BenchR5FailureAudit $audit $r5Failure
+        $summary.r5_failure_verified=$true
+    }elseif($StaleAllowProbe){
+        Assert-BenchStaleAudit $audit $staleAllowed
+        $summary.stale_allow_verified=$true; $summary.stale_target_callback_zero_verified=$true; $summary.confirmation_result='allowed_stale'
+    }else{
     $blocked=@($audit|Where-Object id -CEQ $denied.audit_id)
     Assert-Bench ($blocked[0].tool -ceq 'ui_action' -and $blocked[0].result -ceq 'E_CONFIRM_TIMEOUT') 'timeout_audit_mismatch'
     $focusEntry=@($audit|Where-Object id -CEQ $focused.audit_id)[0]
@@ -496,6 +836,7 @@ try{
             $null -eq $imeEntry.args.PSObject.Properties['text']) 'ime_commit_audit_mismatch'
         Assert-Bench ($summary.ime_restore_verified -ceq $true) 'ime_restore_unproven'
         $summary.ime_audit_verified=$true; $summary.ime_probe_status='passed'
+    }
     }
     $summary.audit_verified=$true; $summary.status='passed'
 }catch{

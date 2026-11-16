@@ -7,6 +7,33 @@ import org.junit.Test
 
 class ReleaseTestControlTest {
     @Test
+    fun `release owned target click never arms captures or injects Home`() {
+        var captured = false
+        var home = false
+        val control = ReleaseTestControl()
+        val attempt = TestConfirmationAttempt(
+            confirmationId = "abc123def456",
+            toolName = "ui_action",
+            action = "click",
+            initialPackage = "dev.magina.testtarget",
+        )
+
+        val session = control.onConfirmationShown(attempt) {
+            captured = true
+            TestConfirmationCapture(byteArrayOf(1), cardVisible = true, attempts = 1)
+        }
+        control.onConfirmationDecision(session, TestConfirmationDecision.ALLOWED, ApprovalChannel.OVERLAY)
+        control.afterAllowed(session, attempt, { home = true; true }) {
+            TestForeground(known = true, packageName = "launcher")
+        }
+
+        assertFalse(session.armed)
+        assertNull(session.confirmId)
+        assertFalse(captured)
+        assertFalse(home)
+    }
+
+    @Test
     fun `release remains inert even when input digest is present`() {
         var captured = false
         var home = false
