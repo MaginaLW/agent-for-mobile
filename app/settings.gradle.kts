@@ -13,16 +13,7 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "mobile-agent-gateway"
-val tabletC1bIsolatedBuild = providers.gradleProperty("tabletC1bIsolatedBuild").orNull
-tabletC1bIsolatedBuild?.let { value ->
-    check(value == "true" || value == "false") {
-        "tabletC1bIsolatedBuild must be exactly true or false"
-    }
+include(":gateway")
+if (providers.gradleProperty("localTestbench").orNull == "true") {
+    include(":test-target")
 }
-if (tabletC1bIsolatedBuild != "true") {
-    include(":gateway")
-    if (providers.gradleProperty("localTestbench").orNull == "true") {
-        include(":test-target")
-    }
-}
-include(":tablet-c1b-probe")

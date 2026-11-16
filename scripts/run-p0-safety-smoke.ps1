@@ -14,7 +14,7 @@ P0 安全硬门监督式真机 runner。
 param(
     [Parameter(Mandatory)][string[]]$Legs,
     [ValidateSet('gateway')][string]$Executor = 'gateway',
-    [ValidateSet('claude','codex')][string]$Brain = 'codex',
+    [ValidateSet('codex')][string]$Brain = 'codex',
     [switch]$Provision,
     [string]$RepoRootOverride,
     [string]$AdbPath = 'adb',
@@ -32,10 +32,6 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
-
-if ($Brain -eq 'claude') {
-    throw 'Claude 执行已退役：监督式 runner 仅接受 Codex + gateway；未开始设备准备或派单。'
-}
 
 if ($ConfirmationTimeoutSec -lt 1 -or $ConfirmationTimeoutSec -gt 240) { throw 'ConfirmationTimeoutSec 必须为 1..240。' }
 if ($DispatchTimeoutMin -lt 1 -or $DispatchTimeoutMin -gt 60) { throw 'DispatchTimeoutMin 必须为 1..60。' }

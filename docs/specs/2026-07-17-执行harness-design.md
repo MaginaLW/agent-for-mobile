@@ -31,8 +31,8 @@
 
 ```powershell
 scripts/dispatch.ps1 -Task "<内联任务>" | -TaskFile scripts/tasks/xxx.md
-                     [-Slug 台账短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15]
-                     [-Model sonnet] [-Brain claude|codex]
+                     [-Slug 台账短名] [-TimeoutMin 15]
+                     [-Model <Codex模型>] [-Brain codex]
                      [-Executor mobile|gateway] [-DryRun]
                      [-Confirm <暂停件路径>]   # 仅 gateway 纯前置恢复，见 §5.2
 ```

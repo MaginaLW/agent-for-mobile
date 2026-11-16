@@ -2,7 +2,7 @@
 docs/runs/traces/
 docs/runs/ledger.csv.write.lock
 docs/runs/ledger.csv.tmp.*
-# 少量早期 C1a/T0 证据 JSON 是有意强制入库的（被文档引用，部分由 .gitattributes 固定原字节）
+# 跑测本地证据，不入库
 docs/runs/evidence/
 
 # 派单并发锁
@@ -14,7 +14,7 @@ configs/gateway-mcp.json
 configs/.gateway-mcp.*.tmp
 configs/gateway-mcp.json.restore-*.tmp
 
-# Android 工程（app/ 网关、spikes/probe/ 探针）
+# Android 工程（app/）
 **/build/
 **/.gradle/
 **/.kotlin/

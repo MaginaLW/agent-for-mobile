@@ -188,107 +188,6 @@ Invoke-Check '离线环境与构建隔离' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'dev-env-offline.log')
 }
 
-Invoke-Check '平板只读 intake 无设备离线门' {
-    Invoke-Logged -LogName 'tablet-intake-offline-gate.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-tablet-intake-offline.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-intake-offline-gate.log')
-}
-
-Invoke-Check '平板双窗 T-L1 v2 诊断离线门' {
-    Invoke-Logged -LogName 'tablet-layout-observation-v2-offline-gate.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\run-tablet-layout-observation-v2-offline-gate.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-v2-offline-gate.log')
-}
-
-Invoke-Check '平板双窗 T-L1 C1a 受控 runner 无设备门' {
-    Invoke-Logged -LogName 'tablet-layout-c1a-offline-gate.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-tablet-layout-c1a-offline.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-c1a-offline-gate.log')
-}
-
-Invoke-Check '平板双窗 T-L1 C1b pure-a11y 离线门' {
-    Invoke-Logged -LogName 'tablet-layout-observation-c1b-v1-offline-gate.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\run-tablet-layout-observation-c1b-v1-offline-gate.ps1')
-    ) | Out-Null
-    Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-c1b-v1-offline-gate.log')
-}
-
-Invoke-Check 'C1b 未分类窗口 v2 合同离线' {
-    Invoke-Logged -LogName 'tablet-layout-observation-c1b-v2-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-layout-observation-c1b-v2-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-layout-observation-c1b-v2-offline.log')
-    if ($summary -cnotmatch '^tablet-c1b observation v2 offline: \d+ passed, 0 failed$') {
-        throw "C1b v2 合同测试汇总不符：$summary"
-    }
-    $summary
-}
-
-Invoke-Check 'C1b inventory 结果合同离线' {
-    Invoke-Logged -LogName 'tablet-c1b-inventory-result-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-c1b-inventory-result-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-c1b-inventory-result-offline.log')
-    if ($summary -cnotmatch '^tablet-c1b inventory result offline: \d+ passed, 0 failed$') {
-        throw "C1b inventory 结果测试汇总不符：$summary"
-    }
-    $summary
-}
-
-Invoke-Check 'C1b 真实派生语料回放与有界变异' {
-    Invoke-Logged -LogName 'c1b-corpus-replay-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\c1b-corpus-replay-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'c1b-corpus-replay-offline.log')
-    if ($summary -cnotmatch '^c1b corpus replay offline: \d+ passed, 0 failed; originals=0$') {
-        throw "C1b 语料回放汇总不符：$summary"
-    }
-    $summary
-}
-
-Invoke-Check '运行复核草稿与身份预检离线' {
-    Invoke-Logged -LogName 'prepare-run-review-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\prepare-run-review-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'prepare-run-review-offline.log')
-    if ($summary -cnotmatch '^prepare run review offline: \d+ passed, 0 failed$') {
-        throw "运行复核草稿测试汇总不符：$summary"
-    }
-    $summary
-}
-
-Invoke-Check '合同改动联动检查' {
-    Invoke-Logged -LogName 'contract-coverage-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\contract-coverage-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'contract-coverage-offline.log')
-    if ($summary -cnotmatch '^contract coverage offline: \d+ passed, 0 failed$') {
-        throw "合同联动测试汇总不符：$summary"
-    }
-    Invoke-Logged -LogName 'contract-coverage.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\check-contract-coverage.ps1'), '-RepoRoot', $RepoRoot
-    ) | Out-Null
-    $result = Get-Content -LiteralPath (Join-Path $LogDir 'contract-coverage.log') -Raw | ConvertFrom-Json
-    if ($result.schema -cne 'contract-coverage/v1' -or $result.status -cne 'passed') {
-        throw '合同改动未覆盖且未明确豁免。'
-    }
-    $summary
-}
-
-Invoke-Check 'C1b runner 离线' {
-    Invoke-Logged -LogName 'tablet-c1b-runner-offline.log' -FilePath $PwshPath -Arguments @(
-        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\tablet-c1b-runner-offline.ps1')
-    ) | Out-Null
-    $summary = Get-LastMeaningfulLine (Join-Path $LogDir 'tablet-c1b-runner-offline.log')
-    if ($summary -cnotmatch '^tablet-c1b runner offline: \d+ passed, 0 failed$') {
-        throw "C1b runner 离线测试汇总不符：$summary"
-    }
-    $summary
-}
-
 Invoke-Check '派单离线测试' {
     Invoke-Logged -LogName 'dispatch-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-offline.ps1')
@@ -316,14 +215,10 @@ else {
             '-p', (Join-Path $RepoRoot 'app'),
             ':gateway:testDebugUnitTest', ':gateway:testReleaseUnitTest',
             ':gateway:lintDebug', ':gateway:lintRelease', ':gateway:assembleDebug', ':gateway:assembleRelease',
-            ':gateway:verifyTabletC1aReleaseAbsence', ':gateway:verifyTabletC1bReleaseAbsence',
-            ':tablet-c1b-probe:testDebugUnitTest', ':tablet-c1b-probe:testReleaseUnitTest',
-            ':tablet-c1b-probe:lintDebug', ':tablet-c1b-probe:lintRelease',
-            ':tablet-c1b-probe:verifyTabletC1bReadOnlyArtifact',
             '--offline', '--no-daemon', '-Pkotlin.compiler.execution.strategy=in-process',
             '--dependency-verification=strict', '--console=plain'
         ) | Out-Null
-        'gateway/probe testDebug + testRelease + lintDebug/lintRelease + assembleDebug/assembleRelease + release absence/artifact proof'
+        'gateway testDebug + testRelease + lintDebug/lintRelease + assembleDebug/assembleRelease'
     }
 }
 

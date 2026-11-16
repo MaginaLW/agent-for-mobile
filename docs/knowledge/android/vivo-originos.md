@@ -1,11 +1,11 @@
 # vivo / OriginOS（历史手机基线：V2352A · X100 系列，Android 16，1260×2800）
 
-> 来源：M0/M0.5 起实测（2026-07-16 起，各条注日期）。原始记录：[../../runs/2026-07-16-M0.md](../../runs/2026-07-16-M0.md)。品牌开关完整矩阵见 [M0 runbook §1.1](../../runbooks/M0-runbook.md)。
+> 来源：M0/M0.5 起实测（2026-07-16 起，各条注日期）。原始记录：[../../runs/2026-07-16-M0.md](../../runs/2026-07-16-M0.md)。品牌开关完整矩阵见 [M0 runbook §1.1](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runbooks/M0-runbook.md)。
 
 ## 调试与注入
 
 - **启用和客户端登记不替代绑定证据（PA2553，2026-11-14）**：适用于任务前置只核到enabled成员存在、dump其他段也提及目标包的情况。按唯一User state分别解释Bound、Enabled、Binding/Crashed及Registered clients；客户端字符串命中不算服务绑定，空crashed不排除历史异常。A18现有helper正常识别完整Bound段但未匹配目标，拒绝与原件一致，无格式修复证据；仅保留该次绑定未证，不能推导撤权、原因、持续时长或当前状态。依据：[A18原件离线复核与固定Android16字段来源](../../runs/2026-11-14-小红书单窗口只读准备.md#a18新阅读链在无障碍绑定前置冻结)，未为沉淀追加设备采样。
-- **既有包/配置先读再复用（PA2553，2026-11-11 实测）**：F1-P01 在固定 `93b850213b1b4c9bfb2de53ef2abeee3a5a306c2` 制品上核 base APK 字节匹配，再间隔约 10 秒读取两点 awake/keyguard、网关 enabled 与系统 Bound services、保屏设置，均匹配，不必重复安装或重开权限。默认仍是 vivo IME，不能因此认定 GatewayIme 活跃。有效做法是复用同包身份、区分 enabled/bound 与 IME 配置；不是每轮先写 enabled 列表，不外推到 probe、长期存活或重启。依据：[F1-P01 实施记录](../../runs/2026-11-11-离线减负实施.md#f1-p01既有真机配置只读复用通过)，本轮许可已消费，未来读取仍按适用准入。
+- **既有包/配置先读再复用（PA2553，2026-11-11 实测）**：F1-P01 在固定 `93b850213b1b4c9bfb2de53ef2abeee3a5a306c2` 制品上核 base APK 字节匹配，再间隔约 10 秒读取两点 awake/keyguard、网关 enabled 与系统 Bound services、保屏设置，均匹配，不必重复安装或重开权限。默认仍是 vivo IME，不能因此认定 GatewayIme 活跃。有效做法是复用同包身份、区分 enabled/bound 与 IME 配置；不是每轮先写 enabled 列表，不外推到 probe、长期存活或重启。依据：[F1-P01 实施记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-11-离线减负实施.md#f1-p01既有真机配置只读复用通过)，本轮许可已消费，未来读取仍按适用准入。
 
 - **「USB 模拟点击」开关必开**，否则注入报 SecurityException；开了之后 tap/swipe 正常。
 - OriginOS 5 有 ADB 白名单：一直 unauthorized 就检查「USB 调试 → 仅允许指定计算机调试」。
@@ -20,17 +20,17 @@
 - **后台 overlay 被静默拦截**（2026-07-18）：`SYSTEM_ALERT_WINDOW` ≠「后台弹出界面」权限；网关在后台时 `addView(TYPE_APPLICATION_OVERLAY)` 不抛异常但不显示，确认卡弹不出。✅ 授「后台弹出界面」后，微信前台时确认卡正常弹出（2026-07-22）。
 - **充电胶囊/灵动岛是带文本的大 a11y 悬浮节点**，罩住屏幕上部——OCR 融合去重按「内容相同」判重，不能按「bbox 包含」判。
 
-- **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，当次记录以应用自报判断就绪，但不足以证明持续绑定。详见 [运行记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
+- **vivo 安全中心撤销第三方无障碍**（2026-10-09，PA2553 / Android 16 实测）：探针开启后 1–9 秒内被 `com.vivo.safecenter` 改写 `enabled_accessibility_services` 移除（`dumpsys settings` 可见改写者），日志无原因。允许 i管家弹窗、`settings put`、放行受限设置、后台高耗电、锁卡片、加启动页、系统安装器安装、release 非调试签名 + 官方“解除限制”均无效。vivo 的 `dumpsys accessibility` 绑定列表也不列出已连接的第三方服务，当次记录以应用自报判断就绪，但不足以证明持续绑定。详见 [运行记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
 
 ## 官方资料与客服咨询（2026-10-14–28，🔵 未新增设备实测）
 
 > **确认了系统侧撤销，尚未查明触发原因，也没有验证过的解法；C1b 仍未采集。** 设备证据截至 10-09。Pad5 / OriginOS 6 / `DPD2437C_A_16.1.10.1.W10.V000L1` 为用户提供，未重新读取设备。
 
-- **直接证据**：`com.vivo.safecenter` 改写启用列表移除了探针，通常发生在开启后约 1–9 秒。已尝试授权、保活、安装来源和非调试版等 7 类做法，均未解阻；这不能排除应用行为触发系统处理，也不能认定所有第三方无障碍都被禁用。见 [10-09 记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
-- **调研缩小了范围，未锁定机制**：[vivo FAQ](https://www.vivo.com.cn/service/questions/all?categoryId=170&questionId=1836)只解释首次受限设置与解除流程；Android 16 另有服务登记权限检查和停止清理路径。官方曾修过其他机型的自动关闭问题，但未找到当前 Pad5 固件的对应说明；公开近似病例也没有相同证据链下的可靠解法。详见[首轮](../../runs/2026-10-14-C1b-vivo无障碍权限阻塞调研.md)与[深入调研](../../runs/2026-10-14-C1b-vivo无障碍权限深入调研.md)。
-- **人工未确认根因**：10-15 普通售后只提出“可能不兼容”，称未收到相关反馈，未提供规则或修复版本，转介开放平台。这不能当作兼容性诊断或无系统缺陷证明；开发者人工当时已下班，尚未受理。见[答复记录](../../runs/2026-10-15-C1b-vivo人工客服答复.md)。
+- **直接证据**：`com.vivo.safecenter` 改写启用列表移除了探针，通常发生在开启后约 1–9 秒。已尝试授权、保活、安装来源和非调试版等 7 类做法，均未解阻；这不能排除应用行为触发系统处理，也不能认定所有第三方无障碍都被禁用。见 [10-09 记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)。
+- **调研缩小了范围，未锁定机制**：[vivo FAQ](https://www.vivo.com.cn/service/questions/all?categoryId=170&questionId=1836)只解释首次受限设置与解除流程；Android 16 另有服务登记权限检查和停止清理路径。官方曾修过其他机型的自动关闭问题，但未找到当前 Pad5 固件的对应说明；公开近似病例也没有相同证据链下的可靠解法。详见[首轮](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-14-C1b-vivo无障碍权限阻塞调研.md)与[深入调研](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-14-C1b-vivo无障碍权限深入调研.md)。
+- **人工未确认根因**：10-15 普通售后只提出“可能不兼容”，称未收到相关反馈，未提供规则或修复版本，转介开放平台。这不能当作兼容性诊断或无系统缺陷证明；开发者人工当时已下班，尚未受理。见[答复记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-15-C1b-vivo人工客服答复.md)。
 - **仍未知**：安全误判、系统缺陷、独立权限检查或应用触发处理之间如何归因；未上架应用的自测/误判复核入口；安全检测报告和商店分发是否影响 ROM 放行。探针自报 ready 也不能独立证明持续绑定。
-- **下一步**：10-28 Chrome 已连接，但[开放平台客服入口](https://www.vivo.com.cn/kefu?source=openPlatform)跳转账号登录页，登录状态未确认；当时已过历史人工时段，用户要求明天继续，详见[客服跟进记录](../../runs/2026-10-28-C1b客服跟进与验收准备.md)。确认登录和人工在线后，询问受理团队、未上架应用流程及最少材料，以及检测报告是否关联管家判断。只提供型号、版本和脱敏现象，不直接上传日志、APK 或设备标识，不操作设备或重跑失败轮。10-16 浏览器未连接的情况保留为[历史记录](../../runs/2026-10-16-C1b-vivo开发者客服浏览器未连接.md)。
+- **下一步**：10-28 Chrome 已连接，但[开放平台客服入口](https://www.vivo.com.cn/kefu?source=openPlatform)跳转账号登录页，登录状态未确认；当时已过历史人工时段，用户要求明天继续，详见[客服跟进记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-28-C1b客服跟进与验收准备.md)。确认登录和人工在线后，询问受理团队、未上架应用流程及最少材料，以及检测报告是否关联管家判断。只提供型号、版本和脱敏现象，不直接上传日志、APK 或设备标识，不操作设备或重跑失败轮。10-16 浏览器未连接的情况保留为[历史记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-16-C1b-vivo开发者客服浏览器未连接.md)。
 
 ## C1b 权限诊断矩阵（2026-11-01，复核已有证据）
 
@@ -46,7 +46,7 @@
 | 仍连接但树 opaque | 08-26 曾观察到零几何、childCount=0 的 root；这是先前 C1a 的设备观察 | 不是 10-09 C1b 新采集结果；有 root/ready 不等于有可用语义、目标会话或布局证据 |
 | 读取异常或截断 | C1b source/probe/validator 有单独 read_error、预算和完整性判据；10-09 未开始采集 | 不得把读取失败记成空树或 opaque；没有该轮原始 observation 就不能判读该轮拓扑 |
 
-来源：[10-09 记录](../../runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)、[C1a 记录](../../runs/2026-08-26-T-L1-C1a只读取证成功.md)、[C1b runner](../../../scripts/run-tablet-c1b.ps1)、[source](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt)、[probe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt)。10-09 记录页首“不在 runner 或探针代码”是当时判断；现有直接证据只足以归属系统侧撤销，不能据此排除所有应用侧触发因素。
+来源：[10-09 记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-09-C1b-真机-vivo安全中心撤销无障碍.md)、[C1a 记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-08-26-T-L1-C1a只读取证成功.md)、[C1b runner](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/scripts/run-tablet-c1b.ps1)、[source](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt)、[probe](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt)。10-09 记录页首“不在 runner 或探针代码”是当时判断；现有直接证据只足以归属系统侧撤销，不能据此排除所有应用侧触发因素。
 
 **已有尝试与 Mika 的关系**：界面允许、settings 写回、受限设置放行、保活、启动页、安装来源、非调试 release/官方解除限制等七类尝试都未形成可靠解法。Mika 自动修复仍通过写回启用列表并等待重绑；其进程死亡后由 helper 拉起是另一机制，不能证明可阻止这里的列表再次撤销。当前没有新增有效设置解法，不部署自动重开或抢数秒窗口。
 
@@ -58,13 +58,13 @@
 
 独立 C 在用户连接并允许调试后读到唯一 PA2553/SDK 36；已装只读探针未启用、进程未运行，未启动 provider 或采集。已装 APK 的 DEX producer `b2bd3c92089796279669d875652b57be57dd2919` 是准备主线祖先，`app/` 无差异，签名验证通过，因此可按现有 `-SkipBuild -ApkPath` 路径复用，避免用不同证书的本地 debug 包覆盖或卸载。
 
-用户随后按要求手动开启一次，报告“开启后又被系统关闭”，即停止，不再重复。该次没有独立读取改写者或完整绑定时间线，不能把 10-09 的 safecenter 归属直接冒充本轮新证据；权限仍未解阻、当前触发机制仍未知。详情、哈希和构建范围见[就位与制品准备](../../runs/2026-11-01-C1b就位核验与制品准备.md)。
+用户随后按要求手动开启一次，报告“开启后又被系统关闭”，即停止，不再重复。该次没有独立读取改写者或完整绑定时间线，不能把 10-09 的 safecenter 归属直接冒充本轮新证据；权限仍未解阻、当前触发机制仍未知。详情、哈希和构建范围见[就位与制品准备](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b就位核验与制品准备.md)。
 
 **复用条件**：先核实已装包的哈希、producer、祖先关系及 `app/` 无差异；满足身份规程时可保留该包，不因本地新包签名不同就默认卸载。真正需要更新到其他签名时仍由用户决定卸载清数据的代价；上述条件不证明无障碍可持续绑定或布局就绪。
 
 ### 11-01 存量状态调查：进程和 AppOp 不等于绑定
 
-**适用条件**：探针一次开启后又关闭，先查现存资料，不重新启用、不启动 provider。独立 C 在报就位、取得本轮批准后，固定 `d3872a93ab08d0c5102ea73ad98b735b7f61dade`，九条只读命令一次完成，均 exit 0、524 ms，锁已释放，见[原始结果与限制](../../runs/2026-11-01-C1b存量状态只读调查.md)。未改代码/设置，未采集 C1b。
+**适用条件**：探针一次开启后又关闭，先查现存资料，不重新启用、不启动 provider。独立 C 在报就位、取得本轮批准后，固定 `d3872a93ab08d0c5102ea73ad98b735b7f61dade`，九条只读命令一次完成，均 exit 0、524 ms，锁已释放，见[原始结果与限制](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b存量状态只读调查.md)。未改代码/设置，未采集 C1b。
 
 **新实读**：PA2553 / SDK 36，`ro.build.display.id=DPD2437C_A_16.1.10.7.W10`，安全补丁 `2026-09-01`；与原用户提供的 `16.1.10.1.W10.V000L1` 不同，更新时刻未知。当前探针进程存在，`BIND_ACCESSIBILITY_SERVICE` 和 `ACCESS_RESTRICTED_SETTINGS` 的 AppOp 均 allow；它们不能证明启用列表保留、服务实际绑定、此前同一进程未退出或关闭时权限也允许。AppOp 的 time 是访问时间，历史 rejectTime 也不能冒充当前拒绝。
 
@@ -72,17 +72,17 @@
 
 **下一步边界**：本轮未读启用列表、绑定或 settings 写入归属，没有关闭前后连续时序，原因仍 unknown。后续厂商咨询使用新实读固件和上述有限事实；不自动写回或重复开启，不根据当前 allow 宣布解阻，也不把存量读取通过当作 C1b/T-L1 通过。
 
-11-01 用户自行完成开发者注册/登录后，明确授权发送新固件咨询。已发送一次，机器人仅答联系人工，没有根因、规则或修复版本。登录后的官方页面当前公告人工为工作日 09:00–12:00、14:00–18:00；非服务时间可发 `open@vivo.com`，页面称一个工作日内回复，不等于个案保证或安全团队已受理。用户另行批准邮件渠道、发件账号及具体文字后，A 于 10:31:58（Asia/Singapore）发送一次无附件/抄送邮件，Gmail 回读 SENT；未接人工或上传其他材料。当前等厂商答复，不重复发信。回执及接续点见[客服续查](../../runs/2026-10-28-C1b客服跟进与验收准备.md#11-01-续查机器人建议人工及邮件咨询)，不把登录、机器人转介或邮件 SENT 当作技术受理。
+11-01 用户自行完成开发者注册/登录后，明确授权发送新固件咨询。已发送一次，机器人仅答联系人工，没有根因、规则或修复版本。登录后的官方页面当前公告人工为工作日 09:00–12:00、14:00–18:00；非服务时间可发 `open@vivo.com`，页面称一个工作日内回复，不等于个案保证或安全团队已受理。用户另行批准邮件渠道、发件账号及具体文字后，A 于 10:31:58（Asia/Singapore）发送一次无附件/抄送邮件，Gmail 回读 SENT；未接人工或上传其他材料。当前等厂商答复，不重复发信。回执及接续点见[客服续查](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-10-28-C1b客服跟进与验收准备.md#11-01-续查机器人建议人工及邮件咨询)，不把登录、机器人转介或邮件 SENT 当作技术受理。
 
 ### 11-01 底层突破：前台页面触发的临时控制候选
 
-**适用条件与证据**：用户要求继续从 Android 底层探索后，另行批准最小就位和单次文件提取。C 在固定 `dbf1b621358a75208a5778a56fbd18f9077fa1f5` 只读取得当前安全中心 `6.2.1.3` APK，SHA-256 `c9808a1781c3644344b359ec6ae2dbb7948879b8d85c311b16c1859e2255ac3b`；A 静态交叉引用、定向反编译，关键分支由另一执行者对原 smali 复核。仅提取和源码分析，未运行 APK、开启探针、读用户私有数据或改设置；完整身份、调用链和限制见[底层归因记录](../../runs/2026-11-01-C1b底层源码与安全中心静态归因.md)。
+**适用条件与证据**：用户要求继续从 Android 底层探索后，另行批准最小就位和单次文件提取。C 在固定 `dbf1b621358a75208a5778a56fbd18f9077fa1f5` 只读取得当前安全中心 `6.2.1.3` APK，SHA-256 `c9808a1781c3644344b359ec6ae2dbb7948879b8d85c311b16c1859e2255ac3b`；A 静态交叉引用、定向反编译，关键分支由另一执行者对原 smali 复核。仅提取和源码分析，未运行 APK、开启探针、读用户私有数据或改设置；完整身份、调用链和限制见[底层归因记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b底层源码与安全中心静态归因.md)。
 
 **已查明的代码机制**：该版本以两套名单分别表示“监控前台页面”和“候选无障碍服务包”。前台匹配后，经 `n6.h.b → n6.f.a(false) → p6.a.c(false)` 移除组件并写 enabled 列表；非监控前台回调可安排延迟恢复，重入或后续回调可取消/延期。它不要求 AppOp 拒绝或杀进程，因而与早前“进程在、两个 AppOp allow”的快照相容。恢复调用返回值未读回验证，不能保证恢复成功。
 
 **内置默认不等于当前运行配置**：APK 资产 version 3 开启 `accCtrlSwitch`，监控整个 `com.android.settings` 包，默认恢复延时 8000 ms，并可追加支付 App。候选集合还取决于安全缓存的 cloud/safeLevel/服务声明/路径与 install/spread 条件，未知分类也可能入选；不是凡第三方或侧载服务都会被关。入参/文件实体可以覆盖内置默认。当前有效配置、探针是否入选、准确前台回调及实际 false/true 写入均未取证，**尚未证明此次命中或找到可靠解法**。
 
-**运行态更新**：后续[修订观察](../../runs/2026-11-01-C1b底层源码与安全中心静态归因.md#8-修订轮基线已有目标成员未观察恢复转变)读到基线已启用，因此按卡结束，没有进入恢复窗口，仍不能归因上述机制。AOSP 的设置行 `pkg` 也只是归属元数据，同值写入或 reset 可改变其解释，不能替代实际调用时间线；不为补证据改日志开关/私有 JSON 或关闭系统安全组件。
+**运行态更新**：后续[修订观察](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b底层源码与安全中心静态归因.md#8-修订轮基线已有目标成员未观察恢复转变)读到基线已启用，因此按卡结束，没有进入恢复窗口，仍不能归因上述机制。AOSP 的设置行 `pkg` 也只是归属元数据，同值写入或 reset 可改变其解释，不能替代实际调用时间线；不为补证据改日志开关/私有 JSON 或关闭系统安全组件。
 
 **独立观测候选**：AOSP UiAutomation 使用临时测试登记，可不靠同一 enabled 列表，但仍是 accessibility 树；默认连接会抑制普通服务，原生 `uiautomator dump --windows` 还会输出明文并缺完整性状态。未来独立只读 PoC 须显式 DONT_SUPPRESS 并另审来源/隐私合同；默认 tool 身份可能改变敏感 View 可见性，不能据差异归因原 probe 或将通用 Agent 伪装为助残工具。本轮没有 PoC 或新采集许可，不能回填 C1b/T-L1/P0 证据。
 
@@ -90,25 +90,25 @@
 
 - **适用条件**：此前现场报告开启后关闭，之后只做不重开权限的成员观察。固定 `3641f0cabcfabd1a8268ff731952fa94ee3945a8`，C 在就位后获单独开跑令；用户 0 基线读到目标服务已在 enabled 列表，六条读取全成功、生产锁正常释放。
 - **有效做法**：基线已启用即结束，保留 `already_enabled`，不要求用户重入设置或再次关闭来制造转变。当前成员存在、服务实际绑定、可持续读树及布局可用分别判定；未读绑定/前台，不放行 C1b。
-- **验证依据与限制**：[本轮结果](../../runs/2026-11-01-C1b底层源码与安全中心静态归因.md#8-修订轮基线已有目标成员未观察恢复转变)没有 false 基线、Home 对照或后续采样。用户随后称似乎可以开启，手动操作与基线先后未定，不能归为系统自动恢复；厂商机制实际命中仍未知，不重跑已消费轮。
+- **验证依据与限制**：[本轮结果](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b底层源码与安全中心静态归因.md#8-修订轮基线已有目标成员未观察恢复转变)没有 false 基线、Home 对照或后续采样。用户随后称似乎可以开启，手动操作与基线先后未定，不能归为系统自动恢复；厂商机制实际命中仍未知，不重跑已消费轮。
 
 ### 11-01 实际绑定核验：目标启用成员未列出，绑定仍未知
 
 - **适用条件**：PA2553 / SDK 36 / 同一实读固件；用户报告已连接且开关开启后，C 在固定 `1bfb258a99528af6b054d43b08398eb2b4a3d495` 新就位，并另获一次观察开跑令。12:26 八条限定读取全成功，用户 0 的精确目标成员未列出；固定解析器未取得目标 AMS 绑定记录，结果 `binding_unknown`。与 12:05 正基线或界面报告不是同刻证据，不能据此归因写入者。
 - **有效做法**：enabled 成员、服务绑定元数据、初始化与持续可靠分别判断。AOSP Android 16 的 Bound services dump 只有标签/能力等，没有精确组件；同名标签不作绑定身份。AMS 完整组件过滤配合精确用户、a11y intent、binder/received/hasBound 和系统客户端，最多提供一次系统侧正向快照；缺项或 OEM 格式未知不判未绑定。原始 dump 仅内存处理，只保存目标字段与来源摘要，不读 provider 以免启动应用。
-- **验证依据与限制**：[本轮记录](../../runs/2026-11-01-C1b实际绑定核验.md)含精确命令、AOSP 来源、离线反例和脱敏收据索引；就位与观察锁均正常释放。此轮没有正向绑定、初始化、可靠解阻或 C1b 证据，退出 0 仅证明限定读取成功。两轮均已冻结，不通过重开或补读回填原轮；后续先核对用户界面报告对应的服务、页面与时间。
+- **验证依据与限制**：[本轮记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b实际绑定核验.md)含精确命令、AOSP 来源、离线反例和脱敏收据索引；就位与观察锁均正常释放。此轮没有正向绑定、初始化、可靠解阻或 C1b 证据，退出 0 仅证明限定读取成功。两轮均已冻结，不通过重开或补读回填原轮；后续先核对用户界面报告对应的服务、页面与时间。
 
 ### 11-01 离开设置后双点 ready：与后续会话握手分开判定
 
 - **适用条件**：PA2553 / SDK 36 / `DPD2437C_A_16.1.10.7.W10`，用户已离开设置页。固定 `3902195` 的单次获批观察读到两次精确成员存在、`a11y_service_ready=true`，首次 status 完成后静置 12.032 秒；原始 status 对新 key 的 absent/session_not_found 是未创建会话的预期值。
 - **有效做法**：把 enabled、应用自报、系统绑定、同一实例和可采集会话分别判定。两点 ready 不证明中间连续、系统侧绑定或安全中心自动恢复；provider 访问可能启动进程，也没有 nonce 回显证明。不要为做对照要求用户重进设置或切换权限。
-- **验证依据与限制**：[本轮记录](../../runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)的两点观察和后来一次采集均未改设置或安装。采集越过就绪检查，却在 T0 写后 absent，c1/c2 未开始；该签名不能直接归因无障碍撤销。历史撤销、设置页静态机制与本轮握手故障不能混成同一条已证因果链。
+- **验证依据与限制**：[本轮记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-C1b离开设置后就绪与T0失败核定.md)的两点观察和后来一次采集均未改设置或安装。采集越过就绪检查，却在 T0 写后 absent，c1/c2 未开始；该签名不能直接归因无障碍撤销。历史撤销、设置页静态机制与本轮握手故障不能混成同一条已证因果链。
 
 ### 11-10 网关确认卡（PA2553）
 
 - **普通 app overlay 受阻**：`SYSTEM_ALERT_WINDOW=allow` 且应用级“后台弹出界面”未让 `TYPE_APPLICATION_OVERLAY` 卡在后台出现；通知只有“拒绝/查看详细”，查看详细切前台后目标过期。
 - **无障碍 overlay 候选有效**：`TYPE_ACCESSIBILITY_OVERLAY` 候选（APK `4B46D30D…C0C1`，构建 `93b8502`）在后台 Settings 前台时卡可见；允许后 `ui_action` OK、`decided_via=overlay`、`context=rechecked`，返回动作执行到桌面。仅一次安全返回的允许路径；拒绝、其他 App、重启/长期绑定未验，不证明 vivo“后台弹出界面”本身生效。
-- **验证依据**：[真机记录](../../runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[离线记录](../../runs/2026-11-10-无障碍overlay确认卡离线实现.md)。这是单设备验证，不构成 S05/T-L1/P0 证据。
+- **验证依据**：[真机记录](../../runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[离线记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-10-无障碍overlay确认卡离线实现.md)。这是单设备验证，不构成 S05/T-L1/P0 证据。
 
 ## 深链 / Intent
 

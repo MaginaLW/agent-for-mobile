@@ -4,7 +4,7 @@
 设计：docs/specs/2026-07-17-执行harness-design.md（§4–§7）
 
 用法：
-  scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-MaxBudgetUsd 2.0] [-TimeoutMin 15] [-Model <Codex模型>]
+  scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-TimeoutMin 15] [-Model <Codex模型>]
   scripts/dispatch.ps1 -Task "<内联任务文本>" [-Slug 短名]
   scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md    # gateway 纯前置条件恢复；PC 输入 RESUME 不批准危险动作
   默认 Codex + gateway；Claude 派单已退役，mobile 仅保留历史配置预览。
@@ -17,17 +17,9 @@ param(
     [string]$Task,
     [string]$TaskFile,
     [string]$Slug,
-    [ValidateScript({
-        $budget = [double]$_
-        if ([double]::IsNaN($budget) -or [double]::IsInfinity($budget) -or $budget -le 0) {
-            throw 'MaxBudgetUsd 必须是大于 0 的有限数字。'
-        }
-        return $true
-    })]
-    [double]$MaxBudgetUsd = 2.0,
     [ValidateRange(1, 60)][int]$TimeoutMin = 15,
-    [string]$Model = 'sonnet',
-    [ValidateSet('claude', 'codex')][string]$Brain = 'codex',
+    [string]$Model = '',
+    [ValidateSet('codex')][string]$Brain = 'codex',
     [ValidateSet('mobile', 'gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
     [switch]$DryRun
@@ -40,10 +32,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
-
-if ($Brain -eq 'claude') {
-    throw 'Claude 执行已退役：不接受新派单或恢复；请新建 Codex + gateway 任务，不能迁移旧暂停件。'
-}
 
 $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
@@ -64,15 +52,14 @@ $LedgerModel = if ($Brain -eq 'codex' -and -not $ModelWasExplicit) { '' } else {
 
 function Add-LedgerRow([AllowNull()][object]$Turns, [AllowNull()][object]$InTok, [AllowNull()][object]$OutTok,
                        [AllowNull()][object]$CacheRead, [AllowNull()][object]$CacheWrite,
-                       [AllowNull()][object]$CostUsd, [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
+                       [int]$DurS, [string]$Result, [string]$SessionId, [string]$Trace,
                        [string]$Note, [string]$FailReason = '') {
     # 表头与拼行都在 dispatch-ledger.ps1：runner 也要写台账（派单被提前掐掉那种），
     # 各写各的必然漂移，而台账列的语义漂移正是归因失效的开始。
     $noteWithExecutor = if ([string]::IsNullOrWhiteSpace($Note)) { "executor=$Executor" } else { "executor=$Executor | $Note" }
-    $costField = if ($Brain -eq 'codex' -or $null -eq $CostUsd) { '' } else { "$([math]::Round([double]$CostUsd, 4))" }
     Add-P0LedgerRow -LedgerPath $LedgerPath -Slug $Slug -Leg $Leg -Brain $Brain -Model $LedgerModel `
         -Result $Result -Turns "$Turns" -InTok "$InTok" -OutTok "$OutTok" `
-        -CacheRead "$CacheRead" -CacheWrite "$CacheWrite" -CostUsd $costField `
+        -CacheRead "$CacheRead" -CacheWrite "$CacheWrite" `
         -DurS "$DurS" -SessionId $SessionId -TraceFile $Trace -Note $noteWithExecutor -FailReason $FailReason
 }
 
@@ -114,16 +101,15 @@ if ($Confirm) {
     if ($Executor -eq 'mobile') {
         throw 'mobile -Confirm 已阻断：PC 输入不能批准危险动作，当前没有独立人控且绑定实际动作的恢复机制；旧 mobile 暂停件也不可转到 gateway。'
     }
-    $pauseBrain = if ([string]::IsNullOrWhiteSpace($meta['brain'])) { 'claude' } else { [string]$meta['brain'] }
-    if ($pauseBrain -notin @('claude', 'codex')) { throw "暂停件 brain 无效：$pauseBrain" }
-    if ($pauseBrain -eq 'claude') {
-        throw 'Claude 执行已退役：旧 Claude 暂停件（含未记录 brain 的旧格式）不得恢复或映射为 Codex。'
+    $pauseBrain = [string]$meta['brain']
+    if ($pauseBrain -ne 'codex') {
+        throw "暂停件 brain 无效：'$pauseBrain'；只接受 codex，缺少 brain 的旧格式同样不得恢复。"
     }
     if ($BrainWasExplicit -and $Brain -cne $pauseBrain) {
         throw "确认腿 brain 冲突：暂停件要求 $pauseBrain，显式参数为 $Brain。确认腿必须继承原大脑。"
     }
     $Brain = $pauseBrain
-    $pauseModel = if ($meta.Contains('model')) { [string]$meta['model'] } elseif ($Brain -eq 'claude') { 'sonnet' } else { '' }
+    $pauseModel = if ($meta.Contains('model')) { [string]$meta['model'] } else { '' }
     if ($ModelWasExplicit -and $Model -cne $pauseModel) {
         throw "确认腿 model 冲突：暂停件要求 $pauseModel，显式参数为 $Model。确认腿必须继承原模型。"
     }
@@ -199,11 +185,7 @@ $PreamblePath = $profile.PreamblePath
 $McpConfig = $profile.McpConfigPath
 $AllowedTools = $profile.AllowedTools
 $preambleTemplate = Get-Content -LiteralPath $PreamblePath -Raw -Encoding utf8
-$budgetPolicy = if ($Brain -eq 'codex') {
-    '本次派单走 ChatGPT 订阅通道，不提供 API 美元硬上限；轮数软预算约 25 轮；接近软预算仍未完成就停止尝试并按规定格式报告失败。'
-} else {
-    "本次派单机械成本上限 $MaxBudgetUsd 美元，轮数软预算约 25 轮；接近预算仍未完成就停止尝试并按规定格式报告失败。"
-}
+$budgetPolicy = '本次派单走 ChatGPT 订阅通道，不提供 API 美元硬上限；轮数软预算约 25 轮；接近软预算仍未完成就停止尝试并按规定格式报告失败。'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $base = "$stamp-$Slug-$Executor-$Brain-leg$Leg"
 $TraceFile  = Join-Path $TracesDir "$base.jsonl"
@@ -215,8 +197,7 @@ if ($DryRun) {
         Replace('{{DEVICE}}', '<dry-run-no-device>')
     $prompt = $preamble + "`n`n" + $TaskText
     $dryModel = if ($Brain -eq 'codex' -and -not $ModelWasExplicit) { '<codex-default>' } else { $Model }
-    $dryBudget = if ($Brain -eq 'codex') { 'budget=订阅通道/无 API 硬上限' } else { "budget=`$$MaxBudgetUsd" }
-    Write-Host "[DryRun] executor=$Executor brain=$Brain slug=$Slug leg=$Leg model=$dryModel $dryBudget timeout=${TimeoutMin}min"
+    Write-Host "[DryRun] executor=$Executor brain=$Brain slug=$Slug leg=$Leg model=$dryModel budget=订阅通道/无 API 硬上限 timeout=${TimeoutMin}min"
     Write-Host "[DryRun] MCP config：$McpConfig"
     Write-Host "[DryRun] allowed tools：$AllowedTools"
     Write-Host "[DryRun] preamble：$PreamblePath"
@@ -259,7 +240,7 @@ function Test-Preflight {
     return $null
 }
 
-# Job Object 把 claude/MCP/任何后代变成一个可机械收口的生命周期单位。
+# Job Object 把 brain/MCP/任何后代变成一个可机械收口的生命周期单位。
 # wrapper 在 named gate 上等待；父进程先 Assign，再 signal，消除“子进程出生后、入 Job 前”派生逃逸竞态。
 Add-Type -TypeDefinition @'
 using System;
@@ -491,7 +472,6 @@ function Start-DispatchJobRoot {
         [Parameter(Mandatory)][string]$ExpectedExecutableSha256,
         [Parameter(Mandatory)][bool]$RequireOpenAiSignature,
         [hashtable]$SensitiveEnvironment = @{},
-        [string[]]$ScrubEnvironmentPatterns = @(),
         [string[]]$PreserveEnvironmentNames = @(),
         [string[]]$EnvironmentAllowList = @(),
         [hashtable]$ChildEnvironmentOverrides = @{}
@@ -738,7 +718,7 @@ public static class AgentMobileDispatchSuspendedChild {
             }
             // membership 已机械确认后，wrapper 不再需要自己的 Job handle。必须在 Resume 前
             // 关闭它：否则 dispatch owner 被硬杀时这会成为“最后一个 handle”，KILL_ON_JOB_CLOSE
-            // 不触发，wrapper/Claude/MCP 全部脱管且根 lease 已释放。
+            // 不触发，wrapper/brain/MCP 全部脱管且根 lease 已释放。
             if (!CloseHandle(job)) {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
@@ -808,13 +788,6 @@ exit $childExit
             $start.Environment[[string]$entry.Key] = [string]$entry.Value
         }
     }
-    else {
-        foreach ($pattern in @($ScrubEnvironmentPatterns)) {
-            foreach ($key in @($start.Environment.Keys | Where-Object { $_ -like $pattern })) {
-                [void]$start.Environment.Remove($key)
-            }
-        }
-    }
     foreach ($entry in $preservedEnvironment.GetEnumerator()) {
         $start.Environment[[string]$entry.Key] = [string]$entry.Value
     }
@@ -825,7 +798,7 @@ exit $childExit
         $start.Environment[[string]$entry.Key] = [string]$entry.Value
     }
     # runner→dispatch 的 join token 在 Open-DispatchLock 中已消费；这里再机械删除一次，
-    # 保证 Claude 的默认继承路径也绝不会把主机级设备租约交给 brain/MCP 后代。
+    # 保证默认继承路径也绝不会把主机级设备租约交给 brain/MCP 后代。
     [void]$start.Environment.Remove($script:DispatchLockLeaseEnvironmentVariable)
     $start.Environment['AGENT_MOBILE_DISPATCH_GATE'] = $gateName
     $start.Environment['AGENT_MOBILE_DISPATCH_PAYLOAD'] = $payloadBase64
@@ -840,7 +813,7 @@ exit $childExit
         }
         if (-not $process.Start()) { throw 'dispatch gate wrapper 启动失败。' }
         $started = $true
-        # wrapper 此时只能 WaitOne；Assign 成功之前没有任何路径能启动 claude/MCP。
+        # wrapper 此时只能 WaitOne；Assign 成功之前没有任何路径能启动 brain/MCP。
         [AgentMobileDispatchJob]::Assign($JobHandle, $process.Handle)
         $stdoutPump = [AgentMobileDispatchOutputPump]::Start(
             $process.StandardOutput.BaseStream, $TracePath, $script:DispatchStdoutLimitBytes,
@@ -914,7 +887,7 @@ try {
     $pf = Test-Preflight
     if ($pf) {
         Write-Host "预检失败：$pf" -ForegroundColor Red
-        Add-LedgerRow 0 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
+        Add-LedgerRow 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
         exit 4
     }
 
@@ -930,106 +903,49 @@ try {
     $finished = $false
     $childExit = $null
 
-    # --allowedTools 只是"免确认"名单，不阻止别的工具（2026-07-26 实测执行器在派单里
-    # 真的跑起了本机 Bash）。执行器的职责只有驱动手机，本机 shell / 文件 / 网络一律拒绝：
-    # 仓库里就放着 gateway 私密 token，让它能读本机文件等于给证据脱敏链开后门。
-    # ToolSearch 不在此列——延迟注册的 MCP 工具要靠它加载 schema，禁掉 gateway 工具就没法调。
-    #
-    # **这份名单是"枚举已知工具"，天生会漏——两次真机事故都栽在漏项上：**
-    # · 2026-07-26 ToolSearch 被 trace 审计当成越权（那次是白名单漏）；
-    # · 2026-07-31 执行器调了 ReportFindings，Allow 腿在真人已点允许、危险动作已执行之后
-    #   被判死，白烧一轮真机。
-    # 同一轮复查还发现 **PowerShell 一直没被禁**：注释说"本机 shell 一律拒绝"，实际只禁了
-    # Bash，而本机是 Windows——执行器手里很可能一直握着一个等价的本机 shell。
-    # 所以除了补齐漏项，下面按类分组列出，加新工具时对着组补，别再一条条追。
-    $LocalToolDenyList = @(
-        # 本机 shell（Bash 与 PowerShell 等价，漏一个等于没禁）
-        'Bash', 'BashOutput', 'KillShell', 'PowerShell',
-        # 本机文件与检索
-        'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep',
-        # 网络
-        'WebFetch', 'WebSearch',
-        # 派生执行体（会绕开本名单）
-        'Task', 'Agent', 'Workflow', 'SendMessage', 'TaskCreate', 'TaskUpdate',
-        'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop',
-        # 汇报 / 交互 / 调度类：对驱动手机毫无用处，出现即污染 trace 审计
-        'ReportFindings', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode',
-        'SlashCommand', 'Skill', 'Artifact', 'SendUserFile', 'Monitor', 'PushNotification',
-        'ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger',
-        'EnterWorktree', 'ExitWorktree', 'DesignSync'
-    ) -join ','
     $modelLabel = if ($Brain -eq 'codex' -and [string]::IsNullOrWhiteSpace($LedgerModel)) { '<codex-default>' } else { $LedgerModel }
-    $budgetLabel = if ($Brain -eq 'codex') { '订阅通道/无 API 硬上限' } else { "≤`$$MaxBudgetUsd" }
-    Write-Host "派单：$Slug · 第 $Leg 腿 · $Executor · $Brain/$modelLabel · $budgetLabel · ≤${TimeoutMin}min ..."
+    Write-Host "派单：$Slug · 第 $Leg 腿 · $Executor · $Brain/$modelLabel · 订阅通道/无 API 硬上限 · ≤${TimeoutMin}min ..."
     $timeoutMilliseconds = [int]([long]$TimeoutMin * 60L * 1000L)
-    $brainExecutable = ''
-    $argList = @()
-    $launchWorkingDirectory = $RepoRoot
-    $scrubEnvironmentPatterns = @()
     $preserveEnvironmentNames = @()
-    $childEnvironmentAllowList = @()
-    $childEnvironmentOverrides = @{}
-    $expectedExecutableSha256 = ''
-    $requireOpenAiSignature = $false
-    if ($Brain -eq 'claude') {
-        $claudeBin = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $claudeBin) { throw '找不到 claude 可执行文件。' }
-        $brainExecutable = [string]$claudeBin.Source
-        $claudeItem = Get-Item -LiteralPath $brainExecutable -Force -ErrorAction Stop
-        if ($claudeItem.PSIsContainer -or
-            ($claudeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-            -not [string]::IsNullOrWhiteSpace([string]$claudeItem.LinkType)) {
-            throw 'claude 可执行文件不是普通文件。'
-        }
-        $expectedExecutableSha256 = (Get-FileHash -LiteralPath $brainExecutable -Algorithm SHA256).Hash
-        $scrubEnvironmentPatterns = @('CLAUDE*')
-        $argList = @('-p', '--output-format', 'stream-json', '--verbose',
-                     '--mcp-config', $McpConfig, '--strict-mcp-config',
-                     '--allowedTools', $AllowedTools,
-                     '--disallowedTools', $LocalToolDenyList,
-                     '--max-budget-usd', "$MaxBudgetUsd", '--model', $Model)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $codexWorkspaceParent = Join-Path $tempRoot 'agent-mobile-codex-workspaces'
+    New-Item -ItemType Directory -Path $codexWorkspaceParent -Force | Out-Null
+    $workspaceParentItem = Get-Item -LiteralPath $codexWorkspaceParent -Force
+    if (($workspaceParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace([string]$workspaceParentItem.LinkType)) {
+        throw 'Codex 隔离 workspace 容器是 reparse/link，拒绝启动。'
     }
-    else {
-        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
-            [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-        $codexWorkspaceParent = Join-Path $tempRoot 'agent-mobile-codex-workspaces'
-        New-Item -ItemType Directory -Path $codexWorkspaceParent -Force | Out-Null
-        $workspaceParentItem = Get-Item -LiteralPath $codexWorkspaceParent -Force
-        if (($workspaceParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-            -not [string]::IsNullOrWhiteSpace([string]$workspaceParentItem.LinkType)) {
-            throw 'Codex 隔离 workspace 容器是 reparse/link，拒绝启动。'
+    $codexWorkspace = Join-Path $codexWorkspaceParent ([guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $codexWorkspace | Out-Null
+    $launchSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $McpConfig `
+        -WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg
+    $brainExecutable = $launchSpec.Executable
+    $argList = $launchSpec.Arguments
+    $launchWorkingDirectory = $codexWorkspace
+    $sensitiveChildEnvironment = $launchSpec.SensitiveEnvironment
+    $LedgerModel = $launchSpec.LedgerModel
+    $expectedExecutableSha256 = $launchSpec.ExpectedSha256
+    $requireOpenAiSignature = $launchSpec.RequireOpenAiSignature
+    $childEnvironmentAllowList = @(
+        'SystemRoot','WINDIR','ComSpec','OS','TEMP','TMP','PATH','PATHEXT',
+        'LOCALAPPDATA','APPDATA','USERPROFILE','HOMEDRIVE','HOMEPATH','USERNAME','USERDOMAIN',
+        'ProgramData','ProgramFiles','ProgramFiles(x86)'
+    )
+    $childEnvironmentOverrides = @{ RUST_LOG = 'error' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:CODEX_HOME)) {
+        $codexHome = [IO.Path]::GetFullPath([string]$env:CODEX_HOME)
+        $codexHomeItem = Get-Item -LiteralPath $codexHome -Force -ErrorAction Stop
+        if (-not $codexHomeItem.PSIsContainer -or
+            ($codexHomeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrWhiteSpace([string]$codexHomeItem.LinkType)) {
+            throw 'CODEX_HOME 不是普通目录，拒绝交给 Codex child。'
         }
-        $codexWorkspace = Join-Path $codexWorkspaceParent ([guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $codexWorkspace | Out-Null
-        $launchSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $McpConfig `
-            -WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg
-        $brainExecutable = $launchSpec.Executable
-        $argList = $launchSpec.Arguments
-        $launchWorkingDirectory = $codexWorkspace
-        $sensitiveChildEnvironment = $launchSpec.SensitiveEnvironment
-        $LedgerModel = $launchSpec.LedgerModel
-        $expectedExecutableSha256 = $launchSpec.ExpectedSha256
-        $requireOpenAiSignature = $launchSpec.RequireOpenAiSignature
-        $childEnvironmentAllowList = @(
-            'SystemRoot','WINDIR','ComSpec','OS','TEMP','TMP','PATH','PATHEXT',
-            'LOCALAPPDATA','APPDATA','USERPROFILE','HOMEDRIVE','HOMEPATH','USERNAME','USERDOMAIN',
-            'ProgramData','ProgramFiles','ProgramFiles(x86)'
-        )
-        $childEnvironmentOverrides = @{ RUST_LOG = 'error' }
-        if (-not [string]::IsNullOrWhiteSpace([string]$env:CODEX_HOME)) {
-            $codexHome = [IO.Path]::GetFullPath([string]$env:CODEX_HOME)
-            $codexHomeItem = Get-Item -LiteralPath $codexHome -Force -ErrorAction Stop
-            if (-not $codexHomeItem.PSIsContainer -or
-                ($codexHomeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-                -not [string]::IsNullOrWhiteSpace([string]$codexHomeItem.LinkType)) {
-                throw 'CODEX_HOME 不是普通目录，拒绝交给 Codex child。'
-            }
-            $childEnvironmentOverrides['CODEX_HOME'] = $codexHome
-        }
-        if ($Executor -eq 'gateway') {
-            $childEnvironmentOverrides['NO_PROXY'] = '127.0.0.1,localhost'
-            $childEnvironmentOverrides['no_proxy'] = '127.0.0.1,localhost'
-        }
+        $childEnvironmentOverrides['CODEX_HOME'] = $codexHome
+    }
+    if ($Executor -eq 'gateway') {
+        $childEnvironmentOverrides['NO_PROXY'] = '127.0.0.1,localhost'
+        $childEnvironmentOverrides['no_proxy'] = '127.0.0.1,localhost'
     }
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -1040,7 +956,7 @@ try {
         -TracePath $TraceFile -ErrorPath $ErrFile -JobName $dispatchJobName `
         -ExpectedExecutableSha256 $expectedExecutableSha256 `
         -RequireOpenAiSignature $requireOpenAiSignature `
-        -SensitiveEnvironment $sensitiveChildEnvironment -ScrubEnvironmentPatterns $scrubEnvironmentPatterns `
+        -SensitiveEnvironment $sensitiveChildEnvironment `
         -PreserveEnvironmentNames $preserveEnvironmentNames -EnvironmentAllowList $childEnvironmentAllowList `
         -ChildEnvironmentOverrides $childEnvironmentOverrides
     $proc = $jobRoot.Process
@@ -1138,10 +1054,9 @@ try {
     }
 
     $turns = $null; $inTok = $null; $outTok = $null; $cacheRead = $null; $cacheWrite = $null
-    $cost = $null; $sid = ''; $final = ''; $terminalSubtype = ''
+    $sid = ''; $final = ''; $terminalSubtype = ''
     if ($null -ne $transcript) {
         $turns = $transcript.Turns
-        $cost = $transcript.CostUsd
         $sid = [string]$transcript.SessionId
         $inTok = $transcript.Usage.InputTokens
         $outTok = $transcript.Usage.OutputTokens
@@ -1174,7 +1089,6 @@ try {
     elseif ($partialTrace -or $null -eq $transcript.Terminal) { $verdict = 'fail'; $note = 'unexpected-partial-trace' }
     elseif (-not $transcript.Terminal.Success) { $verdict = 'fail'; $note = "brain-terminal-$terminalSubtype" }
     elseif ($policyProblems.Count -gt 0) { $verdict = 'fail'; $note = $policyProblems -join '+' }
-    elseif ($terminalSubtype -match 'budget|max_turns') { $verdict = 'step-cap'; $note = $terminalSubtype }
     else {
         # 全文按行首匹配（模型偶尔在报告前多说一句话）；暂停标记优先——宁可误暂停交人看，不可漏暂停。
         #
@@ -1197,20 +1111,6 @@ try {
         $note += ' | ' + ($policyProblems -join '+')
     }
 
-    # 上限/超时截断时，从 trace 捞末条 assistant 文本——任务可能已完成、只是报告被截断（④ 实测教训）
-    $lastSay = ''
-    if (($verdict -in @('step-cap', 'timeout')) -and (Test-Path $TraceFile)) {
-        foreach ($line in (Get-Content $TraceFile -Tail 200 -Encoding utf8)) {
-            if ($line -notmatch '"type":"assistant"') { continue }
-            try { $evt2 = $line | ConvertFrom-Json } catch { continue }
-            foreach ($c in $evt2.message.content) { if ($c.type -eq 'text' -and $c.text) { $lastSay = $c.text } }
-        }
-        if ($lastSay) {
-            $flat = $lastSay -replace "\s+", " "
-            $note = "$note | 末条报告: " + $flat.Substring(0, [Math]::Min(150, $flat.Length))
-        }
-    }
-
     # ── 暂停件（spec §5.1）────────────────────────────────────────────────
     $PauseFile = ''
     if ($verdict -eq 'paused') {
@@ -1226,15 +1126,11 @@ try {
     $failReason = if ($outputLimitReached) { 'brain-output-limit' }
         elseif (-not [string]::IsNullOrWhiteSpace($outputPumpFailure)) { 'brain-output-pump-failure' }
         else { Get-FailReason -Verdict $verdict -Subtype $terminalSubtype -TraceFile $TraceFile }
-    Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $cost $durS $verdict $sid "$base.jsonl" $note $failReason
+    Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $durS $verdict $sid "$base.jsonl" $note $failReason
     Write-Host ''
     $usageTurns = if ($null -eq $turns) { '?' } else { $turns }
-    $costSummary = if ($null -eq $cost -or $Brain -eq 'codex') { '订阅通道/无 API cost' } else {
-        "`$$([math]::Round([double]$cost, 4))"
-    }
-    Write-Host "───── 派单结果：$verdict（$Executor · $usageTurns 轮 · $costSummary · ${durS}s）─────"
+    Write-Host "───── 派单结果：$verdict（$Executor · $usageTurns 轮 · 订阅通道/无 API cost · ${durS}s）─────"
     if ($final) { Write-Host $final }
-    elseif ($lastSay) { Write-Host "（会话被上限截断，以下为末条 assistant 报告）`n$lastSay" }
     if ($note) { Write-Host "note: $note" }
     if ($failReason) { Write-Host "fail_reason: $failReason" }
     if ($verdict -eq 'paused') {

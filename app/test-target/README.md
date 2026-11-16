@@ -1,6 +1,6 @@
 # 本地测试靶标
 
-独立包 `dev.magina.testtarget`，仅合成页面，无权限、账号、网络、Provider 或真实发送能力。构建入口为 `:test-target:assembleDebug`；运行在隔离 API 36 模拟器，构建继续使用工程已有 compile/target 35。主工程通过 `-PlocalTestbench=true` 显式纳入本模块；默认构建和 C1b 隔离构建不应因此扩大。
+独立包 `dev.magina.testtarget`，仅合成页面，无权限、账号、网络、Provider 或真实发送能力。构建入口为 `:test-target:assembleDebug`；运行在隔离 API 36 模拟器，构建继续使用工程已有 compile/target 35。主工程通过 `-PlocalTestbench=true` 显式纳入本模块；默认构建不应因此扩大。
 
 固定深链 `agent-testbench://target/<route>`，route 为 `list`、`search`、`conversation`、`stale-conversation`、`opaque`、`degenerate`、`ime`、`ime-only`。列表→搜索→会话保留真实 UI 路径；自动台架可通过既有 `intent_send` 的 VIEW 深链路由进入各页，不将它冒充实际点击导航覆盖。
 

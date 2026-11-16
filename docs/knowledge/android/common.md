@@ -13,23 +13,23 @@
 
 ## 原生窗口截图的同代保证（2026-11-12，查阅未实测）
 
-**适用条件**：普通第三方 AccessibilityService 使用API34+窗口定向截图，评估其能否满足[完整视觉合同](../../specs/2026-11-01-平板window-pane视觉证据合同-design.md)；本条是固定AOSP参考与官方API查阅，不是vivo固件证明。
+**适用条件**：普通第三方 AccessibilityService 使用API34+窗口定向截图，评估其能否满足[完整视觉合同](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/specs/2026-11-01-平板window-pane视觉证据合同-design.md)；本条是固定AOSP参考与官方API查阅，不是vivo固件证明。
 
 固定 `99b01a65cc4c104933788b3143285ab6bae65827` 中，[客户端](https://github.com/aosp-mirror/platform_frameworks_base/blob/99b01a65cc4c104933788b3143285ab6bae65827/core/java/android/view/accessibility/AccessibilityInteractionClient.java#L1290)以interactionId配对请求，收到截图后用buffer、colorSpace和回调时的uptime构造公共结果；该时间不提供精确compositor采样时刻。[服务端](https://github.com/aosp-mirror/platform_frameworks_base/blob/99b01a65cc4c104933788b3143285ab6bae65827/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L1348)的两条截图分支都没有向普通应用返回frame/layout事务或同代transform；内部surface/UID不等于公开能力。
 
 **有效边界**：[ScreenshotResult](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService.ScreenshotResult)公共返回仅buffer、色彩和时间；window事件经过过滤/Handler派发且可按type合并，timeout0不提供全变化覆盖或原子屏障。transition time只描述bounds变化，事件计数和前后相等可用于发现差异，不能证明采集期间无变化。定向图可避开无障碍overlay，也不能据此证明确认卡或实际合成画面可见。
 
-**验证依据**：只查上述固定客户端、实际服务端、定位用InteractionController及隐藏ScreenCapture四文件和官方文档，见[本轮核定](../../runs/2026-11-12-后续任务推进.md#标准截图api的完整同代来源核定)。原S04窄来源对应可复用；对现行完整geometry/epoch/失效合同，当前标准API路线NO-GO。该结论不排除未来合作来源，未新增设备调用或更改合同。
+**验证依据**：只查上述固定客户端、实际服务端、定位用InteractionController及隐藏ScreenCapture四文件和官方文档，见[本轮核定](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-12-后续任务推进.md#标准截图api的完整同代来源核定)。原S04窄来源对应可复用；对现行完整geometry/epoch/失效合同，当前标准API路线NO-GO。该结论不排除未来合作来源，未新增设备调用或更改合同。
 
-**替代路线边界（2026-11-12查阅）**：同一合成帧可减少视觉区域/可见遮挡的跨采集拼接，但不证明原生身份、输入连接、隐形触达或截图后无变化；需先评审信任结构，不能作为旧合同已通过。MediaProjection的resize与时间戳不构成共同epoch；UI Automator稳定性检测也是周期观察，官方明确不保证完全idle。资料和建议见[阻塞处理调查](../../runs/2026-11-12-阻塞处理调查与收尾.md)，均未实测或接入。
+**替代路线边界（2026-11-12查阅）**：同一合成帧可减少视觉区域/可见遮挡的跨采集拼接，但不证明原生身份、输入连接、隐形触达或截图后无变化；需先评审信任结构，不能作为旧合同已通过。MediaProjection的resize与时间戳不构成共同epoch；UI Automator稳定性检测也是周期观察，官方明确不保证完全idle。资料和建议见[阻塞处理调查](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-12-阻塞处理调查与收尾.md)，均未实测或接入。
 
-**研究校验器的复用边界（2026-11-12静态核对）**：评估S05区域记录时，固定 `aa32d29377f305ea0ca8904cc1d241267d17d799` 的 `SourceProbeSession.validProbeReview` 只检查kind去重、矩形正值/范围和状态与bounds对应，不验证区域语义、包含关系或安全遮挡；主线 `FreshVisionSession` 的采集前后本地revision相等也不证明跨源原子性。复用时分别检查“数据格式”“语义参考真值”“来源与时序”，不能将格式测试或revision守卫通过写成视觉验收。源码对象、范围及反例见[单帧视觉评审§3–§4](../../runs/2026-11-12-单帧视觉离线评审.md#3-已有证据与复用边界)；本轮未执行图像测试或设备操作。
+**研究校验器的复用边界（2026-11-12静态核对）**：评估S05区域记录时，固定 `aa32d29377f305ea0ca8904cc1d241267d17d799` 的 `SourceProbeSession.validProbeReview` 只检查kind去重、矩形正值/范围和状态与bounds对应，不验证区域语义、包含关系或安全遮挡；主线 `FreshVisionSession` 的采集前后本地revision相等也不证明跨源原子性。复用时分别检查“数据格式”“语义参考真值”“来源与时序”，不能将格式测试或revision守卫通过写成视觉验收。源码对象、范围及反例见[单帧视觉评审§3–§4](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-12-单帧视觉离线评审.md#3-已有证据与复用边界)；本轮未执行图像测试或设备操作。
 
-**验证失败与状态否定分开（R5，2026-11-12静态核对）**：原M1协议规定超时/无正向前台证据报`E_VERIFY_FAIL`，当前IntentTools判据也是未获得成功验证，不承诺目标从未收到或出现。重审验收方案时先匹配产品真正承诺；不能把后加的全时段负向证明反写成错误码语义。现行较强验收设计仍需显式评审后才可变更，瞬时旁证不证明全窗口；见[调查依据](../../runs/2026-11-12-阻塞处理调查与收尾.md#r5先区分生产错误语义与验收证明强度)。
+**验证失败与状态否定分开（R5，2026-11-12静态核对）**：原M1协议规定超时/无正向前台证据报`E_VERIFY_FAIL`，当前IntentTools判据也是未获得成功验证，不承诺目标从未收到或出现。重审验收方案时先匹配产品真正承诺；不能把后加的全时段负向证明反写成错误码语义。现行较强验收设计仍需显式评审后才可变更，瞬时旁证不证明全窗口；见[调查依据](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-12-阻塞处理调查与收尾.md#r5先区分生产错误语义与验收证明强度)。
 
-**内部观测的故障隔离与接线（2026-11-13，源码/JVM及自有API36正例）**：A01已允许先做R5产品失败语义子项，不取消强负例。有效做法是让每次观测与原Envelope/Audit共用调用ID，研究时钟与记录失败只使观测不可用，不参与原轮询判定、不替换原异常；未触达、no_a11y、timeout、interrupted和缺失分别保留。新增9项JVM专项在Debug/Release两边验证共享分派/轮询/终态链及故障隔离。其后A06固定host e930aa6、应用构建2eb3e89的三条真实Android合成路由均匹配唯一原audit及available=true的新note，同应用PID/进程实例、returned/hit及单调时序成立；checks为8/1/1，不把次数乘200ms冒称实际窗口。该经验只适用于debug内部正向关联，Android timeout/no_a11y及其他故障分支仍未取得运行证据，也不证明系统独立接收、原第三方强负例或完整窗口。依据：[A06结果](../../runs/2026-11-13-R5失败语义离线观测.md#a06独立android路由审计观测子项通过)。
+**内部观测的故障隔离与接线（2026-11-13，源码/JVM及自有API36正例）**：A01已允许先做R5产品失败语义子项，不取消强负例。有效做法是让每次观测与原Envelope/Audit共用调用ID，研究时钟与记录失败只使观测不可用，不参与原轮询判定、不替换原异常；未触达、no_a11y、timeout、interrupted和缺失分别保留。新增9项JVM专项在Debug/Release两边验证共享分派/轮询/终态链及故障隔离。其后A06固定host e930aa6、应用构建2eb3e89的三条真实Android合成路由均匹配唯一原audit及available=true的新note，同应用PID/进程实例、returned/hit及单调时序成立；checks为8/1/1，不把次数乘200ms冒称实际窗口。该经验只适用于debug内部正向关联，Android timeout/no_a11y及其他故障分支仍未取得运行证据，也不证明系统独立接收、原第三方强负例或完整窗口。依据：[A06结果](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-R5失败语义离线观测.md#a06独立android路由审计观测子项通过)。
 
-**前台事件与快照元素分开核对（2026-11-13，API36自有AVD）**：适用于融合快照同时带ctx前台判断和fg_elements计数的读取。一次R5台架保存了ctx.foreground_known=true、来源event且包为靶标，但fg_elements=0、所需焦点标签匹配0；因此路由verified或前台事件不能补成目标控件已观测。有效做法是对保存材料分别核对来源、元素计数和精确标签命中，不因错误名含not_unique便认定重复，不放宽唯一性或把缺失补成false。依据：[A05失败记录](../../runs/2026-11-13-R5失败语义离线观测.md#a05一次本地android链失败冻结)。底层原因未定位，本例不证明时序故障或观测代码有错。
+**前台事件与快照元素分开核对（2026-11-13，API36自有AVD）**：适用于融合快照同时带ctx前台判断和fg_elements计数的读取。一次R5台架保存了ctx.foreground_known=true、来源event且包为靶标，但fg_elements=0、所需焦点标签匹配0；因此路由verified或前台事件不能补成目标控件已观测。有效做法是对保存材料分别核对来源、元素计数和精确标签命中，不因错误名含not_unique便认定重复，不放宽唯一性或把缺失补成false。依据：[A05失败记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-R5失败语义离线观测.md#a05一次本地android链失败冻结)。底层原因未定位，本例不证明时序故障或观测代码有错。
 
 ## Mika 独立后台屏参考
 
@@ -39,7 +39,7 @@
 
 **查见的做法**：2026-11-01 固定 Mika SHA `daa6efab22ee88444bbe5de295897f23cf09b1fd` 核对：[ShellService.createDisplay/displayFlags](https://github.com/wangzan101/Mika/blob/daa6efab22ee88444bbe5de295897f23cf09b1fd/app/src/main/java/com/wangzan101/mika/cap/phone/shell/ShellService.kt#L980-L989) 由 shell 身份助手创建虚拟屏，Android 14 起组合独立焦点和禁止抢主屏焦点的标志；自身建屏范围外的启动被拒绝。还设置显示级 IME 策略，涉及隐藏接口及系统权限，不能理解为普通无障碍 App 无权限即可实现。
 
-**本项目建议**：未来若明确要求后台屏，需单独验证 App 启动归属、a11y 读屏、输入焦点/IME、系统弹窗溢出、接管及 ConfirmOverlay 所在屏。当前 [TabletLayoutProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt) 和 [TabletC1bProbe](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt) 阻断多 display，不为试用放宽门禁；主屏原生多窗与独立 display 是两种拓扑。
+**本项目建议**：未来若明确要求后台屏，需单独验证 App 启动归属、a11y 读屏、输入焦点/IME、系统弹窗溢出、接管及 ConfirmOverlay 所在屏。当前 [TabletLayoutProbe](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/app/gateway/src/main/java/dev/magina/gateway/tablet/TabletLayoutProbe.kt) 和 [TabletC1bProbe](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/TabletC1bProbe.kt) 阻断多 display，不为试用放宽门禁；主屏原生多窗与独立 display 是两种拓扑。
 
 **验证依据与边界**：仅上游源码/README 与本地探针静态对照，无 PA2553 / OriginOS / Android 16 兼容实测。其虚拟屏 ImageReader 取帧和部分 shell 输入原语独立于无障碍，但 TaskRun 手机任务装配仍等待无障碍连接，树与事件也来自该服务；没有现成的纯 shell/OCR 降级可直接解阻 C1b。自动修复只是重写启用列表，不能证明能阻止 ROM 再撤销。完整依据与当前阻塞的重新评估见 [Mika 参考 §6](../brain/mika.md#6-对当前阻塞的重新评估)。
 
@@ -49,7 +49,7 @@
 
 | 通道 | 本项目已接线的来源/消费者 | 无障碍缺失时的边界 |
 |---|---|---|
-| 窗口、树、事件 | [C1b source](../../../app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt) 接受 AccessibilityService，从 service.windows/root 读取；[gateway 服务](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt) 在事件回调推进 revision/前台跟踪 | C1b 不能由截图代替该合同中的 window/root 绑定；Mika 没有可直接接入的无障碍替代树 |
+| 窗口、树、事件 | [C1b source](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/app/gateway/src/main/java/dev/magina/gateway/tablet/c1b/AndroidTabletC1bSource.kt) 接受 AccessibilityService，从 service.windows/root 读取；[gateway 服务](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt) 在事件回调推进 revision/前台跟踪 | C1b 不能由截图代替该合同中的 window/root 绑定；Mika 没有可直接接入的无障碍替代树 |
 | 设备截图 | gateway `captureBitmap` 调 AccessibilityService.takeScreenshot；[确认卡取证](../../../app/gateway/src/main/java/dev/magina/gateway/mcp/ToolRegistry.kt) 也要求该服务。P0 runner 另有 ADB screencap 带外证据 | 带外截图原语不依赖该服务，但未安装成 gateway 截图/身份生产者；不据此宣称 gateway 已有无障碍缺失降级 |
 | OCR | [UiTools.uiSnapshot](../../../app/gateway/src/main/java/dev/magina/gateway/tools/UiTools.kt) 先 require 服务，融合使用其截图；OCR 识别算法与采集源是两层 | 算法能读位图不等于现有产品能在无障碍断开时取得可信帧、pane 或 ref；没有第二个已接线截图源 |
 | 手势 | gateway OCR ref/坐标动作最终进入服务的 dispatchGesture | Mika shell 注入只是上游原语，本地没有对等替换；不得改走裸坐标绕过 SafetyGate |
@@ -65,9 +65,9 @@
 
 **有效做法**：分别核验“本次请求关联、独立系统接收、实际窗口起止与时钟映射、完整覆盖及丢失检测”。系统/events 是环形缓冲且受过滤/厂商输出影响；前台采样只证明采样点；录屏须核实时间映射、帧断档及身份，不能假定无丢帧；官方 Winscope ADB 路径的 debug/root 前提不能假定设备具备。无日志、离散快照或限速预览均不证明目标从未短暂落地，shell 启动也不能替代原 app 的调用身份。
 
-**验证依据与限制**：本轮静态核对代码和官方 Logcat、ADB screenrecord、ActivityStarter、窗口事件及 Winscope 说明，来源链接与四类比较见[执行记录](../../runs/2026-11-01-Mika借鉴解阻离线执行.md#r5独立完整窗口证据仍不可得)。未在 PA2553 验证来源可读性、时钟或完整性；四项不足时保留 R5 未验证，不生成派单卡，不为制造反例改权限、切前台或重发。
+**验证依据与限制**：本轮静态核对代码和官方 Logcat、ADB screenrecord、ActivityStarter、窗口事件及 Winscope 说明，来源链接与四类比较见[执行记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-Mika借鉴解阻离线执行.md#r5独立完整窗口证据仍不可得)。未在 PA2553 验证来源可读性、时钟或完整性；四项不足时保留 R5 未验证，不生成派单卡，不为制造反例改权限、切前台或重发。
 
-**同日可行性核定**：先从源码判断被验收窗口能否导出，再决定设备读取是否有用。现有实现与审计不能给出实际轮询窗口；`logcat --help` 或 `-g` 成功最多说明选项/容量元数据可读，不能建立请求关联或事件完整性。本阶段据此不执行这两条设备查询；若后续审查最小观测候选，新增应用计时也不能单独补成独立证据。源码行号、官方来源、时钟差异及两个选择见[核定记录](../../runs/2026-11-01-R5独立取证可行性核定.md)。仅静态核定，未新增真机结果。
+**同日可行性核定**：先从源码判断被验收窗口能否导出，再决定设备读取是否有用。现有实现与审计不能给出实际轮询窗口；`logcat --help` 或 `-g` 成功最多说明选项/容量元数据可读，不能建立请求关联或事件完整性。本阶段据此不执行这两条设备查询；若后续审查最小观测候选，新增应用计时也不能单独补成独立证据。源码行号、官方来源、时钟差异及两个选择见[核定记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-01-R5独立取证可行性核定.md)。仅静态核定，未新增真机结果。
 
 ## 通知锁屏资格
 
@@ -102,7 +102,7 @@
 
 ## 自有零 UI IME
 
-- **区分 SET_TEXT 与真实 IME（API 36 AVD，2026-11-12 实测）**：`type_text` 省略 ref 仍会优先 SET_TEXT，默认 IME 已切换或返回 OK 都不是 commitText 证据。合成 ime-only EditText 仅拒绝 SET_TEXT、保留普通 InputConnection，run-07 取得真实 `data.channel=ime_commit`、committed/verified=true、中文精确读回，独立快照相符且实际拒绝计数 1；外层审计仍为 a11y。原 default/enabled（含 subtype）恢复并逐字读回。适用于隔离 AVD 的通道回归，不证明 PA2553/微信或异常路径零 OCR。依据：[run-07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)。
+- **区分 SET_TEXT 与真实 IME（API 36 AVD，2026-11-12 实测）**：`type_text` 省略 ref 仍会优先 SET_TEXT，默认 IME 已切换或返回 OK 都不是 commitText 证据。合成 ime-only EditText 仅拒绝 SET_TEXT、保留普通 InputConnection，run-07 取得真实 `data.channel=ime_commit`、committed/verified=true、中文精确读回，独立快照相符且实际拒绝计数 1；外层审计仍为 a11y。原 default/enabled（含 subtype）恢复并逐字读回。适用于隔离 AVD 的通道回归，不证明 PA2553/微信或异常路径零 OCR。依据：[run-07](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)。
 
 - **`ime_visible` / `keyboard_state.visible` 在自有 IME 下恒为 false**（2026-07-25）：`GatewayIme.onEvaluateInputViewShown()` 有意返回 false，永不创建 `TYPE_INPUT_METHOD` 窗口。拿它当"输入会话是活的"的代理，已准备目标就永远记录不成功，也不能用它"佐证键盘没弹起"。**教训：选活性/可见性代理指标时，先确认它在自家组件架构下可能为真。**
 - **替换判据**：① `ImeBridge.session()` 非空且 InputConnection 可用；② 会话 `EditorInfo.packageName` 等于前台包（需单独留存 `sessionPackage`）；③ 降级链不走"已聚焦"短路，必须亲手执行已校验的盲点，打字后 OCR 读回。**"聚焦前后 session id 必须变化"不成立**：微信输入框键盘收起后仍长期持有活连接，再点一次不触发 `onStartInput`。
@@ -146,7 +146,7 @@
 
 ## 监督式真机跑测控制面
 
-- **安装会话丢失时保留 UNKNOWN（F3-P01，2026-11-12）**：原句柄不可访问后，只读核宿主进程/监听与已有原件；旧 manifest 的 RUNNING 不证明仍在运行，无进程/无监听也不证明设备装包成功或失败。原 manifest 保留，补充观察另存；区分已落盘 SDK=13 与已启动但无结果的第 14 次安装，未记录的退出码/结束时间/时长不补零。原轮冻结，不因无自动超时、剩余预算或 C1b A10 模板自动恢复/补后验。依据：[本轮归档](../../runs/2026-11-11-离线减负实施.md#f3-p01安装会话丢失后的-unknown-冻结归档)，只核宿主，没有新增设备命令。
+- **安装会话丢失时保留 UNKNOWN（F3-P01，2026-11-12）**：原句柄不可访问后，只读核宿主进程/监听与已有原件；旧 manifest 的 RUNNING 不证明仍在运行，无进程/无监听也不证明设备装包成功或失败。原 manifest 保留，补充观察另存；区分已落盘 SDK=13 与已启动但无结果的第 14 次安装，未记录的退出码/结束时间/时长不补零。原轮冻结，不因无自动超时、剩余预算或 C1b A10 模板自动恢复/补后验。依据：[本轮归档](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-11-离线减负实施.md#f3-p01安装会话丢失后的-unknown-冻结归档)，只核宿主，没有新增设备命令。
 
 - **确认状态可观察不等于可写**：debug runner 只用 `run-as` 写一次性 `test-control.json`（字段严格校验、不含 allowed/denied），PC 只读 `test-confirmation-state.json`；决定只来自手机按钮回调，不加"测试方便"的 decision 写接口。release 用 no-op 控制面。token、确认状态、截图不经 exported provider/网络接口；外部命令异常不得拼接 adb stdout。
 - **危险 Enter 绑定输入证据与业务目标**：`type_text` 后登记短 TTL 证据（预览、长度、SHA-256、焦点指纹），准备宏另存 `PreparedTargetEvidence(label/package/focused-input/bounds/TTL)`，只沿 `macro → type_text → press_key(enter)` 链存活，任何旁路 UI mutation 先使其失效；Enter 前后复核。audit 只记长度/哈希不落正文。
@@ -167,25 +167,25 @@
 
 ## adb / uiautomator 工具链
 
-- **人就绪与设备允许分开（2026-11-13，现场报告/离线与后续AVD）**：A08已进入真实卡等待，用户后续报告看到卡但未在60秒内允许，原轮超时冻结、后计数/原audit仍UNKNOWN。对应的host协调在conversation/新ref准备之前等待本轮就绪或取消，沿原时钟/预算，不能把PC信号写成Android允许或延长卡。新屏障19项软件验证证明PC ready后原timeout/deny/overlay审计约束仍成立；A09/A10后续均实际经过本轮ready，只有A10自动化UI允许链通过，真人允许仍未测试。依据：[A08与后继协调](../../runs/2026-11-13-人控允许台架离线准备.md#a08唯一新轮确认超时冻结)及同记录A09/A10，不外推微信P0/Stale/T-L1。
+- **人就绪与设备允许分开（2026-11-13，现场报告/离线与后续AVD）**：A08已进入真实卡等待，用户后续报告看到卡但未在60秒内允许，原轮超时冻结、后计数/原audit仍UNKNOWN。对应的host协调在conversation/新ref准备之前等待本轮就绪或取消，沿原时钟/预算，不能把PC信号写成Android允许或延长卡。新屏障19项软件验证证明PC ready后原timeout/deny/overlay审计约束仍成立；A09/A10后续均实际经过本轮ready，只有A10自动化UI允许链通过，真人允许仍未测试。依据：[A08与后继协调](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-人控允许台架离线准备.md#a08唯一新轮确认超时冻结)及同记录A09/A10，不外推微信P0/Stale/T-L1。
 
-- **窗口绑定不等于可观察/可控（2026-11-13，A09/A10）**：computer-use唯一列出AVD标题/qemu路径后仍可能捕获不相符内容；A09激活报 `foreground window did not report a process id`，UI允许点击0次后确认超时。用户报告被遮挡，普通窗口对照不能证明qemu已修复。A10改为ready前先一次激活目标成功，卡出现后正确捕获并一次允许，同次响应/审计/计数0→1通过；这只证明本轮有限控制链，不倒推A09唯一根因或保证未来遮挡恢复。gateway主界面含token，前景检查不截其界面；激活失败则发卡前取消。依据：[A09](../../runs/2026-11-13-人控允许台架离线准备.md#a09唯一新轮自动化ui观察失败与确认超时)及[A10](../../runs/2026-11-13-人控允许台架离线准备.md#a10唯一新轮自动化ui-allow子项通过)。实际actor须按操作记录判断，不能把原human_allow_verified字段当真人证明；正式真人/生产边界不变。
+- **窗口绑定不等于可观察/可控（2026-11-13，A09/A10）**：computer-use唯一列出AVD标题/qemu路径后仍可能捕获不相符内容；A09激活报 `foreground window did not report a process id`，UI允许点击0次后确认超时。用户报告被遮挡，普通窗口对照不能证明qemu已修复。A10改为ready前先一次激活目标成功，卡出现后正确捕获并一次允许，同次响应/审计/计数0→1通过；这只证明本轮有限控制链，不倒推A09唯一根因或保证未来遮挡恢复。gateway主界面含token，前景检查不截其界面；激活失败则发卡前取消。依据：[A09](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-人控允许台架离线准备.md#a09唯一新轮自动化ui观察失败与确认超时)及[A10](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-人控允许台架离线准备.md#a10唯一新轮自动化ui-allow子项通过)。实际actor须按操作记录判断，不能把原human_allow_verified字段当真人证明；正式真人/生产边界不变。
 
-- **后台回调零值不能靠重开页面证明（2026-11-13，通用Stale离线候选）**：自有靶标每次重建conversation都会归零；确认后HOME时，重新深链回去读0会毁掉原实例的后验。仅新stale-conversation路由保存私有计数，host前后核实际PID存活、同Activity实例/页面generation/生成时刻，并把生成时刻与本次route观测绑定；缺文件、错类型或新实例均拒绝。该方法只支持自有应用回调计数，不能证明微信未发送或系统独立事实。依据：[本批记录](../../runs/2026-11-13-通用失败与失效验证.md)，尚待固定候选Android验证。
+- **后台回调零值不能靠重开页面证明（2026-11-13，通用Stale离线候选）**：自有靶标每次重建conversation都会归零；确认后HOME时，重新深链回去读0会毁掉原实例的后验。仅新stale-conversation路由保存私有计数，host前后核实际PID存活、同Activity实例/页面generation/生成时刻，并把生成时刻与本次route观测绑定；缺文件、错类型或新实例均拒绝。该方法只支持自有应用回调计数，不能证明微信未发送或系统独立事实。依据：[本批记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-通用失败与失效验证.md)，尚待固定候选Android验证。
 
-- **前景激活超时与元数据可读分开（2026-11-13，A11）**：Stale新轮唯一activate_window超时后，ready前cancel实际保持0 intent_send/ui_action，未进入卡或安全拒绝；这是协调屏障的实证，不是Stale通过。冻结后list_windows能响应且原AVD已不存在，只证明元数据查询层可用，不证明先前激活未生效、当前锁屏状态或qemu已修。用户另报告当时存在锁屏/桌面切换，与问题相容而非唯一根因证明；新轮应先明确未锁定同一交互桌面条件，不能由Agent改系统设置或续用旧许可。依据：[A11记录](../../runs/2026-11-13-通用失败与失效验证.md#a11两独立新轮受控r5通过stale发卡前取消)，无额外SDK/截图。
+- **前景激活超时与元数据可读分开（2026-11-13，A11）**：Stale新轮唯一activate_window超时后，ready前cancel实际保持0 intent_send/ui_action，未进入卡或安全拒绝；这是协调屏障的实证，不是Stale通过。冻结后list_windows能响应且原AVD已不存在，只证明元数据查询层可用，不证明先前激活未生效、当前锁屏状态或qemu已修。用户另报告当时存在锁屏/桌面切换，与问题相容而非唯一根因证明；新轮应先明确未锁定同一交互桌面条件，不能由Agent改系统设置或续用旧许可。依据：[A11记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-通用失败与失效验证.md#a11两独立新轮受控r5通过stale发卡前取消)，无额外SDK/截图。
 
-- **复核进入事件不能只写在解析成功之后（2026-11-14，A12/源码/JVM/A13自有API36）**：HOME后旧ref解析抛错，原Gate仍按二次获取失败返回E_STALE_REF，但ToolRegistry旧also尾部marker不会执行，导致实际安全拒绝与台架审计要求脱节。复用CallScope在二次reader进入前记原context=rechecked，异常原样传给原Gate；首读失败/拒绝/未二读无marker，事件本身不保证一致或成功。实际producer与原Gate的Debug/Release专项证明拒绝时handler/success仍0；A13另获许可，以固定3a6702e新制品实际卡允许后验证原Gate拒绝、原audit含复核事件、后台同实例计数0→0及收尾，299秒通过。host不放宽，旧A12继续失败冻结；仅自动化UI自有子项，不外推真人、第三方ROM或生产。依据：[修复记录](../../runs/2026-11-14-Stale复核审计修复.md)。
+- **复核进入事件不能只写在解析成功之后（2026-11-14，A12/源码/JVM/A13自有API36）**：HOME后旧ref解析抛错，原Gate仍按二次获取失败返回E_STALE_REF，但ToolRegistry旧also尾部marker不会执行，导致实际安全拒绝与台架审计要求脱节。复用CallScope在二次reader进入前记原context=rechecked，异常原样传给原Gate；首读失败/拒绝/未二读无marker，事件本身不保证一致或成功。实际producer与原Gate的Debug/Release专项证明拒绝时handler/success仍0；A13另获许可，以固定3a6702e新制品实际卡允许后验证原Gate拒绝、原audit含复核事件、后台同实例计数0→0及收尾，299秒通过。host不放宽，旧A12继续失败冻结；仅自动化UI自有子项，不外推真人、第三方ROM或生产。依据：[修复记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-14-Stale复核审计修复.md)。
 
 - **源侧字段过滤仍须保留语义来源（2026-11-14，A14既存原件）**：对window/activity dump非锚定匹配mRotation或mWindowingMode会选中多个嵌套历史配置，多条打印条件还会重复同一行；将display信息压成无来源数字又会丢失base/override/current区别。A14保存材料因此仍为rotation ambiguous，离线锚定减少噪声也未消除已丢来源的0/1冲突。不能删除冲突或推造scope来宣布姿态已知；保留原NOT_READY，按下一实际动作所需证据核定最小新来源，不为整理材料补采。依据：[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#a14只读检查完成但未就绪)。
 
 - **ServiceRecord caller后缀不是服务身份（2026-11-14，A15原件/P02离线）**：API36实测服务行在目标类名后还有`c:com.android.shell`，旧解析器紧接右括号会误拒并失去收尾对象。新解析接受该可选格式元数据，仍独立核user、精确包/类、唯一Record/PID及startRequested/isForeground；接管旧自启服务须另有原件绑定和新鲜同实例证据。实际材料/旧裸格式及5类必要拒绝例通过，旧A15不改判、服务未停回仍UNKNOWN；离线解析不能代替新鲜服务恢复验证。依据：[P02准备](../../runs/2026-11-14-小红书单窗口只读准备.md#p02最小修复与残余服务接管准备)。
 
-- **启动请求与token就绪分开（2026-11-13，源码/离线）**：适用于本地台架启动gateway后从私有偏好文件读取凭据。Activity/服务命令返回只说明请求已提交；现应用TokenStore同步commit完成后才把token交给McpServer，后者才开放health。因此复用原forward和有界health正例作为一次敏感读取前置，不增加敏感重读、固定延时或新权限。源码核定与启动顺序回归见[人控轮后的核定](../../runs/2026-11-13-人控允许台架离线准备.md#失败后的源码核定)。A07只有敏感读取非零退出的证据，不能据该顺序缺口断言它必因时序，也不能把离线修复称为真实故障已解决。
+- **启动请求与token就绪分开（2026-11-13，源码/离线）**：适用于本地台架启动gateway后从私有偏好文件读取凭据。Activity/服务命令返回只说明请求已提交；现应用TokenStore同步commit完成后才把token交给McpServer，后者才开放health。因此复用原forward和有界health正例作为一次敏感读取前置，不增加敏感重读、固定延时或新权限。源码核定与启动顺序回归见[人控轮后的核定](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-人控允许台架离线准备.md#失败后的源码核定)。A07只有敏感读取非零退出的证据，不能据该顺序缺口断言它必因时序，也不能把离线修复称为真实故障已解决。
 
-- **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](../../runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
+- **Windows/ADB 37.0.1 的本轮 USB 自动发现范围（F3-P03，2026-11-12）**：只在自持标准5037 server子进程请求 `ADB_EMU=0`、`ADB_MDNS=0`、`ADB_USB=1`，保留完整表和任何foreign/未知行即拒绝；本轮只出现预期PA2553，实际完成既有两包SHA核定、单次中文ime_commit/工具内精确读回/匹配审计及原default/enabled精确恢复。官方初始化门只能解释自动扫描范围，主动socket transport注册未据此被禁止，不把本次唯一表外推为通用USB隔离保证或P02唯一根因。依据：[P03原件核对与限制](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-11-离线减负实施.md#f3-p03真机-ime-提交与守卫恢复通过)，33SDK/7HTTP/32.559秒；foreground原文可能带历史事件，只保留本地，公开只投影本轮必要事实。
 
-- **Windows/ADB 37.0.1 的本地 AVD 隔离（2026-11-12 实测）**：只传随机不存在的 `--one-device` 不足以证明 USB 排除，run-06 私有表实际列出 PA2553 并在 shell 前拒绝。run-07 改用官方初始化门 `ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动 emulator 前严格要求只有标准表头，后续仅准预期 emulator；在主机 PnP 仍有实体 USB Present/OK 的条件下通过了完整 AVD/IME 链。不要忽略未知行或把 binary 含环境键当执行证据；原过滤失效唯一原因未定。依据：[实施记录 run-06/07](../../runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)及[台架规程](../../runbooks/本地测试台.md)，不外推未来版本。
+- **Windows/ADB 37.0.1 的本地 AVD 隔离（2026-11-12 实测）**：只传随机不存在的 `--one-device` 不足以证明 USB 排除，run-06 私有表实际列出 PA2553 并在 shell 前拒绝。run-07 改用官方初始化门 `ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动 emulator 前严格要求只有标准表头，后续仅准预期 emulator；在主机 PnP 仍有实体 USB Present/OK 的条件下通过了完整 AVD/IME 链。不要忽略未知行或把 binary 含环境键当执行证据；原过滤失效唯一原因未定。依据：[实施记录 run-06/07](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-11-离线减负实施.md#run-07初始化隔离与真实-ime-输入恢复通过)及[台架规程](../../runbooks/本地测试台.md)，不外推未来版本。
 
 - **`uiautomator dump` 在重动画商业 app 报 `could not get idle state`**（京东首页实测；设置类正常）。截图+视觉兜底是刚需；自研 AccessibilityService 直读事件流可绕开 idle 等待。
 - 软键盘弹出导致坐标错位（M0 两次误触主因之一）→ 键盘状态感知 + 点击前二次校验（网关已内建）。
@@ -211,9 +211,9 @@
 
 ## Windows 批处理与离线套件
 
-- **PowerShell空分支与null计数（2026-11-13，实际函数离线反例）**：`$lines=if(...){@()}`会把空数组输出展开为null，随后`@($lines)`可能成为单元素null数组。新AVD缺接收记录的真实Read函数因此把0条算成1条，无法验证第一次新增记录。用显式类型空数组初始化后再条件赋值，并验证“文件不存在→0条→新增唯一行”的实际读取路径；只在外面补Count或镜像解析测试不能证明修复。依据：[通用验证记录](../../runs/2026-11-13-通用失败与失效验证.md)；这是host离线结果，不是Android收件证明。
+- **PowerShell空分支与null计数（2026-11-13，实际函数离线反例）**：`$lines=if(...){@()}`会把空数组输出展开为null，随后`@($lines)`可能成为单元素null数组。新AVD缺接收记录的真实Read函数因此把0条算成1条，无法验证第一次新增记录。用显式类型空数组初始化后再条件赋值，并验证“文件不存在→0条→新增唯一行”的实际读取路径；只在外面补Count或镜像解析测试不能证明修复。依据：[通用验证记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-通用失败与失效验证.md)；这是host离线结果，不是Android收件证明。
 
-- **许可中的 ISO 时间保持字符串（PowerShell 7.6.5，2026-11-12）**：`ConvertFrom-Json` 默认会把 ISO 时间转为 `System.DateTime`，让随后合法的字符串/时区校验误拒绝。字段合同要求原始字符串时显式使用 `-DateKind String`。本轮对原真实许可复现旧解析拒绝，并在实际授权校验 AST 片段中验证修正后通过；仅无 Run/缺许可负例通过不能覆盖有效许可解析。依据：[SCREEN-P01 记录](../../runs/2026-11-12-后续任务推进.md#screen-p01许可解析拒绝与新候选准备)，SDK0/截图0；这是离线解析修复，不证明设备运行通过。
+- **许可中的 ISO 时间保持字符串（PowerShell 7.6.5，2026-11-12）**：`ConvertFrom-Json` 默认会把 ISO 时间转为 `System.DateTime`，让随后合法的字符串/时区校验误拒绝。字段合同要求原始字符串时显式使用 `-DateKind String`。本轮对原真实许可复现旧解析拒绝，并在实际授权校验 AST 片段中验证修正后通过；仅无 Run/缺许可负例通过不能覆盖有效许可解析。依据：[SCREEN-P01 记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-12-后续任务推进.md#screen-p01许可解析拒绝与新候选准备)，SDK0/截图0；这是离线解析修复，不证明设备运行通过。
 
 - **隔离工作树复制Gradle缓存的长路径（2026-11-12）**：在较长的managed worktree路径下，Python标准copytree可对超过260字符的目标报不存在；本轮只读源模块/wrapper缓存、目标resolve核实仍位于当前工作树后，以Windows长路径前缀补齐本任务部分产物成功。未修改全局LongPaths设置，不把配置、凭据或keystore混入缓存复制。依据：[开机恢复离线记录](../../runs/2026-11-12-网关开机恢复离线.md)；这是缓存准备经验，不是设备或开机行为证明。
 
