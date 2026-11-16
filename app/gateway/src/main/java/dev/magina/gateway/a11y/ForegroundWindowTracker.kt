@@ -41,6 +41,9 @@ internal enum class ForegroundUnknownReason {
 
     /** 已接受身份的 windowId 与当前活动应用窗口不一致（窗口换了但没等到可接受的事件）。 */
     WINDOW_ID_MISMATCH,
+
+    /** 检测到异包或归属未知的多窗口（分屏/悬浮窗），拒绝猜测前台身份。 */
+    CROSS_APP_MULTI_WINDOW,
 }
 
 internal data class ResolvedForeground(
@@ -100,6 +103,9 @@ internal enum class ForegroundEventDecision {
 
     /** 冷启动自举：从未收到任何事件，直接用活动应用窗口自报的包名建立 package 级身份。 */
     BOOTSTRAPPED,
+
+    /** 同包平行视界/应用多窗内跨 windowId 切换：同包名活动应用窗口延续 package 级身份。 */
+    SAME_PACKAGE_WINDOW_SWITCH,
 }
 
 /** 一条前台事件的处置记录。时间与序号让"两次工具调用之间发生了什么"可事后复盘。 */
@@ -222,6 +228,40 @@ internal class ForegroundWindowTracker(
             packageName = packageName,
             activityName = "",
             decision = ForegroundEventDecision.BOOTSTRAPPED,
+            selectedApplicationWindowId = applicationWindowId,
+            windows = windows,
+        )
+        return true
+    }
+
+    /**
+     * 同应用多窗口（如平行视界左右窗格）焦点切换时，Android 常只移动 active/focused
+     * 而不重发带 Activity 的 WINDOW_STATE_CHANGED。仅当当前已建立身份的包名与新活动应用窗口
+     * 自报包名完全一致时，平滑延续 package 级身份并清空旧 Activity；异包切换仍保持 mismatch。
+     */
+    @Synchronized
+    fun continueSamePackageWindow(
+        applicationWindowId: Int,
+        packageName: String,
+        windows: List<ForegroundWindow>,
+    ): Boolean {
+        val current = identity as? ForegroundIdentity.Known ?: return false
+        if (packageName.isEmpty()) return false
+        if (current.packageName != packageName || current.windowId == applicationWindowId) return false
+        if (applicationWindow(windows)?.id != applicationWindowId) return false
+
+        identity = ForegroundIdentity.Known(
+            windowId = applicationWindowId,
+            packageName = packageName,
+            activityName = "",
+            bootstrapped = true,
+        )
+        record(
+            kind = "same_package_switch",
+            eventWindowId = applicationWindowId,
+            packageName = packageName,
+            activityName = "",
+            decision = ForegroundEventDecision.SAME_PACKAGE_WINDOW_SWITCH,
             selectedApplicationWindowId = applicationWindowId,
             windows = windows,
         )

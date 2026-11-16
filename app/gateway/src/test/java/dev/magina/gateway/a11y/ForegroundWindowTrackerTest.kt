@@ -719,6 +719,54 @@ class ForegroundWindowTrackerTest {
         assertFalse(resolveForeground(tracker.current(), wechat.id, "com.tencent.mm").bootstrapped)
     }
 
+    @Test
+    fun `continueSamePackageWindow smoothly follows same-package window switch and clears stale activity`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+        val rightPane = ForegroundWindow(
+            id = 22,
+            type = ForegroundWindowType.APPLICATION,
+            isActive = true,
+            isFocused = true,
+        )
+        val parallelWindows = listOf(
+            wechat.copy(isActive = false, isFocused = false),
+            rightPane,
+        )
+
+        assertTrue(tracker.continueSamePackageWindow(rightPane.id, "com.tencent.mm", parallelWindows))
+        assertEquals(
+            ForegroundIdentity.Known(
+                windowId = rightPane.id,
+                packageName = "com.tencent.mm",
+                activityName = "",
+                bootstrapped = true,
+            ),
+            tracker.current(),
+        )
+        assertEquals(
+            ForegroundEventDecision.SAME_PACKAGE_WINDOW_SWITCH,
+            tracker.recentEvents().last().decision,
+        )
+        assertTrue(
+            resolveForeground(tracker.current(), rightPane.id, "com.tencent.mm").let {
+                it.known && it.bootstrapped && it.activityName.isEmpty()
+            },
+        )
+    }
+
+    @Test
+    fun `continueSamePackageWindow rejects cross-package switch and preserves window id mismatch`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+        val other = ForegroundWindow(id = 99, type = ForegroundWindowType.APPLICATION, isActive = true)
+
+        assertFalse(tracker.continueSamePackageWindow(other.id, "com.android.settings", listOf(other)))
+        assertEquals(wechatIdentity, tracker.current())
+        assertEquals(
+            ForegroundUnknownReason.WINDOW_ID_MISMATCH,
+            resolveForeground(tracker.current(), other.id, "com.android.settings").reason,
+        )
+    }
+
     private fun trackerAtWeChat(windows: List<ForegroundWindow>): ForegroundWindowTracker =
         ForegroundWindowTracker().also { tracker ->
             tracker.onWindowStateChanged(

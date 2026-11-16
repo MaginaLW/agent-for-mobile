@@ -674,11 +674,13 @@ object ToolRegistry {
         val revision = ctx.optLong("revision", -1)
         val foregroundKnown = ctx.optBoolean("foreground_known", false)
         val identityBootstrapped = ctx.optString("foreground_identity_source") == "bootstrap"
+        val sameAppMulti = ctx.optString("window_topology") == "same_app_multi"
         if (!foregroundKnown) return SafetyContext(
             packageName = packageName,
             activityName = activityName,
             revision = revision,
             foregroundKnown = false,
+            sameAppMultiWindow = sameAppMulti,
             target = null,
         )
         val target = when {
@@ -691,6 +693,7 @@ object ToolRegistry {
                     description = resolved.desc,
                     bounds = "[${resolved.bounds.left},${resolved.bounds.top}][${resolved.bounds.right},${resolved.bounds.bottom}]",
                     source = resolved.source,
+                    windowPane = resolved.pane.takeIf { sameAppMulti },
                 )
             }
             name == "press_key" && args.optString("key").equals("enter", ignoreCase = true) ->
@@ -708,6 +711,7 @@ object ToolRegistry {
                             focused.identity,
                             bounds,
                         ),
+                        windowPane = a11y.paneForBounds(focused.bounds).takeIf { sameAppMulti },
                     )
                 }
             else -> null
@@ -718,6 +722,7 @@ object ToolRegistry {
             revision = revision,
             foregroundKnown = true,
             identityBootstrapped = identityBootstrapped,
+            sameAppMultiWindow = sameAppMulti,
             target = target,
         )
     }
