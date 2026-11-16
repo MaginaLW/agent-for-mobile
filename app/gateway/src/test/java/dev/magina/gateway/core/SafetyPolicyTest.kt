@@ -269,15 +269,23 @@ class SafetyPolicyTest {
     }
 
     @Test
-    fun `enter without matching prepared target is blocked before confirmation`() {
+    fun `enter with mismatched prepared target is blocked while absent prepared target enters confirmation`() {
         val validTarget = SafetyTarget(
             focusIdentity = strict,
             focusedInputBounds = "[10,20][100,80]",
             inputCommitEvidence = inputEvidence,
             preparedTargetEvidence = preparedTarget,
         )
+        val regularEnter = policy.assess(
+            "press_key",
+            Level.W,
+            JSONObject().put("key", "enter"),
+            normalContext.copy(target = validTarget.copy(preparedTargetEvidence = null)),
+        )
+        assertTrue(regularEnter is SafetyDecision.ConfirmationRequired)
+        assertTrue((regularEnter as SafetyDecision.ConfirmationRequired).cardText("c-reg").contains("目标会话：未绑定会话标题，请核对屏幕"))
+
         val invalidTargets = listOf(
-            validTarget.copy(preparedTargetEvidence = null),
             validTarget.copy(
                 preparedTargetEvidence = preparedTarget.copy(packageName = "other.package"),
             ),
@@ -377,43 +385,70 @@ class SafetyPolicyTest {
     }
 
     /**
-     * 有限词表只能识别已知危险语义，不能证明未命中目标安全。无标签图标、陌生文案和 OCR 漏字
-     * 都必须 fail-closed，且未知风险保守归 I 级。
+     * 具名普通控件且未命中风险/动作确认词表时直接放行；纯图标（text 与 desc 皆空）与
+     * 泛化动作确认词（如「确认/确定/提交/下单/同意/允许」）仍按 I 级要求确认；
+     * 敏感黑名单目标门前直接 E_BLOCKED。
      */
     @Test
-    fun `unknown click and long click targets fail closed`() {
-        val cases = listOf(
-            Triple("click", SafetyTarget(ref = "icon", bounds = "[1,2][30,40]", source = "a11y"), "无标签"),
-            Triple(
-                "click",
-                SafetyTarget(ref = "confirm", text = "确认", bounds = "[1,2][30,40]", source = "a11y"),
-                "未收录的确认文案",
-            ),
-            Triple(
-                "long_click",
-                SafetyTarget(ref = "continue", text = "Continue", bounds = "[1,2][30,40]", source = "a11y"),
-                "未收录文案",
-            ),
-            Triple(
-                "click",
-                SafetyTarget(ref = "ocr-1", text = "继续", bounds = "[1,2][30,40]", source = "ocr"),
-                "OCR 目标",
-            ),
+    fun `named safe click is allowed while unlabeled icon and action confirm words require confirmation`() {
+        val safeCases = listOf(
+            Triple("click", SafetyTarget(ref = "note", text = "东京三日游攻略", bounds = "[1,2][30,40]", source = "a11y"), "普通笔记"),
+            Triple("click", SafetyTarget(ref = "logistics", text = "查看物流", bounds = "[1,2][30,40]", source = "a11y"), "查看物流"),
+            Triple("click", SafetyTarget(ref = "back", description = "返回上一页", bounds = "[1,2][30,40]", source = "a11y"), "仅有无风险描述"),
+            Triple("long_click", SafetyTarget(ref = "item", text = "复制微信号", bounds = "[1,2][30,40]", source = "ocr"), "OCR 非风险长按"),
         )
-
-        cases.forEach { (action, target, description) ->
+        safeCases.forEach { (action, target, description) ->
             val decision = policy.assess(
                 "ui_action",
                 Level.W,
                 JSONObject().put("ref", target.ref).put("action", action),
                 normalContext.copy(target = target),
             )
-
-            assertTrue("$description 的 $action 必须确认", decision is SafetyDecision.ConfirmationRequired)
-            decision as SafetyDecision.ConfirmationRequired
-            assertEquals("$description 的未知风险必须归 I 级", RiskTier.IRREVERSIBLE, decision.riskTier)
-            assertTrue(decision.actionSummary.contains("目标语义未知"))
+            assertTrue("$description 的 $action 应直接放行", decision is SafetyDecision.Allowed)
         }
+
+        val unlabeledCases = listOf(
+            Triple("click", SafetyTarget(ref = "icon", bounds = "[1,2][30,40]", source = "a11y"), "无标签 click"),
+            Triple("long_click", SafetyTarget(ref = "icon2", text = "   ", description = "", bounds = "[1,2][30,40]", source = "ocr"), "空白标签 long_click"),
+        )
+        unlabeledCases.forEach { (action, target, description) ->
+            val decision = policy.assess(
+                "ui_action",
+                Level.W,
+                JSONObject().put("ref", target.ref).put("action", action),
+                normalContext.copy(target = target),
+            )
+            assertTrue("$description 必须确认", decision is SafetyDecision.ConfirmationRequired)
+            decision as SafetyDecision.ConfirmationRequired
+            assertEquals("$description 必须归 I 级", RiskTier.IRREVERSIBLE, decision.riskTier)
+            assertTrue(decision.actionSummary.contains("目标无文本/描述"))
+        }
+
+        SafetyPolicy.DEFAULT_ACTION_CONFIRM_WORDS.forEach { word ->
+            val decision = policy.assess(
+                "ui_action",
+                Level.W,
+                JSONObject().put("ref", "confirm-$word").put("action", "click"),
+                normalContext.copy(
+                    target = SafetyTarget(ref = "confirm-$word", text = word, bounds = "[1,2][30,40]", source = "a11y"),
+                ),
+            )
+            assertTrue("泛化确认词「$word」必须确认", decision is SafetyDecision.ConfirmationRequired)
+            decision as SafetyDecision.ConfirmationRequired
+            assertEquals("泛化确认词「$word」必须归 I 级", RiskTier.IRREVERSIBLE, decision.riskTier)
+        }
+
+        val sensitivePolicy = SafetyPolicy(sensitiveTargets = listOf("保密联系人"))
+        val blocked = sensitivePolicy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "s1").put("action", "click"),
+            normalContext.copy(
+                target = SafetyTarget(ref = "s1", text = "联系保密联系人", bounds = "[1,2][30,40]", source = "a11y"),
+            ),
+        )
+        assertTrue("sensitiveTargets 命中必须门前直接阻断", blocked is SafetyDecision.Blocked)
+        assertEquals(ErrorCode.E_BLOCKED, (blocked as SafetyDecision.Blocked).code)
     }
 
     /** fail-closed 只覆盖真正触发控件的 click/long_click，不扩大到 focus 等非触发动作。 */

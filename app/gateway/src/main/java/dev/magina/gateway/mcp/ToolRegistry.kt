@@ -72,10 +72,6 @@ object ToolRegistry {
             .put("properties", JSONObject().apply { props.forEach { (k, v) -> put(k, v) } })
             .put("required", JSONArray(required))
 
-    private fun stub(msg: String, fallback: String): (JSONObject) -> JSONObject = {
-        throw GatewayError(ErrorCode.E_CHANNEL_DOWN, msg, fallback = fallback)
-    }
-
     private fun gatedOnly(name: String): (JSONObject) -> JSONObject = {
         throw GatewayError(ErrorCode.E_INTERNAL, "$name 只能由统一安全门执行")
     }
@@ -127,10 +123,6 @@ object ToolRegistry {
             "app_launch", "按别名或包名启动 app，执行后验前台。",
             Level.W, schema(listOf("name"), "name" to prop("string", "app 别名（微信/京东…）或包名")),
         ) { SystemTools.appLaunch(it.getString("name")) },
-        ToolSpec(
-            "app_stop", "强停 app（Shizuku 通道，M1b）。",
-            Level.W, schema(listOf("package"), "package" to prop("string", "包名")),
-        ) { SystemTools.appStop(it.getString("package")) },
         ToolSpec(
             "clipboard", "剪贴板读写。读取需本 app 为默认 IME（Android 10+ 限制）。",
             Level.W,
@@ -194,19 +186,6 @@ object ToolRegistry {
             ),
         ) { IntentTools.shareFile(it.getString("uri"), it.getString("mime"), it.optString("target").ifEmpty { null }) },
 
-        // ---------- L3 通知层（M1b 占位） ----------
-        ToolSpec(
-            "notifications_list", "列当前通知（M1b：NotificationListener）。",
-            Level.R, schema(emptyList()),
-            handler = stub("通知层在 M1b 实现", "打开目标 app 走 UI 读取"),
-        ),
-        ToolSpec(
-            "notification_reply", "通知内直接回复（M1b；危险级=对外发送）。",
-            Level.D,
-            schema(listOf("id", "text"), "id" to prop("string", "通知 id"), "text" to prop("string", "回复内容")),
-            handler = stub("通知层在 M1b 实现", "打开目标 app 走 UI 回复"),
-        ),
-
         // ---------- L4 UI 层 ----------
         ToolSpec(
             "ui_snapshot", "当前页面语义元素列表（带 revision；树空/稀疏自动融合 OCR，source=a11y|ocr|fused；ref 供后续操作寻址）。首选感知工具。",
@@ -216,10 +195,6 @@ object ToolRegistry {
                 "scope" to prop("string", "interactive=可交互+短文本（默认）；full=含长文本供阅读", listOf("interactive", "full")),
             ),
         ) { UiTools.uiSnapshot(it.optString("scope", "interactive")) },
-        ToolSpec(
-            "ui_diff", "自某 revision 以来的元素增删改（M1b）。",
-            Level.R, schema(listOf("since_revision"), "since_revision" to prop("integer", "上次 snapshot 的 revision")),
-        ) { UiTools.uiDiff(it.getLong("since_revision")) },
         ToolSpec(
             "ui_find", "按文本/角色/描述找元素；scroll_search=true 时网关自行滚动查找（≤3 屏）。",
             Level.R,
@@ -398,10 +373,11 @@ object ToolRegistry {
      */
     private fun newSafetyGate(call: CallScope): SafetyGate = SafetyGate(
         policy = SafetyPolicy(
-            // 技能包资产的 danger_words 即 I 级、send_words 即 II 级（见 SafetyPolicy 类注释）。
+            // 技能包资产的 danger_words 即 I 级、send_words 即 II 级、action_confirm_words 为泛化确认词（I 级）。
             irreversibleWords = Gateway.skills.dangerWords,
             retractableWords = Gateway.skills.sendWords,
             sensitiveTargets = Gateway.skills.sensitiveTargets,
+            actionConfirmWords = Gateway.skills.actionConfirmWords,
         ),
         confirmer = { decision ->
             // 纵深防御，**当前站规下走不到**：站规 §4「安全失败就是终态」要求大脑在第一次
@@ -455,7 +431,7 @@ object ToolRegistry {
                         nonce = ConfirmApprovalArbiter.newNonce(),
                         riskTier = decision.riskTier,
                         action = confirmActionPhrase(decision),
-                        target = call.targetLabel.ifBlank { decision.initialPackage },
+                        target = call.targetLabel.ifBlank { "${decision.initialPackage}（未绑定会话标题）" },
                         targetPackage = decision.initialPackage,
                         preview = call.inputPreview,
                     ),

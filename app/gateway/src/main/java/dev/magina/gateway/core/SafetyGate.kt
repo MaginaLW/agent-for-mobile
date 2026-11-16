@@ -15,6 +15,8 @@ data class SafetyContext(
      * 不是窗口事件给出的完整身份。参与确认前后的硬相等，并在确认卡上如实标注。
      */
     val identityBootstrapped: Boolean = false,
+    /** 是否处于同应用多窗口（如 vivo 平板横屏平行视界）。 */
+    val sameAppMultiWindow: Boolean = false,
     val target: SafetyTarget? = null,
 )
 
@@ -30,6 +32,8 @@ data class SafetyTarget(
     val focusedInputBounds: String? = null,
     val inputCommitEvidence: InputCommitEvidence? = null,
     val preparedTargetEvidence: PreparedTargetEvidence? = null,
+    /** 同应用多窗口下的所在窗格（left/right/top/bottom 等）；单窗为 null。 */
+    val windowPane: String? = null,
 )
 
 /**
@@ -103,6 +107,7 @@ class SafetyPolicy(
     private val irreversibleWords: List<String> = DEFAULT_IRREVERSIBLE_WORDS,
     private val retractableWords: List<String> = DEFAULT_RETRACTABLE_WORDS,
     private val sensitiveTargets: List<String> = emptyList(),
+    private val actionConfirmWords: List<String> = DEFAULT_ACTION_CONFIRM_WORDS,
 ) {
     fun assess(
         toolName: String,
@@ -117,27 +122,36 @@ class SafetyPolicy(
             val input = target?.inputCommitEvidence
             val prepared = target?.preparedTargetEvidence
             val identity = target?.focusIdentity
-            // 两种身份模式共用同一条硬要求：三处证据的身份（含来源）必须逐字段一致，
+            if (
+                context.sameAppMultiWindow &&
+                (identity?.source == IdentitySource.IME_ONLY || target?.focusedInputBounds == null)
+            ) {
+                return SafetyDecision.Blocked(
+                    ErrorCode.E_BLOCKED,
+                    "同应用多窗口下缺少输入框无障碍几何，拒绝盲按 Enter；请改用 ui_action 点击目标窗口内的具体按钮",
+                )
+            }
+            // 两种身份模式共用同一条硬要求：基础证据身份（含来源）必须逐字段一致，
             // 且几何证据与来源一致地存在或缺失——不允许 blank == blank 平凡通过。
-            val chainValid = identity != null &&
+            val baseValid = identity != null &&
                 input != null && input.identity == identity &&
-                prepared != null && prepared.label.isNotBlank() &&
-                prepared.packageName == context.packageName &&
-                prepared.identity == identity &&
-                prepared.bounds == target.focusedInputBounds &&
                 FocusIdentity.boundsConsistent(identity.source, target.focusedInputBounds) &&
                 // IME-only 降级链失去了 a11y 焦点身份与几何，OCR 读回是仅剩的落框机械证据。
                 (identity.source != IdentitySource.IME_ONLY || input.readbackVerified)
-            if (!chainValid) return SafetyDecision.Blocked(
+            // 存在已准备目标会话证据（如 P0 宏）时必须严格对齐；常规生产路径允许无 preparedTargetEvidence 进确认卡。
+            val preparedValid = prepared == null || (
+                prepared.label.isNotBlank() &&
+                    prepared.packageName == context.packageName &&
+                    prepared.identity == identity &&
+                    prepared.bounds == target.focusedInputBounds
+                )
+            if (!baseValid || !preparedValid) return SafetyDecision.Blocked(
                 ErrorCode.E_BLOCKED,
-                "当前焦点输入框没有匹配的短时输入与目标会话证据，拒绝按下 Enter",
+                "当前焦点输入框缺少有效的短时输入证据或目标会话证据不匹配，拒绝按下 Enter",
             )
         }
 
-        // 档位与"要不要确认"是两件独立的事：这里先算出命中词与档位，放行判定在下面。
-        // 通用 click/long_click 无法仅凭有限词表证明目标安全：无标签图标、OCR 漏字或未收录语言
-        // 都可能承载发送/支付/删除动作。因此这两类动作一律确认；词表只负责给已知语义分档，
-        // 未命中时按 fail-closed 归 I 级，绝不把"没有识别出危险"当成"已证明安全"。
+        // 档位与"要不要确认"是两件独立的事：具名普通点击直接放行；仅命中词表或无标签纯图标才确认。
         var tier: RiskTier? = null
         val dynamicReason = when {
             enterPressed -> {
@@ -148,16 +162,27 @@ class SafetyPolicy(
             toolName == "ui_action" && args.optString("action") in setOf("click", "long_click") -> {
                 val label = listOf(context.target?.text, context.target?.description)
                     .filterNotNull().joinToString(" ").trim()
-                // 顺序与拆档前逐字相同（I 级 → II 级 → 敏感目标），因此"命中哪个词"这件事
-                // 不会因为拆档而改变——卡上那句「命中“X”」是黄金回归钉住的文本。
-                val hit = (irreversibleWords + retractableWords + sensitiveTargets)
+                val sensitiveHit = sensitiveTargets
                     .firstOrNull { it.isNotBlank() && label.contains(it, ignoreCase = true) }
-                hit?.let {
-                    tier = tierOfWord(it)
-                    "${args.optString("action")} 危险目标（命中“$it”）"
-                } ?: run {
-                    tier = RiskTier.IRREVERSIBLE
-                    "${args.optString("action")} 目标语义未知（未命中风险词，按 fail-closed 要求确认）"
+                if (sensitiveHit != null) {
+                    return SafetyDecision.Blocked(
+                        ErrorCode.E_BLOCKED,
+                        "点击目标命中敏感黑名单（“$sensitiveHit”），拒绝执行",
+                    )
+                }
+                // 匹配顺序：I 级危险词 → II 级发送词 → 泛化动作确认词（I 级），保持「命中“X”」主顺序不变。
+                val hit = (irreversibleWords + retractableWords + actionConfirmWords)
+                    .firstOrNull { it.isNotBlank() && label.contains(it, ignoreCase = true) }
+                when {
+                    hit != null -> {
+                        tier = tierOfWord(hit)
+                        "${args.optString("action")} 危险目标（命中“$hit”）"
+                    }
+                    label.isBlank() -> {
+                        tier = RiskTier.IRREVERSIBLE
+                        "${args.optString("action")} 目标无文本/描述（纯图标按 fail-closed 要求确认）"
+                    }
+                    else -> null
                 }
             }
 
@@ -238,10 +263,16 @@ class SafetyPolicy(
         if (toolName == "ui_action" && target != null) {
             add("目标：ref=${target.ref} text=${target.text.take(40)} desc=${target.description.take(40)}")
             add("位置：${target.bounds} source=${target.source}")
+            target.windowPane?.takeIf { it.isNotBlank() }?.let { pane ->
+                add("所在窗口：${paneDisplayName(pane)}")
+            }
         } else if (toolName == "press_key") {
             val identity = target?.focusIdentity
             add("按键：${args.optString("key")}")
-            add("目标会话：${target?.preparedTargetEvidence?.label ?: "不可识别"}")
+            add("目标会话：${target?.preparedTargetEvidence?.label ?: "未绑定会话标题，请核对屏幕"}")
+            target?.windowPane?.takeIf { it.isNotBlank() }?.let { pane ->
+                add("所在窗口：${paneDisplayName(pane)}")
+            }
             // 焦点几何不可得时不得静默少展示一项：改为展示 IME 会话身份并标注降级模式，
             // 让真人清楚知道这一次少了哪一套证据（design §3.6）。
             when (identity?.source) {
@@ -292,6 +323,20 @@ class SafetyPolicy(
          * 这两个词的归档立刻变成承重的，必须重新走 B 道。**
          */
         internal val DEFAULT_RETRACTABLE_WORDS = listOf("发送", "发布", "发表", "评论", "回复")
+
+        /** 泛化动作确认词（独立于 [DEFAULT_IRREVERSIBLE_WORDS]，不污染页面级敏感判定）。 */
+        internal val DEFAULT_ACTION_CONFIRM_WORDS = listOf(
+            "确认", "确定", "提交", "下单", "购买", "结算", "去结算", "同意", "授权", "允许",
+        )
+
+        private fun paneDisplayName(pane: String): String = when (pane) {
+            "left" -> "左侧窗口"
+            "right" -> "右侧窗口"
+            "top" -> "上方窗口"
+            "bottom" -> "下方窗口"
+            "middle" -> "中间窗口"
+            else -> pane
+        }
 
         /**
          * 页面级 fail-closed 判定供受控导航复用。与针对单个点击目标的 [assess] 共用
@@ -440,6 +485,9 @@ class SafetyGate(
         if (initial.identityBootstrapped != current.identityBootstrapped) {
             stale("确认后前台身份来源已变化（自举包级身份 ↔ 窗口事件身份）")
         }
+        if (initial.sameAppMultiWindow != current.sameAppMultiWindow) {
+            stale("确认后多窗口形态已变化")
+        }
         when {
             toolName == "ui_action" -> {
                 val before = initial.target ?: stale("确认前未解析到 UI 目标")
@@ -447,10 +495,13 @@ class SafetyGate(
                 if (
                     before.ref != after.ref || before.text != after.text ||
                     before.description != after.description || before.bounds != after.bounds ||
-                    before.source != after.source
+                    before.source != after.source || before.windowPane != after.windowPane
                 ) stale("确认后 UI 目标证据已变化")
             }
             toolName == "press_key" && args.optString("key").equals("enter", ignoreCase = true) -> {
+                if (initial.target?.windowPane != current.target?.windowPane) {
+                    stale("确认后目标窗口位置已变化")
+                }
                 // 逐条点名并给出旧值→新值：把"A 或 B 或 C 变了"合并成一句话，是真机排查里
                 // 最贵的反模式（每撞一次多烧一轮派单，knowledge 已记）。判据本身一字未放宽。
                 val before = initial.target?.focusIdentity
@@ -479,8 +530,7 @@ class SafetyGate(
                 if (beforeInput != afterInput) stale("确认后短时输入提交证据已变化")
                 val beforeTarget = initial.target.preparedTargetEvidence
                 val afterTarget = current.target?.preparedTargetEvidence
-                if (beforeTarget == null) stale("确认前没有短时目标会话证据")
-                if (afterTarget == null) stale("确认后短时目标会话证据已过期")
+                if (beforeTarget != null && afterTarget == null) stale("确认后短时目标会话证据已过期")
                 if (beforeTarget != afterTarget) stale("确认后短时目标会话证据已变化")
             }
         }

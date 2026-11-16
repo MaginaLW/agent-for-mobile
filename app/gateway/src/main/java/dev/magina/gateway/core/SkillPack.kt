@@ -24,6 +24,7 @@ class SkillPack(context: Context) {
      */
     val shareLandingActivities: Map<String, List<String>>
     val dangerWords: List<String>
+    val actionConfirmWords: List<String>
     val sendWords: List<String>
     val blockedAppPrefixes: List<String>
     val sensitiveTargets: List<String>
@@ -60,6 +61,9 @@ class SkillPack(context: Context) {
         val safety = load("safety.json")
         fun arr(k: String) = safety.getJSONArray(k).let { a -> (0 until a.length()).map { a.getString(it) } }
         dangerWords = arr("danger_words")
+        actionConfirmWords = safety.optJSONArray("action_confirm_words")?.let { a ->
+            (0 until a.length()).map { a.getString(it) }
+        } ?: SafetyPolicy.DEFAULT_ACTION_CONFIRM_WORDS
         sendWords = arr("send_words")
         blockedAppPrefixes = arr("blocked_app_prefixes")
         sensitiveTargets = arr("sensitive_targets")
@@ -74,4 +78,19 @@ class SkillPack(context: Context) {
     fun isBlockedApp(pkg: String?): Boolean =
         pkg != null && blockedAppPrefixes.any { pkg.startsWith(it) }
 
+}
+
+/** 目标包出站前黑名单拦截，供 app_launch/open_uri/intent_send/share 共用。 */
+internal fun ensureTargetPackageAllowed(
+    targetPackage: String?,
+    isBlocked: (String?) -> Boolean,
+) {
+    if (isBlocked(targetPackage)) {
+        throw GatewayError(
+            ErrorCode.E_BLOCKED,
+            "目标应用（$targetPackage）属于敏感黑名单，拒绝启动或派发",
+            channel = "safety",
+            fallback = "按站规在报告中说明目标属于敏感黑名单，不得进入",
+        )
+    }
 }

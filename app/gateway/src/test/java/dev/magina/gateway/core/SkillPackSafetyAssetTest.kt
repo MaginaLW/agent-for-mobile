@@ -26,6 +26,31 @@ class SkillPackSafetyAssetTest {
             "黑名单应从支付宝主包开始，而不是只拦不存在的 security 子包",
             blockedPrefixes.contains(alipayPackage),
         )
+
+        val actionConfirmWords = safety.getJSONArray("action_confirm_words").let { array ->
+            (0 until array.length()).map(array::getString)
+        }
+        assertTrue("safety.json 应配置 action_confirm_words", actionConfirmWords.containsAll(listOf("确认", "确定", "提交", "下单")))
+    }
+
+    @Test
+    fun `blocked app outbound guard rejects blocked target package and allows normal package`() {
+        val safety = loadAsset("safety.json")
+        val blockedPrefixes = safety.getJSONArray("blocked_app_prefixes").let { array ->
+            (0 until array.length()).map(array::getString)
+        }
+        val isBlocked: (String?) -> Boolean = { pkg ->
+            pkg != null && blockedPrefixes.any { pkg.startsWith(it) }
+        }
+
+        val blocked = try {
+            ensureTargetPackageAllowed("com.eg.android.AlipayGphone", isBlocked)
+            null
+        } catch (error: GatewayError) {
+            error
+        }
+        assertEquals(ErrorCode.E_BLOCKED, blocked?.code)
+        ensureTargetPackageAllowed("com.xingin.xhs", isBlocked)
     }
 
     private fun loadAsset(name: String): JSONObject {

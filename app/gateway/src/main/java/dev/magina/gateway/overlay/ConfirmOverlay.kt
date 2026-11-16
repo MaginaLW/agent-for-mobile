@@ -56,6 +56,9 @@ object ConfirmOverlay {
     var isAwaitingDecision: Boolean = false
         private set
 
+    /** 默认确认超时（2026-11-16 对齐 backlog 决策为 90s）。 */
+    internal const val DEFAULT_CONFIRM_TIMEOUT_MS: Long = 90_000L
+
     /** 卡片底色；取证判据按它比对，改颜色必须两处一起改，故只留这一处定义。 */
     val CARD_BACKGROUND_COLOR: Int = Color.parseColor("#F2222222")
 
@@ -65,7 +68,7 @@ object ConfirmOverlay {
         context: Context,
         actionDesc: String,
         overlayHost: ConfirmOverlayWindowHost? = null,
-        timeoutMs: Long = 60_000,
+        timeoutMs: Long = DEFAULT_CONFIRM_TIMEOUT_MS,
         onShownBeforeButtonsEnabled: (ConfirmCardTarget?) -> Unit = {},
         /**
          * 观察到的真人决定 + 它来自哪条通道（无人决定时通道为 null）。
