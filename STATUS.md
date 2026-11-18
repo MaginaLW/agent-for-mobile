@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-16。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
+> 更新 2026-11-18。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
 > 2026-11-15 之前的过程记录、平板双窗研究和历史状态已移出主树，需要时用 `git show e1bae37:<路径>` 查看（如 `git show e1bae37:STATUS.md`）。
 
 ## 现在能做什么
@@ -13,6 +13,8 @@
 | 占位工具 | `notifications_list`、`notification_reply`、`ui_diff`、`app_stop` 已从 `tools/list` 下架，按需实施时再挂回 | [能力现状](docs/knowledge/android/m1b-capabilities.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 
 ## 卡在哪
+
+11 月 17 日的一次派单有 3 次网关调用成功、2 次向本机网关发送 HTTP 请求失败。断点尚未定位。11 月 18 日已修复预检对既有服务和端口转发的归属判断、前台未知时仍尝试重绑、同包窗口被替换时沿用旧身份，以及派单台账误把网关工具失败记为传输故障。预检与派单归因已通过离线回归，PA2553 上的表现待验。
 
 第一个真实日常任务（小红书搜索并总结 5 条公开笔记，即 M0 任务 3）还没跑通：上次尝试在派单前置检查停在 `gateway_a11y_not_ready`——系统设置里无障碍服务已启用，但没有绑定。原因未知；vivo 安全中心会撤销或解绑第三方无障碍服务，见 [vivo 记录](docs/knowledge/android/vivo-originos.md)。过程见 [小红书记录](docs/runs/2026-11-14-小红书单窗口只读准备.md)。2026-11-16 已定契约：不关闭 `com.vivo.safecenter`，由 `dispatch.ps1` 预检在非设置页前台下执行单次有界无障碍重绑。
 

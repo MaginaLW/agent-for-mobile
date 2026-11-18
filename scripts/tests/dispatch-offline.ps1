@@ -691,7 +691,10 @@ public static class Program {
         Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
         if (scenario == "exit-partial") return 23;
         string ok = scenario == "gateway-ok-false" ? "false" : "true";
-        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"completed\"}}");
+        string outcome = scenario == "transport-failure"
+            ? "\"result\":null,\"error\":{\"message\":\"fixture connection closed\"},\"status\":\"failed\""
+            : "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"" + (ok == "false" ? "failed" : "completed") + "\"";
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}," + outcome + "}}");
         Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：成功\"}}");
         if (scenario == "missing-usage") Console.WriteLine("{\"type\":\"turn.completed\"}");
         else Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"cached_input_tokens\":2,\"output_tokens\":7,\"cache_write_input_tokens\":3}}");
@@ -1181,8 +1184,8 @@ public static class Program {
         $businessFailure[3] = '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":false}"}]},"error":null,"status":"completed"}}'
         $businessTranscript = Invoke-TranscriptFixture -Brain codex -Lines $businessFailure
         Assert-True ($businessTranscript.Calls.Count -eq 1 -and
-            $businessTranscript.Calls[0].Outcome -ceq 'failed') `
-            'gateway JSON boolean ok=false 被当作成功调用。'
+            $businessTranscript.Calls[0].Outcome -ceq 'gateway-tool-failure') `
+            'gateway JSON boolean ok=false 未归入网关工具失败。'
 
         foreach ($badResult in @(
             '{"content":[{"type":"text","text":"[{\"ok\":true}]"}]}',
@@ -1275,7 +1278,8 @@ public static class Program {
                 @{ Scenario='exit-partial'; Exit=1; Pattern='brain-process-exit-23.*partial-trace' },
                 @{ Scenario='malformed'; Exit=1; Pattern='trace-invalid-or-incomplete' },
                 @{ Scenario='wrong-server'; Exit=1; Pattern='unauthorized-mcp-server' },
-                @{ Scenario='gateway-ok-false'; Exit=1; Pattern='mcp-transport-failure' },
+                @{ Scenario='gateway-ok-false'; Exit=1; Pattern='(?m)^note: gateway-tool-failure\r?$' },
+                @{ Scenario='transport-failure'; Exit=1; Pattern='(?m)^note: mcp-transport-failure\r?$' },
                 @{ Scenario='missing-usage'; Exit=1; Pattern='trace-invalid-or-incomplete' }
             )
             foreach ($case in $cases) {
@@ -2111,8 +2115,19 @@ if /I "%1"=="get-state" (
   echo device
   exit /b 0
 )
+if /I "%1"=="get-serialno" (
+  echo FAKE-DISPATCH-DEVICE
+  exit /b 0
+)
 if /I "%1"=="shell" if /I "%2"=="input" if /I "%3"=="keyevent" exit /b 0
 if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="services" (
+  if "%PF_SVC_RUNNING%"=="error" exit /b 1
+  if "%PF_SVC_RUNNING%"=="partial" exit /b 0
+  if "%PF_SVC_RUNNING%"=="background" (
+    echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}
+    echo isForeground=false
+    exit /b 0
+  )
   if "%PF_SVC_RUNNING%"=="1" (
     echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService c:com.android.shell}
     echo isForeground=true
@@ -2120,7 +2135,8 @@ if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="se
     echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService c:com.android.shell}
     echo isForeground=true
   ) else (
-    echo ** Activity Services **
+    echo ACTIVITY MANAGER SERVICES ^(dumpsys activity services^)
+    echo   ^(nothing^)
   )
   exit /b 0
 )
@@ -2132,6 +2148,11 @@ if /I "%1"=="shell" if /I "%2"=="am" if /I "%3"=="stopservice" (
   >&2 echo Service stopped
   exit /b 255
 )
+if /I "%1"=="forward" if /I "%2"=="--list" (
+  if defined PF_EXISTING_FORWARD echo %PF_EXISTING_FORWARD%
+  exit /b 0
+)
+if /I "%1"=="forward" if /I "%2"=="--no-rebind" if defined PF_EXISTING_FORWARD exit /b 1
 if /I "%1"=="forward" exit /b 0
 if /I "%1"=="exec-out" if /I "%2"=="run-as" (
   if not "%PF_SYNC_TOKEN%"=="" (
@@ -2141,6 +2162,11 @@ if /I "%1"=="exec-out" if /I "%2"=="run-as" (
   exit /b 1
 )
 if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="activities" (
+  if "%PF_FG_SETTINGS%"=="error" exit /b 1
+  if "%PF_FG_SETTINGS%"=="unknown" (
+    echo topResumedActivity=null
+    exit /b 0
+  )
   if "%PF_FG_SETTINGS%"=="1" (
     echo   topResumedActivity=ActivityRecord{abc u0 com.android.settings/.Settings t9}
   ) else (
@@ -2163,6 +2189,7 @@ exit /b 98
         $savedEnv = @{
             PF_LOG = $env:PF_LOG
             PF_SVC_RUNNING = $env:PF_SVC_RUNNING
+            PF_EXISTING_FORWARD = $env:PF_EXISTING_FORWARD
             PF_SVC_STARTED_FLAG = $env:PF_SVC_STARTED_FLAG
             PF_SYNC_TOKEN = $env:PF_SYNC_TOKEN
             PF_FG_SETTINGS = $env:PF_FG_SETTINGS
@@ -2178,6 +2205,7 @@ exit /b 98
             # 1) 服务已在跑：不自启、收尾不停 service
             Copy-Item -LiteralPath $validGatewayConfig -Destination $pfConfig -Force
             $env:PF_SVC_RUNNING = '1'
+            $env:PF_EXISTING_FORWARD = ''
             $env:PF_SYNC_TOKEN = ''
             $env:PF_FG_SETTINGS = '0'
             $env:PF_REBOUND_FLAG = ''
@@ -2193,6 +2221,28 @@ exit /b 98
             $log1 = Get-Content -LiteralPath $pfAdbLog -Raw
             Assert-NotMatches $log1 'start-foreground-service|stopservice'
             Assert-Contains $log1 'forward --remove'
+
+            # 只接管新建映射。已有同设备同端点可借用，其他映射不能覆盖。
+            $endpoint = "tcp:$($gatewayStub.Port)"
+            foreach ($mapping in @("FAKE-DISPATCH-DEVICE $endpoint $endpoint", "OTHER $endpoint $endpoint", "FAKE-DISPATCH-DEVICE $endpoint tcp:1")) {
+                $env:PF_EXISTING_FORWARD = $mapping
+                Clear-Content -LiteralPath $pfAdbLog
+                $borrowed = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+                $sameMapping = $mapping -ceq "FAKE-DISPATCH-DEVICE $endpoint $endpoint"
+                Assert-True (($null -eq $borrowed.Problem) -eq $sameMapping) '已有映射须同时匹配设备和远端端口。'
+                Assert-True (-not $borrowed.PortForwarded) '既有映射不可记为本轮创建。'
+                Stop-GatewayPreflightOwnedResources -State $borrowed -AdbCommand $pfAdbCmd
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'forward (?:tcp:|--remove)'
+            }
+            $env:PF_EXISTING_FORWARD = ''
+
+            foreach ($probeStatus in @('error', 'partial', 'background')) {
+                $env:PF_SVC_RUNNING = $probeStatus
+                Clear-Content -LiteralPath $pfAdbLog
+                $uncertain = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+                Assert-True (-not [string]::IsNullOrEmpty($uncertain.Problem)) '未确认服务缺席时应停止预检。'
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'start-foreground-service|stopservice|forward '
+            }
 
             # 2) 服务未跑 + 配置缺失需 run-as 同步（非 32 hex token）+ Android 16 stopservice exit 255 零告警
             Remove-Item -LiteralPath $pfConfig, $pfAdbLog, $pfStartedFlag -Force -ErrorAction SilentlyContinue
@@ -2242,6 +2292,14 @@ exit /b 98
             Assert-True (-not $s4.PortForwarded) '失败返回后应已回收本次端口转发。'
             $log4 = Get-Content -LiteralPath $pfAdbLog -Raw
             Assert-NotMatches $log4 'settings\s+put|settings\s+delete'
+
+            foreach ($foreground in @('error', 'unknown')) {
+                $env:PF_FG_SETTINGS = $foreground
+                Clear-Content -LiteralPath $pfAdbLog
+                $unknown = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port -A11yRebindTimeoutSec 1
+                Assert-Matches ([string]$unknown.Problem) 'gateway_a11y_not_ready'
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'settings\s+put|settings\s+delete'
+            }
 
             # 5) caps 缺 a11y：非 Settings toggle 后仍未恢复则 fail-closed
             $env:PF_FG_SETTINGS = '0'

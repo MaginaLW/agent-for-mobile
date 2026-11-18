@@ -1045,7 +1045,10 @@ try {
         if (@($transcript.Calls | Where-Object Server -cne $Executor).Count -gt 0) {
             $policyProblems.Add('unauthorized-mcp-server')
         }
-        if (@($transcript.Calls | Where-Object Outcome -ne 'success').Count -gt 0) {
+        if ('gateway-tool-failure' -in $transcript.Calls.Outcome) {
+            $policyProblems.Add('gateway-tool-failure')
+        }
+        if (@($transcript.Calls | Where-Object { $_.Outcome -notin @('success','gateway-tool-failure') }).Count -gt 0) {
             $policyProblems.Add('mcp-transport-failure')
         }
     }
@@ -1079,7 +1082,7 @@ try {
     if ($partialTrace) {
         $note = $(if ($note) { "$note | partial-trace" } else { 'partial-trace' })
     }
-    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure') {
+    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure|gateway-tool-failure') {
         $note += ' | ' + ($policyProblems -join '+')
     }
 

@@ -1089,7 +1089,7 @@ function Get-DispatchGatewayResultOutcome {
     }
     $ok = Get-DispatchPropertyValue $Envelope 'ok'
     if ($ok -isnot [bool]) { throw "$Context 的结果缺少 JSON boolean ok。" }
-    return $(if ($isError -eq $true -or $ok -ne $true) { 'failed' } else { 'success' })
+    return $(if ($isError -eq $true -or $ok -ne $true) { 'gateway-tool-failure' } else { 'success' })
 }
 
 function ConvertTo-DispatchMobileTransportMarker {
@@ -1289,13 +1289,16 @@ function Read-DispatchTraceTranscript {
                         $call.CompletedOrdinal = $eventOrdinal
                         $itemStatus = Get-DispatchPropertyValue $item 'status'
                         $itemError = Get-DispatchPropertyValue $item 'error'
-                        if ($itemStatus -isnot [string] -or $itemStatus -cne 'completed' -or
+                        $rawResult = Get-DispatchPropertyValue $item 'result'
+                        # Codex 也会把带有网关错误信封的正常 MCP 响应标记为 failed。
+                        $hasFailedGatewayResult = $itemStatus -ceq 'failed' -and
+                            $call.Server -ceq 'gateway' -and $null -ne $rawResult
+                        if ($itemStatus -isnot [string] -or ($itemStatus -cne 'completed' -and -not $hasFailedGatewayResult) -or
                             $null -ne $itemError) {
                             $call.Outcome = 'failed'
                             $call.ResultEnvelope = $itemError
                             continue
                         }
-                        $rawResult = Get-DispatchPropertyValue $item 'result'
                         $call.ResultEnvelope = if ($call.Server -ceq 'mobile') {
                             ConvertTo-DispatchMobileTransportMarker $rawResult
                         }
@@ -1304,6 +1307,7 @@ function Read-DispatchTraceTranscript {
                         if ($call.Server -ceq 'gateway') {
                             $call.Outcome = Get-DispatchGatewayResultOutcome -RawResult $rawResult `
                                 -Envelope $call.ResultEnvelope -Context "Codex gateway mcp_tool_call $id"
+                            if ($hasFailedGatewayResult -and $call.Outcome -ceq 'success') { $call.Outcome = 'failed' }
                         }
                         else { $call.Outcome = 'success' }
                     }

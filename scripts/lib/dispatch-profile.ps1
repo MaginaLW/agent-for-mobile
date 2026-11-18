@@ -130,16 +130,18 @@ function Read-GatewayDeviceTokenViaRunAs {
     finally { $text = $null }
 }
 
-function Test-GatewayForegroundServiceRunning {
+function Get-GatewayForegroundServiceState {
     param([Parameter(Mandatory)][string]$AdbCommand)
 
-    $out = @(& $AdbCommand shell dumpsys activity services dev.magina.gateway 2>&1)
-    if ($LASTEXITCODE -ne 0) { return $false }
+    $out = @(& $AdbCommand shell dumpsys activity services dev.magina.gateway/.GatewayService 2>&1)
+    if ($LASTEXITCODE -ne 0) { return 'unknown' }
     $text = $out -join "`n"
-    if ($text -notmatch 'ServiceRecord\{[^\r\n]*dev\.magina\.gateway/\.GatewayService(?:\s+[^\r\n}]*)?\}') {
-        return $false
+    if ($text -match 'ServiceRecord\{[^\r\n]*dev\.magina\.gateway/\.GatewayService(?:\s+[^\r\n}]*)?\}' -and
+        $text -match '(?i)\b(?:isForeground|foreground)\s*[=:]\s*true\b') {
+        return 'foreground'
     }
-    return [bool]($text -match '(?i)(?:isForeground|foreground)\s*[=:]\s*true')
+    if ($text -notmatch 'ServiceRecord\{' -and $text -match '(?m)^\s*\(nothing\)\s*$') { return 'absent' }
+    return 'unknown'
 }
 
 function New-GatewayLocalHttpClient {
@@ -241,6 +243,10 @@ function Invoke-GatewayBoundedAccessibilityRebind {
         $actText -match '(?m)(?:topResumedActivity|mResumedActivity)\s*[:=][^\r\n]*\bcom\.android\.settings/') {
         return 'gateway_a11y_not_ready：当前前台为系统设置（com.android.settings），为避开安全中心监控不自动重绑，请先退回桌面或目标 App 后重试。'
     }
+    if ($actExit -ne 0 -or
+        $actText -notmatch '(?:topResumedActivity|mResumedActivity)\s*[:=]\s*ActivityRecord\{[^}\r\n]*\bu\d+\s+[\w.]+/') {
+        return 'gateway_a11y_not_ready：无法确认当前前台应用，已停止预检。'
+    }
 
     $fullComp = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
     $shortComp = 'dev.magina.gateway/.a11y.GatewayA11yService'
@@ -333,7 +339,12 @@ function Ensure-GatewayPreflightReady {
         return $state
     }
 
-    if (-not (Test-GatewayForegroundServiceRunning -AdbCommand $AdbCommand)) {
+    $serviceState = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
+    if ($serviceState -eq 'unknown') {
+        $state.Problem = '无法确认 GatewayService 正在前台运行或尚未启动，已停止预检。'
+        return $state
+    }
+    if ($serviceState -eq 'absent') {
         & $AdbCommand shell am start-foreground-service -n dev.magina.gateway/.GatewayService *> $null
         $startExit = $LASTEXITCODE
         if ($startExit -ne 0) {
@@ -348,7 +359,7 @@ function Ensure-GatewayPreflightReady {
         $deadline = [DateTime]::UtcNow.AddSeconds(3)
         $running = $false
         while ($true) {
-            if (Test-GatewayForegroundServiceRunning -AdbCommand $AdbCommand) { $running = $true; break }
+            if ((Get-GatewayForegroundServiceState -AdbCommand $AdbCommand) -eq 'foreground') { $running = $true; break }
             if ([DateTime]::UtcNow -ge $deadline) { break }
             Start-Sleep -Milliseconds 250
         }
@@ -359,13 +370,24 @@ function Ensure-GatewayPreflightReady {
         }
     }
 
-    & $AdbCommand forward "tcp:$Port" "tcp:$Port" *> $null
-    if ($LASTEXITCODE -ne 0) {
-        $state.Problem = "gateway 端口转发失败（adb forward tcp:$Port tcp:$Port）。"
-        Stop-GatewayPreflightOwnedResources -State $state -AdbCommand $AdbCommand
-        return $state
+    $endpoint = "tcp:$Port"
+    & $AdbCommand forward --no-rebind $endpoint $endpoint *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $state.PortForwarded = $true
     }
-    $state.PortForwarded = $true
+    else {
+        # ADB 的转发列表跨设备；只有当前设备的同一映射可以借用。
+        $serial = [string](& $AdbCommand get-serialno 2>$null)
+        $hasSerial = $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($serial) -and $serial -cne 'unknown'
+        $forwards = @(& $AdbCommand forward --list 2>$null)
+        $listed = @($forwards | ForEach-Object { $_.Trim() -replace '\s+', ' ' })
+        if (-not $hasSerial -or $LASTEXITCODE -ne 0 -or
+            "$serial $endpoint $endpoint" -cnotin $listed) {
+            $state.Problem = "gateway 端口转发失败，未确认 $endpoint 属于当前设备的同一映射。"
+            Stop-GatewayPreflightOwnedResources -State $state -AdbCommand $AdbCommand
+            return $state
+        }
+    }
 
     $configProblem = Get-GatewayConfigProblem -ConfigPath $ConfigPath
     if ($configProblem -and ($configProblem -like '*不存在*' -or $configProblem -like '*占位符*')) {
