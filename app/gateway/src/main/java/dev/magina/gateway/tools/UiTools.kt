@@ -192,6 +192,9 @@ object UiTools {
                 )
             }
             node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val session = if (mode == "replace" && !node.isPassword && node == a11y.focusedEditable()) {
+                ImeBridge.session()?.takeIf { it.belongsTo(node.packageName?.toString().orEmpty()) }
+            } else null
             channel = "ime_commit"
             committed = ImeBridge.commit(text, mode)
             if (!committed) throw GatewayError(
@@ -200,6 +203,14 @@ object UiTools {
             )
             Thread.sleep(150)
             readback = readback(node)
+            // 小红书的无障碍节点会把“搜索, ”作为文本的一部分。只接受同一焦点编辑器的精确读回。
+            if (session != null && readback != null && readback != expected &&
+                node.isEditable && node.isFocused && !node.isPassword && node == a11y.focusedEditable() &&
+                ImeBridge.matchesCommittedText(session, expected) && node == a11y.focusedEditable()
+            ) {
+                recordInputEvidence(a11y, expected, readbackVerified = true)
+                return result(channel, true, expected, verified = true).put("readback_source", "input_connection")
+            }
         }
 
         if (readback == null) return ocrReadbackResult(a11y, node, channel, expected).also {

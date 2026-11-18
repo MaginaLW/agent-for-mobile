@@ -1,5 +1,6 @@
 package dev.magina.gateway.ime
 
+import android.view.inputmethod.ExtractedText
 import android.view.inputmethod.InputConnection
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -60,11 +61,44 @@ class ImeBridgeSessionCommitTest {
         assertEquals(0, commits)
     }
 
-    private fun fakeConnection(): InputConnection = Proxy.newProxyInstance(
+    @Test
+    fun `editor readback needs exact full text in the original session`() {
+        val expected = "东京三日游"
+        val field = ExtractedText().apply {
+            text = expected
+            startOffset = 0
+            partialStartOffset = -1
+            partialEndOffset = -1
+            selectionStart = expected.length
+            selectionEnd = expected.length
+        }
+        val connection = fakeConnection(field)
+        ImeBridge.startSession("search", "com.xingin.xhs", null) { connection }
+        val session = requireNotNull(ImeBridge.session())
+        assertTrue(ImeBridge.matchesCommittedText(session, expected))
+        field.text = "搜索, $expected"
+        assertFalse(ImeBridge.matchesCommittedText(session, expected))
+        field.text = expected
+        field.startOffset = 4
+        assertFalse(ImeBridge.matchesCommittedText(session, expected))
+        field.startOffset = 0
+        field.partialEndOffset = expected.length
+        assertFalse(ImeBridge.matchesCommittedText(session, expected))
+        field.partialEndOffset = -1
+        val clipped = fakeConnection(field, afterCursor = "余")
+        ImeBridge.startSession("clipped", "com.xingin.xhs", null) { clipped }
+        assertFalse(ImeBridge.matchesCommittedText(requireNotNull(ImeBridge.session()), expected))
+        ImeBridge.startSession("other-field", "com.xingin.xhs", null) { connection }
+        assertFalse(ImeBridge.matchesCommittedText(session, expected))
+    }
+
+    private fun fakeConnection(field: ExtractedText? = null, afterCursor: String = ""): InputConnection = Proxy.newProxyInstance(
         InputConnection::class.java.classLoader,
         arrayOf(InputConnection::class.java),
     ) { _, method, _ ->
         when (method.name) {
+            "getExtractedText" -> field
+            "getTextAfterCursor" -> afterCursor
             "commitText" -> { commits++; true }
             "beginBatchEdit", "endBatchEdit", "performContextMenuAction" -> true
             else -> when (method.returnType) {
