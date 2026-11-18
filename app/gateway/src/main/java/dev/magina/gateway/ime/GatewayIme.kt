@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
@@ -221,6 +222,17 @@ object ImeBridge {
 
     /** 只暴露连接是否仍可用，不暴露 InputConnection 给宏状态机执行任意编辑动作。 */
     fun hasInputConnection(): Boolean = ic() != null
+
+    /** 只比较同一编辑会话的完整内容，不把编辑器里的其他文字传给调用方。 */
+    internal fun matchesCommittedText(session: ImeSessionIdentity, expected: String): Boolean = synchronized(sessionLock) {
+        if (!active || focusedInputId != session.id || sessionPackage != session.packageName) return false
+        val connection = ic() ?: return false
+        val request = ExtractedTextRequest().apply { hintMaxChars = expected.length + 1 }
+        val field = connection.getExtractedText(request, 0) ?: return false
+        field.startOffset == 0 && field.partialStartOffset == -1 && field.partialEndOffset == -1 &&
+            field.selectionStart == expected.length && field.selectionEnd == expected.length &&
+            field.text?.toString() == expected && connection.getTextAfterCursor(1, 0)?.isEmpty() == true
+    }
 
     /** mode=append 追加；mode=replace 全选后覆盖。返回是否注入成功（不含内容验证——由调用方读回）。 */
     fun commit(text: String, mode: String): Boolean {

@@ -8,6 +8,7 @@ import android.net.Uri
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.ensureTargetPackageAllowed
 import org.json.JSONObject
 
 /**
@@ -25,7 +26,12 @@ object IntentTools {
 
     fun openUri(uri: String): JSONObject {
         val hit = Gateway.skills.matchDeeplink(uri)
+        ensureTargetPackageAllowed(hit?.expectPackage?.takeIf { it.isNotEmpty() }, Gateway.skills::isBlockedApp)
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val resolvedPkg = runCatching {
+            ctx.packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
+        }.getOrNull()
+        ensureTargetPackageAllowed(resolvedPkg, Gateway.skills::isBlockedApp)
         try {
             ctx.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
@@ -67,6 +73,7 @@ object IntentTools {
         uri?.let { intent.data = Uri.parse(it) }
         extras?.keys()?.forEach { k -> intent.putExtra(k, extras.getString(k)) }
         val resolvedPackage = pkg?.let(Gateway.skills::resolvePackage)
+        ensureTargetPackageAllowed(resolvedPackage, Gateway.skills::isBlockedApp)
         resolvedPackage?.let(intent::setPackage)
         var componentPackage: String? = null
         component?.let { comp ->
@@ -76,6 +83,7 @@ object IntentTools {
                 fallback = "改用 package 定向 + 系统解析，或先在 apps.json 注册组件",
             )
             val p = Gateway.skills.shareComponents.entries.first { it.value == comp }.key
+            ensureTargetPackageAllowed(p, Gateway.skills::isBlockedApp)
             if (resolvedPackage != null && resolvedPackage != p) throw GatewayError(
                 ErrorCode.E_INVALID_ARG,
                 "package「$resolvedPackage」与组件「$comp」所属包「$p」不一致",
@@ -140,6 +148,7 @@ object IntentTools {
         base.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (target != null) {
             val pkg = Gateway.skills.resolvePackage(target)
+            ensureTargetPackageAllowed(pkg, Gateway.skills::isBlockedApp)
             val direct = Gateway.skills.shareComponents[pkg]
             if (direct != null) {
                 // 组件失效（如微信改版）→ 静默降级 package 定向（网关内机械回退，spec §3）

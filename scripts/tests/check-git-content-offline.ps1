@@ -205,8 +205,8 @@ try {
         @{ Name='fragment'; Content="$publicUrl#other`n" },
         @{ Name='token in query'; Content="${publicUrl}?token=$token`n" },
         @{ Name='embedded URL'; Content="https://example.invalid/?next=$publicUrl`n" },
-        @{ Name='Chinese token adjacency'; Content="$publicUrl`n中${token}文`n" },
-        @{ Name='accented token adjacency'; Content="$publicUrl`né${token}é`n" }
+        @{ Name='Chinese token adjacency'; Content="中${token}文`n" },
+        @{ Name='accented token adjacency'; Content="é${token}é`n" }
     )) {
         Test-Case $scenario.Name {
             Set-FixtureFile 'tracked.txt' $scenario.Content

@@ -86,6 +86,8 @@ class GatewayA11yService : AccessibilityService() {
         val bounds: Rect,
         val snapRev: Long,
         val source: String,
+        val windowId: Int = -1,
+        val pane: String = "full",
     )
 
     private val refs = SnapshotRefRegistry<RefEntry>()
@@ -172,8 +174,11 @@ class GatewayA11yService : AccessibilityService() {
     }
 
     fun ctx(caps: List<String>): JSONObject {
-        // 同一次已接受事件原子地产生 package/activity，避免 ctx 拼出跨窗口身份。
-        val foreground = currentForeground()
+        // 同一次已接受事件与拓扑判定共用当前稳定窗口，避免 ctx 拼出跨窗口身份。
+        val currentWindows = settledWindows()
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
+        val foreground = resolveForegroundOf(currentWindows, appSlices, topology)
         return JSONObject()
             .put("app", foreground.packageName)
             .put("activity", foreground.activityName)
@@ -182,6 +187,7 @@ class GatewayA11yService : AccessibilityService() {
             .put("foreground_reason", foreground.reason.name.lowercase())
             // known=true 还不够：自举来的身份没有 Activity，安全门要据此在确认卡上说明白。
             .put("foreground_identity_source", identitySourceName(foreground))
+            .put("window_topology", topology.wireName)
             .put("revision", revision)
             .put("keyboard", keyboardState())
             .put("screen", "on") // 服务在收事件即亮屏；灭屏感知 M1b 接 PowerManager
@@ -193,23 +199,56 @@ class GatewayA11yService : AccessibilityService() {
      */
     private fun currentForeground(): ResolvedForeground = resolveForegroundOf(settledWindows())
 
+    private fun appWindowSlices(
+        currentWindows: List<AccessibilityWindowInfo> = windows,
+    ): List<AppWindowSlice> = currentWindows.mapNotNull { w ->
+        if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) return@mapNotNull null
+        val b = Rect().also(w::getBoundsInScreen)
+        val rootPackage = runCatching { w.root?.packageName?.toString() }.getOrNull()
+        AppWindowSlice(w.id, rootPackage, b.left, b.top, b.right, b.bottom)
+            .takeIf { it.hasPositiveArea }
+    }
+
+    fun paneForBounds(bounds: Rect?): String? {
+        bounds ?: return null
+        val slices = appWindowSlices()
+        if (classifyWindowTopology(slices) != WindowTopology.SAME_APP_MULTI) return null
+        val slice = matchSliceForPoint(slices, bounds.centerX(), bounds.centerY()) ?: return null
+        return assignWindowPanes(slices)[slice.windowId]
+    }
+
     /**
-     * 解析前台身份；身份从未建立过（服务刚重启、没人切过窗口）时先做一次冷启动自举。
-     *
-     * 自举写进 tracker 是**幂等的读取副作用**：它只把"正在被解析的这一份窗口列表里、活动
-     * 应用窗口自己上报的包名"固化下来，不引入窗口列表以外的任何信息，因此挂在只读路径上
-     * 不会让结论依赖谁先调用。约束与失败方向见
-     * [ForegroundWindowTracker.bootstrapFromWindow]。
+     * 解析前台身份；异包/未知多窗直接 fail-closed；单窗或同应用多窗时按需执行冷启动自举或同包切窗延续。
      */
-    private fun resolveForegroundOf(currentWindows: List<AccessibilityWindowInfo>): ResolvedForeground {
+    private fun resolveForegroundOf(
+        currentWindows: List<AccessibilityWindowInfo>,
+        appSlices: List<AppWindowSlice> = appWindowSlices(currentWindows),
+        topology: WindowTopology = classifyWindowTopology(appSlices),
+    ): ResolvedForeground {
+        if (topology == WindowTopology.CROSS_OR_UNKNOWN_MULTI) {
+            return ResolvedForeground(
+                known = false,
+                packageName = "",
+                activityName = "",
+                reason = ForegroundUnknownReason.CROSS_APP_MULTI_WINDOW,
+            )
+        }
         val currentWindow = applicationWindow(currentWindows)
-        val rootPackage = runCatching { currentWindow?.root?.packageName?.toString() }.getOrNull()
+        val rootPackage = appSlices.firstOrNull { it.windowId == currentWindow?.id }?.rootPackage
         if (currentWindow != null && !rootPackage.isNullOrEmpty()) {
-            foregroundWindowTracker.bootstrapFromWindow(
+            val fgWindows = foregroundWindows(currentWindows)
+            val bootstrapped = foregroundWindowTracker.bootstrapFromWindow(
                 applicationWindowId = currentWindow.id,
                 packageName = rootPackage,
-                windows = foregroundWindows(currentWindows),
+                windows = fgWindows,
             )
+            if (!bootstrapped && topology == WindowTopology.SAME_APP_MULTI) {
+                foregroundWindowTracker.continueSamePackageWindow(
+                    applicationWindowId = currentWindow.id,
+                    packageName = rootPackage,
+                    windows = fgWindows.filter { w -> appSlices.any { it.windowId == w.id } },
+                )
+            }
         }
         return resolveForeground(
             identity = foregroundWindowTracker.current(),
@@ -233,9 +272,11 @@ class GatewayA11yService : AccessibilityService() {
     fun foregroundDiagnostics(): JSONObject {
         val currentWindows = windows
         val selected = applicationWindow(currentWindows)
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
         // 先解析（必要时自举）再读 identity：否则同一次诊断里会出现"resolved 已自举、
         // tracked_identity 仍是 null"这种自相矛盾的输出。
-        val resolved = resolveForegroundOf(currentWindows)
+        val resolved = resolveForegroundOf(currentWindows, appSlices, topology)
         val identity = foregroundWindowTracker.current()
         val windowsJson = JSONArray()
         for (window in currentWindows) {
@@ -274,6 +315,7 @@ class GatewayA11yService : AccessibilityService() {
             .put("foreground_known", resolved.known)
             .put("foreground_reason", resolved.reason.name.lowercase())
             .put("foreground_identity_source", identitySourceName(resolved))
+            .put("window_topology", topology.wireName)
             .put("selected_window_id", selected?.id ?: JSONObject.NULL)
             .put(
                 "tracked_identity",
@@ -376,6 +418,18 @@ class GatewayA11yService : AccessibilityService() {
     /** scope: interactive(默认，可交互 + 带文本) / full(全部有信号节点)。上限截断防 token 爆炸。 */
     @Synchronized
     fun snapshot(scope: String, maxElements: Int = 200): JSONObject {
+        val currentWindows = windows
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
+        if (topology == WindowTopology.CROSS_OR_UNKNOWN_MULTI) {
+            throw GatewayError(
+                ErrorCode.E_BLOCKED,
+                "检测到跨应用或归属未知的多窗口（分屏/悬浮窗），已拒绝混采快照",
+                channel = "a11y",
+                fallback = "关闭无关分屏或悬浮小窗，保留单应用全屏或同应用平行视界后重试",
+            )
+        }
+        val paneByWinId = assignWindowPanes(appSlices)
         lastSnapshotRev = revision
         // 每次快照都切换命名空间；不能让上一屏的 e1/o1 在下一屏静默绑定到另一个目标。
         val refBatch = refs.beginSnapshot(lastSnapshotRev)
@@ -383,14 +437,13 @@ class GatewayA11yService : AccessibilityService() {
         val jsonByRef = HashMap<String, JSONObject>()
         // interactive 与 full 的差异在文本截断长度：interactive 面向操作（短），full 面向阅读（长）
         val cap = if (scope == "full") 500 else 80
-        // 前台归属按「活动应用窗口」判定，不用包名比对——vivo 系统窗口事件会污染前台包名跟踪
-        //（实测：设置页 43 节点却被误判 fg=0 触发 OCR）；WeChat 类 root=null 的应用窗口自然贡献 0。
-        val fgWinId = appWindowId()
+        // 前台归属按「活动应用窗口」判定；同应用平行视界下同一包名全部应用窗口计入 fgCount。
+        val fgWinId = applicationWindow(currentWindows)?.id ?: -1
         var fgCount = 0
         var count = 0
         var truncated = false
 
-        fun visit(node: AccessibilityNodeInfo, depth: Int, inFgWin: Boolean) {
+        fun visit(node: AccessibilityNodeInfo, depth: Int, inFgWin: Boolean, windowId: Int, pane: String) {
             if (depth > 60 || truncated) return
             val text = node.text?.toString().orEmpty()
             val desc = node.contentDescription?.toString().orEmpty()
@@ -409,7 +462,7 @@ class GatewayA11yService : AccessibilityService() {
                     refBatch,
                     UiRefSource.A11Y,
                     count,
-                    RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y"),
+                    RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y", windowId, pane),
                 )
                 if (inFgWin) fgCount += 1
                 val json = JSONObject()
@@ -420,16 +473,29 @@ class GatewayA11yService : AccessibilityService() {
                     .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
                     .put("flags", flagsOf(node))
                     .put("source", "a11y")
+                    .put("window_id", windowId)
+                    .put("pane", pane)
                 jsonByRef[ref] = json
                 elements.put(json)
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, depth + 1, inFgWin) }
+            for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, depth + 1, inFgWin, windowId, pane) }
         }
 
-        // 遍历全部交互窗口（含弹窗/对话框），跳过 IME 窗口
-        val ws = exposedWindows()
-        for (w in ws) w.root?.let { visit(it, 0, w.id == fgWinId) }
-        if (count == 0) rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { visit(it, 0, true) }
+        // 遍历全部交互窗口（含弹窗/对话框/同应用平行视界），跳过 IME 窗口
+        val ws = exposedWindows(currentWindows)
+        for (w in ws) {
+            val winId = w.id
+            val inFgWin = winId == fgWinId ||
+                (topology == WindowTopology.SAME_APP_MULTI && w.type == AccessibilityWindowInfo.TYPE_APPLICATION)
+            val pane = paneByWinId[winId] ?: "full"
+            w.root?.let { visit(it, 0, inFgWin, winId, pane) }
+        }
+        if (count == 0) {
+            rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { root ->
+                val winId = root.windowId
+                visit(root, 0, true, winId, paneByWinId[winId] ?: "full")
+            }
+        }
 
         // ---- L5 OCR 融合：前台 app 树空/稀疏时自动触发（spec §5.4/§9）----
         // 骨架规则：OCR 行中心落在最小且大小同量级的 a11y 元素内 → 无语义则挂载(fused)、有语义视为重复丢弃；
@@ -474,11 +540,14 @@ class GatewayA11yService : AccessibilityService() {
                     count += 1
                     ocrIdx += 1
                     val b = Rect(line.bounds)
+                    val slice = matchSliceForPoint(appSlices, b.centerX(), b.centerY())
+                    val ocrWinId = slice?.windowId ?: -1
+                    val ocrPane = slice?.let { paneByWinId[it.windowId] } ?: "full"
                     val ref = refs.bind(
                         refBatch,
                         UiRefSource.OCR,
                         ocrIdx,
-                        RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr"),
+                        RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr", ocrWinId, ocrPane),
                     )
                     elements.put(
                         JSONObject()
@@ -489,6 +558,8 @@ class GatewayA11yService : AccessibilityService() {
                             .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
                             .put("flags", "")
                             .put("source", "ocr")
+                            .put("window_id", ocrWinId)
+                            .put("pane", ocrPane)
                             .put("confidence", conf2(line.conf))
                     )
                 }
@@ -509,7 +580,8 @@ class GatewayA11yService : AccessibilityService() {
             .put("vision_generation", usedVisionGeneration)
             .put("capture_revision", usedCaptureRevision)
             .put("foreground_window_id", fgWinId)
-            .put("blocking_overlay", hasBlockingOverlay(ws, fgWinId))
+            .put("window_topology", topology.wireName)
+            .put("blocking_overlay", hasBlockingOverlay(ws, fgWinId.takeIf { it >= 0 }))
             .put("ime_visible", windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD })
             .put("system_bottom_inset", systemBottomInset())
             .put("elements", elements)
@@ -743,18 +815,25 @@ class GatewayA11yService : AccessibilityService() {
         if (w <= 0 || h <= 0) return true
         val titleBand = Rect((w * 0.25).toInt(), (h * 0.04).toInt(), (w * 0.75).toInt(), (h * 0.22).toInt())
         val probeBand = Rect((w * 0.24).toInt(), (h * 0.84).toInt(), (w * 0.76).toInt(), (h * 0.94).toInt())
+        val primaryBounds = primaryId?.let { id ->
+            exposed.firstOrNull { it.id == id }?.let { Rect().also(it::getBoundsInScreen) }
+                ?.takeIf { it.width() > 0 && it.height() > 0 }
+        }
         return exposed.any { window ->
-            // 状态栏/导航栏是常驻 TYPE_SYSTEM 窗口：状态栏满宽、y 落在 0..~系统栏高度，
-            // 与 titleBand（y 4%~22%）必然几何相交——不排除会让本判定在任意前台 App 上恒为
-            // true（2026-07-23 真机实锤，本设备 1260x2800，状态栏 bounds=(0,0)-(1260,133)
-            // 与 titleBand=(315,112)-(945,616) 相交）。TYPE_SYSTEM 从不代表遮挡内容的对话框。
+            // 状态栏/导航栏/分屏条是系统常驻装饰窗口，从不代表遮挡内容的对话框。
             if (window.id == primaryId ||
                 window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
-                window.type == AccessibilityWindowInfo.TYPE_SYSTEM
+                window.type == AccessibilityWindowInfo.TYPE_SYSTEM ||
+                window.type == AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
             ) return@any false
             val bounds = Rect().also(window::getBoundsInScreen)
-            bounds.width() > 0 && bounds.height() > 0 &&
-                (Rect.intersects(bounds, titleBand) || Rect.intersects(bounds, probeBand))
+            if (bounds.width() <= 0 || bounds.height() <= 0) return@any false
+            // 并排分栏的另一个同应用窗口与主窗口互不相交，不视为遮挡浮层。
+            if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                primaryBounds != null &&
+                !Rect.intersects(primaryBounds, bounds)
+            ) return@any false
+            Rect.intersects(bounds, titleBand) || Rect.intersects(bounds, probeBand)
         }
     }
 
@@ -830,10 +909,17 @@ class GatewayA11yService : AccessibilityService() {
     /** 活动应用窗口 id（type=APPLICATION 且 active/focused；vivo 灵动岛等悬浮窗不算前台归属）。 */
     private fun appWindowId(): Int = applicationWindow()?.id ?: -1
 
-    /** 活动应用窗口的可读节点是否稀疏（达到阈值即提前返回，代价仅一次浅遍历）。 */
+    /** 活动应用窗口（同应用多窗时合并全部应用窗口）的可读节点是否稀疏。 */
     private fun fgSparse(): Boolean {
-        val winId = appWindowId()
-        val root = windows.firstOrNull { it.id == winId }?.root ?: rootInActiveWindow ?: return true
+        val currentWindows = windows
+        val topology = classifyWindowTopology(appWindowSlices(currentWindows))
+        val winId = applicationWindow(currentWindows)?.id ?: -1
+        val roots = if (topology == WindowTopology.SAME_APP_MULTI) {
+            currentWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }.mapNotNull { it.root }
+        } else {
+            listOfNotNull(currentWindows.firstOrNull { it.id == winId }?.root ?: rootInActiveWindow)
+        }
+        if (roots.isEmpty()) return true
         var n = 0
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > 60 || n >= FUSE_FG_THRESHOLD) return
@@ -845,7 +931,10 @@ class GatewayA11yService : AccessibilityService() {
                 node.getChild(i)?.let { visit(it, depth + 1) }
             }
         }
-        visit(root, 0)
+        for (root in roots) {
+            if (n >= FUSE_FG_THRESHOLD) break
+            visit(root, 0)
+        }
         return n < FUSE_FG_THRESHOLD
     }
 
@@ -857,6 +946,8 @@ class GatewayA11yService : AccessibilityService() {
         val desc: String,
         val bounds: Rect,
         val source: String = "a11y",
+        val windowId: Int = -1,
+        val pane: String = "full",
     )
 
     /** ref → 目标；节点刷新失败/指纹不符 → E_STALE_REF（点击前二次校验，M0 误触对策）。 */
@@ -897,7 +988,7 @@ class GatewayA11yService : AccessibilityService() {
             channel = "a11y", fallback = "先 ui_snapshot 确认目标再操作",
         )
         val b = Rect().also { e.node.getBoundsInScreen(it) }
-        return Target(e.node, nowText.ifEmpty { e.label }, nowDesc, b, e.source)
+        return Target(e.node, nowText.ifEmpty { e.label }, nowDesc, b, e.source, e.windowId, e.pane)
     }
 
     /**
@@ -956,7 +1047,7 @@ class GatewayA11yService : AccessibilityService() {
             ErrorCode.E_STALE_REF, "OCR ref $ref 已被新 snapshot 取代",
             channel = "vision", fallback = "ui_snapshot 重新定位",
         )
-        return Target(null, e.label, e.desc, b, "ocr")
+        return Target(null, e.label, e.desc, b, "ocr", e.windowId, e.pane)
     }
 
     /** 字符袋相似度（0~1）：多重集交集 ×2 / 总长。短文本 OCR 抖动下比编辑距离更稳。 */

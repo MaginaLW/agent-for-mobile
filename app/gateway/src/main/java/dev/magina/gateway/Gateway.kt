@@ -69,7 +69,8 @@ object Gateway {
         if (imeEnabled()) out.add("ime")
         if (ImeBridge.active) out.add("ime_active")
         if (Settings.canDrawOverlays(appContext)) out.add("overlay")
-        // "shizuku" / "notif" / "ocr"：M1b 接入后上报
+        out.add("ocr")
+        // "shizuku" / "notif"：M1b 接入后上报
         return out
     }
 

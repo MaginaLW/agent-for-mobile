@@ -7,33 +7,34 @@
 
 | # | 待办 | 完成标准 |
 |---|---|---|
-| 1 | 让网关无障碍服务在 PA2553 上稳定绑定 | 派单前置检查不再报 `gateway_a11y_not_ready`；若 vivo 反复解绑，把规律和解法写进 [vivo 记录](knowledge/android/vivo-originos.md) |
-| 2 | 小红书只读任务跑通 | 经 `dispatch.ps1` 搜索并总结 5 条公开笔记，结果和台账行落盘 |
-| 3 | 自研网关跑完 M0 五任务 | 每个任务记录成败/步数/耗时/token；成功率 ≥ M0（4.5/5）即 M1 验收 |
-| 4 | 处理草稿 PR #13、#17、#12 | 决定合入或关闭；#17 叠在 #13 之上，先处理 #13；合入前跑一次 `scripts/check.ps1` |
-| 5 | P0 真人确认 | 真机上由真人完成 Allow / Deny / Stale 各一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
+| 1 | 后续实际任务中复核 M1 的无干预完成率 | PA2553 非微信主验收已取得三项业务结果。首轮无干预完成 1/3，历史 M0 为 3/3；后续重点核对小红书连续阅读及冷启动受系统提示阻挡的情况。微信两项后置。[非微信任务对照](runs/2026-11-18-PA2553非微信主验收.md) |
+| 2 | 在后续实际任务中核对 PA2553 无障碍绑定 | 11 月 18 日上述十二次派单均通过预检。若 vivo 再次解绑，记录当时的前台、服务状态和单次重绑结果。[vivo 记录](knowledge/android/vivo-originos.md) |
+| 3 | 处理设定对齐与修复的[草稿 PR #18](https://github.com/MaginaLW/agent-for-mobile/pull/18) | 合入前对候选版本运行 `scripts/check.ps1`，检查通过且获用户批准后合入 main |
+| 4 | P0 真人确认 | 真机上由真人完成 Allow / Deny / Stale 各一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
 
 ## 2. 按需再做（有具体任务需要时才排）
 
-- M1b 占位工具：通知读取/回复、`ui_diff`、Shizuku 强停，实施与必验失败路径见 [能力现状](knowledge/android/m1b-capabilities.md)。
+- 下次小红书公开搜索时核对是否能在无人切换页面的情况下，从提交连续读到五条笔记。
+- M1b 占位工具：通知读取/回复、`ui_diff`、Shizuku 强停当前已从 `tools/list` 下架；按需实施与必验失败路径见 [能力现状](knowledge/android/m1b-capabilities.md)。
 - 语义意图生产接线：基础模块已在代码中，接线范围见 [语义意图 spec §5](specs/2026-08-02-语义意图审批-design.md)。
 - 分享落地 activity 白名单：必须来自真机观测，没有观测就保持空。
-- 微信相关任务（发消息、发图）与平板双窗适配：已后置；若重启，先读 [平板知识](knowledge/android/tablet.md) 与 [微信知识](knowledge/apps/wechat.md)，从需要的最小能力做起，不恢复已删除的研究栈。
+- 微信相关任务（M0-2/M0-4 发消息、发图）：已后置；重启后以「三层窗口 + 点右窗发送按钮确认卡」单独实测，仍参考 [平板知识](knowledge/android/tablet.md) 与 [微信知识](knowledge/apps/wechat.md)，不恢复已删除的研究栈。
 - M3：宏系统「教一遍」、语音/分享入口、App 技能包。
-- 剩余可选精简：dispatch.ps1 的 mobile executor 现在只剩 DryRun 配置预览，可连同 configs/mobile-mcp.json 一起删；-Brain claude 现只报 PowerShell 英文参数错误，如需中文提示可加 ValidateSet 错误信息。
+- 剩余可选精简：`-Brain claude` 现只报 PowerShell 英文参数错误，如需中文提示可加 ValidateSet 错误信息。
 
 ## 3. 有效决定
 
 | 决定 | 内容 |
 |---|---|
-| 设备基线 | vivo PA2553 / Android 16。项目适配设备，不靠关闭系统功能换通过；没验证过的形态 fail-closed。手机真机验收暂停。 |
-| 大脑 | 只用 Codex CLI 官方登录（`-Brain codex -Executor gateway`）。Claude 执行路线已退役，旧 Claude 暂停件不恢复。 |
-| 危险动作 | 发送/支付/删除类两段式：网关在执行前弹出设备端确认卡（ConfirmOverlay），由现场真人批准；一次批准只放行当次调用。通知只能拒绝或查看，不能批准。 |
+| 设备基线与三层窗口 | vivo PA2553 / Android 16。项目适配设备，不禁用 `com.vivo.safecenter` 或关闭系统多窗；支持单窗口与同应用平行视界（分屏/跨应用/未知多窗严格 fail-closed）。手机真机验收暂停。 |
+| 大脑与派单 | 只用 Codex CLI 官方登录（固定 `codex + gateway`）；优先使用受控 `toolchain/codex` 冻结副本，回退官方桌面目录；预检内建网关自启、token 同步（仅 debug 可读写）与非设置页单次无障碍重绑。 |
+| 点击与常规回车规则 | 普通具名点击（有可读 text/desc 且未命中危险/动作确认/发送/敏感词表）直接放行+审计；纯图标无标签或命中词表弹确认卡；`sensitive_targets` 与黑名单目标出站直接 `E_BLOCKED`。常规 `press_key(enter)` 只要 `focusIdentity + inputCommitEvidence` 齐全即可进确认卡（无会话标题时卡面明示；同应用多窗且 `IME_ONLY` 拦截）。 |
+| 危险动作 | 发送/支付/删除类两段式：网关在执行前弹出设备端确认卡（ConfirmOverlay，默认超时 90s），由现场真人批准；一次批准只放行当次调用。通知只能拒绝或查看，不能批准。 |
 | 风险分级 | 两档都逐次确认，没有免确认路径。见 [风险分级](specs/2026-08-01-危险动作风险分级-design.md)。 |
 | 安全失败即终态 | 拒绝、超时、上下文失效后不重弹、不换路重试。 |
 | PC 输入不是批准 | 终端输入（`Read-Host`、`RESUME` 等）不能当危险动作的真人批准；`-Confirm` 只恢复未调用危险工具的前置步骤。见 [执行 harness spec §5](specs/2026-07-17-执行harness-design.md)。 |
 | `intent_send` 落地 | 指定目标时落地失败返回 `E_VERIFY_FAIL`；未指定目标如实报告“已分派、未验证”。 |
-| 语义意图时钟 | decisionTimeout 90s、intentTtl 360s、II 级 foregroundWaitBudget 300s、I 级 0；证据 TTL 120s。见 [语义意图 spec](specs/2026-08-02-语义意图审批-design.md)。 |
+| 语义意图时钟 | `ConfirmOverlay` 默认超时已生效为 `90s`；语义意图 `intentTtl 360s` / II 级 `foregroundWaitBudget 300s`（I 级 0）/ 证据 TTL `120s` 尚未完成生产接线，见 [语义意图 spec](specs/2026-08-02-语义意图审批-design.md)。 |
 | 会话标题读取 | 标题识别放在生产代码，宏复用同一份；不另造弱读取器。 |
 | 宿主进程 | 脚本不终止外部进程；PC Suite 等占用 ADB 5037 造成冲突时由用户处理。 |
 | 安装等待 | 安装命令不设自动超时（现场确认可能慢），开始前提醒用户。 |

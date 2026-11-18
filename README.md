@@ -4,14 +4,14 @@
 
 **架构**：设备端 = 无障碍执行器 + MCP server（`app/gateway`）；大脑 = Codex CLI，经 `scripts/dispatch.ps1` 派单，只走官方订阅通道。
 
-**设备**：vivo PA2553 / Android 16，按单窗口使用。未验证的形态一律 fail-closed。
+**设备**：vivo PA2553 / Android 16，支持单窗口与同应用平行视界；跨应用分屏或未知多窗 fail-closed。
 
 ## 入口
 
 - 开发指南：[AGENTS.md](AGENTS.md)
 - 当前状态与下一步：[STATUS.md](STATUS.md)
 - 待办与有效决定：[docs/backlog.md](docs/backlog.md)
-- 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md)
+- 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md) · [2026-11-16 设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md)
 - 文档结构：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（关键跑测记录与台账）
 
 ## 目录

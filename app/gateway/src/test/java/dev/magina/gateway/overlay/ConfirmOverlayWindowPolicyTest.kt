@@ -47,4 +47,9 @@ class ConfirmOverlayWindowPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `default confirm overlay timeout matches backlog 90s decision`() {
+        assertEquals(90_000L, ConfirmOverlay.DEFAULT_CONFIRM_TIMEOUT_MS)
+    }
 }

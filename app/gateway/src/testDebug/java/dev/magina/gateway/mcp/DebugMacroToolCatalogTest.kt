@@ -17,4 +17,14 @@ class DebugMacroToolCatalogTest {
         assertEquals(0, tool.inputSchema.getJSONArray("required").length())
         assertEquals(false, tool.inputSchema.getBoolean("additionalProperties"))
     }
+
+    @Test
+    fun `unimplemented m1b stub tools are not exposed in tools list`() {
+        listOf("app_stop", "notifications_list", "notification_reply", "ui_diff").forEach { removed ->
+            org.junit.Assert.assertFalse(
+                "不应继续发布占位工具 $removed",
+                ToolRegistry.tools.any { it.name == removed },
+            )
+        }
+    }
 }

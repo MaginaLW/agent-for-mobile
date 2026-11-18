@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 [CmdletBinding()]
 param([string]$Filter = '*')
 
@@ -379,6 +379,169 @@ function Get-DispatchGlobalLockPath {
         '测试设施错误：fixture 缺少 dispatch profile helper。'
     . $fixtureProfileHelper
 
+    $gatewayStubTypeSource = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+
+public sealed class DispatchOfflineGatewayStub : IDisposable {
+    private readonly TcpListener _listener;
+    private readonly Thread _thread;
+    private volatile bool _stopped;
+
+    public int Port { get; private set; }
+    public string ExpectedToken { get; set; }
+    public string DefaultCapsJson { get; set; }
+    public string ReboundCapsFile { get; set; }
+    public string ReboundCapsJson { get; set; }
+
+    public DispatchOfflineGatewayStub() {
+        ExpectedToken = "fixture-bearer-value-must-never-leak";
+        DefaultCapsJson = "[\"a11y\",\"ime\",\"ocr\"]";
+        ReboundCapsFile = null;
+        ReboundCapsJson = "[\"a11y\",\"ime\",\"ocr\"]";
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _thread = new Thread(RunLoop) { IsBackground = true, Name = "DispatchOfflineGatewayStub" };
+        _thread.Start();
+    }
+
+    private void RunLoop() {
+        while (!_stopped) {
+            TcpClient client = null;
+            try {
+                client = _listener.AcceptTcpClient();
+            }
+            catch {
+                if (_stopped) break;
+                continue;
+            }
+            try { HandleClient(client); }
+            catch {}
+            finally {
+                try { client.Dispose(); } catch {}
+            }
+        }
+    }
+
+    private void HandleClient(TcpClient client) {
+        client.ReceiveTimeout = 3000;
+        client.SendTimeout = 3000;
+        NetworkStream stream = client.GetStream();
+        List<byte> headerBuffer = new List<byte>();
+        byte[] chunk = new byte[1024];
+        int headerEnd = -1;
+        while (headerEnd < 0) {
+            int read = stream.Read(chunk, 0, chunk.Length);
+            if (read <= 0) return;
+            for (int i = 0; i < read; i++) headerBuffer.Add(chunk[i]);
+            byte[] arr = headerBuffer.ToArray();
+            headerEnd = FindHeaderEnd(arr);
+            if (headerEnd < 0 && headerBuffer.Count > 65536) return;
+        }
+
+        byte[] all = headerBuffer.ToArray();
+        string headerText = Encoding.ASCII.GetString(all, 0, headerEnd);
+        string[] lines = headerText.Split(new[] { "\r\n" }, StringSplitOptions.None);
+        if (lines.Length == 0) return;
+        string[] parts = lines[0].Split(' ');
+        if (parts.Length < 2) return;
+        string method = parts[0];
+        string path = parts[1];
+
+        Dictionary<string, string> headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 1; i < lines.Length; i++) {
+            int colon = lines[i].IndexOf(':');
+            if (colon > 0) {
+                headers[lines[i].Substring(0, colon).Trim()] = lines[i].Substring(colon + 1).Trim();
+            }
+        }
+
+        int contentLength = 0;
+        string clValue;
+        if (headers.TryGetValue("Content-Length", out clValue)) {
+            int.TryParse(clValue, out contentLength);
+        }
+        int bodyAlreadyRead = all.Length - (headerEnd + 4);
+        int remaining = contentLength - bodyAlreadyRead;
+        while (remaining > 0) {
+            int toRead = Math.Min(remaining, chunk.Length);
+            int read = stream.Read(chunk, 0, toRead);
+            if (read <= 0) break;
+            remaining -= read;
+        }
+
+        if (method == "GET" && path == "/health") {
+            WriteResponse(stream, 200, "OK", "text/plain; charset=utf-8", "ok");
+            return;
+        }
+        if (method == "POST" && path == "/mcp") {
+            string auth;
+            if (!headers.TryGetValue("Authorization", out auth) || auth != "Bearer " + ExpectedToken) {
+                WriteResponse(stream, 401, "Unauthorized", "application/json; charset=utf-8", "{\"error\":\"unauthorized\"}");
+                return;
+            }
+            string proto;
+            if (!headers.TryGetValue("MCP-Protocol-Version", out proto) || proto != "2025-03-26") {
+                WriteResponse(stream, 400, "Bad Request", "application/json; charset=utf-8", "{\"error\":\"bad_version\"}");
+                return;
+            }
+            string reboundFile = ReboundCapsFile;
+            string capsJson = (!String.IsNullOrEmpty(reboundFile) && File.Exists(reboundFile))
+                ? ReboundCapsJson
+                : DefaultCapsJson;
+            string innerEnvelope = "{\"ok\":true,\"data\":{\"caps\":" + capsJson + "}}";
+            string escapedInner = innerEnvelope.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            string rpc = "{\"jsonrpc\":\"2.0\",\"id\":\"dispatch-preflight\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" +
+                escapedInner + "\"}],\"isError\":false}}";
+            WriteResponse(stream, 200, "OK", "application/json; charset=utf-8", rpc);
+            return;
+        }
+        WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8", "not found");
+    }
+
+    private static int FindHeaderEnd(byte[] bytes) {
+        for (int i = 0; i <= bytes.Length - 4; i++) {
+            if (bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10) return i;
+        }
+        return -1;
+    }
+
+    private static void WriteResponse(NetworkStream stream, int code, string reason, string contentType, string body) {
+        byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+        string header = "HTTP/1.1 " + code + " " + reason + "\r\n" +
+            "Content-Type: " + contentType + "\r\n" +
+            "Content-Length: " + bodyBytes.Length + "\r\n" +
+            "Connection: close\r\n\r\n";
+        byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+        stream.Write(headerBytes, 0, headerBytes.Length);
+        if (bodyBytes.Length > 0) stream.Write(bodyBytes, 0, bodyBytes.Length);
+        stream.Flush();
+    }
+
+    public void Dispose() {
+        _stopped = true;
+        try { _listener.Stop(); } catch {}
+        try { _thread.Join(2000); } catch {}
+    }
+}
+'@
+    Add-Type -TypeDefinition $gatewayStubTypeSource -Language CSharp
+    $gatewayStub = [DispatchOfflineGatewayStub]::new()
+    $fixtureProfilePortOverride = @"
+
+function Get-GatewayPreflightPort {
+    return $($gatewayStub.Port)
+}
+"@
+    [IO.File]::AppendAllText($fixtureProfileHelper, $fixtureProfilePortOverride, [Text.UTF8Encoding]::new($false))
+    . $fixtureProfileHelper
+
     $fixtureConfigDir = Join-Path $RepoRoot 'configs\offline-fixtures'
     New-Item -ItemType Directory -Path $fixtureConfigDir -Force | Out-Null
     $testBearer = 'fixture-bearer-value-must-never-leak'
@@ -429,11 +592,17 @@ if /I "%1"=="get-state" (
   exit /b 0
 )
 if /I "%1"=="shell" if /I "%2"=="input" if /I "%3"=="keyevent" exit /b 0
+if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="services" (
+  echo ServiceRecord{101 u0 dev.magina.gateway/.GatewayService c:com.android.shell}
+  echo isForeground=true
+  exit /b 0
+)
 if /I "%1"=="get-serialno" (
   echo FAKE-DISPATCH-DEVICE
   exit /b 0
 )
 if /I "%1"=="forward" exit /b 0
+if /I "%1"=="exec-out" exit /b 1
 exit /b 97
 '@
     Set-Content -LiteralPath (Join-Path $FakeBin 'adb.cmd') -Value $fakeAdb -Encoding ascii
@@ -522,7 +691,10 @@ public static class Program {
         Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
         if (scenario == "exit-partial") return 23;
         string ok = scenario == "gateway-ok-false" ? "false" : "true";
-        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"completed\"}}");
+        string outcome = scenario == "transport-failure"
+            ? "\"result\":null,\"error\":{\"message\":\"fixture connection closed\"},\"status\":\"failed\""
+            : "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"" + (ok == "false" ? "failed" : "completed") + "\"";
+        Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}," + outcome + "}}");
         Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：成功\"}}");
         if (scenario == "missing-usage") Console.WriteLine("{\"type\":\"turn.completed\"}");
         else Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"cached_input_tokens\":2,\"output_tokens\":7,\"cache_write_input_tokens\":3}}");
@@ -689,14 +861,15 @@ public static class Program {
         Assert-True (-not (Test-Path -LiteralPath $lockDirectory)) 'Codex DryRun 创建了主机级锁目录。'
     }
 
-    Test-Case 'Codex mobile 在任何 preflight/设备副作用前 fail closed' {
+    Test-Case 'Codex mobile 在参数校验层直接拒绝且无任何副作用' {
         $beforeMobile = Get-RepoEffectState
         $result = Invoke-Dispatch @(
             '-Task','offline codex mobile must fail closed','-Slug','offline-codex-mobile-blocked',
             '-Brain','codex','-Executor','mobile'
         )
-        Assert-True ($result.ExitCode -ne 0) 'Codex + mobile 未被硬拒绝。'
-        Assert-Matches $result.Text '可信 npx runtime.*仅支持 gateway'
+        Assert-True ($result.ExitCode -ne 0) 'Codex + mobile 未被参数校验拒绝。'
+        Assert-Contains $result.Text 'Executor'
+        Assert-Contains $result.Text 'gateway'
         Assert-NoExternalTools $result
         Assert-NoRepoEffects $beforeMobile
     }
@@ -1011,8 +1184,8 @@ public static class Program {
         $businessFailure[3] = '{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"gateway","tool":"foreground_app","arguments":{},"result":{"content":[{"type":"text","text":"{\"ok\":false}"}]},"error":null,"status":"completed"}}'
         $businessTranscript = Invoke-TranscriptFixture -Brain codex -Lines $businessFailure
         Assert-True ($businessTranscript.Calls.Count -eq 1 -and
-            $businessTranscript.Calls[0].Outcome -ceq 'failed') `
-            'gateway JSON boolean ok=false 被当作成功调用。'
+            $businessTranscript.Calls[0].Outcome -ceq 'gateway-tool-failure') `
+            'gateway JSON boolean ok=false 未归入网关工具失败。'
 
         foreach ($badResult in @(
             '{"content":[{"type":"text","text":"[{\"ok\":true}]"}]}',
@@ -1105,7 +1278,8 @@ public static class Program {
                 @{ Scenario='exit-partial'; Exit=1; Pattern='brain-process-exit-23.*partial-trace' },
                 @{ Scenario='malformed'; Exit=1; Pattern='trace-invalid-or-incomplete' },
                 @{ Scenario='wrong-server'; Exit=1; Pattern='unauthorized-mcp-server' },
-                @{ Scenario='gateway-ok-false'; Exit=1; Pattern='mcp-transport-failure' },
+                @{ Scenario='gateway-ok-false'; Exit=1; Pattern='(?m)^note: gateway-tool-failure\r?$' },
+                @{ Scenario='transport-failure'; Exit=1; Pattern='(?m)^note: mcp-transport-failure\r?$' },
                 @{ Scenario='missing-usage'; Exit=1; Pattern='trace-invalid-or-incomplete' }
             )
             foreach ($case in $cases) {
@@ -1386,13 +1560,11 @@ public static class Program {
         Assert-NoRepoEffects $before
     }
 
-    Test-Case '显式 mobile profile' {
+    Test-Case '显式已退役 mobile executor 即使 DryRun 也直接拒绝' {
         $result = Invoke-Dispatch ($taskArgs + @('-Executor', 'mobile'))
-        Assert-ExitCode $result 0
-        Assert-Contains $result.Text 'executor=mobile'
-        Assert-Matches $result.Text 'configs[\\/]mobile-mcp\.json'
-        Assert-Contains $result.Text 'mcp__mobile'
-        Assert-NotMatches $result.Text '文件传输助手'
+        Assert-True ($result.ExitCode -ne 0) '已退役 mobile executor 不应接受 DryRun。'
+        Assert-Contains $result.Text 'Executor'
+        Assert-Contains $result.Text 'gateway'
         Assert-NoExternalTools $result
         Assert-NoRepoEffects $before
     }
@@ -1411,25 +1583,22 @@ public static class Program {
     }
 
     Test-Case '派单设备身份来自任务证据，未知设备不套用历史手机假设' {
-        foreach ($executor in @('mobile', 'gateway')) {
-            foreach ($task in @(
-                '仅完成任务卡中的只读观察；本任务未提供设备型号。',
-                '本任务设备证据：PA2553 / Android 16 / 横屏应用多窗。仅完成任务卡中的只读观察。'
-            )) {
-                $result = Invoke-Dispatch @('-Task', $task, '-Slug', 'offline-device-context',
-                    '-Executor', $executor, '-DryRun')
-                Assert-ExitCode $result 0
-                Assert-Contains $result.Text '设备序列号 `<dry-run-no-device>`'
-                Assert-Contains $result.Text '设备型号、系统版本、姿态与多窗状态以本任务的设备证据或任务卡为准'
-                Assert-Contains $result.Text '未知信息不猜测'
-                Assert-Contains $result.Text $task
-                Assert-NotMatches $result.Text 'vivo X100|OriginOS|1260[×x]2800|360[×x]800|×\s*3\.5'
-                if ($task -notmatch 'PA2553') { Assert-NotMatches $result.Text 'PA2553|Android 16|横屏应用多窗' }
-                Assert-NotMatches $result.Text '\{\{DEVICE\}\}|\{\{BUDGET_POLICY\}\}'
-                if ($executor -eq 'mobile') { Assert-Contains $result.Text 'get_screen_size' }
-                Assert-NoExternalTools $result
-                Assert-NoRepoEffects $before
-            }
+        foreach ($task in @(
+            '仅完成任务卡中的只读观察；本任务未提供设备型号。',
+            '本任务设备证据：PA2553 / Android 16 / 横屏应用多窗。仅完成任务卡中的只读观察。'
+        )) {
+            $result = Invoke-Dispatch @('-Task', $task, '-Slug', 'offline-device-context',
+                '-Executor', 'gateway', '-DryRun')
+            Assert-ExitCode $result 0
+            Assert-Contains $result.Text '设备序列号 `<dry-run-no-device>`'
+            Assert-Contains $result.Text '设备型号、系统版本、姿态与多窗状态以本任务的设备证据或任务卡为准'
+            Assert-Contains $result.Text '未知信息不猜测'
+            Assert-Contains $result.Text $task
+            Assert-NotMatches $result.Text 'vivo X100|OriginOS|1260[×x]2800|360[×x]800|×\s*3\.5'
+            if ($task -notmatch 'PA2553') { Assert-NotMatches $result.Text 'PA2553|Android 16|横屏应用多窗' }
+            Assert-NotMatches $result.Text '\{\{DEVICE\}\}|\{\{BUDGET_POLICY\}\}'
+            Assert-NoExternalTools $result
+            Assert-NoRepoEffects $before
         }
     }
 
@@ -1437,7 +1606,6 @@ public static class Program {
         $result = Invoke-Dispatch ($taskArgs + @('-Executor', 'invalid-profile'))
         Assert-True ($result.ExitCode -ne 0) '非法 executor 不应成功。'
         Assert-Contains $result.Text 'Executor'
-        Assert-Contains $result.Text 'mobile'
         Assert-Contains $result.Text 'gateway'
         Assert-NotMatches $result.Text '(?i)parameter cannot be found|找不到[^\r\n]*参数名称'
         Assert-NoExternalTools $result
@@ -1497,12 +1665,11 @@ session_id: offline
         Assert-NoRepoEffects $before
     }
 
-    Test-Case '确认腿显式不同 executor 时 fail-fast' {
+    Test-Case '确认腿显式传入已退役 executor mobile 时 fail-fast' {
         $result = Invoke-Dispatch @('-Confirm', $gatewayPause, '-Executor', 'mobile', '-DryRun')
-        Assert-True ($result.ExitCode -ne 0) '确认腿不应允许切换 executor。'
+        Assert-True ($result.ExitCode -ne 0) '确认腿不应允许切换到已退役的 mobile。'
+        Assert-Contains $result.Text 'Executor'
         Assert-Contains $result.Text 'gateway'
-        Assert-Contains $result.Text 'mobile'
-        Assert-Matches $result.Text '(?i)不一致|不同|冲突|继承|mismatch'
         Assert-NotMatches $result.Text '(?i)parameter cannot be found|找不到[^\r\n]*参数名称'
         Assert-NotMatches $result.Text '键入\s*CONFIRM|Read-Host'
         Assert-NoExternalTools $result
@@ -1932,6 +2099,284 @@ session_id: offline
         }
     }
 
+    Test-Case '一站式预检：服务所有权、debug token 同步与无障碍自愈边界' {
+        $preflightDir = Join-Path $TestRoot 'preflight-unit'
+        New-Item -ItemType Directory -Path $preflightDir -Force | Out-Null
+        $pfAdbCmd = Join-Path $preflightDir 'fake-adb-pf.cmd'
+        $pfAdbLog = Join-Path $preflightDir 'adb-pf.log'
+        $pfStartedFlag = Join-Path $preflightDir 'svc-started.flag'
+        $pfReboundFlag = Join-Path $preflightDir 'a11y-rebound.flag'
+        $pfConfig = Join-Path $preflightDir 'gateway-mcp.json'
+
+        @'
+@echo off
+>>"%PF_LOG%" echo %*
+if /I "%1"=="get-state" (
+  echo device
+  exit /b 0
+)
+if /I "%1"=="get-serialno" (
+  echo FAKE-DISPATCH-DEVICE
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="input" if /I "%3"=="keyevent" exit /b 0
+if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="services" (
+  if "%PF_SVC_RUNNING%"=="error" exit /b 1
+  if "%PF_SVC_RUNNING%"=="partial" exit /b 0
+  if "%PF_SVC_RUNNING%"=="background" (
+    echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}
+    echo isForeground=false
+    exit /b 0
+  )
+  if "%PF_SVC_RUNNING%"=="1" (
+    echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService c:com.android.shell}
+    echo isForeground=true
+  ) else if exist "%PF_SVC_STARTED_FLAG%" (
+    echo ServiceRecord{202 u0 dev.magina.gateway/.GatewayService c:com.android.shell}
+    echo isForeground=true
+  ) else (
+    echo ACTIVITY MANAGER SERVICES ^(dumpsys activity services^)
+    echo   ^(nothing^)
+  )
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="am" if /I "%3"=="start-foreground-service" (
+  echo started>"%PF_SVC_STARTED_FLAG%"
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="am" if /I "%3"=="stopservice" (
+  >&2 echo Service stopped
+  exit /b 255
+)
+if /I "%1"=="forward" if /I "%2"=="--list" (
+  if defined PF_EXISTING_FORWARD echo %PF_EXISTING_FORWARD%
+  exit /b 0
+)
+if /I "%1"=="forward" if /I "%2"=="--no-rebind" if defined PF_EXISTING_FORWARD exit /b 1
+if /I "%1"=="forward" exit /b 0
+if /I "%1"=="exec-out" if /I "%2"=="run-as" (
+  if not "%PF_SYNC_TOKEN%"=="" (
+    echo ^<map^>^<string name="token"^>%PF_SYNC_TOKEN%^</string^>^</map^>
+    exit /b 0
+  )
+  exit /b 1
+)
+if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="activities" (
+  if "%PF_FG_SETTINGS%"=="error" exit /b 1
+  if "%PF_FG_SETTINGS%"=="unknown" (
+    echo topResumedActivity=null
+    exit /b 0
+  )
+  if "%PF_FG_SETTINGS%"=="1" (
+    echo   topResumedActivity=ActivityRecord{abc u0 com.android.settings/.Settings t9}
+  ) else (
+    echo   topResumedActivity=ActivityRecord{abc u0 com.xingin.xhs/.MainActivity t9}
+  )
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="get" if /I "%4"=="secure" (
+  echo com.other/.Service:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="put" if /I "%4"=="secure" if /I "%5"=="accessibility_enabled" (
+  if not "%PF_REBOUND_FLAG%"=="" echo rebound>"%PF_REBOUND_FLAG%"
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="settings" exit /b 0
+exit /b 98
+'@ | Set-Content -LiteralPath $pfAdbCmd -Encoding ascii
+
+        $savedEnv = @{
+            PF_LOG = $env:PF_LOG
+            PF_SVC_RUNNING = $env:PF_SVC_RUNNING
+            PF_EXISTING_FORWARD = $env:PF_EXISTING_FORWARD
+            PF_SVC_STARTED_FLAG = $env:PF_SVC_STARTED_FLAG
+            PF_SYNC_TOKEN = $env:PF_SYNC_TOKEN
+            PF_FG_SETTINGS = $env:PF_FG_SETTINGS
+            PF_REBOUND_FLAG = $env:PF_REBOUND_FLAG
+        }
+        $savedExpectedToken = $gatewayStub.ExpectedToken
+        $savedCaps = $gatewayStub.DefaultCapsJson
+        $savedReboundFile = $gatewayStub.ReboundCapsFile
+        try {
+            $env:PF_LOG = $pfAdbLog
+            $env:PF_SVC_STARTED_FLAG = $pfStartedFlag
+
+            # 1) 服务已在跑：不自启、收尾不停 service
+            Copy-Item -LiteralPath $validGatewayConfig -Destination $pfConfig -Force
+            $env:PF_SVC_RUNNING = '1'
+            $env:PF_EXISTING_FORWARD = ''
+            $env:PF_SYNC_TOKEN = ''
+            $env:PF_FG_SETTINGS = '0'
+            $env:PF_REBOUND_FLAG = ''
+            $gatewayStub.ExpectedToken = $testBearer
+            $gatewayStub.DefaultCapsJson = '["a11y","ime","ocr"]'
+            $gatewayStub.ReboundCapsFile = $null
+            Remove-Item -LiteralPath $pfAdbLog, $pfStartedFlag, $pfReboundFlag -Force -ErrorAction SilentlyContinue
+
+            $s1 = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+            Assert-True ($null -eq $s1.Problem) "已运行服务预检失败：$($s1.Problem)"
+            Assert-True (-not $s1.StartedService -and $s1.PortForwarded) '已运行服务不应记为自启。'
+            Stop-GatewayPreflightOwnedResources -State $s1 -AdbCommand $pfAdbCmd
+            $log1 = Get-Content -LiteralPath $pfAdbLog -Raw
+            Assert-NotMatches $log1 'start-foreground-service|stopservice'
+            Assert-Contains $log1 'forward --remove'
+
+            # 只接管新建映射。已有同设备同端点可借用，其他映射不能覆盖。
+            $endpoint = "tcp:$($gatewayStub.Port)"
+            foreach ($mapping in @("FAKE-DISPATCH-DEVICE $endpoint $endpoint", "OTHER $endpoint $endpoint", "FAKE-DISPATCH-DEVICE $endpoint tcp:1")) {
+                $env:PF_EXISTING_FORWARD = $mapping
+                Clear-Content -LiteralPath $pfAdbLog
+                $borrowed = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+                $sameMapping = $mapping -ceq "FAKE-DISPATCH-DEVICE $endpoint $endpoint"
+                Assert-True (($null -eq $borrowed.Problem) -eq $sameMapping) '已有映射须同时匹配设备和远端端口。'
+                Assert-True (-not $borrowed.PortForwarded) '既有映射不可记为本轮创建。'
+                Stop-GatewayPreflightOwnedResources -State $borrowed -AdbCommand $pfAdbCmd
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'forward (?:tcp:|--remove)'
+            }
+            $env:PF_EXISTING_FORWARD = ''
+
+            foreach ($probeStatus in @('error', 'partial', 'background')) {
+                $env:PF_SVC_RUNNING = $probeStatus
+                Clear-Content -LiteralPath $pfAdbLog
+                $uncertain = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+                Assert-True (-not [string]::IsNullOrEmpty($uncertain.Problem)) '未确认服务缺席时应停止预检。'
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'start-foreground-service|stopservice|forward '
+            }
+
+            # 2) 服务未跑 + 配置缺失需 run-as 同步（非 32 hex token）+ Android 16 stopservice exit 255 零告警
+            Remove-Item -LiteralPath $pfConfig, $pfAdbLog, $pfStartedFlag -Force -ErrorAction SilentlyContinue
+            $syncToken = 'fixture-sync-token-value-safe'
+            $env:PF_SVC_RUNNING = '0'
+            $env:PF_SYNC_TOKEN = $syncToken
+            $gatewayStub.ExpectedToken = $syncToken
+
+            $s2 = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+            Assert-True ($null -eq $s2.Problem) "自动拉起与 run-as 同步预检失败：$($s2.Problem)"
+            Assert-True ($s2.StartedService -and $s2.PortForwarded) '未运行服务应标为本次自启并转发端口。'
+            Assert-True ($null -eq (Get-GatewayConfigProblem -ConfigPath $pfConfig)) 'run-as 同步后配置应完全合法。'
+            Assert-Contains (Get-Content -LiteralPath $pfConfig -Raw) 'http://127.0.0.1:8848/mcp'
+            $stopWarnings = $null
+            Stop-GatewayPreflightOwnedResources -State $s2 -AdbCommand $pfAdbCmd -WarningVariable stopWarnings
+            Assert-True (@($stopWarnings).Count -eq 0) 'Android 16 Service stopped + 255 不应产生收尾告警。'
+            $log2 = Get-Content -LiteralPath $pfAdbLog -Raw
+            Assert-Contains $log2 'start-foreground-service'
+            Assert-Contains $log2 'stopservice'
+            Assert-NotMatches $log2 ([regex]::Escape($syncToken))
+
+            # 3) caps 缺 a11y：非 Settings 前台执行单次有界 toggle 恢复成功
+            Copy-Item -LiteralPath $validGatewayConfig -Destination $pfConfig -Force
+            $gatewayStub.ExpectedToken = $testBearer
+            $gatewayStub.DefaultCapsJson = '["ime","ocr"]'
+            $gatewayStub.ReboundCapsFile = $pfReboundFlag
+            $env:PF_SVC_RUNNING = '1'
+            $env:PF_SYNC_TOKEN = ''
+            $env:PF_FG_SETTINGS = '0'
+            $env:PF_REBOUND_FLAG = $pfReboundFlag
+            Remove-Item -LiteralPath $pfAdbLog, $pfReboundFlag -Force -ErrorAction SilentlyContinue
+
+            $s3 = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port -A11yRebindTimeoutSec 2
+            Assert-True ($null -eq $s3.Problem) "非 Settings 单次无障碍重绑应恢复成功：$($s3.Problem)"
+            Stop-GatewayPreflightOwnedResources -State $s3 -AdbCommand $pfAdbCmd
+            $log3 = Get-Content -LiteralPath $pfAdbLog -Raw
+            Assert-Contains $log3 'enabled_accessibility_services'
+
+            # 4) caps 缺 a11y：前台为 com.android.settings 时严禁 toggle
+            $env:PF_FG_SETTINGS = '1'
+            $env:PF_REBOUND_FLAG = ''
+            $gatewayStub.ReboundCapsFile = $null
+            Remove-Item -LiteralPath $pfAdbLog -Force -ErrorAction SilentlyContinue
+
+            $s4 = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port
+            Assert-Matches ([string]$s4.Problem) 'gateway_a11y_not_ready.*com\.android\.settings'
+            Assert-True (-not $s4.PortForwarded) '失败返回后应已回收本次端口转发。'
+            $log4 = Get-Content -LiteralPath $pfAdbLog -Raw
+            Assert-NotMatches $log4 'settings\s+put|settings\s+delete'
+
+            foreach ($foreground in @('error', 'unknown')) {
+                $env:PF_FG_SETTINGS = $foreground
+                Clear-Content -LiteralPath $pfAdbLog
+                $unknown = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port -A11yRebindTimeoutSec 1
+                Assert-Matches ([string]$unknown.Problem) 'gateway_a11y_not_ready'
+                Assert-NotMatches (Get-Content -LiteralPath $pfAdbLog -Raw) 'settings\s+put|settings\s+delete'
+            }
+
+            # 5) caps 缺 a11y：非 Settings toggle 后仍未恢复则 fail-closed
+            $env:PF_FG_SETTINGS = '0'
+            Remove-Item -LiteralPath $pfAdbLog -Force -ErrorAction SilentlyContinue
+
+            $s5 = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port -A11yRebindTimeoutSec 1
+            Assert-Matches ([string]$s5.Problem) 'gateway_a11y_not_ready'
+            Assert-True (-not $s5.PortForwarded) '重绑失败后应已回收端口转发。'
+        }
+        finally {
+            $gatewayStub.ExpectedToken = $savedExpectedToken
+            $gatewayStub.DefaultCapsJson = $savedCaps
+            $gatewayStub.ReboundCapsFile = $savedReboundFile
+            foreach ($key in $savedEnv.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $savedEnv[$key], 'Process')
+            }
+        }
+    }
+
+    Test-Case 'toolchain\codex 钉定二进制优先、未知不回退与安全 fail-closed' {
+        $pinned = @(
+            [pscustomobject]@{ Path = (Join-Path $TestRoot 'toolchain\codex\codex.exe'); VersionOutput = 'codex-cli 0.149.0-alpha.4.1'; Sha256 = 'PIN49A' }
+        )
+        $official = @(
+            [pscustomobject]@{ Path = (Join-Path $TestRoot 'official\001\codex.exe'); VersionOutput = 'codex-cli 0.149.0'; Sha256 = 'OFF49' }
+        )
+        $pickPinned = Select-DispatchCodexRootCandidates -ToolchainCandidates $pinned -OfficialCandidates $official
+        Assert-True ($pickPinned.Sha256 -ceq 'PIN49A') 'toolchain\codex 非空时必须优先于系统安装目录。'
+
+        $pickFallback = Select-DispatchCodexRootCandidates -ToolchainCandidates @() -OfficialCandidates $official
+        Assert-True ($pickFallback.Sha256 -ceq 'OFF49') 'toolchain\codex 为空时应回退官方安装目录。'
+
+        $unknownPinnedRejected = $false
+        try {
+            $null = Select-DispatchCodexRootCandidates -ToolchainCandidates @(
+                [pscustomobject]@{ Path = (Join-Path $TestRoot 'toolchain\codex\codex.exe'); VersionOutput = 'codex-cli 0.150.0'; Sha256 = 'PIN50' }
+            ) -OfficialCandidates $official
+        }
+        catch { $unknownPinnedRejected = $_.Exception.Message -match '0\.150\.0' }
+        Assert-True $unknownPinnedRejected 'toolchain\codex 只有未知版本时不得静默回退系统目录。'
+
+        # 真实文件系统边界：未签名钉定 exe / junction toolchain 目录必须优先 fail-closed；空目录才回退
+        $fakeOfficialRoot = Join-Path $TestRoot 'fake-official-codex-root'
+        New-Item -ItemType Directory -Path $fakeOfficialRoot -Force | Out-Null
+
+        $unsignedRoot = Join-Path $TestRoot 'toolchain-unsigned\codex'
+        New-Item -ItemType Directory -Path $unsignedRoot -Force | Out-Null
+        Copy-Item -LiteralPath $fakeCodexExe -Destination (Join-Path $unsignedRoot 'codex.exe') -Force
+        $unsignedRejected = $false
+        try {
+            $null = Resolve-DispatchTrustedCodexExecutable -ToolchainBinRoot $unsignedRoot -OfficialBinRoot $fakeOfficialRoot
+        }
+        catch { $unsignedRejected = $_.Exception.Message -match 'OpenAI OpCo' }
+        Assert-True $unsignedRejected 'toolchain\codex 下的未签名 codex.exe 未被拦截。'
+
+        $junctionParent = Join-Path $TestRoot 'toolchain-junction-host'
+        $junctionTarget = Join-Path $TestRoot 'toolchain-junction-target'
+        $junctionPath = Join-Path $junctionParent 'codex'
+        New-Item -ItemType Directory -Path $junctionParent, $junctionTarget -Force | Out-Null
+        New-Item -ItemType Junction -Path $junctionPath -Target $junctionTarget | Out-Null
+        $junctionRejected = $false
+        try {
+            $null = Resolve-DispatchTrustedCodexExecutable -ToolchainBinRoot $junctionPath -OfficialBinRoot $fakeOfficialRoot
+        }
+        catch { $junctionRejected = $_.Exception.Message -match 'reparse/link' }
+        Assert-True $junctionRejected 'junction 形态的 toolchain\codex 未被拦截。'
+
+        $emptyPinned = Join-Path $TestRoot 'toolchain-empty\codex'
+        New-Item -ItemType Directory -Path $emptyPinned -Force | Out-Null
+        $fellBack = $false
+        try {
+            $null = Resolve-DispatchTrustedCodexExecutable -ToolchainBinRoot $emptyPinned -OfficialBinRoot $fakeOfficialRoot
+        }
+        catch { $fellBack = $_.Exception.Message -match 'bundled codex\.exe' }
+        Assert-True $fellBack '空 toolchain\codex 目录未正常回退检查官方目录。'
+    }
+
     Test-Case '程序化 RESUME 只进入 gateway 恢复流程，消费后拒绝重放' {
         # 此用例最后运行：真实非 DryRun 分支只碰 TEMP fixture 的 fake adb/ledger，
         # 在私密 gateway 配置预检处停下，不启动模型，也不接触设备。
@@ -1960,6 +2405,9 @@ session_id: offline
     exit 0
 }
 finally {
+    if ($null -ne $gatewayStub) {
+        try { $gatewayStub.Dispose() } catch {}
+    }
     if (Test-Path -LiteralPath $TestRoot) {
         try {
             Remove-Item -LiteralPath $TestRoot -Recurse -Force -ErrorAction Stop

@@ -852,6 +852,83 @@ class SafetyGateTest {
         assertEquals(0, failureRecords)
     }
 
+    @Test
+    fun `regular enter without prepared target confirms once and executes when context stays unchanged`() {
+        val regularContext = initialContext.copy(
+            target = initialContext.target!!.copy(preparedTargetEvidence = null),
+        )
+        var confirmerCalls = 0
+        var executorCalls = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { decision ->
+                confirmerCalls++
+                assertTrue(decision.cardText("c-reg").contains("目标会话：未绑定会话标题，请核对屏幕"))
+                true
+            },
+            contextProvider = { regularContext },
+            onExecutionFailure = { fail("常规回车执行不得误记失败") },
+        )
+
+        gate.execute("press_key", Level.W, args) { _, _ -> executorCalls++ }
+
+        assertEquals(1, confirmerCalls)
+        assertEquals(1, executorCalls)
+    }
+
+    @Test
+    fun `same app multi window blocks ime only enter while allowing pane labeled click and strict enter`() {
+        val imeOnlyMulti = degradedContext.copy(
+            sameAppMultiWindow = true,
+            target = degradedContext.target!!.copy(preparedTargetEvidence = null),
+        )
+        assertEnterBlocked(imeOnlyMulti)
+
+        val strictMulti = initialContext.copy(
+            sameAppMultiWindow = true,
+            target = initialContext.target!!.copy(windowPane = "right"),
+        )
+        var clickExecutorCalls = 0
+        val uiArgs = JSONObject().put("ref", "send-btn").put("action", "click")
+        val clickContext = strictMulti.copy(
+            target = SafetyTarget(
+                ref = "send-btn",
+                text = "发送",
+                bounds = "[2000,1800][2100,1900]",
+                source = "a11y",
+                windowPane = "right",
+            ),
+        )
+        val clickGate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { decision ->
+                assertTrue(decision.cardText("c-pane").contains("所在窗口：右侧窗口"))
+                true
+            },
+            contextProvider = { clickContext },
+            onExecutionFailure = { fail("成功点击不得记录失败") },
+        )
+        clickGate.execute("ui_action", Level.W, uiArgs) { _, _ -> clickExecutorCalls++ }
+        assertEquals(1, clickExecutorCalls)
+
+        var reads = 0
+        var paneDriftExecutorCalls = 0
+        val driftGate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { true },
+            contextProvider = {
+                reads++
+                if (reads == 1) clickContext
+                else clickContext.copy(target = clickContext.target!!.copy(windowPane = "left"))
+            },
+            onExecutionFailure = { fail("窗口飘移不得记录执行失败") },
+        )
+        expectGatewayError(ErrorCode.E_STALE_REF) {
+            driftGate.execute("ui_action", Level.W, uiArgs) { _, _ -> paneDriftExecutorCalls++ }
+        }
+        assertEquals(0, paneDriftExecutorCalls)
+    }
+
     private fun expectGatewayError(code: ErrorCode, block: () -> Unit): GatewayError {
         try {
             block()

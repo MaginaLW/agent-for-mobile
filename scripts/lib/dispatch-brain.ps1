@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 
 function ConvertTo-DispatchTomlString {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
@@ -705,40 +705,78 @@ function Invoke-DispatchCodexVersionProbe {
     }
 }
 
-function Resolve-DispatchTrustedCodexExecutable {
+$script:DispatchBrainRepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$script:DispatchOpenAiSignerSubject = 'CN="OpenAI OpCo, LLC", O="OpenAI OpCo, LLC", L=San Francisco, S=California, C=US'
+
+function Select-DispatchCodexRootCandidates {
     [CmdletBinding()]
     param(
-        [ref]$VersionOutput,
-        [ref]$Sha256
+        [AllowEmptyCollection()][object[]]$ToolchainCandidates = @(),
+        [AllowEmptyCollection()][object[]]$OfficialCandidates = @()
     )
 
-    $localAppData = [IO.Path]::GetFullPath([Environment]::GetFolderPath('LocalApplicationData'))
-    $binRoot = Join-Path $localAppData 'OpenAI\Codex\bin'
-    foreach ($directory in @(
-        $localAppData,
-        (Join-Path $localAppData 'OpenAI'),
-        (Join-Path $localAppData 'OpenAI\Codex'),
-        $binRoot
-    )) {
+    # 钉定目录一旦存在有效扫描候选，就绝不因其中缺少匹配契约或哈希冲突而悄悄回退系统安装目录。
+    $pinned = @($ToolchainCandidates)
+    if ($pinned.Count -gt 0) {
+        return Select-DispatchCodexExecutableCandidate -Candidates $pinned
+    }
+    $official = @($OfficialCandidates)
+    if ($official.Count -gt 0) {
+        return Select-DispatchCodexExecutableCandidate -Candidates $official
+    }
+    throw '找不到官方桌面应用 bundled codex.exe。'
+}
+
+function Assert-DispatchTrustedDirectoryChain {
+    param(
+        [Parameter(Mandatory)][string[]]$Directories,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    foreach ($directory in $Directories) {
         $item = Get-Item -LiteralPath $directory -Force -ErrorAction Stop
         if (-not $item.PSIsContainer -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
             -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
-            throw 'Codex 官方 bin 路径含 reparse/link，拒绝启动。'
+            throw "$Label 路径含 reparse/link，拒绝启动。"
+        }
+    }
+}
+
+function Get-DispatchVerifiedCodexCandidatesInRoot {
+    param(
+        [Parameter(Mandatory)][string]$RootPath,
+        [AllowEmptyCollection()][string[]]$AncestorDirectories = @(),
+        [Parameter(Mandatory)][string]$RootLabel,
+        [switch]$AllowDirectExecutable
+    )
+
+    Assert-DispatchTrustedDirectoryChain -Directories (@($AncestorDirectories) + @($RootPath)) -Label $RootLabel
+
+    $seenPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $candidateFiles = [Collections.Generic.List[IO.FileInfo]]::new()
+    if ($AllowDirectExecutable) {
+        $directPath = Join-Path $RootPath 'codex.exe'
+        if (Test-Path -LiteralPath $directPath -PathType Leaf) {
+            $directItem = Get-Item -LiteralPath $directPath -Force
+            if ($seenPaths.Add([IO.Path]::GetFullPath($directItem.FullName))) {
+                $candidateFiles.Add($directItem)
+            }
         }
     }
 
-    # 子目录名是随机 hash，mtime 也不是版本。应用更新可保留多个目录，因此必须逐个
-    # 验签、探测精确版本并交给显式契约优先级选择；未知新版不能靠时间戳冒充首选。
-    $candidateFiles = @(Get-ChildItem -LiteralPath $binRoot -Directory -Force |
-        ForEach-Object {
-            if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-                -not [string]::IsNullOrWhiteSpace([string]$_.LinkType)) { return }
-            $path = Join-Path $_.FullName 'codex.exe'
-            if (Test-Path -LiteralPath $path -PathType Leaf) { return (Get-Item -LiteralPath $path -Force) }
-        })
-    if ($candidateFiles.Count -eq 0) {
-        throw '找不到官方桌面应用 bundled codex.exe。'
+    foreach ($subdir in @(Get-ChildItem -LiteralPath $RootPath -Directory -Force)) {
+        if (($subdir.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrWhiteSpace([string]$subdir.LinkType)) {
+            continue
+        }
+        $path = Join-Path $subdir.FullName 'codex.exe'
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $fileItem = Get-Item -LiteralPath $path -Force
+            if ($seenPaths.Add([IO.Path]::GetFullPath($fileItem.FullName))) {
+                $candidateFiles.Add($fileItem)
+            }
+        }
     }
 
     $probedCandidates = [Collections.Generic.List[object]]::new()
@@ -747,15 +785,14 @@ function Resolve-DispatchTrustedCodexExecutable {
             -not [string]::IsNullOrWhiteSpace([string]$candidate.LinkType)) {
             throw 'codex.exe 候选是 reparse/link，拒绝启动。'
         }
-        # LocalAppData 可写：从签名检查到 --version 再到 hash 必须持 deny-write/delete 句柄，
+        # 目录对当前用户可写：从签名检查到 --version 再到 hash 必须持 deny-write/delete 句柄，
         # 否则候选可在“验签后、执行前”被换成任意 exe，最终再换回以骗过 hash。
         $candidateGuard = [IO.File]::Open($candidate.FullName, [IO.FileMode]::Open,
             [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try {
             $signature = Get-AuthenticodeSignature -LiteralPath $candidate.FullName
             if ($signature.Status -ne 'Valid' -or
-                [string]$signature.SignerCertificate.Subject -cne
-                    'CN="OpenAI OpCo, LLC", O="OpenAI OpCo, LLC", L=San Francisco, S=California, C=US') {
+                [string]$signature.SignerCertificate.Subject -cne $script:DispatchOpenAiSignerSubject) {
                 throw 'codex.exe 候选签名不是有效的 OpenAI OpCo 签名。'
             }
             $version = ''
@@ -771,8 +808,56 @@ function Resolve-DispatchTrustedCodexExecutable {
         }
         finally { $candidateGuard.Dispose() }
     }
+    return ,$probedCandidates.ToArray()
+}
 
-    $selection = Select-DispatchCodexExecutableCandidate -Candidates $probedCandidates.ToArray()
+function Resolve-DispatchTrustedCodexExecutable {
+    [CmdletBinding()]
+    param(
+        [ref]$VersionOutput,
+        [ref]$Sha256,
+        [string]$ToolchainBinRoot = '',
+        [string]$OfficialBinRoot = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ToolchainBinRoot)) {
+        $ToolchainBinRoot = Join-Path $script:DispatchBrainRepoRoot 'toolchain\codex'
+    }
+
+    $toolchainCandidates = @()
+    $toolchainItem = Get-Item -LiteralPath $ToolchainBinRoot -Force -ErrorAction SilentlyContinue
+    if ($null -ne $toolchainItem) {
+        $toolchainParent = Split-Path -Parent ([IO.Path]::GetFullPath($ToolchainBinRoot))
+        $toolchainCandidates = Get-DispatchVerifiedCodexCandidatesInRoot `
+            -RootPath $ToolchainBinRoot `
+            -AncestorDirectories @($toolchainParent) `
+            -RootLabel 'Codex 钉定 toolchain\codex' `
+            -AllowDirectExecutable
+    }
+
+    $selection = if ($toolchainCandidates.Count -gt 0) {
+        Select-DispatchCodexRootCandidates -ToolchainCandidates $toolchainCandidates
+    }
+    else {
+        $officialAncestors = @()
+        if ([string]::IsNullOrWhiteSpace($OfficialBinRoot)) {
+            $localAppData = [IO.Path]::GetFullPath([Environment]::GetFolderPath('LocalApplicationData'))
+            $OfficialBinRoot = Join-Path $localAppData 'OpenAI\Codex\bin'
+            $officialAncestors = @(
+                $localAppData,
+                (Join-Path $localAppData 'OpenAI'),
+                (Join-Path $localAppData 'OpenAI\Codex')
+            )
+        }
+        # 子目录名是随机 hash，mtime 也不是版本。应用更新可保留多个目录，因此必须逐个
+        # 验签、探测精确版本并交给显式契约优先级选择；未知新版不能靠时间戳冒充首选。
+        $officialCandidates = Get-DispatchVerifiedCodexCandidatesInRoot `
+            -RootPath $OfficialBinRoot `
+            -AncestorDirectories $officialAncestors `
+            -RootLabel 'Codex 官方 bin'
+        Select-DispatchCodexRootCandidates -OfficialCandidates $officialCandidates
+    }
+
     if ($selection.UnknownVersions.Count -gt 0) {
         Write-Warning ('忽略未验证的 Codex CLI 候选：' + ($selection.UnknownVersions -join ', '))
     }
@@ -1004,7 +1089,7 @@ function Get-DispatchGatewayResultOutcome {
     }
     $ok = Get-DispatchPropertyValue $Envelope 'ok'
     if ($ok -isnot [bool]) { throw "$Context 的结果缺少 JSON boolean ok。" }
-    return $(if ($isError -eq $true -or $ok -ne $true) { 'failed' } else { 'success' })
+    return $(if ($isError -eq $true -or $ok -ne $true) { 'gateway-tool-failure' } else { 'success' })
 }
 
 function ConvertTo-DispatchMobileTransportMarker {
@@ -1204,13 +1289,16 @@ function Read-DispatchTraceTranscript {
                         $call.CompletedOrdinal = $eventOrdinal
                         $itemStatus = Get-DispatchPropertyValue $item 'status'
                         $itemError = Get-DispatchPropertyValue $item 'error'
-                        if ($itemStatus -isnot [string] -or $itemStatus -cne 'completed' -or
+                        $rawResult = Get-DispatchPropertyValue $item 'result'
+                        # Codex 也会把带有网关错误信封的正常 MCP 响应标记为 failed。
+                        $hasFailedGatewayResult = $itemStatus -ceq 'failed' -and
+                            $call.Server -ceq 'gateway' -and $null -ne $rawResult
+                        if ($itemStatus -isnot [string] -or ($itemStatus -cne 'completed' -and -not $hasFailedGatewayResult) -or
                             $null -ne $itemError) {
                             $call.Outcome = 'failed'
                             $call.ResultEnvelope = $itemError
                             continue
                         }
-                        $rawResult = Get-DispatchPropertyValue $item 'result'
                         $call.ResultEnvelope = if ($call.Server -ceq 'mobile') {
                             ConvertTo-DispatchMobileTransportMarker $rawResult
                         }
@@ -1219,6 +1307,7 @@ function Read-DispatchTraceTranscript {
                         if ($call.Server -ceq 'gateway') {
                             $call.Outcome = Get-DispatchGatewayResultOutcome -RawResult $rawResult `
                                 -Envelope $call.ResultEnvelope -Context "Codex gateway mcp_tool_call $id"
+                            if ($hasFailedGatewayResult -and $call.Outcome -ceq 'success') { $call.Outcome = 'failed' }
                         }
                         else { $call.Outcome = 'success' }
                     }

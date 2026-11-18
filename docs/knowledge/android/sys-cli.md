@@ -6,6 +6,8 @@
 
 ## 1. 系统开关：写命令 + 真值源（对应 system_set_state / verify_state）
 
+PA2553（2026-11-18）的蓝牙服务存在，但本次 `dumpsys bluetooth_manager` 输出为空。在该机用 `cmd bluetooth_manager help` 确认支持 `wait-for-state:<STATE>` 后，以 `timeout 4 cmd bluetooth_manager wait-for-state:STATE_ON` 在关闭前和恢复后各读到一次成功。此查询只等候目标状态，超时本身不能证明另一状态。关闭时由网关另行读回 `actual=off`。[PA2553 蓝牙验收](../../runs/2026-11-18-PA2553非微信主验收.md#蓝牙开关的验证)
+
 关键分裂（M0 发现 #2 已实测确认）：**写用一套命令，验真值用另一套源**——settings 键会撒谎。
 
 | 状态 | 写（Shizuku shell，🔵 逐条待验） | 真值源（复核，部分已测） | 备注 |

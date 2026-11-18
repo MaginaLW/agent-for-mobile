@@ -330,7 +330,7 @@ Invoke-Check '凭据扫描' {
         @{ Scope = 'index'; Mode = '--cached' }
     )) {
         # 候选仍由 Git 枚举；NUL 分隔保留含空格及非 ASCII 的路径，原文不写日志。
-        $rawPaths = @(& git -C $RepoRoot -c core.quotepath=false grep -zlIE $view.Mode '\b[0-9a-f]{32}\b' -- . 2>$null)
+        $rawPaths = @(& git -C $RepoRoot -c core.quotepath=false grep -zlIE $view.Mode '(^|[^0-9A-Za-z_])[0-9a-f]{32}([^0-9A-Za-z_]|$)' -- . 2>$null)
         if ($LASTEXITCODE -notin @(0, 1)) { throw "$($view.Scope)：git grep 执行失败。" }
         $paths = ($rawPaths -join "`n").Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
         foreach ($path in $paths) {
@@ -347,7 +347,7 @@ Invoke-Check '凭据扫描' {
                     $url = $urlMatch.Groups['url']
                     [void]$publicIdOffsets.Add($url.Index + $url.Length - 32)
                 }
-                # ASCII 词边界保守覆盖 Git 的候选，不因 .NET 的 Unicode \b 漏掉额外命中。
+                # 与 Git 的文件筛选使用相同的 ASCII 词边界。
                 $matches = [regex]::Matches($content, '(?<![0-9A-Za-z_])[0-9a-f]{32}(?![0-9A-Za-z_])')
                 if ($matches.Count -eq 0) { throw 'candidate parse mismatch' }
                 foreach ($match in $matches) {

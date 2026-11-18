@@ -18,6 +18,7 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.ensureTargetPackageAllowed
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -144,6 +145,7 @@ object SystemTools {
 
     fun appLaunch(nameOrPackage: String): JSONObject {
         val pkg = Gateway.skills.resolvePackage(nameOrPackage)
+        ensureTargetPackageAllowed(pkg, Gateway.skills::isBlockedApp)
         val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
             ?: throw GatewayError(
                 ErrorCode.E_NOT_FOUND, "找不到可启动的 app：$pkg",
@@ -154,11 +156,6 @@ object SystemTools {
         val verified = waitForeground(pkg, 3000)
         return JSONObject().put("launched", true).put("package", pkg).put("foreground_verified", verified)
     }
-
-    fun appStop(@Suppress("UNUSED_PARAMETER") pkg: String): JSONObject = throw GatewayError(
-        ErrorCode.E_CHANNEL_DOWN, "app_stop 需要 Shizuku 特权通道（M1b：am force-stop）",
-        channel = "shell", fallback = "press_key(home) 把它置于后台即可满足多数任务",
-    )
 
     fun clipboard(op: String, text: String?): JSONObject {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

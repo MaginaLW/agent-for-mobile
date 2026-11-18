@@ -78,10 +78,6 @@ object UiTools {
         return snap
     }
 
-    fun uiDiff(@Suppress("UNUSED_PARAMETER") sinceRevision: Long): JSONObject = throw GatewayError(
-        ErrorCode.E_CHANNEL_DOWN, "ui_diff 在 M1b 实现", fallback = "先用 ui_snapshot 全量",
-    )
-
     fun uiFind(text: String?, role: String?, desc: String?, scrollSearch: Boolean): JSONObject {
         val a11y = GatewayA11yService.require()
         var matches = a11y.find(text, role, desc)
@@ -196,6 +192,9 @@ object UiTools {
                 )
             }
             node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val session = if (mode == "replace" && !node.isPassword && node == a11y.focusedEditable()) {
+                ImeBridge.session()?.takeIf { it.belongsTo(node.packageName?.toString().orEmpty()) }
+            } else null
             channel = "ime_commit"
             committed = ImeBridge.commit(text, mode)
             if (!committed) throw GatewayError(
@@ -204,6 +203,14 @@ object UiTools {
             )
             Thread.sleep(150)
             readback = readback(node)
+            // 小红书的无障碍节点会把“搜索, ”作为文本的一部分。只接受同一焦点编辑器的精确读回。
+            if (session != null && readback != null && readback != expected &&
+                node.isEditable && node.isFocused && !node.isPassword && node == a11y.focusedEditable() &&
+                ImeBridge.matchesCommittedText(session, expected) && node == a11y.focusedEditable()
+            ) {
+                recordInputEvidence(a11y, expected, readbackVerified = true)
+                return result(channel, true, expected, verified = true).put("readback_source", "input_connection")
+            }
         }
 
         if (readback == null) return ocrReadbackResult(a11y, node, channel, expected).also {
@@ -540,6 +547,16 @@ object UiTools {
         val actualBounds = focused.bounds?.let {
             "[${it.left},${it.top}][${it.right},${it.bottom}]"
         }
+        if (
+            focused.identity == null ||
+            !FocusIdentity.boundsConsistent(focused.identity.source, expectedBounds) ||
+            actualBounds != expectedBounds
+        ) throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "执行 Enter 前焦点几何或身份异常",
+            channel = "safety",
+            fallback = "重新感知并聚焦输入框后再发起一次新调用",
+        )
         val context = a11y.ctx(Gateway.caps())
         val actual = Gateway.preparedTargetEvidence.current(
             packageName = context.optString("app").takeIf {
@@ -548,11 +565,16 @@ object UiTools {
             identity = focused.identity,
             bounds = actualBounds,
         )
-        if (
-            expected == null || focused.identity == null ||
-            !FocusIdentity.boundsConsistent(focused.identity.source, expectedBounds) ||
-            actualBounds != expectedBounds || actual == null || actual != expected
-        ) throw GatewayError(
+        if (expected == null) {
+            if (actual != null) throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "执行 Enter 前目标会话证据状态已变化",
+                channel = "safety",
+                fallback = "重新核对当前页面后再发起一次新调用",
+            )
+            return
+        }
+        if (actual == null || actual != expected) throw GatewayError(
             ErrorCode.E_STALE_REF,
             "执行 Enter 前短时目标会话证据已过期或变化",
             channel = "safety",

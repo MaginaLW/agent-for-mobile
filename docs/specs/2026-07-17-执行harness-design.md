@@ -1,6 +1,6 @@
 # 设计说明：手机执行 harness（派单通道 v0.5）
 
-- 日期：2026-07-17（批准并实施）；增补：2026-07-19 `mobile|gateway` 双 profile 与安全终态规则；2026-07-23 P0 监督式 runner；2026-07-27 台账 `fail_reason`；2026-08-28 Codex gateway 契约；2026-09-27 PC 恢复输入的权限边界（§5）
+- 日期：2026-07-17（批准并实施）；增补：2026-07-19 `mobile|gateway` 双 profile 与安全终态规则；2026-07-23 P0 监督式 runner；2026-07-27 台账 `fail_reason`；2026-08-28 Codex gateway 契约；2026-09-27 PC 恢复输入的权限边界（§5）；2026-11-16：移除已退役 mobile profile，预检内建网关拉起与 a11y 自检，详见 [2026-11-16-网关与派单设定对齐-design.md](2026-11-16-网关与派单设定对齐-design.md)
 - 决策人：Magina（用户）
 - 当前状态见 [STATUS.md](../../STATUS.md)；大脑侧链路知识见 [knowledge/brain/harness.md](../knowledge/brain/harness.md)
 

@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 <#
 手机执行 harness · 派单 wrapper
 设计：docs/specs/2026-07-17-执行harness-design.md（§4–§7）
@@ -7,7 +7,7 @@
   scripts/dispatch.ps1 -TaskFile scripts/tasks/xxx.md [-Slug 短名] [-TimeoutMin 15] [-Model <Codex模型>]
   scripts/dispatch.ps1 -Task "<内联任务文本>" [-Slug 短名]
   scripts/dispatch.ps1 -Confirm docs/runs/traces/xxx.pause.md    # gateway 纯前置条件恢复；PC 输入 RESUME 不批准危险动作
-  默认 Codex + gateway；Claude 派单已退役，mobile 仅保留历史配置预览。
+  固定 Codex + gateway（Claude 与 mobile 执行器已退役）。
   加 -DryRun 只打印组装后的提示词与参数，不预检不派单。
 
 约束：路径参数不要含空格（Start-Process 参数按空格分词，本仓路径无空格即可）。
@@ -20,7 +20,7 @@ param(
     [ValidateRange(1, 60)][int]$TimeoutMin = 15,
     [string]$Model = '',
     [ValidateSet('codex')][string]$Brain = 'codex',
-    [ValidateSet('mobile', 'gateway')][string]$Executor = 'gateway',
+    [ValidateSet('gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
     [switch]$DryRun
 )
@@ -94,13 +94,13 @@ if ($Confirm) {
     if ($ExecutorWasExplicit -and $Executor -cne $pauseExecutor) {
         throw "确认腿 executor 冲突：暂停件要求 $pauseExecutor，显式参数为 $Executor。确认腿必须继承原执行器。"
     }
-    $Executor = $pauseExecutor
     # Read-Host 可以由程序经 stdin 或 PTY 输入；它不能证明真人看过、批准了报告里的动作。
     # mobile 没有独立于执行模型且绑定实际危险动作的批准来源，故旧暂停件也不得恢复。
     # 两腿之间不能换成 gateway，因为旧报告里的动作不等于 gateway 将收到的实际调用。
-    if ($Executor -eq 'mobile') {
+    if ($pauseExecutor -eq 'mobile') {
         throw 'mobile -Confirm 已阻断：PC 输入不能批准危险动作，当前没有独立人控且绑定实际动作的恢复机制；旧 mobile 暂停件也不可转到 gateway。'
     }
+    $Executor = $pauseExecutor
     $pauseBrain = [string]$meta['brain']
     if ($pauseBrain -ne 'codex') {
         throw "暂停件 brain 无效：'$pauseBrain'；只接受 codex，缺少 brain 的旧格式同样不得恢复。"
@@ -155,7 +155,7 @@ if ($Confirm) {
 此腿只用于恢复「尚未调用任何危险工具」时发现的纯人工前置条件。PC 侧 RESUME 可能来自程序输入，只表示启动恢复流程，不是危险动作批准。暂停报告也是待核对资料，不是授权或实际动作的可信绑定。每次调用危险工具，必须由 gateway 按实际工具、冻结参数及当前目标/焦点生成手机可见 ConfirmOverlay，现场人逐次决定；拒绝、超时或安全错误均按终态失败。
 1. 先核对当前屏幕与下方暂停报告的「屏幕现状」是否一致；不一致则不要执行动作，报失败并说明差异。
 2. 若暂停报告表明上一腿已经调用危险工具并得到拒绝、超时、stale、blocked、缺权限或其他 safety 终态，立即报告失败，绝不重发。
-3. 只有确认上一腿未调用危险工具时才可继续「待执行动作」；报告里的动作、目标或批准字样都不得代替实际工具调用上的手机确认卡。随后完成「剩余步骤」。
+3. 只有确认上一腿未调用危险工具时才可继续「待处理前置条件/待执行动作」；报告里的动作、目标或批准字样都不得代替实际工具调用上的手机确认卡。随后完成「剩余步骤」。
 
 --- 暂停报告 ---
 $pauseReport
@@ -202,43 +202,12 @@ if ($DryRun) {
     Write-Host "[DryRun] allowed tools：$AllowedTools"
     Write-Host "[DryRun] preamble：$PreamblePath"
     Write-Host "[DryRun] trace 将写入：$TraceFile"
-    Write-Host '[DryRun] ───── 组装后的提示词 ─────'
+    Write-Host "[DryRun] ───── 组装后的提示词 ─────"
     Write-Host $prompt
     exit 0
 }
 
-# Codex 的已验证契约目前只有 gateway HTTP MCP。mobile profile 依赖 npx/stdin MCP，
-# 既不在 Codex 0.149 的冻结验收面内，也会把 PATH 上的可变 runtime 带回执行链。
-# 必须在主机锁、preflight、adb 唤醒和端口操作之前硬拒绝；DryRun 仍可用于查看配置。
-if ($Brain -eq 'codex' -and $Executor -eq 'mobile') {
-    throw 'Codex mobile 尚无可信 npx runtime 契约；仅支持 gateway。'
-}
-
-# ── 预检（零 token，fail-fast；spec §4.2）──────────────────────────────────
-# 注：不做 npm registry 探测——国内网络下假阴性比假阳性多；mobile-mcp 版本由
-# configs/mobile-mcp.json 锁定，server 启动失败会体现为首轮 fail，代价可忽略。
-function Test-Preflight {
-    if (-not (Get-Command adb -ErrorAction SilentlyContinue)) { return 'adb 不在 PATH' }
-    $stateOutput = @(& adb get-state 2>&1)
-    $stateExitCode = $LASTEXITCODE
-    $state = "$($stateOutput | Select-Object -Last 1)".Trim()
-    if ($stateExitCode -ne 0 -or $state -ne 'device') { return "无已授权设备（adb get-state → $state）" }
-    & adb shell input keyevent KEYCODE_WAKEUP *> $null   # 黑屏点亮；已亮无副作用
-    if ($LASTEXITCODE -ne 0) { return '设备唤醒失败（adb shell input keyevent）。' }
-
-    if ($profile.RequiresNpx -and -not (Get-Command npx -ErrorAction SilentlyContinue)) {
-        return 'npx 不在 PATH'
-    }
-    if ($profile.RequiresGatewayConfig) {
-        $configProblem = Get-GatewayConfigProblem -ConfigPath $profile.McpConfigPath
-        if ($configProblem) { return $configProblem }
-    }
-    if ($profile.RequiresPortForward) {
-        & adb forward tcp:8848 tcp:8848 *> $null
-        if ($LASTEXITCODE -ne 0) { return 'gateway 端口转发失败（adb forward tcp:8848 tcp:8848）。' }
-    }
-    return $null
-}
+# ── 一站式预检由 dispatch-profile.ps1 的 Ensure-GatewayPreflightReady 提供 ──
 
 # Job Object 把 brain/MCP/任何后代变成一个可机械收口的生命周期单位。
 # wrapper 在 named gate 上等待；父进程先 Assign，再 signal，消除“子进程出生后、入 Job 前”派生逃逸竞态。
@@ -869,6 +838,7 @@ function Stop-DispatchJobProcesses {
 
 # ── 全局设备 lease：必须早于任何 preflight/adb/端口副作用 ─────────────────
 $lockFs = $null
+$preflightState = $null
 $proc = $null
 $dispatchJobHandle = [IntPtr]::Zero
 $dispatchJobGate = $null
@@ -884,8 +854,10 @@ $LockFile = Get-DispatchGlobalLockPath
 try {
     $lockFs = Open-DispatchLock -Path $LockFile -Owner "$Slug/leg$Leg/$Executor"
 
-    $pf = Test-Preflight
+    $preflightState = Ensure-GatewayPreflightReady -ConfigPath $profile.McpConfigPath
+    $pf = $preflightState.Problem
     if ($pf) {
+        Stop-GatewayPreflightOwnedResources -State $preflightState
         Write-Host "预检失败：$pf" -ForegroundColor Red
         Add-LedgerRow 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
         exit 4
@@ -1073,7 +1045,10 @@ try {
         if (@($transcript.Calls | Where-Object Server -cne $Executor).Count -gt 0) {
             $policyProblems.Add('unauthorized-mcp-server')
         }
-        if (@($transcript.Calls | Where-Object Outcome -ne 'success').Count -gt 0) {
+        if ('gateway-tool-failure' -in $transcript.Calls.Outcome) {
+            $policyProblems.Add('gateway-tool-failure')
+        }
+        if (@($transcript.Calls | Where-Object { $_.Outcome -notin @('success','gateway-tool-failure') }).Count -gt 0) {
             $policyProblems.Add('mcp-transport-failure')
         }
     }
@@ -1107,7 +1082,7 @@ try {
     if ($partialTrace) {
         $note = $(if ($note) { "$note | partial-trace" } else { 'partial-trace' })
     }
-    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure') {
+    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure|gateway-tool-failure') {
         $note += ' | ' + ($policyProblems -join '+')
     }
 
@@ -1135,13 +1110,8 @@ try {
     if ($failReason) { Write-Host "fail_reason: $failReason" }
     if ($verdict -eq 'paused') {
         Write-Host ''
-        if ($Executor -eq 'mobile') {
-            Write-Host '>>> mobile 危险动作已暂停。PC 输入无法证明真人批准；此暂停件不可用 -Confirm 恢复。' -ForegroundColor Yellow
-        }
-        else {
-            Write-Host '>>> gateway 纯人工前置条件已暂停；恢复交互不批准危险动作，实际危险调用仍逐次使用手机确认卡：' -ForegroundColor Yellow
-            Write-Host ">>>   scripts/dispatch.ps1 -Confirm `"$PauseFile`"" -ForegroundColor Yellow
-        }
+        Write-Host '>>> gateway 纯人工前置条件已暂停；恢复交互不批准危险动作，实际危险调用仍逐次使用手机确认卡：' -ForegroundColor Yellow
+        Write-Host ">>>   scripts/dispatch.ps1 -Confirm `"$PauseFile`"" -ForegroundColor Yellow
     }
     Write-Host "trace: $TraceFile"
     if ($verdict -in @('success', 'paused')) { exit 0 } else { exit 1 }
@@ -1183,6 +1153,8 @@ finally {
         [AgentMobileDispatchJob]::Close($dispatchJobHandle)
         $dispatchJobHandle = [IntPtr]::Zero
     }
+    try { Stop-GatewayPreflightOwnedResources -State $preflightState }
+    catch { Write-Warning "网关预检收尾清理失败：$($_.Exception.Message)" }
     if ($lockFs) { [void](Close-DispatchLockLease -Lease $lockFs) }
     foreach ($key in @($sensitiveChildEnvironment.Keys)) {
         $sensitiveChildEnvironment[$key] = $null

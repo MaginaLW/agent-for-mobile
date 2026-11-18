@@ -6,6 +6,8 @@
 
 ## 默认大脑迁移须核对 trace 消费者（2026-11-12）
 
+- 排查旧台账中的 `mcp-transport-failure` 时，用 `Read-DispatchTraceTranscript` 核对失败调用的结果和错误类型。自 2026-11-18 起，派单入口将有效网关响应中的 `ok=false` 或 `isError=true` 记作 `gateway-tool-failure`，发送请求出错且没有返回结果时记作 `mcp-transport-failure`。离线派单回归覆盖两类错误的退出码和台账标签。
+
 - 适用条件：派单默认大脑或 JSONL schema 变化。只改默认参数和 DryRun 不能证明下游消费者仍可使用。
 - 有效做法：P0 复用 `Read-DispatchTraceTranscript` 解析 Codex 事件，再沿用已有调用顺序、结果数和完成时序判据；fake runner 必须产生真实大脑 schema。下方 Claude CLI 经验保留为已退役路线的历史资料，不作为当前调用指南。
 - 验证依据：本轮 13 个现有定向用例通过，包含 Codex `item.*` 到 manifest 的 Allow/Stale 闭环与 ledger、顺序、JSON/audit 等反例；源码与过滤用例在 `scripts/tests/dispatch-offline.ps1`、`scripts/tests/p0-supervised-runner-offline.ps1`。证据限离线 fake，不代表设备或真实模型验收。
