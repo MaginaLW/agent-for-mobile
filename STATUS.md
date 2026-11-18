@@ -12,9 +12,15 @@
 | 危险动作两段式硬门 | 已实现；本地 AVD 台架上 Allow/Stale 自动化链通过，真人在真机上的 Allow 尚未测；ConfirmOverlay 默认超时 90s | [P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md)、[本地测试台](docs/runbooks/本地测试台.md) |
 | 占位工具 | `notifications_list`、`notification_reply`、`ui_diff`、`app_stop` 已从 `tools/list` 下架，按需实施时再挂回 | [能力现状](docs/knowledge/android/m1b-capabilities.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 
+## 11 月 18 日修复与离线验证
+
+派单预检现在只回收本轮创建的服务和端口转发，前台应用未知时停止重绑。同包切窗只有在新旧窗格都可见时才沿用身份。派单台账区分网关工具失败和传输失败，凭据扫描也能识别紧邻中文或重音字母的 token。[台账判读方法](docs/knowledge/brain/harness.md)
+
+这批修复的最后一个代码提交为 `9c69577`。完整离线检查 9/9 通过，含派单回归 56 项、监督式 runner 89 项。Android Debug 476 项、Release 379 项单测均通过，两个版本的 Lint 和构建也已通过。本轮未做真机验收。
+
 ## 卡在哪
 
-11 月 17 日的一次派单有 3 次网关调用成功、2 次向本机网关发送 HTTP 请求失败。断点尚未定位。11 月 18 日已修复预检对既有服务和端口转发的归属判断、前台未知时仍尝试重绑、同包窗口被替换时沿用旧身份，以及派单台账误把网关工具失败记为传输故障。预检与派单归因已通过离线回归，PA2553 上的表现待验。
+11 月 17 日的一次派单有 3 次网关调用成功、2 次向本机网关发送 HTTP 请求失败。具体断点仍未知。
 
 第一个真实日常任务（小红书搜索并总结 5 条公开笔记，即 M0 任务 3）还没跑通：上次尝试在派单前置检查停在 `gateway_a11y_not_ready`——系统设置里无障碍服务已启用，但没有绑定。原因未知；vivo 安全中心会撤销或解绑第三方无障碍服务，见 [vivo 记录](docs/knowledge/android/vivo-originos.md)。过程见 [小红书记录](docs/runs/2026-11-14-小红书单窗口只读准备.md)。2026-11-16 已定契约：不关闭 `com.vivo.safecenter`，由 `dispatch.ps1` 预检在非设置页前台下执行单次有界无障碍重绑。
 
@@ -22,7 +28,7 @@
 
 1. 在 PA2553 上用对齐后的网关与 `dispatch.ps1` 预检跑通小红书只读任务（M0 任务 3）。
 2. 跑通后，用非微信日常任务集（M0-3 小红书总结、M0-5 京东/淘宝查物流 + 确认卡演练/系统任务；M0-1 蓝牙若触发 `safecenter` 则记录为 ROM 边界或待 Shizuku）完成 PA2553 上的 M1 主验收；微信两项保留后置，不阻塞 M1 收官。
-3. 存量草稿 PR 处置建议：先合入 [#13](https://github.com/MaginaLW/agent-for-mobile/pull/13) → 再合入 [#17](https://github.com/MaginaLW/agent-for-mobile/pull/17)；[#12](https://github.com/MaginaLW/agent-for-mobile/pull/12)（微信 P0 移植，微信当前后置）建议关闭或搁置；之后合入本轮设定对齐分支。
+3. 设定对齐与本轮修复在草稿 PR #18，合入 main 待用户批准。此前的 #13、#17 已合入，微信 P0 移植 #12 已关闭。[PR #18](https://github.com/MaginaLW/agent-for-mobile/pull/18)
 
 ## 2026-11-15 精简
 
