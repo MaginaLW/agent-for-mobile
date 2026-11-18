@@ -176,8 +176,9 @@ class GatewayA11yService : AccessibilityService() {
     fun ctx(caps: List<String>): JSONObject {
         // 同一次已接受事件与拓扑判定共用当前稳定窗口，避免 ctx 拼出跨窗口身份。
         val currentWindows = settledWindows()
-        val topology = classifyWindowTopology(appWindowSlices(currentWindows))
-        val foreground = resolveForegroundOf(currentWindows, topology)
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
+        val foreground = resolveForegroundOf(currentWindows, appSlices, topology)
         return JSONObject()
             .put("app", foreground.packageName)
             .put("activity", foreground.activityName)
@@ -221,7 +222,8 @@ class GatewayA11yService : AccessibilityService() {
      */
     private fun resolveForegroundOf(
         currentWindows: List<AccessibilityWindowInfo>,
-        topology: WindowTopology = classifyWindowTopology(appWindowSlices(currentWindows)),
+        appSlices: List<AppWindowSlice> = appWindowSlices(currentWindows),
+        topology: WindowTopology = classifyWindowTopology(appSlices),
     ): ResolvedForeground {
         if (topology == WindowTopology.CROSS_OR_UNKNOWN_MULTI) {
             return ResolvedForeground(
@@ -232,7 +234,7 @@ class GatewayA11yService : AccessibilityService() {
             )
         }
         val currentWindow = applicationWindow(currentWindows)
-        val rootPackage = runCatching { currentWindow?.root?.packageName?.toString() }.getOrNull()
+        val rootPackage = appSlices.firstOrNull { it.windowId == currentWindow?.id }?.rootPackage
         if (currentWindow != null && !rootPackage.isNullOrEmpty()) {
             val fgWindows = foregroundWindows(currentWindows)
             val bootstrapped = foregroundWindowTracker.bootstrapFromWindow(
@@ -240,11 +242,11 @@ class GatewayA11yService : AccessibilityService() {
                 packageName = rootPackage,
                 windows = fgWindows,
             )
-            if (!bootstrapped) {
+            if (!bootstrapped && topology == WindowTopology.SAME_APP_MULTI) {
                 foregroundWindowTracker.continueSamePackageWindow(
                     applicationWindowId = currentWindow.id,
                     packageName = rootPackage,
-                    windows = fgWindows,
+                    windows = fgWindows.filter { w -> appSlices.any { it.windowId == w.id } },
                 )
             }
         }
@@ -270,10 +272,11 @@ class GatewayA11yService : AccessibilityService() {
     fun foregroundDiagnostics(): JSONObject {
         val currentWindows = windows
         val selected = applicationWindow(currentWindows)
-        val topology = classifyWindowTopology(appWindowSlices(currentWindows))
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
         // 先解析（必要时自举）再读 identity：否则同一次诊断里会出现"resolved 已自举、
         // tracked_identity 仍是 null"这种自相矛盾的输出。
-        val resolved = resolveForegroundOf(currentWindows, topology)
+        val resolved = resolveForegroundOf(currentWindows, appSlices, topology)
         val identity = foregroundWindowTracker.current()
         val windowsJson = JSONArray()
         for (window in currentWindows) {

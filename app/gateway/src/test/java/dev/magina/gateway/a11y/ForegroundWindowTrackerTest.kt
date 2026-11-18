@@ -755,6 +755,21 @@ class ForegroundWindowTrackerTest {
     }
 
     @Test
+    fun `same package replacement cannot continue an identity whose window disappeared`() {
+        val tracker = trackerAtWeChat(listOf(wechat))
+        val replacement = wechat.copy(id = 99)
+        val sibling = wechat.copy(id = 98, isActive = false, isFocused = false)
+
+        for (visible in listOf(listOf(replacement), listOf(replacement, sibling))) {
+            assertFalse(tracker.continueSamePackageWindow(replacement.id, "com.tencent.mm", visible))
+            assertEquals(
+                ForegroundUnknownReason.WINDOW_ID_MISMATCH,
+                resolveForeground(tracker.current(), replacement.id, "com.tencent.mm").reason,
+            )
+        }
+    }
+
+    @Test
     fun `continueSamePackageWindow rejects cross-package switch and preserves window id mismatch`() {
         val tracker = trackerAtWeChat(listOf(wechat))
         val other = ForegroundWindow(id = 99, type = ForegroundWindowType.APPLICATION, isActive = true)

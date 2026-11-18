@@ -237,7 +237,7 @@ internal class ForegroundWindowTracker(
     /**
      * 同应用多窗口（如平行视界左右窗格）焦点切换时，Android 常只移动 active/focused
      * 而不重发带 Activity 的 WINDOW_STATE_CHANGED。仅当当前已建立身份的包名与新活动应用窗口
-     * 自报包名完全一致时，平滑延续 package 级身份并清空旧 Activity；异包切换仍保持 mismatch。
+     * 自报包名完全一致，且两个窗口都在当前可见同包窗格中时，才延续 package 级身份并清空旧 Activity。
      */
     @Synchronized
     fun continueSamePackageWindow(
@@ -248,6 +248,7 @@ internal class ForegroundWindowTracker(
         val current = identity as? ForegroundIdentity.Known ?: return false
         if (packageName.isEmpty()) return false
         if (current.packageName != packageName || current.windowId == applicationWindowId) return false
+        if (windows.none { it.id == current.windowId && it.type == ForegroundWindowType.APPLICATION }) return false
         if (applicationWindow(windows)?.id != applicationWindowId) return false
 
         identity = ForegroundIdentity.Known(
