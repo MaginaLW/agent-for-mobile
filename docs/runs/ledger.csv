@@ -155,3 +155,4 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-18T22:47:21,m1-xhs-tokyo-fixed-20261118,1,codex,,1,252820,643,210432,0,,66,fail,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,reported-fail
 2026-11-18T22:51:03,m1-xhs-tokyo-postcheck-20261118,1,codex,,1,88531,304,73472,0,,58,fail,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,reported-fail
 2026-11-18T22:56:26,m1-xhs-tokyo-notes-20261118,1,codex,,1,61255,341,48000,0,,58,fail,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,reported-fail
+2026-11-18T23:09:02,m1-xhs-tokyo-visible-20261118,1,codex,,1,411075,1212,355200,0,,98,success,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,
