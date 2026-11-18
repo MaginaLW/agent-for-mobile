@@ -9,8 +9,7 @@
 |---|---|---|
 | 1 | 后续实际任务中复核 M1 的无干预完成率 | PA2553 非微信主验收已取得三项业务结果。首轮无干预完成 1/3，历史 M0 为 3/3；后续重点核对小红书连续阅读及冷启动受系统提示阻挡的情况。微信两项后置。[非微信任务对照](runs/2026-11-18-PA2553非微信主验收.md) |
 | 2 | 在后续实际任务中核对 PA2553 无障碍绑定 | 11 月 18 日上述十二次派单均通过预检。若 vivo 再次解绑，记录当时的前台、服务状态和单次重绑结果。[vivo 记录](knowledge/android/vivo-originos.md) |
-| 3 | 处理设定对齐与修复的[草稿 PR #18](https://github.com/MaginaLW/agent-for-mobile/pull/18) | 合入前对候选版本运行 `scripts/check.ps1`，检查通过且获用户批准后合入 main |
-| 4 | P0 真人确认 | 真机上由真人完成 Allow / Deny / Stale 各一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
+| 3 | P0 真人确认 | 真机上由真人按 Allow → Stale → Deny 顺序各完成一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
 
 ## 2. 按需再做（有具体任务需要时才排）
 
