@@ -156,3 +156,7 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-18T22:51:03,m1-xhs-tokyo-postcheck-20261118,1,codex,,1,88531,304,73472,0,,58,fail,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,reported-fail
 2026-11-18T22:56:26,m1-xhs-tokyo-notes-20261118,1,codex,,1,61255,341,48000,0,,58,fail,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,reported-fail
 2026-11-18T23:09:02,m1-xhs-tokyo-visible-20261118,1,codex,,1,411075,1212,355200,0,,98,success,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,
+2026-11-18T23:24:22,m1-jd-logistics,1,codex,,1,55701,157,41472,0,,51,fail,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,reported-fail
+2026-11-18T23:28:41,m1-bluetooth,1,codex,,1,154499,732,143616,0,,66,success,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
+2026-11-18T23:31:43,m1-jd-logistics-foreground,1,codex,,1,103515,491,94336,0,,48,paused,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
+2026-11-18T23:42:05,m1-taobao-logistics,1,codex,,1,278890,1170,262272,0,,90,success,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
