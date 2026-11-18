@@ -7,8 +7,8 @@
 
 | # | 待办 | 完成标准 |
 |---|---|---|
-| 1 | 让网关无障碍服务在 PA2553 上稳定绑定 | 派单前置检查（含非设置页前台单次重绑）不再报 `gateway_a11y_not_ready`；若 vivo 反复解绑，把规律和解法写进 [vivo 记录](knowledge/android/vivo-originos.md) |
-| 2 | 小红书只读任务跑通 | 经 `dispatch.ps1` 搜索并总结 5 条公开笔记，结果和台账行落盘 |
+| 1 | 小红书公开笔记完整验收 | 已分别实测应用内搜索提交、就绪列表读取五条。待空白页恢复后，经 `dispatch.ps1` 搜索并总结该次查询的五条笔记，核对结果和台账。[实测记录](runs/2026-11-18-PA2553小红书只读验收.md) |
+| 2 | 在后续实际任务中核对 PA2553 无障碍绑定 | 11 月 18 日七次派单均通过预检。若 vivo 再次解绑，记录当时的前台、服务状态和单次重绑结果。[vivo 记录](knowledge/android/vivo-originos.md) |
 | 3 | 自研网关完成 PA2553 M1 主验收 | 非微信日常任务（M0-3 小红书、M0-5 京东/淘宝查物流 + 确认卡演练/系统任务；M0-1 若触发 safecenter 则记 ROM 边界或待 Shizuku）同口径对比 M0；微信两项保留后置不阻塞 M1 |
 | 4 | 处理设定对齐与修复的[草稿 PR #18](https://github.com/MaginaLW/agent-for-mobile/pull/18) | 合入前对候选版本运行 `scripts/check.ps1`，检查通过且获用户批准后合入 main |
 | 5 | P0 真人确认 | 真机上由真人完成 Allow / Deny / Stale 各一次，见 [P0 规程](runbooks/P0-safety-hard-gate-smoke.md) |
