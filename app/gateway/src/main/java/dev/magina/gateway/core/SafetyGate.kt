@@ -492,9 +492,12 @@ class SafetyGate(
             toolName == "ui_action" -> {
                 val before = initial.target ?: stale("确认前未解析到 UI 目标")
                 val after = current.target ?: stale("确认后 UI 目标已失效")
+                if (before.bounds != after.bounds) {
+                    stale("确认后 UI 目标边框已变化：${before.bounds} → ${after.bounds}")
+                }
                 if (
                     before.ref != after.ref || before.text != after.text ||
-                    before.description != after.description || before.bounds != after.bounds ||
+                    before.description != after.description ||
                     before.source != after.source || before.windowPane != after.windowPane
                 ) stale("确认后 UI 目标证据已变化")
             }
