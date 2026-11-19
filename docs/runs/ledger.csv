@@ -179,3 +179,4 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-20T00:28:00,wechat-bounds-write,1,codex,,1,81884,423,52480,0,,29,fail,,,executor=gateway | 重叠 OCR 候选不确定，停在覆盖前,reported-fail
 2026-11-20T00:29:43,wechat-bounds-write-verified,1,codex,,1,113854,351,94080,0,,34,success,,,executor=gateway | 局部图再次核实原稿，覆盖一次并恢复输入法,
 2026-11-20T00:30:47,wechat-bounds-click-allow,1,codex,,1,115472,485,107264,0,,34,fail,,,executor=gateway | 真人允许后边框两边各差一像素，实际点击被拦,stale-context
+2026-11-20T07:24:28,wechat-fixed-open,1,codex,,1,68499,361,55168,0,,24,fail,,,executor=gateway | 左窗会话行 OCR 复核未命中，未备稿或请求发送,stale-context
