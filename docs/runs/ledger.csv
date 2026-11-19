@@ -174,3 +174,8 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-19T23:47:46,wechat-draft-prep-inspect,1,codex,,1,108197,303,98432,0,,29,success,,,executor=gateway | 右窗输入栏局部核对成功,
 2026-11-19T23:52:36,wechat-draft-prepare-write,1,codex,,1,73222,417,35968,0,,29,success,,,executor=gateway | 自动覆盖草稿完成，原输入法已恢复,
 2026-11-19T23:53:55,wechat-assisted-draft-allow,1,codex,,1,142818,452,98432,0,,39,fail,,,executor=gateway | 确认卡允许后目标复核拦截，见微信知识页,stale-context
+2026-11-20T00:26:06,wechat-bounds-read-draft,1,codex,,1,67371,340,46336,0,,25,fail,,,executor=gateway | 冷启动只取得包名，初次准备停在核对会话,reported-fail
+2026-11-20T00:27:17,wechat-bounds-inspect-editor,1,codex,,1,98222,355,90496,0,,29,success,,,executor=gateway | 系统焦点与右窗局部图核实上一轮测试草稿,
+2026-11-20T00:28:00,wechat-bounds-write,1,codex,,1,81884,423,52480,0,,29,fail,,,executor=gateway | 重叠 OCR 候选不确定，停在覆盖前,reported-fail
+2026-11-20T00:29:43,wechat-bounds-write-verified,1,codex,,1,113854,351,94080,0,,34,success,,,executor=gateway | 局部图再次核实原稿，覆盖一次并恢复输入法,
+2026-11-20T00:30:47,wechat-bounds-click-allow,1,codex,,1,115472,485,107264,0,,34,fail,,,executor=gateway | 真人允许后边框两边各差一像素，实际点击被拦,stale-context
