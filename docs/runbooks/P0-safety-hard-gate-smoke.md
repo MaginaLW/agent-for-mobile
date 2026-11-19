@@ -1,6 +1,6 @@
 # P0 危险动作统一硬门 · Agent 主控监督式真机 smoke
 
-> 状态：runner 与 gateway 配套能力已完成离线实现；Allow、Stale 尚未独立真机验收。开发会话不直接操作手机，真机验收必须在独立受控执行会话中进行。
+> 本规程针对微信「文件传输助手」。PA2553 上的微信发送链仍待现场验收。2026-11-19 已在同一平板的本地测试 App 上核实 Allow、Stale、Deny 三种结果，实测效果为按钮的回调次数。开发会话不直接操作手机，真机验收必须在独立受控执行会话中进行。[本地测试 App 验收记录](../runs/2026-11-19-PA2553本地确认卡验收.md)
 
 2026-11-13 后续安排：用户采纳通用能力先行、微信延后。自有AVD的通用Stale子项另在[本地台架](本地测试台.md)及[本批记录](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/runs/2026-11-13-通用失败与失效验证.md)准备；仅debug的精确自有靶标click/stale控制复用原确认后的HOME切换和SafetyGate重验，不替代本规程微信Enter、三腿及适用真机证据，也不改变生产确认规则。Android本地回调0与软件handler零调用分别核定，不能把合成结果写作微信未发送。
 
@@ -124,8 +124,7 @@ runner 核对输入长度、SHA-256 以及 focused-input 证据；用户无需�
 
 批次 2 的通知允许和锁屏方案是历史结论，不适用于现行链路；详情见
 [通知栏审批布局 spec](../specs/2026-08-01-通知栏审批布局-design.md) 和
-[backlog 的批次 2 历史](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/backlog.md#批次-1--2--3--已验收的手机历史)。现行 Allow、Stale
-尚未独立真机验收。
+[backlog 的批次 2 历史](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae376217fc75b13094b2b04858ab93e692a29/docs/backlog.md#批次-1--2--3--已验收的手机历史)。本规程中微信 Allow、Stale 的消息证据仍待真机验证。
 
 ## 4. 真实业务路径与 ADB 边界
 
