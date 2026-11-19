@@ -9,7 +9,7 @@
 |---|---|---|
 | 网关 App（无障碍 + MCP HTTP + 工具 + 安全门） | 历史手机上跑通；PA2553 上确认卡 overlay、开机恢复、中文 `ime_commit` 已真机验证；2026-11-16 对齐普通具名点击、常规回车、黑名单出站与同应用平行视界规则（待真机验收） | [overlay 记录](docs/runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[开机恢复](docs/runs/2026-11-12-网关开机恢复离线.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 | 派单（Codex CLI + gateway） | 可用；入口 `scripts/dispatch.ps1`（固定 `codex + gateway`），内建预检与自启恢复 | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
-| 危险动作两段式硬门 | 已实现；本地 AVD 台架上 Allow/Stale 自动化链通过，真人在真机上的 Allow 尚未测；ConfirmOverlay 默认超时 90s | [P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md)、[本地测试台](docs/runbooks/本地测试台.md) |
+| 危险动作两段式硬门 | PA2553 本地测试按钮的真人 Allow、Stale、Deny 均通过；微信发送链待验。ConfirmOverlay 默认超时 90s | [平板实测](docs/runs/2026-11-19-PA2553本地确认卡验收.md)、[微信 P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md) |
 | 占位工具 | `notifications_list`、`notification_reply`、`ui_diff`、`app_stop` 已从 `tools/list` 下架，按需实施时再挂回 | [能力现状](docs/knowledge/android/m1b-capabilities.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 
 ## 11 月 18 日修复与离线验证
@@ -36,14 +36,14 @@
 
 网关、窗口识别与派单修复已合入 `main`，合并提交为 `70d50a5`。候选 `ad0cf1e` 的完整离线检查 9/9 通过，含 Android Debug 477 项、Release 380 项单测及两个版本的 Lint 和构建。合并提交与受测候选的文件树一致。[PR #18](https://github.com/MaginaLW/agent-for-mobile/pull/18)
 
-## PA2553 本地测试 App 确认卡准备（2026-11-19）
+## PA2553 本地测试 App 确认卡验收（2026-11-19）
 
-在机网关与 M1 真机验收构建一致。已装测试 App 的 APK 摘要与历史提交 `c6225db` 的制品一致，签名证书 SHA-256 以 `41FAFB2C` 开头。该版本缺少记录页面实例和回调次数的 `stale-conversation` 页面。当前源码的测试 App 已离线构建，未声明 Android 权限。项目内查到的三份 debug 签名库均与在机证书不匹配；按现场约定在安装前停止。允许、上下文失效、拒绝三项均未派单，平板保留原有测试 App。[历史靶标构建与真机摘要](https://github.com/MaginaLW/agent-for-mobile/blob/e1bae37/docs/runs/2026-11-11-离线减负实施.md)
+旧靶标签名曾阻塞升级。用户批准换签替换后，平板已保留新版，匹配的测试签名库已受限保管。现场用户在网关卡上允许后，合成按钮恰好执行一次；允许后上下文变化及主动拒绝两种情况下，独立回调数均保持 0，拦截后均无工具续调。三次试验使用同一已验网关。[证据与准备失败记录](docs/runs/2026-11-19-PA2553本地确认卡验收.md)
 
 ## 下一步
 
 1. 在后续实际任务中核对小红书从提交搜索到读完五条的连续性、应用启动提示与无障碍绑定，继续积累全程无需现场协助的样本。微信两项后置。
-2. P0 真机确认卡仍待现场验证 Allow、Stale、Deny 三种结果。[监督式验收规程](docs/runbooks/P0-safety-hard-gate-smoke.md)
+2. 微信任务恢复时，单独验证文件传输助手发送的 Allow、Stale、Deny 及消息后验。[监督式验收规程](docs/runbooks/P0-safety-hard-gate-smoke.md)
 
 ## 2026-11-15 精简
 
