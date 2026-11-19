@@ -169,3 +169,4 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-19T21:57:38,p0-tablet-local-deny,1,codex,,1,54365,234,47360,0,,37,fail,,,executor=gateway | gateway-tool-failure | 见 2026-11-19-PA2553本地确认卡验收.md,safety-denied
 2026-11-19T22:23:55,xhs-tokyo-five-unassisted,1,codex,,1,322497,1114,272512,0,,73,success,,,executor=gateway | 见 2026-11-18-PA2553小红书只读验收.md,
 2026-11-19T23:06:53,p0-wechat-right-pane-readonly,1,codex,,1,89050,671,66944,0,,38,fail,,,executor=gateway | gateway-tool-failure | 见微信知识页横屏右窗只读定位,not-found
+2026-11-19T23:23:24,p0-wechat-right-pane-draft-send-readonly,1,codex,,1,73117,537,56576,0,,29,success,,,executor=gateway | 见微信知识页横屏右窗只读定位,
