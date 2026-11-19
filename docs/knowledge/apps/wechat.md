@@ -49,6 +49,8 @@
 
 回执中的点击引用与右窗「发送」的 OCR 引用一致。按该构建源码，确认前后解析同一 OCR 引用时，标签、描述、来源和窗口归属沿用缓存，重新识别会更新文字边框。结合实际错误分支，可将差异定位到两次识别所得的边框；当时没有记录两组坐标，无法判断控件是否实际移动，也无法量化识别偏差。[OCR 引用复核](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt) · [确认后目标比较](../../../app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt)
 
+11 月 20 日离线复查三次派单，键盘高度均为 781 像素，`ui_find` 初次定位「发送」所得的右窗边框均为 `[2674,1097][2751,1135]`。发送试验最后一次取图与拦截返回时，会话 Activity、同应用双窗状态和键盘高度也一致。两次采样之间的布局仍未知。确认前和确认后会各自重新识别文字，后一次还会以上一次识别框为中心裁图。比较两次复核要读取这两个重新识别的框。像素偏差的大小本身不足以判定原因。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。

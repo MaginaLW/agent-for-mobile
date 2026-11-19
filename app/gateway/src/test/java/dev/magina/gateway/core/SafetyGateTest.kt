@@ -649,6 +649,32 @@ class SafetyGateTest {
     }
 
     @Test
+    fun `approved OCR click reports both bounds on single pixel drift before execution`() {
+        val target = SafetyTarget(
+            ref = "send-ref", text = "发送", description = "private description",
+            bounds = "[40,60][90,85]", source = "ocr", windowPane = "right",
+        )
+        val moved = target.copy(bounds = "[40,60][91,85]")
+        val contexts = listOf(target, moved).map {
+            initialContext.copy(sameAppMultiWindow = true, target = it)
+        }.iterator()
+        var approvals = 0
+        val gate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { approvals++; true },
+            contextProvider = { contexts.next() },
+            onExecutionFailure = { fail("复核拦截不属于点击执行失败") },
+        )
+        val click = JSONObject().put("ref", target.ref).put("action", "click")
+
+        val error = expectGatewayError(ErrorCode.E_STALE_REF) {
+            gate.execute("ui_action", Level.W, click) { _, _ -> fail("目标变化后不得点击") }
+        }
+        assertEquals(1, approvals)
+        assertEquals("确认后 UI 目标边框已变化：${target.bounds} → ${moved.bounds}", error.message)
+    }
+
+    @Test
     fun `executor failure is recorded exactly once`() {
         var failureRecords = 0
         val executionError = GatewayError(ErrorCode.E_VERIFY_FAIL, "执行失败")
