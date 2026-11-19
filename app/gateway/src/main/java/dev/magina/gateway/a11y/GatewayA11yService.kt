@@ -1043,7 +1043,8 @@ class GatewayA11yService : AccessibilityService() {
                 channel = "vision", fallback = "ui_snapshot 重新定位后再操作",
             )
         val b = Rect(hit.bounds).apply { offset(crop.left, crop.top) }
-        if (!refs.replace(ref, e.copy(bounds = b))) throw GatewayError(
+        // 同一 ref 始终以快照框裁图。每次返回本帧实测的框，供确认前后和落点复核比较。
+        if (refs.current(ref) !== e) throw GatewayError(
             ErrorCode.E_STALE_REF, "OCR ref $ref 已被新 snapshot 取代",
             channel = "vision", fallback = "ui_snapshot 重新定位",
         )
