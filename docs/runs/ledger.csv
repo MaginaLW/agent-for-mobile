@@ -171,3 +171,6 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-19T23:06:53,p0-wechat-right-pane-readonly,1,codex,,1,89050,671,66944,0,,38,fail,,,executor=gateway | gateway-tool-failure | 见微信知识页横屏右窗只读定位,not-found
 2026-11-19T23:23:24,p0-wechat-right-pane-draft-send-readonly,1,codex,,1,73117,537,56576,0,,29,success,,,executor=gateway | 见微信知识页横屏右窗只读定位,
 2026-11-19T23:36:12,p0-wechat-right-click-allow,1,codex,,1,74354,270,65664,0,,23,fail,,,executor=gateway | gateway-tool-failure | 见微信知识页横屏发送确认卡试验,not-found
+2026-11-19T23:47:46,wechat-draft-prep-inspect,1,codex,,1,108197,303,98432,0,,29,success,,,executor=gateway | 右窗输入栏局部核对成功,
+2026-11-19T23:52:36,wechat-draft-prepare-write,1,codex,,1,73222,417,35968,0,,29,success,,,executor=gateway | 自动覆盖草稿完成，原输入法已恢复,
+2026-11-19T23:53:55,wechat-assisted-draft-allow,1,codex,,1,142818,452,98432,0,,39,fail,,,executor=gateway | 确认卡允许后目标复核拦截，见微信知识页,stale-context
