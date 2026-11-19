@@ -33,6 +33,12 @@
 
 本次宿主基于 `7ebafb8`，已装网关摘要与 `a9aee63` 构建一致。一次前台查询和两次不滚动的定向查找均成功，台账为 `success`，耗时 29 秒。执行器没有点击、输入或发送。[派单台账](../../runs/ledger.csv)
 
+### 横屏发送确认卡试验
+
+现场用户随后授权向文件传输助手发送一条指定测试文字。点击前，执行器确认微信处于同应用双窗，右窗顶部的会话标题精确匹配；查找约定的草稿文字时，`ui_find` 返回 `E_NOT_FOUND`，派单随即结束。该回执只能说明本次查询未匹配到标记，草稿的实际内容及未匹配原因仍未知。
+
+宿主基于 `b8c5ed7`，在机网关与 `a9aee63` 的已验 APK 摘要一致。三次执行器调用各对应同一网关进程中的一条新增审计记录。发送点击 0 次，确认卡 0 次，本轮未发送测试消息。台账保留 `fail / not-found`，用时 23 秒。[派单台账](../../runs/ledger.csv)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
