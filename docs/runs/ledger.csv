@@ -160,3 +160,10 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-18T23:28:41,m1-bluetooth,1,codex,,1,154499,732,143616,0,,66,success,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
 2026-11-18T23:31:43,m1-jd-logistics-foreground,1,codex,,1,103515,491,94336,0,,48,paused,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
 2026-11-18T23:42:05,m1-taobao-logistics,1,codex,,1,278890,1170,262272,0,,90,success,,,executor=gateway | 见 2026-11-18-PA2553非微信主验收.md,
+2026-11-19T21:46:57,p0-tablet-local-routeallow,1,codex,,1,52870,206,33152,0,,21,success,,,executor=gateway | 见 2026-11-19-PA2553本地确认卡验收.md,
+2026-11-19T21:49:58,p0-tablet-local-allow,1,codex,,1,127493,378,119680,0,,102,success,,,executor=gateway | 见 2026-11-19-PA2553本地确认卡验收.md,
+2026-11-19T21:50:49,p0-tablet-local-routestale,1,codex,,1,52839,228,45824,0,,21,fail,,,executor=gateway | 见 2026-11-19-PA2553本地确认卡验收.md,reported-fail
+2026-11-19T21:53:12,p0-tablet-local-routestalefresh,1,codex,,1,52899,208,45824,0,,20,success,,,executor=gateway | 见 2026-11-19-PA2553本地确认卡验收.md,
+2026-11-19T21:54:45,p0-tablet-local-stale,1,codex,,1,54386,248,47104,0,,31,fail,,,executor=gateway | gateway-tool-failure | 见 2026-11-19-PA2553本地确认卡验收.md,stale-context
+2026-11-19T21:55:50,p0-tablet-local-routedeny,1,codex,,1,52946,198,45824,0,,22,success,,,executor=gateway | 见 2026-11-19-PA2553本地确认卡验收.md,
+2026-11-19T21:57:38,p0-tablet-local-deny,1,codex,,1,54365,234,47360,0,,37,fail,,,executor=gateway | gateway-tool-failure | 见 2026-11-19-PA2553本地确认卡验收.md,safety-denied
