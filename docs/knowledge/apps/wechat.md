@@ -141,6 +141,16 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 安装随后完成，宿主和独立读回都核实了候选 APK 摘要。四项系统设置、网关服务和端口转发与入场一致。另一次组件读回确认，vivo 输入法原有无障碍服务仍启用，且系统客户端持有活动 Binder。本轮没有再次写入无障碍服务清单。
 
+### 免安装复测返回 no_verified_geometry
+
+2026-11-20，PA2553 直接使用已验签的 `e994c71`。切换网关输入法前后各用两次读取核实同一活动右窗及「文件传输助手」标题。第五次 `keyboard_state(probe_editor_origin=true)` 查询返回空原点，原因是 `no_verified_geometry`。派单用时 26 秒，安装、微信点击、输入和发送次数均为零。
+
+按受测源码，这次查询已选中输入连接，完成时该连接仍通过校验。此原因涵盖返回状态不成功、几何对象缺失、字符范围非空及坐标变换无法验证等情形。回执未细分这些情况，不能据此确定微信采用了哪种实现，也未取得可用于点击的编辑框四边。[受测探针](https://github.com/MaginaLW/agent-for-mobile/blob/e994c716a8fa7b6b22a1011c976b7b08bc972df6/app/gateway/src/main/java/dev/magina/gateway/ime/EditorOriginProbe.java)
+
+宿主已恢复默认输入法和启用的输入法清单，网关前台服务及转发均已回收。独立读回发现无障碍服务清单仅缺入场时启用的 vivo 输入法服务。按授权写回该项一次后，四项设置逐字匹配入场值。随后独立读回确认系统客户端已收到该组件的 Binder，`hasBound=true`。本次记录不能确定哪一方移除了该项。
+
+重放既有 Android 16 合成回执时只比较四边。忽略原点字段后，4/4 个矩形与靶应用实测边界一致，均与同原点但尺寸不同的对照框有别。把前一阶段的矩形代入下一阶段，0/3 匹配。把上一次聚焦同一框时的旧矩形代入再次聚焦的阶段，2/2 仍匹配。即使尺寸和位置完全相符，仍需独立证据证明回调来自这一次输入连接。这是对保存读数的重放，真机上是否会迟到仍未知。[合成场景](../../runs/fixtures/editor-origin/README.md)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。

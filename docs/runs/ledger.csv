@@ -192,3 +192,4 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-20T20:07:34,wechat-editor-origin,1,codex,,0,0,0,0,0,,0,preflight-fail,,,executor=gateway | 旧网关预检未确认前台，零业务调用、零安装、零切换；独立收尾核实原设置、服务、转发和 APK,preflight
 2026-11-20T20:37:59,wechat-editor-origin,1,codex,,1,117590,303,98048,0,,82,fail,,,executor=gateway | 五次读取末次原点不可用；同签候选已核验，输入法及服务与转发已恢复，一项非网关无障碍服务缺失,verify-fail
 2026-11-20T21:36:22,wechat-editor-origin-reason,1,codex,,1,198385,538,182528,0,,398,fail,,,executor=gateway | 两次读取核实微信右窗和标题，等待候选就绪超时，未切换输入法或执行原点查询,verify-fail
+2026-11-20T22:11:08,wechat-editor-origin-installed,1,codex,,1,91122,258,85120,0,,26,fail,,,executor=gateway | 免安装五次读取，原点为空且原因为 no_verified_geometry；补回原有 vivo 服务后四项设置与资源一致，系统绑定已核实,verify-fail
