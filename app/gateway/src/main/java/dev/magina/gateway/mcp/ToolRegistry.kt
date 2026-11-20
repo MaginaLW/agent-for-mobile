@@ -116,8 +116,10 @@ object ToolRegistry {
         ) {
             SystemTools.foregroundApp()
         },
-        ToolSpec("keyboard_state", "软键盘可见性与高度（坐标错位主因的感知面）。", Level.R, schema(emptyList())) {
-            SystemTools.keyboardState()
+        ToolSpec("keyboard_state", "读取软键盘可见性与高度。", Level.R, schema(emptyList(),
+            "probe_editor_origin" to prop("boolean", "可选。用已在位的网关输入法查询当前编辑器的屏幕原点；原点只供诊断。"),
+        )) {
+            SystemTools.keyboardState(it.opt("probe_editor_origin") == true)
         },
         ToolSpec(
             "app_launch", "按别名或包名启动 app，执行后验前台。",

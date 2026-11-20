@@ -2482,20 +2482,82 @@ class Adb {
         $oldMode = $env:DISPATCH_TEST_LANDSCAPE
         $caps = $gatewayStub.DefaultCapsJson
         $receiptFile = Join-Path $SentinelDir 'landscape-receipts.jsonl'
-        $box = @(500, 390, 750, 426)
-        $observations = @(
-            @{ tool='foreground_app'; args=@{}; data=@{ package='com.tencent.mm'; foreground_known=$true;
-                window_topology='same_app_multi'; selected_window_id=7; windows=@(@{id=7; type='application'; active=$true; focused=$true}) } },
-            @{ tool='ui_find'; args=@{text='文件传输助手'}; data=@{matches=@(@{pane='right'; window_id=7; text='文件传输助手'; bounds=@(510,20,610,55)})} },
-            @{ tool='keyboard_state'; args=@{}; data=@{visible=$false; height=0} },
-            @{ tool='ui_find'; args=@{role='input'}; data=@{ focused_input_id='editor-1'; focused_input_bounds=$box;
-                matches=@(@{role='input'; source='a11y'; flags='EF'; pane='right'; window_id=7; bounds=$box}) } }
-        )
+        function New-EditorObservations {
+            param([switch]$KeyboardVisible, [switch]$Resized)
+            $editorBox = @(500,390,750,426)
+            $screenHeight = if ($KeyboardVisible) { 620 } else { 440 }
+            $paneBottom = if ($Resized) { 440 } else { $screenHeight }
+            $windows = @(
+                @{id=9; type='application'; root_package='com.tencent.mm'; active=$false; focused=$false; bounds=@(0,0,290,$paneBottom)},
+                @{id=7; type='application'; root_package='com.tencent.mm'; active=$true; focused=$true; bounds=@(300,0,800,$paneBottom)}
+            )
+            $imeHeight = 0
+            if ($KeyboardVisible) {
+                $imeHeight = 180
+                $windows += @{id=11; type='input_method'; bounds=@(0,440,800,620)}
+            }
+            $observed = @(
+                @{ tool='foreground_app'; args=@{}; data=@{ package='com.tencent.mm'; foreground_known=$true; revision=42;
+                    window_topology='same_app_multi'; selected_window_id=7; windows=$windows } },
+                @{ tool='ui_find'; args=@{text='文件传输助手'}; data=@{screen_width=800; screen_height=$screenHeight; matches=@(
+                    @{pane='left'; window_id=9; text='文件传输助手'; bounds=@(10,100,120,135)},
+                    @{pane='right'; window_id=7; text='文件传输助手'; bounds=@(510,20,610,55)})} },
+                @{ tool='keyboard_state'; args=@{}; data=@{visible=[bool]$KeyboardVisible; height=$imeHeight} },
+                @{ tool='ui_find'; args=@{role='input'}; data=@{screen_width=800; screen_height=$screenHeight;
+                    focused_input_id='7||android.widget.EditText|com.tencent.mm|500,390,750,426'; focused_input_bounds=$editorBox;
+                    matches=@(@{role='input'; source='a11y'; flags='EF'; pane='right'; window_id=7; bounds=$editorBox}) } }
+            )
+            for ($n = 0; $n -lt $observed.Count; $n++) {
+                $observed[$n].ctx = @{revision=42; app='com.tencent.mm'; foreground_known=$true; window_topology='same_app_multi';
+                    keyboard=@{visible=[bool]$KeyboardVisible; height=$imeHeight}}
+                $observed[$n].audit_id = "audit-$n"
+            }
+            return $observed
+        }
+        function Test-ObservedEditor($Observed) {
+            $calls = foreach ($o in $Observed) {
+                [pscustomobject]@{Server='gateway'; Outcome='success'; Name=$o.tool; Input=$o.args;
+                    ResultEnvelope=@{data=$o.data; ctx=$o.ctx; audit_id=$o.audit_id}}
+            }
+            return Test-LandscapeEditorReceipt -Calls $calls
+        }
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        $observations = New-EditorObservations
+        Assert-True (Test-ObservedEditor $observations) '键盘收起的原生编辑栏未通过。'
+        Assert-True (Test-ObservedEditor (New-EditorObservations -KeyboardVisible)) '键盘覆盖右窗时未使用 IME 上边界。'
+        Assert-True (Test-ObservedEditor (New-EditorObservations -KeyboardVisible -Resized)) '已缩窗时重复扣除了键盘高度。'
+        foreach ($bad in @(
+            @{name='右窗缺框'; change={ $badReads[0].data.windows[1].Remove('bounds') }},
+            @{name='两个应用窗重叠'; change={ $badReads[0].data.windows[0].bounds[2]=550 }},
+            @{name='左窗错误地被选中'; change={ $badReads[0].data.selected_window_id=9 }},
+            @{name='异包双窗'; change={ $badReads[0].data.windows[0].root_package='other.app' }},
+            @{name='混窗标题'; change={ $badReads[1].data.matches[1].window_id=9 }},
+            @{name='标题越过分界'; change={ $badReads[1].data.matches[1].bounds[0]=260 }},
+            @{name='标题在消息区'; change={ $badReads[1].data.matches[1].bounds=@(510,130,610,155) }},
+            @{name='重复标题'; change={ $badReads[1].data.matches += $badReads[1].data.matches[1] }},
+            @{name='重复编辑框'; change={ $badReads[3].data.matches += $badReads[3].data.matches[0] }},
+            @{name='编辑框在消息区'; change={
+                $badReads[3].data.matches[0].bounds=$badReads[3].data.focused_input_bounds=@(500,270,750,306)
+                $badReads[3].data.focused_input_id='7||android.widget.EditText|com.tencent.mm|500,270,750,306' }},
+            @{name='编辑框在键盘下'; change={
+                $badReads[3].data.matches[0].bounds=$badReads[3].data.focused_input_bounds=@(500,470,750,506)
+                $badReads[3].data.focused_input_id='7||android.widget.EditText|com.tencent.mm|500,470,750,506' }},
+            @{name='同框焦点来自其他窗'; change={ $badReads[3].data.focused_input_id='9||android.widget.EditText|com.tencent.mm|500,390,750,426' }},
+            @{name='查找回执过期'; change={ $badReads[3].ctx.revision=41 }},
+            @{name='前台采样中页面换代'; change={ $badReads[0].data.revision=41 }},
+            @{name='缺少页面修订'; change={ $badReads[1].ctx.Remove('revision') }},
+            @{name='缺少实际键盘窗'; change={ $badReads[0].data.windows=$badReads[0].data.windows[0..1] }},
+            @{name='键盘高度矛盾'; change={ $badReads[2].data.height=179 }}
+        )) {
+            $badReads = New-EditorObservations -KeyboardVisible
+            & $bad.change
+            Assert-True (-not (Test-ObservedEditor $badReads)) "误接纳：$($bad.name)"
+        }
         $receiptLines = for ($i = 0; $i -lt $observations.Count; $i++) {
             $observation = $observations[$i]
             $item = @{id="receipt-$i"; type='mcp_tool_call'; server='gateway'; tool=$observation.tool; arguments=$observation.args}
             @{type='item.started'; item=$item} | ConvertTo-Json -Depth 12 -Compress
-            $payload = @{ok=$true; data=$observation.data} | ConvertTo-Json -Depth 10 -Compress
+            $payload = @{ok=$true; data=$observation.data; ctx=$observation.ctx; audit_id=$observation.audit_id} | ConvertTo-Json -Depth 10 -Compress
             $item.result = @{content=@(@{type='text'; text=$payload})}
             $item.status = 'completed'
             @{type='item.completed'; item=$item} | ConvertTo-Json -Depth 12 -Compress

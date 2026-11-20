@@ -1,5 +1,6 @@
 package dev.magina.gateway.ime
 
+import android.graphics.PointF
 import android.inputmethodservice.InputMethodService
 import android.os.SystemClock
 import android.view.KeyCharacterMap
@@ -8,6 +9,8 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
 
 internal class ImeSessionIdGenerator {
@@ -219,6 +222,25 @@ object ImeBridge {
     }
 
     private fun ic(): InputConnection? = if (active) connection?.invoke() else null
+
+    /** 在 IME 主线程发起一次只读几何查询。重启、换框和迟到的回调都不能沿用旧连接。 */
+    internal fun requestEditorOrigin(expected: ImeSessionIdentity, executor: Executor): CompletableFuture<PointF?> {
+        val result = CompletableFuture<PointF?>()
+        executor.execute {
+            try {
+                val target = synchronized(sessionLock) {
+                    val type = editorContract?.inputType ?: android.text.InputType.TYPE_NULL
+                    if (type == android.text.InputType.TYPE_NULL || session() != expected) null else ic()
+                }
+                EditorOriginProbe.request(target, executor, {
+                    synchronized(sessionLock) { !result.isDone && session() == expected && ic() === target }
+                }) { point -> result.complete(point) }
+            } catch (error: RuntimeException) {
+                result.completeExceptionally(error)
+            }
+        }
+        return result
+    }
 
     /** 只暴露连接是否仍可用，不暴露 InputConnection 给宏状态机执行任意编辑动作。 */
     fun hasInputConnection(): Boolean = ic() != null

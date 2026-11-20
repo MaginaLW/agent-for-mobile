@@ -103,6 +103,14 @@
 
 派单耗时 27 秒，整个准备入口用时 32.8 秒。入口前后在同一设备锁内独立比对，网关前台服务和对应端口转发两次均不存在，默认输入法、已启用输入法、无障碍服务清单及总开关逐项一致。此次无须补做清理，业务台账保留 `fail / not-found`。[派单台账](../../runs/ledger.csv)
 
+### 缺少原生编辑框时怎样核对焦点
+
+PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认会话窗口。Android 16 的标准输入法诊断还可能显示当前服务的 View。该 View 的四边相对父视图，换算到屏幕还涉及祖先滚动、变换和窗口偏移。全窗口编码转储会遍历其他窗口，标准 TextView 也会编码正文。横屏准备入口继续使用定向查找。[Android 16 View 实现](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/view/View.java) · [TextView 实现](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/widget/TextView.java)
+
+候选网关提供可选的 `keyboard_state(probe_editor_origin=true)`。Android 14 及以上、网关输入法已在位且活动连接属于前台应用时，该调用触发一次屏幕外的空区域查询。网关只接受空字符范围，从返回矩阵映射编辑器局部原点，并在回调时复核连接及会话世代。最多等待 2 秒，首次失败或超时即结束。有效结果含会话 ID 和屏幕坐标，无法复核时 `ime_editor_origin` 为空。普通 `keyboard_state` 仍只查询键盘显隐与高度。[网关几何查询](../../../app/gateway/src/main/java/dev/magina/gateway/ime/EditorOriginProbe.java)
+
+这个点可以与独立取得的候选编辑框比对。一个点没有宽、高，同原点的两个候选也无法用它区分。自动就位仍需右窗唯一编辑框和系统窗口归属；不能以该点生成点击引用。切换或恢复输入法后要重新取证。原生回执现在同时核对页面修订号、左右窗口边界、标题、可用底部及编辑框身份。上下各五分之一和距底边最多一行是当前宿主对横屏布局的假设，仍待平板标定。[宿主核对](../../../scripts/lib/dispatch-landscape.ps1)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
