@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>横屏会话合成靶标</title>
+<style>
+  * { box-sizing: border-box }
+  body { margin: 0; font: 16px system-ui, sans-serif; color: #24282c }
+  main { display: grid; grid-template-columns: 32% 1fr; height: 100vh; --ime: 0px }
+  main.open { --ime: 32vh }
+  nav { background: #fafafa; padding: 20px 8px; border-right: 1px solid #bac1c6 }
+  button, header { padding: 8px 16px; font: inherit }
+  nav button { width: 100%; text-align: left }
+  section { position: relative; overflow: hidden }
+  header { height: 48px; text-align: center; background: #f5f5f5 }
+  canvas { position: absolute; top: 48px; left: 0; width: 100%; height: calc(100% - 48px) }
+  footer { position: absolute; inset: auto 8px calc(var(--ime) + 8px); display: flex;
+           justify-content: space-between; pointer-events: none }
+  footer button { pointer-events: auto }
+  #voice-hint { margin: auto; min-width: 50% }
+  aside { position: absolute; bottom: 0; width: 100%; height: var(--ime); background: #cbd3d9;
+          text-align: center; overflow: hidden }
+</style>
+<main>
+  <nav><button id="row">文件传输助手</button></nav>
+  <section>
+    <header id="title" tabindex="-1">文件传输助手</header>
+    <canvas tabindex="-1"></canvas>
+    <footer>
+      <button id="voice">语音</button><button id="voice-hint" hidden>可按住转文字</button>
+      <button id="more">更多</button><button id="send" hidden>发送</button>
+    </footer>
+    <aside>合成键盘</aside>
+  </section>
+</main>
+<script>
+"use strict";
+const main = document.querySelector("main");
+const canvas = document.querySelector("canvas");
+const ctx = canvas.getContext("2d", {willReadFrequently: true});
+const row = document.querySelector("#row");
+const title = document.querySelector("#title");
+const voice = document.querySelector("#voice");
+const voiceHint = document.querySelector("#voice-hint");
+const more = document.querySelector("#more");
+const send = document.querySelector("#send");
+const params = new URL(location.href).searchParams;
+let layout = params.get("field") || "single"; // single, double, missing, voice
+let draft = params.has("draft") ? "本地合成草稿" : "";
+let field, focusClicks = 0, edits = 0, sends = 0, navigations = 0;
+
+function draw() {
+  const area = canvas.getBoundingClientRect();
+  canvas.width = Math.round(area.width);
+  canvas.height = Math.round(area.height);
+  ctx.fillStyle = "#e5e8ea";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "white";
+  ctx.fillRect(16, 16, 150, 44); // 消息气泡也有白色背景
+  ctx.fillStyle = "#24282c";
+  ctx.font = "16px sans-serif";
+  ctx.fillText("合成历史消息", 24, 44);
+  field = undefined;
+  const voiceMode = layout === "voice";
+  voiceHint.hidden = !voiceMode;
+  voice.hidden = voiceMode;
+  more.hidden = voiceMode || draft !== "";
+  send.hidden = voiceMode || draft === "";
+  if (voiceMode) return;
+  const action = (draft ? send : more).getBoundingClientRect();
+  const left = Math.ceil(voice.getBoundingClientRect().right - area.left) + 10;
+  const right = Math.floor(action.left - area.left) - 10;
+  const top = Math.ceil(action.top - area.top) + 3;
+  const bottom = Math.floor(action.bottom - area.top) - 3;
+  if (layout === "missing" || right <= left || bottom <= top) return;
+  const end = layout === "double" ? Math.floor((right + left) / 2) - 4 : right;
+  field = {left, right: end, top, bottom};
+  ctx.fillStyle = "white";
+  ctx.fillRect(left, top, end - left, bottom - top);
+  if (layout === "double") ctx.fillRect(end + 8, top, right - end - 8, bottom - top);
+  ctx.fillStyle = "#24282c";
+  ctx.fillText(draft, left + 6, bottom - 5);
+}
+
+row.onclick = () => { navigations++; title.focus(); };
+send.onclick = () => { sends++; };
+canvas.onmousedown = event => event.preventDefault(); // 消息区域的默认点击不取得编辑焦点。
+canvas.onclick = event => {
+  const bounds = canvas.getBoundingClientRect();
+  const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+  if (field && x >= field.left && x < field.right && y >= field.top && y < field.bottom) {
+    focusClicks++;
+    canvas.focus();
+    main.classList.add("open");
+    draw();
+  }
+};
+canvas.onkeydown = event => {
+  if (event.key === "Escape") main.classList.remove("open");
+  else if (event.key.length === 1) { draft += event.key; edits++; }
+  draw();
+};
+main.classList.toggle("open", params.get("keyboard") === "open");
+if (params.get("start") === "right") title.focus(); else row.focus();
+draw();
+window.addEventListener("resize", draw);
+</script>
+<script src="landscape-composer-replay.js"></script>
+</html>

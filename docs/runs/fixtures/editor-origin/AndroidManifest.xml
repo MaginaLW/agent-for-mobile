@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.magina.editororigin">
+    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35" />
+    <application android:debuggable="true" android:label="本地输入边界实验" android:allowBackup="false">
+        <activity android:name=".OriginProbeActivity" android:exported="true" />
+        <service android:name=".OriginProbeIme" android:process=":ime" android:exported="true"
+                 android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+        <service android:name=".BoundsProbeIme" android:process=":ime" android:exported="true"
+                 android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+    </application>
+</manifest>

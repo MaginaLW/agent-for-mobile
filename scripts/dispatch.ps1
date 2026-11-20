@@ -22,6 +22,8 @@ param(
     [ValidateSet('codex')][string]$Brain = 'codex',
     [ValidateSet('gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')][string]$ExpectedDeviceSerial,
+    [ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedGatewaySha256,
     [switch]$DryRun
 )
 
@@ -171,6 +173,14 @@ elseif ($Task) {
     if (-not $Slug) { $Slug = 'adhoc' }
 }
 else { throw '需要 -Task / -TaskFile / -Confirm 之一。' }
+
+$landscapePrepare = $TaskText -cmatch '\A<!-- dispatch: PA2553-landscape-prepare -->\s*(?:\r?\n|$)'
+if ($landscapePrepare -and -not $DryRun -and (-not $ExpectedDeviceSerial -or -not $ExpectedGatewaySha256)) {
+    throw '横屏就位需要本轮已核实的 -ExpectedDeviceSerial 和 -ExpectedGatewaySha256。'
+}
+if (-not $landscapePrepare -and ($ExpectedDeviceSerial -or $ExpectedGatewaySha256)) {
+    throw '设备与 APK 参数只适用于带横屏准备标记的任务。'
+}
 
 # slug 直接拼进 trace/pause 文件名（$base）与台账行。四个来源里有两个不是本机人手打的：
 # 暂停件的 meta 与任务卡文件名。带上路径分隔符或 .. 就能把 trace 写到 docs/runs 之外，
@@ -839,6 +849,9 @@ function Stop-DispatchJobProcesses {
 # ── 全局设备 lease：必须早于任何 preflight/adb/端口副作用 ─────────────────
 $lockFs = $null
 $preflightState = $null
+$landscapeBaseline = $null
+$landscapeCleanupProblem = ''
+$preflightAdb = 'adb'
 $proc = $null
 $dispatchJobHandle = [IntPtr]::Zero
 $dispatchJobGate = $null
@@ -854,16 +867,38 @@ $LockFile = Get-DispatchGlobalLockPath
 try {
     $lockFs = Open-DispatchLock -Path $LockFile -Owner "$Slug/leg$Leg/$Executor"
 
-    $preflightState = Ensure-GatewayPreflightReady -ConfigPath $profile.McpConfigPath
+    if ($landscapePrepare) {
+        . (Join-Path $PSScriptRoot 'lib\dispatch-landscape.ps1')
+        try {
+            $adb = Get-Command adb -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            $landscapeDevice = @{ AdbPath = $adb.Source; Serial = $ExpectedDeviceSerial }
+            # 现有派单预检和收尾调用同一固定序列号；即使中途换线也不会落到另一台设备。
+            function Invoke-LandscapeAdb { & $landscapeDevice.AdbPath -s $landscapeDevice.Serial @args }
+            $preflightAdb = 'Invoke-LandscapeAdb'
+            $landscapeBaseline = Get-LandscapeStartBaseline -Device $landscapeDevice -AdbCommand $preflightAdb -ExpectedGatewaySha256 $ExpectedGatewaySha256
+        }
+        catch {
+            $pf = $_.Exception.Message
+            Write-Host "横屏就位预检失败：$pf" -ForegroundColor Red
+            Add-LedgerRow 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
+            exit 4
+        }
+    }
+    $preflightState = Ensure-GatewayPreflightReady -ConfigPath $profile.McpConfigPath -AdbCommand $preflightAdb -SkipAccessibilityRebind:$landscapePrepare
     $pf = $preflightState.Problem
     if ($pf) {
-        Stop-GatewayPreflightOwnedResources -State $preflightState
+        if ($landscapePrepare) {
+            $problem = Complete-LandscapePreparation -Device $landscapeDevice -AdbCommand $preflightAdb -Baseline $landscapeBaseline -PreflightState $preflightState
+            $landscapeBaseline = $null
+            if ($problem) { $pf += " | $problem" }
+        }
+        else { Stop-GatewayPreflightOwnedResources -State $preflightState }
         Write-Host "预检失败：$pf" -ForegroundColor Red
         Add-LedgerRow 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
         exit 4
     }
 
-    $serial = "$(& adb get-serialno 2>$null)".Trim()
+    $serial = if ($landscapePrepare) { '宿主已核实 PA2553' } else { "$(& adb get-serialno 2>$null)".Trim() }
     if (-not $serial) { $serial = 'unknown' }
     $preamble = $preambleTemplate.Replace('{{BUDGET_POLICY}}', $budgetPolicy).
         Replace('{{DEVICE}}', $serial)
@@ -891,7 +926,7 @@ try {
     $codexWorkspace = Join-Path $codexWorkspaceParent ([guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $codexWorkspace | Out-Null
     $launchSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $McpConfig `
-        -WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg
+        -WorkspacePath $codexWorkspace -Model $Model -ModelWasExplicit $ModelWasExplicit -Leg $Leg -WeChatLandscapePrepare:$landscapePrepare
     $brainExecutable = $launchSpec.Executable
     $argList = $launchSpec.Arguments
     $launchWorkingDirectory = $codexWorkspace
@@ -1086,6 +1121,18 @@ try {
         $note += ' | ' + ($policyProblems -join '+')
     }
 
+    if ($landscapePrepare) {
+        $problem = Complete-LandscapePreparation -Device $landscapeDevice -AdbCommand $preflightAdb -Baseline $landscapeBaseline `
+            -PreflightState $preflightState -RequireChatFocus:($verdict -eq 'success')
+        $landscapeBaseline = $null
+        if ($verdict -eq 'paused') { $verdict = 'fail'; $note += ' | 横屏准备已终止' }
+        if ($problem) { $verdict = 'fail'; $note += " | $problem" }
+        if ($verdict -eq 'success' -and -not (Test-LandscapeEditorReceipt -Calls $transcript.Calls)) {
+            $verdict = 'fail'; $note = '派单回执未证实右窗会话标题和编辑栏输入焦点'
+        }
+        if ($verdict -eq 'success') { $note = '宿主已核实同一微信会话窗口的输入目标及收尾基线' }
+    }
+
     # ── 暂停件（spec §5.1）────────────────────────────────────────────────
     $PauseFile = ''
     if ($verdict -eq 'paused') {
@@ -1153,7 +1200,12 @@ finally {
         [AgentMobileDispatchJob]::Close($dispatchJobHandle)
         $dispatchJobHandle = [IntPtr]::Zero
     }
-    try { Stop-GatewayPreflightOwnedResources -State $preflightState }
+    try {
+        if ($null -ne $landscapeBaseline) {
+            $landscapeCleanupProblem = Complete-LandscapePreparation -Device $landscapeDevice -AdbCommand $preflightAdb -Baseline $landscapeBaseline -PreflightState $preflightState
+        }
+        else { Stop-GatewayPreflightOwnedResources -State $preflightState -AdbCommand $preflightAdb }
+    }
     catch { Write-Warning "网关预检收尾清理失败：$($_.Exception.Message)" }
     if ($lockFs) { [void](Close-DispatchLockLease -Lease $lockFs) }
     foreach ($key in @($sensitiveChildEnvironment.Keys)) {
@@ -1181,4 +1233,5 @@ finally {
             Remove-Item -LiteralPath $safeParent -Force
         }
     }
+    if ($landscapeCleanupProblem) { throw "横屏准备收尾失败：$landscapeCleanupProblem" }
 }

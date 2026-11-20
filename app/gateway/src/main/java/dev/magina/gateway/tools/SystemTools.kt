@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -19,8 +20,12 @@ import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.ensureTargetPackageAllowed
+import dev.magina.gateway.ime.ImeBridge
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * L1 系统通道（无特权子集，M1a）。
@@ -141,7 +146,31 @@ object SystemTools {
     /** package/activity 之外附带前台身份诊断（unknown 原因、窗口列表、最近窗口事件处置）。 */
     fun foregroundApp(): JSONObject = GatewayA11yService.require().foregroundDiagnostics()
 
-    fun keyboardState(): JSONObject = GatewayA11yService.require().keyboardState()
+    fun keyboardState(probeEditorOrigin: Boolean = false): JSONObject {
+        val service = GatewayA11yService.require()
+        val state = service.keyboardState()
+        if (!probeEditorOrigin) return state
+        state.put("ime_editor_origin", JSONObject.NULL)
+        val session = ImeBridge.session() ?: return state
+        val pkg = service.foregroundPackage()
+        if (pkg.isBlank() || !session.belongsTo(pkg) || Build.VERSION.SDK_INT < 34) return state
+        ensureTargetPackageAllowed(pkg, Gateway.skills::isBlockedApp)
+        check(Looper.myLooper() != Looper.getMainLooper())
+        val request = ImeBridge.requestEditorOrigin(session, ctx.mainExecutor)
+        val point = try {
+            request.get(2, TimeUnit.SECONDS)
+        } catch (_: TimeoutException) {
+            request.cancel(false)
+            null
+        } catch (_: ExecutionException) {
+            null
+        }
+        if (point != null && service.foregroundPackage() == pkg && ImeBridge.session() == session) {
+            state.put("ime_editor_origin", JSONObject().put("session_id", session.id)
+                .put("x", point.x.toDouble()).put("y", point.y.toDouble()))
+        }
+        return state
+    }
 
     fun appLaunch(nameOrPackage: String): JSONObject {
         val pkg = Gateway.skills.resolvePackage(nameOrPackage)

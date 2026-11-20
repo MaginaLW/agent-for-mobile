@@ -695,6 +695,10 @@ public static class Program {
             ? "\"result\":null,\"error\":{\"message\":\"fixture connection closed\"},\"status\":\"failed\""
             : "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"" + (ok == "false" ? "failed" : "completed") + "\"";
         Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}," + outcome + "}}");
+        string landscapeTrace = Path.Combine(sentinel, "landscape-receipts.jsonl");
+        if (File.Exists(landscapeTrace)) {
+            foreach (string line in File.ReadLines(landscapeTrace)) Console.WriteLine(line);
+        }
         Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"message-1\",\"type\":\"agent_message\",\"text\":\"结果：成功\"}}");
         if (scenario == "missing-usage") Console.WriteLine("{\"type\":\"turn.completed\"}");
         else Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"cached_input_tokens\":2,\"output_tokens\":7,\"cache_write_input_tokens\":3}}");
@@ -1071,6 +1075,7 @@ public static class Program {
         try {
             Assert-True ($spec.Arguments -contains 'mcp_servers.gateway.tool_timeout_sec=420') `
                 '真实模板的 420000 毫秒未转换为 Codex 的 420 秒。'
+            Assert-NotMatches ($spec.Arguments -join "`n") 'enabled_tools'
             Assert-NotMatches ($spec.Arguments -join "`n") ([regex]::Escape($testBearer))
         }
         finally {
@@ -1095,10 +1100,12 @@ public static class Program {
             -ScriptsRoot (Join-Path $RepoRoot 'scripts')
         $spec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
             -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
-            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1'
+            -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1' -WeChatLandscapePrepare
         try {
             Assert-True ($spec.Arguments -contains 'mcp_servers.gateway.tool_timeout_sec=420') `
                 'P0配置的工具超时未沿用现有模板的420秒。'
+            Assert-True ($spec.Arguments -ccontains 'mcp_servers.gateway.enabled_tools=["foreground_app","app_launch","ui_find","ui_action","keyboard_state"]') `
+                '就位派单应仅暴露定向导航和焦点核对所需的五个工具。'
             Assert-NotMatches ($spec.Arguments -join "`n") ([regex]::Escape($testBearer))
         }
         finally {
@@ -2400,6 +2407,195 @@ exit /b 98
     }
 
     Write-Host ''
+    Test-Case '横屏就位派单绑定设备并核对版本、输入窗口与收尾基线' {
+        $card = "<!-- dispatch: PA2553-landscape-prepare -->`n离线会话就位"
+        $baseArgs = @('-Task', $card, '-Slug', 'offline-landscape')
+        $missing = Invoke-Dispatch -Arguments $baseArgs
+        Assert-True ($missing.ExitCode -ne 0) '缺少目标绑定仍允许就位。'
+        Assert-Contains $missing.Text '-ExpectedDeviceSerial'
+        Assert-NoExternalTools $missing
+
+        # 由同一个假 adb.exe 接受现有预检和有超时的只读子进程。除 devices 外每次调用都须固定 -s。
+        $adbSource = Join-Path $SentinelDir 'landscape-adb.cs'
+        @'
+using System;
+using System.IO;
+class Adb {
+    static int Main(string[] args) {
+        string dir = Environment.GetEnvironmentVariable("DISPATCH_TEST_SENTINEL_DIR");
+        string mode = Environment.GetEnvironmentVariable("DISPATCH_TEST_LANDSCAPE");
+        string command = String.Join(" ", args);
+        File.AppendAllText(Path.Combine(dir, "adb-called.txt"), command + Environment.NewLine);
+        if (command == "devices") {
+            Console.WriteLine("List of devices attached\nTABLET-TEST\tdevice");
+            if (mode == "multiple") Console.WriteLine("ANOTHER\tdevice");
+            return 0;
+        }
+        if (!command.StartsWith("-s TABLET-TEST ")) return 89;
+        command = command.Substring("-s TABLET-TEST ".Length);
+        string state = Path.Combine(dir, "landscape-started");
+        string ownedService = Path.Combine(dir, "landscape-owned-service");
+        string output;
+        switch (command) {
+            case "get-state": output = "device"; break;
+            case "shell getprop ro.product.model": output = "PA2553"; break;
+            case "shell am get-current-user": output = "0"; break;
+            case "shell dumpsys window policy": output = "showing=" + (mode == "locked" ? "true" : "false") + "\ninputRestricted=false"; break;
+            case "shell pm path dev.magina.gateway": output = "package:/data/app/fixture/base.apk"; break;
+            case "shell sha256sum /data/app/fixture/base.apk": output = new string(mode == "sha" ? 'b' : 'a', 64) + "  /data/app/fixture/base.apk"; break;
+            case "shell dumpsys window":
+                string chat = " u0 com.tencent.mm/.ui.chatting.ChattingUI}";
+                output = "mCurrentFocus=Window{ab" + chat + "\n  imeInputTarget in display# 0 Window{" + (mode == "focus" ? "cd" : "ab") + chat; break;
+            case "shell dumpsys activity services dev.magina.gateway/.GatewayService":
+                if (mode == "owned-stop") {
+                    if (!File.Exists(ownedService)) { Console.WriteLine("(nothing)"); return 0; }
+                    if (File.ReadAllText(ownedService) == "stopping") {
+                        File.Delete(ownedService);
+                        Console.WriteLine("ServiceRecord{101 u0 dev.magina.gateway/.GatewayService}\nisForeground=false");
+                        return 0;
+                    }
+                }
+                output = "ServiceRecord{101 u0 dev.magina.gateway/.GatewayService}\nisForeground=true"; break;
+            case "shell am start-foreground-service -n dev.magina.gateway/.GatewayService":
+            case "shell am stopservice -n dev.magina.gateway/.GatewayService":
+                return 1;
+            case "shell run-as dev.magina.gateway am start-foreground-service --user 0 -n dev.magina.gateway/.GatewayService":
+                File.WriteAllText(ownedService, "running"); return 0;
+            case "shell run-as dev.magina.gateway am stopservice --user 0 -n dev.magina.gateway/.GatewayService":
+                File.WriteAllText(ownedService, "stopping"); Console.Error.WriteLine("Service stopped"); return 255;
+            case "shell input keyevent KEYCODE_WAKEUP": File.WriteAllText(state, ""); return 0;
+            case "forward --list": return 0;
+            default:
+                if (command.StartsWith("forward --no-rebind ") || command.StartsWith("forward --remove ")) return 0;
+                if (!command.StartsWith("shell settings --user 0 get secure ")) return 90;
+                output = (mode == "drift" && File.Exists(state) && command.EndsWith("default_input_method")) ? "other" : "baseline"; break;
+        }
+        Console.WriteLine(output);
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $adbSource -Encoding utf8
+        & $cscPath /nologo /target:exe "/out:$(Join-Path $FakeBin 'adb.exe')" $adbSource | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0) '无法构建就位假设备。'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination (Join-Path $RepoRoot 'configs\gateway-mcp.json') -Force
+        $boundArgs = $baseArgs + @('-ExpectedDeviceSerial','TABLET-TEST','-ExpectedGatewaySha256',('a' * 64))
+        $oldMode = $env:DISPATCH_TEST_LANDSCAPE
+        $caps = $gatewayStub.DefaultCapsJson
+        $receiptFile = Join-Path $SentinelDir 'landscape-receipts.jsonl'
+        function New-EditorObservations {
+            param([switch]$KeyboardVisible, [switch]$Resized)
+            $editorBox = @(500,390,750,426)
+            $screenHeight = if ($KeyboardVisible) { 620 } else { 440 }
+            $paneBottom = if ($Resized) { 440 } else { $screenHeight }
+            $windows = @(
+                @{id=9; type='application'; root_package='com.tencent.mm'; active=$false; focused=$false; bounds=@(0,0,290,$paneBottom)},
+                @{id=7; type='application'; root_package='com.tencent.mm'; active=$true; focused=$true; bounds=@(300,0,800,$paneBottom)}
+            )
+            $imeHeight = 0
+            if ($KeyboardVisible) {
+                $imeHeight = 180
+                $windows += @{id=11; type='input_method'; bounds=@(0,440,800,620)}
+            }
+            $observed = @(
+                @{ tool='foreground_app'; args=@{}; data=@{ package='com.tencent.mm'; foreground_known=$true; revision=42;
+                    window_topology='same_app_multi'; selected_window_id=7; windows=$windows } },
+                @{ tool='ui_find'; args=@{text='文件传输助手'}; data=@{screen_width=800; screen_height=$screenHeight; matches=@(
+                    @{pane='left'; window_id=9; text='文件传输助手'; bounds=@(10,100,120,135)},
+                    @{pane='right'; window_id=7; text='文件传输助手'; bounds=@(510,20,610,55)})} },
+                @{ tool='keyboard_state'; args=@{}; data=@{visible=[bool]$KeyboardVisible; height=$imeHeight} },
+                @{ tool='ui_find'; args=@{role='input'}; data=@{screen_width=800; screen_height=$screenHeight;
+                    focused_input_id='7||android.widget.EditText|com.tencent.mm|500,390,750,426'; focused_input_bounds=$editorBox;
+                    matches=@(@{role='input'; source='a11y'; flags='EF'; pane='right'; window_id=7; bounds=$editorBox}) } }
+            )
+            for ($n = 0; $n -lt $observed.Count; $n++) {
+                $observed[$n].ctx = @{revision=42; app='com.tencent.mm'; foreground_known=$true; window_topology='same_app_multi';
+                    keyboard=@{visible=[bool]$KeyboardVisible; height=$imeHeight}}
+                $observed[$n].audit_id = "audit-$n"
+            }
+            return $observed
+        }
+        function Test-ObservedEditor($Observed) {
+            $calls = foreach ($o in $Observed) {
+                [pscustomobject]@{Server='gateway'; Outcome='success'; Name=$o.tool; Input=$o.args;
+                    ResultEnvelope=@{data=$o.data; ctx=$o.ctx; audit_id=$o.audit_id}}
+            }
+            return Test-LandscapeEditorReceipt -Calls $calls
+        }
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        $observations = New-EditorObservations
+        Assert-True (Test-ObservedEditor $observations) '键盘收起的原生编辑栏未通过。'
+        Assert-True (Test-ObservedEditor (New-EditorObservations -KeyboardVisible)) '键盘覆盖右窗时未使用 IME 上边界。'
+        Assert-True (Test-ObservedEditor (New-EditorObservations -KeyboardVisible -Resized)) '已缩窗时重复扣除了键盘高度。'
+        foreach ($bad in @(
+            @{name='右窗缺框'; change={ $badReads[0].data.windows[1].Remove('bounds') }},
+            @{name='两个应用窗重叠'; change={ $badReads[0].data.windows[0].bounds[2]=550 }},
+            @{name='左窗错误地被选中'; change={ $badReads[0].data.selected_window_id=9 }},
+            @{name='异包双窗'; change={ $badReads[0].data.windows[0].root_package='other.app' }},
+            @{name='混窗标题'; change={ $badReads[1].data.matches[1].window_id=9 }},
+            @{name='标题越过分界'; change={ $badReads[1].data.matches[1].bounds[0]=260 }},
+            @{name='标题在消息区'; change={ $badReads[1].data.matches[1].bounds=@(510,130,610,155) }},
+            @{name='重复标题'; change={ $badReads[1].data.matches += $badReads[1].data.matches[1] }},
+            @{name='重复编辑框'; change={ $badReads[3].data.matches += $badReads[3].data.matches[0] }},
+            @{name='编辑框在消息区'; change={
+                $badReads[3].data.matches[0].bounds=$badReads[3].data.focused_input_bounds=@(500,270,750,306)
+                $badReads[3].data.focused_input_id='7||android.widget.EditText|com.tencent.mm|500,270,750,306' }},
+            @{name='编辑框在键盘下'; change={
+                $badReads[3].data.matches[0].bounds=$badReads[3].data.focused_input_bounds=@(500,470,750,506)
+                $badReads[3].data.focused_input_id='7||android.widget.EditText|com.tencent.mm|500,470,750,506' }},
+            @{name='同框焦点来自其他窗'; change={ $badReads[3].data.focused_input_id='9||android.widget.EditText|com.tencent.mm|500,390,750,426' }},
+            @{name='查找回执过期'; change={ $badReads[3].ctx.revision=41 }},
+            @{name='前台采样中页面换代'; change={ $badReads[0].data.revision=41 }},
+            @{name='缺少页面修订'; change={ $badReads[1].ctx.Remove('revision') }},
+            @{name='缺少实际键盘窗'; change={ $badReads[0].data.windows=$badReads[0].data.windows[0..1] }},
+            @{name='键盘高度矛盾'; change={ $badReads[2].data.height=179 }}
+        )) {
+            $badReads = New-EditorObservations -KeyboardVisible
+            & $bad.change
+            Assert-True (-not (Test-ObservedEditor $badReads)) "误接纳：$($bad.name)"
+        }
+        $receiptLines = for ($i = 0; $i -lt $observations.Count; $i++) {
+            $observation = $observations[$i]
+            $item = @{id="receipt-$i"; type='mcp_tool_call'; server='gateway'; tool=$observation.tool; arguments=$observation.args}
+            @{type='item.started'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+            $payload = @{ok=$true; data=$observation.data; ctx=$observation.ctx; audit_id=$observation.audit_id} | ConvertTo-Json -Depth 10 -Compress
+            $item.result = @{content=@(@{type='text'; text=$payload})}
+            $item.status = 'completed'
+            @{type='item.completed'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+        }
+        try {
+            foreach ($case in @(
+                @{ Mode='multiple'; Code=4; Match='恰好一台' },
+                @{ Mode='locked'; Code=4; Match='锁屏' },
+                @{ Mode='sha'; Code=4; Match='SHA-256' },
+                @{ Mode='no-a11y'; Code=4; Match='未获准修改无障碍设置' },
+                @{ Mode='focus'; Code=1; Match='输入法目标未同时绑定' },
+                @{ Mode='drift'; Code=1; Match='基线变化 default_input_method' },
+                @{ Mode='no-receipt'; Code=1; Match='派单回执未证实' },
+                @{ Mode='success'; Code=0; Match='宿主已核实同一微信会话窗口' },
+                @{ Mode='owned-stop'; Code=0; Match='宿主已核实同一微信会话窗口' }
+            )) {
+                $env:DISPATCH_TEST_LANDSCAPE = $case.Mode
+                if ($case.Mode -eq 'success') { Set-Content -LiteralPath $receiptFile -Value $receiptLines -Encoding utf8 }
+                $gatewayStub.DefaultCapsJson = if ($case.Mode -eq 'no-a11y') { '[]' } else { $caps }
+                Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started') -Force -ErrorAction SilentlyContinue
+                $result = Invoke-Dispatch -Arguments $boundArgs
+                Assert-ExitCode $result $case.Code
+                Assert-Contains $result.Text $case.Match
+                $calls = $result.ToolCalls -join "`n"
+                Assert-NotMatches $calls 'settings\s+(?:put|delete)|\sinstall\s|\sime\s+set'
+                if ($case.Mode -in @('multiple','locked','sha')) { Assert-NotMatches $calls 'KEYCODE_WAKEUP|forward --no-rebind' }
+                if ($case.Mode -eq 'success') { Assert-Contains $calls 'forward --remove' }
+                if ($case.Mode -eq 'owned-stop') {
+                    Assert-True ([regex]::Matches($calls, 'run-as dev\.magina\.gateway am stopservice').Count -eq 1) `
+                        '应仅用所属应用身份停止一次本轮服务。'
+                }
+            }
+        }
+        finally {
+            $env:DISPATCH_TEST_LANDSCAPE = $oldMode
+            $gatewayStub.DefaultCapsJson = $caps
+        }
+    }
     Write-Host "dispatch offline: $($script:Passed) passed, $($script:Failed) failed"
     if ($script:Failed -gt 0) { exit 1 }
     exit 0

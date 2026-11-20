@@ -295,7 +295,15 @@ function Stop-GatewayPreflightOwnedResources {
         $stopText = $stopOut -join "`n"
         # Android 16 上 am stopservice 会把 Service stopped 打到 stderr 并返回 255，属正常停止。
         if ($stopExit -ne 0 -and $stopText -notmatch '(?i)Service stopped') {
-            Write-Warning '收尾停止自启 GatewayService 返回非零，请按需在设备确认。'
+            $service = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
+            if ($service -eq 'foreground') {
+                # PA2553 上 shell 无法停止非导出服务。租约仍在，只撤销预检自己的启动。
+                $stopOut = @(& $AdbCommand shell run-as dev.magina.gateway am stopservice --user 0 -n dev.magina.gateway/.GatewayService 2>&1)
+                if ($LASTEXITCODE -ne 0 -and ($stopOut -join "`n") -notmatch '(?i)Service stopped') {
+                    Write-Warning '所属应用身份停止本轮 GatewayService 失败。'
+                }
+            }
+            elseif ($service -ne 'absent') { Write-Warning '无法核实本轮 GatewayService 的停止状态。' }
         }
         $State.StartedService = $false
     }
@@ -312,7 +320,8 @@ function Ensure-GatewayPreflightReady {
         [string]$AdbCommand = 'adb',
         [int]$Port = (Get-GatewayPreflightPort),
         [int]$HealthTimeoutSec = 5,
-        [int]$A11yRebindTimeoutSec = 8
+        [int]$A11yRebindTimeoutSec = 8,
+        [switch]$SkipAccessibilityRebind
     )
 
     $state = [pscustomobject]@{
@@ -432,6 +441,11 @@ function Ensure-GatewayPreflightReady {
             return $state
         }
         if ('a11y' -in $probe.Caps) { return $state }
+        if ($SkipAccessibilityRebind) {
+            $state.Problem = 'gateway_a11y_not_ready：准备任务未获准修改无障碍设置。'
+            Stop-GatewayPreflightOwnedResources -State $state -AdbCommand $AdbCommand
+            return $state
+        }
 
         $rebindError = Invoke-GatewayBoundedAccessibilityRebind -AdbCommand $AdbCommand
         if ($rebindError) {
