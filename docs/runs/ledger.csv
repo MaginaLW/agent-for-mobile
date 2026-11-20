@@ -189,3 +189,4 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-20T18:06:00,wechat-onsite-allow-01,1,codex,,1,187298,748,161536,0,,125,fail,,,executor=gateway | 已有草稿整行核对后弹卡超时，实际点击为零,confirm-timeout
 2026-11-20T18:52:08,wechat-landscape-prepare,1,codex,,1,57376,266,36224,0,,21,fail,,,executor=gateway | 右窗已聚焦并命中标题，未核实编辑栏；即时收尾服务基线不符，独立清理已证实恢复,reported-fail
 2026-11-20T19:12:14,wechat-focus-b177f99,1,codex,,1,89746,390,68224,0,,27,fail,,,executor=gateway | 已聚焦右窗标题匹配，编辑栏查找 E_NOT_FOUND，零点击；服务、转发及四项设置自动回到基线,not-found
+2026-11-20T20:07:34,wechat-editor-origin,1,codex,,0,0,0,0,0,,0,preflight-fail,,,executor=gateway | 旧网关预检未确认前台，零业务调用、零安装、零切换；独立收尾核实原设置、服务、转发和 APK,preflight
