@@ -180,3 +180,9 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-20T00:29:43,wechat-bounds-write-verified,1,codex,,1,113854,351,94080,0,,34,success,,,executor=gateway | 局部图再次核实原稿，覆盖一次并恢复输入法,
 2026-11-20T00:30:47,wechat-bounds-click-allow,1,codex,,1,115472,485,107264,0,,34,fail,,,executor=gateway | 真人允许后边框两边各差一像素，实际点击被拦,stale-context
 2026-11-20T07:24:28,wechat-fixed-open,1,codex,,1,68499,361,55168,0,,24,fail,,,executor=gateway | 左窗会话行 OCR 复核未命中，未备稿或请求发送,stale-context
+2026-11-20T07:36:52,wechat-right-focus-prepare,1,codex,,1,57939,292,41728,0,,20,fail,,,executor=gateway | 右窗已聚焦，原生输入节点未匹配，未写入,not-found
+2026-11-20T07:42:14,wechat-right-focus-inspect,1,codex,,1,,,,,,180,timeout,,,executor=gateway | 宿主回合开始后超时，除预检外无设备调用,dispatch-timeout
+2026-11-20T07:52:07,wechat-focus2-prepare,1,codex,,1,90630,407,58880,0,,24,success,,,executor=gateway | 右窗局部图核对后写入一次并恢复输入法,
+2026-11-20T07:53:06,wechat-focus2-allow,1,codex,,1,96373,552,75008,0,,29,fail,,,executor=gateway | 重叠 OCR 命中无法核定整行，未调用点击,not-found
+2026-11-20T07:55:25,wechat-focus2-check-line,1,codex,,1,89723,282,63360,0,,24,success,,,executor=gateway | 键盘展开时局部图核实输入框整行,
+2026-11-20T07:58:45,wechat-focus2-confirmed-click,1,codex,,1,252947,659,225152,0,,123,fail,,,executor=gateway | 现场确认卡超时，实际发送点击为零,confirm-timeout
