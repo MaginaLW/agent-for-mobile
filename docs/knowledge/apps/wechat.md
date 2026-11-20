@@ -133,6 +133,12 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 约 73 秒后再次只读核对，原四项设置和网关资源仍匹配。Android 当前用户下选定组件只有一条服务记录，系统客户端已收到 Binder，`hasBound=true`。本次恢复没有触发微信业务派单。该组件的系统绑定和微信编辑框的输入焦点分别验收。
 
+### 等待候选网关就绪超时
+
+2026-11-20，在 PA2553 已聚焦的微信右窗，用旧网关完成两次读取并核实「文件传输助手」标题，随后发起一次同签覆盖安装。派单等待候选 `e994c71` 就绪的 360 秒窗口到期，回执为 `candidate-timeout`。派单共 398 秒，输入法切换、编辑器原点查询、微信点击、输入和发送次数均为零。`candidate-timeout` 出现在安装阶段，微信编辑器是否返回几何数据仍未知。[诊断候选 PR #40](https://github.com/MaginaLW/agent-for-mobile/pull/40)
+
+安装随后完成，宿主和独立读回都核实了候选 APK 摘要。四项系统设置、网关服务和端口转发与入场一致。另一次组件读回确认，vivo 输入法原有无障碍服务仍启用，且系统客户端持有活动 Binder。本轮没有再次写入无障碍服务清单。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
