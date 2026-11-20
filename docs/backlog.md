@@ -21,7 +21,7 @@
 
 第 1 步已在 PA2553 已聚焦右窗的起点验到零导航点击和自动回收服务、转发。第 2 步卡在编辑框识别。右窗标题匹配且键盘可见时，原生 `role=input` 返回 `E_NOT_FOUND`。Android 16 合成靶已分别核对活动输入连接的原点和可见四边。[真机回执](knowledge/apps/wechat.md#右窗编辑栏查找与自动收尾) · [合成实验](runs/fixtures/editor-origin/README.md)
 
-11 月 20 日，PA2553 上的原点诊断返回 `no_verified_geometry`，随后候选 `50c17a2` 的四边诊断返回 `focus_unavailable`。两次右窗及标题核对均通过，编辑框焦点仍缺证据。下一步先离线区分缓存刷新、活动根与窗口、当前输入焦点节点及其一致性检查各自的失败原因。能定位失败环节后，再申请一次真机读取。取得唯一编辑框、匹配窗口号及右窗内完整四边后，再分别验桌面与左窗起点，最后验现场发送。[原点回执](knowledge/apps/wechat.md#免安装复测返回-no_verified_geometry) · [四边回执](knowledge/apps/wechat.md#pa2553-右窗四边诊断返回-focus_unavailable)
+11 月 20 日，PA2553 上的原点诊断返回 `no_verified_geometry`，随后四边诊断返回 `focus_unavailable`。切换输入法前后的右窗及标题均已核实。新候选 `8d02ed3` 已离线验证取样前后十处焦点检查的回执。下一步待单次授权，在同一微信右窗读取一次，保存实测四边或具体失败环节，再核对输入法、无障碍服务和网关资源。取得唯一编辑框、匹配窗口号及右窗内完整四边后，再分别验桌面与左窗起点，最后验现场发送。[真机回执](knowledge/apps/wechat.md#pa2553-右窗四边诊断返回-focus_unavailable) · [候选回执字段](runs/fixtures/editor-bounds-cross-app/README.md)
 
 下一次汇报按起点列出准备耗时、首次派单能否就位、用户为导航或调试实际动手几次、是否出现确认卡及其决定。现场业务决定单独计数。卡前阻塞只汇总一次，写清停在哪一步、自动完成了哪些步骤，以及是否确有一项操作只能由用户完成。
 
