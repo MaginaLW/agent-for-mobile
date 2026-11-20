@@ -32,3 +32,9 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 | 核对节点所在窗口、应用和活动根返回的输入焦点 | `node_window_mismatch`、`node_package_mismatch`、`root_focus_mismatch` |
 
 这两个字段仅含固定标记。成功或其他失败原因的回执省略它们。旧候选的 `focus_unavailable` 回执无法追溯到具体检查。
+
+### 服务级输入焦点为空时的字段核对
+
+沿用 `INPUT_NULL`。候选从当前输入连接取得 `EditorInfo.fieldId`，在目标应用的资源表中解析全限定 ID，然后在已核实的活动窗口内按名查找。每次必须唯一命中，刷新后的节点须有输入焦点、可见、与窗口和应用相符，且通过密码及敏感字段检查。窗口根若返回另一个焦点节点，查询随即结束。字段 ID 可缺失；缺失或无法解析时返回空四边。[Android 字段 ID 约定](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#fieldId) · [窗口内的资源名查找](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String))
+
+取样前后须取得同一节点、窗口、具名资源和屏幕四边，输入会话须稳定，输入法回调中的字段名及完整矩形须与窗口测量匹配。对照用例包含同窗同名、不同焦点、不同窗口、敏感字段和采样期间更换节点。在成功回执中，只有用过按字段查找的阶段才会产生 `ime_editor_bounds.window_field_phase`，取值为 `before_sample`、`after_sample` 或 `both`。该回执仅供几何诊断。

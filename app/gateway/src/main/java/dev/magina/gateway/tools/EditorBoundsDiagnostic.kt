@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.os.Build
 import android.os.Looper
 import android.provider.Settings
+import android.text.InputType
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
@@ -48,7 +49,7 @@ internal fun readEditorBounds(service: GatewayA11yService, state: JSONObject): J
         ?.let(ComponentName::unflattenFromString)
     return try {
         if (selectedIme() != gatewayIme) return unavailable("no_input_target")
-        val before = currentFocus(service, pkg, "before_sample")
+        val (before, usedFieldBefore) = currentFocus(service, pkg, "before_sample")
         val request = ImeBridge.requestEditorBounds(session, service.mainExecutor)
         val sample = try {
             request.get(2, TimeUnit.SECONDS)
@@ -63,16 +64,24 @@ internal fun readEditorBounds(service: GatewayA11yService, state: JSONObject): J
         if (ImeBridge.session() != session || service.foregroundPackage() != pkg) return unavailable("context_changed")
         if (sample == null) return unavailable("no_ime_bounds")
         val imeName = service.packageManager.getResourcesForApplication(pkg).getResourceName(sample.fieldId)
-        val after = currentFocus(service, pkg, "after_sample")
+        val (after, usedFieldAfter) = currentFocus(service, pkg, "after_sample")
         if (before != after || service.foregroundPackage() != pkg || selectedIme() != gatewayIme || ImeBridge.session() != session) {
             return unavailable("context_changed")
         }
         if (imeName != after.resourceName) return unavailable("different_id")
         if (RectF(after.bounds) != sample.bounds) return unavailable("different_bounds")
-        state.put("ime_editor_bounds", JSONObject().put("window_id", after.windowId)
+        val bounds = JSONObject().put("window_id", after.windowId)
             .put("session_id", session.id).put("editable", after.editable)
             .put("left", after.bounds.left).put("top", after.bounds.top)
-            .put("right", after.bounds.right).put("bottom", after.bounds.bottom))
+            .put("right", after.bounds.right).put("bottom", after.bounds.bottom)
+        if (usedFieldBefore || usedFieldAfter) {
+            bounds.put("window_field_phase", when {
+                !usedFieldAfter -> "before_sample"
+                !usedFieldBefore -> "after_sample"
+                else -> "both"
+            })
+        }
+        state.put("ime_editor_bounds", bounds)
     } catch (e: FocusUnavailable) {
         unavailable("focus_unavailable")
             .put("ime_editor_focus_phase", e.phase)
@@ -91,24 +100,46 @@ internal fun readEditorBounds(service: GatewayA11yService, state: JSONObject): J
 }
 
 @RequiresApi(34)
-private fun currentFocus(service: GatewayA11yService, pkg: String, phase: String): EditorFocus {
+private fun currentFocus(service: GatewayA11yService, pkg: String, phase: String): Pair<EditorFocus, Boolean> {
     fun missing(check: String): Nothing = throw FocusUnavailable(phase, check)
     if (!service.clearCache()) missing("cache_clear_failed")
     val root = service.getRootInActiveWindow(0) ?: missing("active_root_missing")
     val window = root.window ?: missing("active_window_missing")
     if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION || !window.isActive ||
         !window.isFocused || root.packageName?.toString() != pkg) throw Unavailable("window_mismatch")
-    val node = service.focusedEditable() ?: missing("input_focus_missing")
+    val serviceFocus = service.focusedEditable()
+    val fieldName = if (serviceFocus == null) {
+        val contract = ImeBridge.editorContract ?: throw Unavailable("missing_id")
+        when (contract.inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)) {
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD -> throw Unavailable("sensitive_field")
+        }
+        val id = contract.fieldId
+        if (id == 0 || id == -1) throw Unavailable("missing_id")
+        val name = service.packageManager.getResourcesForApplication(pkg).getResourceName(id)
+        if (!name.substringAfter(':').startsWith("id/")) throw Unavailable("missing_id")
+        name
+    } else null
+    val node = serviceFocus ?: run {
+        val matches = root.findAccessibilityNodeInfosByViewId(checkNotNull(fieldName))
+        if (matches.isEmpty()) missing("input_focus_missing")
+        matches.singleOrNull() ?: throw Unavailable("ambiguous_id")
+    }
     if (!node.refresh()) missing("node_refresh_failed")
     if (!node.isFocused) missing("node_not_focused")
     if (!node.isVisibleToUser) missing("node_not_visible")
     if (node.windowId != window.id) missing("node_window_mismatch")
     if (node.packageName?.toString() != pkg) missing("node_package_mismatch")
-    if (root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != node) missing("root_focus_mismatch")
+    val rootFocus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+    // 按名定向查找时允许根查询为空，但它一旦指出其他节点就拒绝。
+    if (rootFocus != node && (serviceFocus != null || rootFocus != null)) missing("root_focus_mismatch")
     if (node.isPassword || node.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
     val name = node.viewIdResourceName?.takeIf { it.isNotBlank() } ?: throw Unavailable("missing_id")
+    if (fieldName != null && fieldName != name) throw Unavailable("different_id")
     if (root.findAccessibilityNodeInfosByViewId(name).singleOrNull() != node) throw Unavailable("ambiguous_id")
     val bounds = Rect().also(node::getBoundsInScreen)
     if (bounds.isEmpty || !Rect().also(window::getBoundsInScreen).contains(bounds)) throw Unavailable("invalid_bounds")
-    return EditorFocus(node, window.id, name, bounds, node.isEditable)
+    return EditorFocus(node, window.id, name, bounds, node.isEditable) to (serviceFocus == null)
 }
