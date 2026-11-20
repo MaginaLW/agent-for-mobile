@@ -86,6 +86,8 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 网关候选 `50c17a2` 在 Android 16 模拟器上取得了两个具名编辑框的正确四边。11 月 20 日，PA2553 真机在切换输入法前后均核实了微信同一右窗和「文件传输助手」标题，唯一一次四边查询返回 `focus_unavailable`，编辑框坐标仍未知。原 vivo 输入法和无障碍服务已恢复，四项设置及网关资源与入场一致，系统绑定已独立核实。[真机回执](docs/knowledge/apps/wechat.md#pa2553-右窗四边诊断返回-focus_unavailable)
 
+11 月 21 日，候选 `8d02ed3` 已能在焦点不可用时报告取样阶段和首个失败检查。在用替身控制 Android 和输入法返回值的 JVM 测试中，Debug、Release 各通过 35 个场景，包含十处检查在取样前后分别失败的全部 20 种组合。取样前失败时没有发起输入法几何请求，取样后失败时只发起了一次。PA2553 原回执缺少这两个字段，具体原因仍待一次新读取。[字段及检查顺序](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
 ## 2026-11-15 精简
 
 按用户要求处理过度建设（[PR #17](https://github.com/MaginaLW/agent-for-mobile/pull/17)）：删除平板双窗研究栈、M1 spike 探针和派单中已退役的 Claude 分支；STATUS/backlog/README/AGENTS 压缩，历史过程记录移出主树。跟踪文件 484 → 240，完整离线门 19 项约 15 分钟 → 9 项约 3.5 分钟，9/9 通过；未做真机验证。
