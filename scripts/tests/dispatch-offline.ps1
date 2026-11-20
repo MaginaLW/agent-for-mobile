@@ -2434,6 +2434,7 @@ class Adb {
         if (!command.StartsWith("-s TABLET-TEST ")) return 89;
         command = command.Substring("-s TABLET-TEST ".Length);
         string state = Path.Combine(dir, "landscape-started");
+        string ownedService = Path.Combine(dir, "landscape-owned-service");
         string output;
         switch (command) {
             case "get-state": output = "device"; break;
@@ -2446,7 +2447,22 @@ class Adb {
                 string chat = " u0 com.tencent.mm/.ui.chatting.ChattingUI}";
                 output = "mCurrentFocus=Window{ab" + chat + "\n  imeInputTarget in display# 0 Window{" + (mode == "focus" ? "cd" : "ab") + chat; break;
             case "shell dumpsys activity services dev.magina.gateway/.GatewayService":
+                if (mode == "owned-stop") {
+                    if (!File.Exists(ownedService)) { Console.WriteLine("(nothing)"); return 0; }
+                    if (File.ReadAllText(ownedService) == "stopping") {
+                        File.Delete(ownedService);
+                        Console.WriteLine("ServiceRecord{101 u0 dev.magina.gateway/.GatewayService}\nisForeground=false");
+                        return 0;
+                    }
+                }
                 output = "ServiceRecord{101 u0 dev.magina.gateway/.GatewayService}\nisForeground=true"; break;
+            case "shell am start-foreground-service -n dev.magina.gateway/.GatewayService":
+            case "shell am stopservice -n dev.magina.gateway/.GatewayService":
+                return 1;
+            case "shell run-as dev.magina.gateway am start-foreground-service --user 0 -n dev.magina.gateway/.GatewayService":
+                File.WriteAllText(ownedService, "running"); return 0;
+            case "shell run-as dev.magina.gateway am stopservice --user 0 -n dev.magina.gateway/.GatewayService":
+                File.WriteAllText(ownedService, "stopping"); Console.Error.WriteLine("Service stopped"); return 255;
             case "shell input keyevent KEYCODE_WAKEUP": File.WriteAllText(state, ""); return 0;
             case "forward --list": return 0;
             default:
@@ -2493,7 +2509,8 @@ class Adb {
                 @{ Mode='focus'; Code=1; Match='输入法目标未同时绑定' },
                 @{ Mode='drift'; Code=1; Match='基线变化 default_input_method' },
                 @{ Mode='no-receipt'; Code=1; Match='派单回执未证实' },
-                @{ Mode='success'; Code=0; Match='宿主已核实同一微信会话窗口' }
+                @{ Mode='success'; Code=0; Match='宿主已核实同一微信会话窗口' },
+                @{ Mode='owned-stop'; Code=0; Match='宿主已核实同一微信会话窗口' }
             )) {
                 $env:DISPATCH_TEST_LANDSCAPE = $case.Mode
                 if ($case.Mode -eq 'success') { Set-Content -LiteralPath $receiptFile -Value $receiptLines -Encoding utf8 }
@@ -2506,6 +2523,10 @@ class Adb {
                 Assert-NotMatches $calls 'settings\s+(?:put|delete)|\sinstall\s|\sime\s+set'
                 if ($case.Mode -in @('multiple','locked','sha')) { Assert-NotMatches $calls 'KEYCODE_WAKEUP|forward --no-rebind' }
                 if ($case.Mode -eq 'success') { Assert-Contains $calls 'forward --remove' }
+                if ($case.Mode -eq 'owned-stop') {
+                    Assert-True ([regex]::Matches($calls, 'run-as dev\.magina\.gateway am stopservice').Count -eq 1) `
+                        '应仅用所属应用身份停止一次本轮服务。'
+                }
             }
         }
         finally {

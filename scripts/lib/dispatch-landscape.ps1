@@ -11,7 +11,6 @@ function Read-LandscapeBaseline {
         $baseline[$key] = $value
     }
     $baseline.Service = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
-    if ($baseline.Service -notin @('absent', 'foreground')) { throw '网关服务基线不确定。' }
     $forwards = (Invoke-P0DeviceCommand -Session $Device -Arguments @('forward','--list') -Operation '读取网关端口映射').Stdout
     $port = Get-GatewayPreflightPort
     $baseline.Forward = @($forwards -split '\r?\n' | Where-Object { $_ -match "^\S+\s+tcp:$port\s+" }) -join "`n"
@@ -37,7 +36,9 @@ function Get-LandscapeStartBaseline {
     $apk = $Matches[1]
     $digest = (Invoke-P0DeviceCommand -Session $Device -Arguments @('shell','sha256sum',$apk) -Operation '核对在机网关摘要').Stdout.Trim()
     if ($digest -notmatch '\A([0-9a-f]{64})\s+' -or $Matches[1] -ine $ExpectedGatewaySha256) { throw '在机网关 APK SHA-256 与本轮候选不符。' }
-    Read-LandscapeBaseline -Device $Device -AdbCommand $AdbCommand
+    $baseline = Read-LandscapeBaseline -Device $Device -AdbCommand $AdbCommand
+    if ($baseline.Service -notin @('absent', 'foreground')) { throw '网关服务基线不确定。' }
+    return $baseline
 }
 
 function Test-LandscapeChatFocus {
@@ -111,6 +112,15 @@ function Complete-LandscapePreparation {
     catch { $problems += '网关预检资源清理失败' }
     try {
         $current = Read-LandscapeBaseline -Device $Device -AdbCommand $AdbCommand
+        # Android 的停止回执可能先于 ServiceRecord 消失。只重读状态，不再发停止命令。
+        if ($Baseline.Service -eq 'absent' -and $current.Service -ne 'absent') {
+            foreach ($sample in 1..3) {
+                Start-Sleep -Milliseconds 350
+                $previous = $current.Service
+                $current.Service = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
+                if ($current.Service -eq 'absent' -or ($previous -eq 'unknown' -and $current.Service -eq 'unknown')) { break }
+            }
+        }
         foreach ($key in $Baseline.Keys) {
             if ($Baseline[$key] -cne $current[$key]) { $problems += "基线变化 $key" }
         }
