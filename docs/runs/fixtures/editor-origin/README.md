@@ -61,3 +61,5 @@ try {
 ```
 
 原点实验改用 `.OriginProbeIme`，启动时省略 `--ez geometry true`，并将 `$resultName` 设为 `result.json`。回执的 `complete`、四行 `pass` 和各项独立读数共同用于判定。再次开机读取留存回执时可用 `stat -c %Y` 核实其修改时间早于本次开机。
+
+在同一套四边实验中，用 `--ez session_bounds true` 启动并读取 `session-bounds-result.json`，可验证原点为空时的延后处理。确认本次结果和进度文件均不存在，并保留此前的回执。新模式每阶段通过实际输入连接返回一次 `CODE_UNSUPPORTED`。核对四行原点均空、矩形分别匹配当前框且不匹配对照框。`deferred_rejected` 应依次为 0、1、2、2，其中再次聚焦同一框的 `revisited_rejected` 应为 0、0、1、1。保留的旧样本从输入法已收到的事件中取得，此模式没有为系统首次送达的回调提供请求编号。
