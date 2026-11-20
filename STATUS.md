@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-19。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
+> 更新 2026-11-20。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
 > 2026-11-15 之前的过程记录、平板双窗研究和历史状态已移出主树，需要时用 `git show e1bae37:<路径>` 查看（如 `git show e1bae37:STATUS.md`）。
 
 ## 现在能做什么
@@ -9,7 +9,7 @@
 |---|---|---|
 | 网关 App（无障碍 + MCP HTTP + 工具 + 安全门） | 历史手机上跑通；PA2553 上确认卡 overlay、开机恢复、中文 `ime_commit` 已真机验证；2026-11-16 对齐普通具名点击、常规回车、黑名单出站与同应用平行视界规则（待真机验收） | [overlay 记录](docs/runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[开机恢复](docs/runs/2026-11-12-网关开机恢复离线.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 | 派单（Codex CLI + gateway） | 可用；入口 `scripts/dispatch.ps1`（固定 `codex + gateway`），内建预检与自启恢复 | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
-| 危险动作两段式硬门 | PA2553 本地测试按钮的真人 Allow、Stale、Deny 均通过；微信发送链待验。ConfirmOverlay 默认超时 90s | [平板实测](docs/runs/2026-11-19-PA2553本地确认卡验收.md)、[微信 P0 规程](docs/runbooks/P0-safety-hard-gate-smoke.md) |
+| 危险动作两段式硬门 | PA2553 本地测试按钮的真人 Allow、Stale、Deny 均通过。横屏微信已核实现场确认卡超时后实际点击为零，修复版获准后的发送效果仍待验 | [本地按钮实测](docs/runs/2026-11-19-PA2553本地确认卡验收.md) · [微信右窗实测](docs/knowledge/apps/wechat.md#保留草稿后的独立现场验收) |
 | 占位工具 | `notifications_list`、`notification_reply`、`ui_diff`、`app_stop` 已从 `tools/list` 下架，按需实施时再挂回 | [能力现状](docs/knowledge/android/m1b-capabilities.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
 
 ## 11 月 18 日修复与离线验证
@@ -53,6 +53,8 @@
 固定裁区版本 `dde8139` 已在 PA2553 验签安装。右窗显示「文件传输助手」，焦点在左窗；就位派单尝试选择左侧会话行，OCR 动作复核未命中，网关在实际点击前停止。本轮没有写入或发送。下一轮须先核实右窗会话已取得焦点，再验发送与投递。[本轮真机回执](docs/knowledge/apps/wechat.md#固定裁区版本在左窗就位时停止)
 
 同日，修复版在右窗已聚焦的「文件传输助手」成功备稿，编辑栏局部图核实整行只有指定测试串。唯一一次「发送」请求触发现场确认卡，最终返回 `E_CONFIRM_TIMEOUT`。实际发送点击为零。确认后边框复核与消息区投递仍待独立新轮验证。[右窗备稿与确认卡超时](docs/knowledge/apps/wechat.md#右窗备稿成功发送确认卡超时)
+
+随后一次独立现场验收沿用保留的草稿，重新核实整行与唯一的「发送」。悬浮窗出现后已提醒现场用户，网关在 90 秒内未收到决定，本轮以 `E_CONFIRM_TIMEOUT` 结束。没有写入或实际发送点击。修复版获准后的目标复核及消息区结果仍待验。[本轮设备审计与回执](docs/knowledge/apps/wechat.md#保留草稿后的独立现场验收)
 
 ## 2026-11-15 精简
 
