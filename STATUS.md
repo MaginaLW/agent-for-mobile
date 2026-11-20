@@ -88,6 +88,8 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 11 月 21 日，现场重新就位后，PA2553 保数据更新至 `8d02ed3`。输入法切换前后均核实了同一微信右窗和「文件传输助手」标题。唯一一次四边查询返回 `before_sample / input_focus_missing`：无障碍服务查询输入焦点时得到空节点，尚未向输入法请求几何数据。原输入法、四项设置和网关资源已恢复，vivo 无障碍服务的系统绑定已独立核实。[本轮回执](docs/knowledge/apps/wechat.md#重新就位后输入焦点节点为空) · [此前的入场记录](docs/knowledge/apps/wechat.md#细分焦点诊断在派单前停止)
 
+针对这次空焦点，草稿候选 `4862535` 增加了窗口字段核对。Debug 和 Release 的编译产物各通过 83 项 JVM 用例，其中 6 项取得预期四边，77 项按预期返回空四边。项目完整离线检查 9/9 通过。PA2553 最后一次核实的版本仍是 `8d02ed3`，微信是否提供核对所需的字段待真机验证。[核对条件与用例](docs/knowledge/apps/wechat.md#窗口字段与输入连接的离线核对) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
 ## 2026-11-15 精简
 
 按用户要求处理过度建设（[PR #17](https://github.com/MaginaLW/agent-for-mobile/pull/17)）：删除平板双窗研究栈、M1 spike 探针和派单中已退役的 Claude 分支；STATUS/backlog/README/AGENTS 压缩，历史过程记录移出主树。跟踪文件 484 → 240，完整离线门 19 项约 15 分钟 → 9 项约 3.5 分钟，9/9 通过；未做真机验证。
