@@ -103,6 +103,13 @@ data class ImeSessionIdentity(
         connected && packageName == expectedPackage
 }
 
+internal sealed interface EditorOriginResult {
+    data class Available(val point: PointF) : EditorOriginResult
+    enum class Unavailable : EditorOriginResult {
+        NO_INPUT_TARGET, CONTEXT_CHANGED, NO_VERIFIED_GEOMETRY, REQUEST_FAILED, TIMEOUT, UNSUPPORTED_API
+    }
+}
+
 /**
  * 当前输入框对 IME 声明的契约——**它决定 Enter 到底该怎么送**。
  *
@@ -224,17 +231,32 @@ object ImeBridge {
     private fun ic(): InputConnection? = if (active) connection?.invoke() else null
 
     /** 在 IME 主线程发起一次只读几何查询。重启、换框和迟到的回调都不能沿用旧连接。 */
-    internal fun requestEditorOrigin(expected: ImeSessionIdentity, executor: Executor): CompletableFuture<PointF?> {
-        val result = CompletableFuture<PointF?>()
+    internal fun requestEditorOrigin(expected: ImeSessionIdentity, executor: Executor): CompletableFuture<EditorOriginResult> {
+        val result = CompletableFuture<EditorOriginResult>()
         executor.execute {
             try {
                 val target = synchronized(sessionLock) {
+                    if (session() != expected) {
+                        result.complete(EditorOriginResult.Unavailable.CONTEXT_CHANGED)
+                        return@execute
+                    }
                     val type = editorContract?.inputType ?: android.text.InputType.TYPE_NULL
-                    if (type == android.text.InputType.TYPE_NULL || session() != expected) null else ic()
+                    if (type == android.text.InputType.TYPE_NULL) null else ic()
                 }
-                EditorOriginProbe.request(target, executor, {
-                    synchronized(sessionLock) { !result.isDone && session() == expected && ic() === target }
-                }) { point -> result.complete(point) }
+                if (target == null) {
+                    result.complete(EditorOriginResult.Unavailable.NO_INPUT_TARGET)
+                    return@execute
+                }
+                fun stillCurrent() = synchronized(sessionLock) {
+                    !result.isDone && session() == expected && ic() === target
+                }
+                EditorOriginProbe.request(target, executor, ::stillCurrent) { point ->
+                    result.complete(when {
+                        !stillCurrent() -> EditorOriginResult.Unavailable.CONTEXT_CHANGED
+                        point == null -> EditorOriginResult.Unavailable.NO_VERIFIED_GEOMETRY
+                        else -> EditorOriginResult.Available(point)
+                    })
+                }
             } catch (error: RuntimeException) {
                 result.completeExceptionally(error)
             }

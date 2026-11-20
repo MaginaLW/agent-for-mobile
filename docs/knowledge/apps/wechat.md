@@ -125,6 +125,8 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 网关的空结果可来自没有匹配的活动输入连接、编辑器回调没有提供合格几何、请求超时或连接在查询期间变化。本次回执不能区分这些情况，也无法确定输入框四边。[键盘查询](../../../app/gateway/src/main/java/dev/magina/gateway/tools/SystemTools.kt) · [编辑器回调](../../../app/gateway/src/main/java/dev/magina/gateway/ime/EditorOriginProbe.java)
 
+后续源码候选在显式查询原点失败时保留 `ime_editor_origin=null`，并附带固定原因 `ime_editor_origin_reason`。`no_input_target` 表示没有可用的目标编辑连接，`context_changed` 表示上下文已变化，`no_verified_geometry` 表示查询未取得合格几何，`timeout` 表示两秒内未收到结果。请求异常和系统版本不支持分别记为 `request_failed`、`unsupported_api`。原因字段不含输入文字或异常正文。PA2553 上的 `f913fb4` 没有这一字段，本轮失败的具体原因仍未知。
+
 宿主的首次收尾报告设置不匹配。随后在设备锁内逐项读回，确认原默认输入法、启用的输入法清单和无障碍总开关均匹配。服务和转发回到入场时的缺席状态，同签候选已保留。无障碍服务清单少了一项原已启用的非网关服务，没有新增项。移除时间及原因未知，本轮保留了这项差异。
 
 ### 历史手机实测
