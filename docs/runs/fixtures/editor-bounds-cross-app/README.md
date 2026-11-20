@@ -22,3 +22,13 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 | `missing` | 控件只有动态 ID。缺少资源名时返回空矩形和 `missing_id`。 |
 
 还原原默认输入法、启用清单及无障碍设置，逐项读回。停止本轮自建网关、转发、模拟器及私有 ADB，核实端口释放。此验收只覆盖当前输入焦点的只读元数据。
+
+显式查询四边时，如果网关返回 `focus_unavailable`，矩形仍为空。`ime_editor_focus_phase` 表明核对发生在输入法取样前（`before_sample`）或取样后（`after_sample`）。`ime_editor_focus_check` 记录按执行顺序首个失败的检查。
+
+| 检查位置 | 可能的回执值 |
+|---|---|
+| 清理无障碍缓存、取得活动根或所属窗口 | `cache_clear_failed`、`active_root_missing`、`active_window_missing` |
+| 取得系统输入焦点、刷新节点、核对焦点和可见状态 | `input_focus_missing`、`node_refresh_failed`、`node_not_focused`、`node_not_visible` |
+| 核对节点所在窗口、应用和活动根返回的输入焦点 | `node_window_mismatch`、`node_package_mismatch`、`root_focus_mismatch` |
+
+这两个字段仅含固定标记。成功或其他失败原因的回执省略它们。旧候选的 `focus_unavailable` 回执无法追溯到具体检查。
