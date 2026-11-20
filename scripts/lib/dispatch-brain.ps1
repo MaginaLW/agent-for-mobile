@@ -876,7 +876,8 @@ function New-DispatchCodexLaunchSpec {
         [Parameter(Mandatory)][bool]$ModelWasExplicit,
         [Parameter(Mandatory)][ValidateSet(1,2)][int]$Leg,
         [string]$CodexExecutableOverride = '',
-        [string]$CodexVersionOverride = ''
+        [string]$CodexVersionOverride = '',
+        [switch]$WeChatLandscapePrepare
     )
 
     # mobile profile 依赖宿主 PATH 中的 npx/npm，并会继续下载/执行包。当前尚未建立对
@@ -1007,6 +1008,10 @@ function New-DispatchCodexLaunchSpec {
         $timeoutSeconds = [int]$timeoutSecondsNumber
         $arguments.Add('-c')
         $arguments.Add("mcp_servers.$serverName.tool_timeout_sec=$timeoutSeconds")
+        if ($WeChatLandscapePrepare) {
+            $arguments.Add('-c')
+            $arguments.Add('mcp_servers.gateway.enabled_tools=["foreground_app","app_launch","ui_find","ui_action","keyboard_state"]')
+        }
         $token = $null
         $authorization = $null
     }

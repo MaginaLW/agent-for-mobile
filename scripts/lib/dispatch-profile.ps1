@@ -312,7 +312,8 @@ function Ensure-GatewayPreflightReady {
         [string]$AdbCommand = 'adb',
         [int]$Port = (Get-GatewayPreflightPort),
         [int]$HealthTimeoutSec = 5,
-        [int]$A11yRebindTimeoutSec = 8
+        [int]$A11yRebindTimeoutSec = 8,
+        [switch]$SkipAccessibilityRebind
     )
 
     $state = [pscustomobject]@{
@@ -432,6 +433,11 @@ function Ensure-GatewayPreflightReady {
             return $state
         }
         if ('a11y' -in $probe.Caps) { return $state }
+        if ($SkipAccessibilityRebind) {
+            $state.Problem = 'gateway_a11y_not_ready：准备任务未获准修改无障碍设置。'
+            Stop-GatewayPreflightOwnedResources -State $state -AdbCommand $AdbCommand
+            return $state
+        }
 
         $rebindError = Invoke-GatewayBoundedAccessibilityRebind -AdbCommand $AdbCommand
         if ($rebindError) {
