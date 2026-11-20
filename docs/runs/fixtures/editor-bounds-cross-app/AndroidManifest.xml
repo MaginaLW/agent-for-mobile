@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.magina.crossappfixture">
+    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35"/>
+    <application android:label="跨应用焦点测试" android:debuggable="true" android:allowBackup="false"
+                 android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".EditorActivity" android:exported="true"/>
+    </application>
+</manifest>

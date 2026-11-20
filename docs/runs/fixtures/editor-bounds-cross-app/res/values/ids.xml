@@ -1,0 +1,4 @@
+<resources>
+    <item name="focused_editor" type="id" />
+    <item name="other_editor" type="id" />
+</resources>
