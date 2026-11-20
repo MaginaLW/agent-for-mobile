@@ -1,13 +1,18 @@
 package dev.magina.gateway.ime
 
+import android.graphics.Matrix
 import android.graphics.PointF
+import android.graphics.RectF
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.os.SystemClock
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
+import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
+import androidx.annotation.RequiresApi
 import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
@@ -69,6 +74,7 @@ class GatewayIme : InputMethodService() {
                     imeOptions = it.imeOptions,
                     actionId = it.actionId,
                     actionLabel = it.actionLabel?.toString(),
+                    fieldId = it.fieldId,
                 )
             },
         ) { currentInputConnection }
@@ -77,6 +83,11 @@ class GatewayIme : InputMethodService() {
     override fun onFinishInput() {
         ImeBridge.finishSession()
         super.onFinishInput()
+    }
+
+    override fun onUpdateCursorAnchorInfo(info: CursorAnchorInfo?) {
+        super.onUpdateCursorAnchorInfo(info)
+        if (Build.VERSION.SDK_INT >= 34) ImeBridge.observeEditorBounds(currentInputConnection, info)
     }
 
     // 不显示输入视图：注入通道不需要可见键盘（也避免键盘弹出高度扰动布局）。
@@ -118,6 +129,7 @@ data class ImeEditorContract(
     val imeOptions: Int,
     val actionId: Int,
     val actionLabel: String?,
+    val fieldId: Int = 0,
 ) {
     /** `EditorInfo.IME_MASK_ACTION` 取出的动作码。 */
     val actionCode: Int get() = imeOptions and EditorInfo.IME_MASK_ACTION
@@ -169,9 +181,28 @@ data class ImeEditorContract(
     }
 }
 
+internal data class EditorBoundsSample(val fieldId: Int, val bounds: RectF)
+
+@RequiresApi(34)
+private fun CursorAnchorInfo.screenEditorBounds(): RectF? {
+    val source = editorBoundsInfo?.editorBounds ?: return null
+    fun RectF.valid() = left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite() &&
+        left < right && top < bottom
+    if (!source.valid()) return null
+    val transform = matrix
+    if (!transform.isAffine || !transform.invert(Matrix())) return null
+    val screen = RectF(source)
+    transform.mapRect(screen)
+    return screen.takeIf { it.valid() }
+}
+
 /** 网关进程内的 IME 桥：工具实现经它注入文本。 */
 object ImeBridge {
     private val sessionLock = Any()
+    private data class PendingBounds(
+        val session: ImeSessionIdentity, val connection: InputConnection, val result: CompletableFuture<EditorBoundsSample?>,
+    )
+    private var pendingBounds: PendingBounds? = null
     @Volatile var active: Boolean = false
         private set
     @Volatile private var connection: (() -> InputConnection?)? = null
@@ -198,6 +229,7 @@ object ImeBridge {
             this.sessionPackage = sessionPackage
             this.editorContract = editorContract
             active = true
+            discardPendingBounds()
         }
     }
 
@@ -208,6 +240,7 @@ object ImeBridge {
             sessionPackage = null
             editorContract = null
             connection = null
+            discardPendingBounds()
         }
     }
 
@@ -222,6 +255,60 @@ object ImeBridge {
     }
 
     private fun ic(): InputConnection? = if (active) connection?.invoke() else null
+
+    private fun discardPendingBounds() {
+        val prior = pendingBounds
+        pendingBounds = null
+        prior?.result?.complete(null)
+    }
+
+    /** 只请求一次立即回调。调用方超时后取消 future，迟到的回调在本会话中仍由原请求消费。 */
+    @RequiresApi(34)
+    internal fun requestEditorBounds(expected: ImeSessionIdentity, executor: Executor): CompletableFuture<EditorBoundsSample?> {
+        val result = CompletableFuture<EditorBoundsSample?>()
+        executor.execute {
+            val failure = try {
+                val connection = synchronized(sessionLock) {
+                    val current = ic()
+                    val type = editorContract?.inputType ?: android.text.InputType.TYPE_NULL
+                    if (current == null || result.isDone || pendingBounds != null ||
+                        type == android.text.InputType.TYPE_NULL || session() != expected) null
+                    else {
+                        pendingBounds = PendingBounds(expected, current, result)
+                        current
+                    }
+                }
+                val accepted = connection?.requestCursorUpdates(
+                    InputConnection.CURSOR_UPDATE_IMMEDIATE, InputConnection.CURSOR_UPDATE_FILTER_EDITOR_BOUNDS,
+                )
+                if (accepted == true) return@execute
+                null
+            } catch (error: RuntimeException) {
+                error
+            }
+            synchronized(sessionLock) { if (pendingBounds?.result === result) pendingBounds = null }
+            if (failure == null) result.complete(null) else result.completeExceptionally(failure)
+        }
+        return result
+    }
+
+    /** 系统首次送达的事件没有请求编号，调用方仍需独立核对当前焦点的身份和四边。 */
+    @RequiresApi(34)
+    internal fun observeEditorBounds(connection: InputConnection?, info: CursorAnchorInfo?) {
+        synchronized(sessionLock) {
+            val target = pendingBounds ?: return
+            pendingBounds = null
+            val sample = try {
+                if (!target.result.isDone && target.connection === connection &&
+                    ic() === connection && session() == target.session) {
+                    info?.screenEditorBounds()?.let { EditorBoundsSample(editorContract?.fieldId ?: 0, it) }
+                } else null
+            } catch (_: RuntimeException) {
+                null
+            }
+            target.result.complete(sample)
+        }
+    }
 
     /** 在 IME 主线程发起一次只读几何查询。重启、换框和迟到的回调都不能沿用旧连接。 */
     internal fun requestEditorOrigin(expected: ImeSessionIdentity, executor: Executor): CompletableFuture<PointF?> {
