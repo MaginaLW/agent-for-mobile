@@ -151,6 +151,16 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 重放既有 Android 16 合成回执时只比较四边。忽略原点字段后，4/4 个矩形与靶应用实测边界一致，均与同原点但尺寸不同的对照框有别。把前一阶段的矩形代入下一阶段，0/3 匹配。把上一次聚焦同一框时的旧矩形代入再次聚焦的阶段，2/2 仍匹配。即使尺寸和位置完全相符，仍需独立证据证明回调来自这一次输入连接。这是对保存读数的重放，真机上是否会迟到仍未知。[合成场景](../../runs/fixtures/editor-origin/README.md)
 
+### 原点为空时的四边实验
+
+2026-11-20，在隔离的 Android 16 模拟器上，合成编辑框对原点查询显式返回不支持，保留标准四边更新。独立进程中的输入法依次观察甲、乙、甲、乙四次聚焦，覆盖空稿和有稿。原点均为空，四个矩形均与靶应用实测的当前可见四边一致，并排除了同原点、尺寸不同的对照框。
+
+输入法在收到回调时记住当时的请求对象和输入连接，再将同一份数据延后处理。换框后三次处理前一阶段样本、两次处理再次聚焦同一框前的样本，五份均被拒绝。该检查覆盖输入法内部的延后处理。若系统在换框后才首次送达事件，公开回调只有位置对象，不能从签名中直接取得请求编号。本次没有观测到可证实来源的此类系统事件，微信的编辑框归属仍待验。[Android 输入法回调](https://developer.android.com/reference/android/inputmethodservice/InputMethodService#onUpdateCursorAnchorInfo(android.view.inputmethod.CursorAnchorInfo))
+
+针对首次送达，Android 16 源码显示应用侧发送前会检查传入 View 是否由输入法服务，并核对编辑器和系统输入法会话是否就绪。跨进程接口随后只传递 `CursorAnchorInfo`。输入法服务收到时检查会话是否启用，再把位置对象交给公开回调。发送端的检查不能给接收方提供可与本次四边请求逐一核对的编号。这份源码也没有证明 PA2553 发生过错序。[应用侧检查](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/inputmethod/InputMethodManager.java#L4195-L4216) · [跨进程接口](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/com/android/internal/inputmethod/IInputMethodSession.aidl#L51) · [输入法回调](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/inputmethodservice/InputMethodService.java#L1532-L1537)
+
+首次启动因干净实例缺少历史合成包，在安装前结束。修正入口后使用同一 APK 运行四个场景，共 86 秒，含启动与收尾。原默认输入法及启用清单均恢复，私有 ADB、模拟器和端口均已释放。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
