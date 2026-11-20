@@ -9,6 +9,7 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Process;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
@@ -23,6 +24,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -41,10 +43,13 @@ public final class OriginProbeActivity extends Activity {
     private boolean allPassed = true;
     private boolean geometry;
     private boolean sessionCase;
+    private boolean focusCheck;
+    final ArrayBlockingQueue<Intent> focusSamples = new ArrayBlockingQueue<>(1);
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        sessionCase = getIntent().getBooleanExtra(SESSION_CASE, false);
+        focusCheck = getIntent().getBooleanExtra("focus_check", false);
+        sessionCase = focusCheck || getIntent().getBooleanExtra(SESSION_CASE, false);
         geometry = sessionCase || getIntent().getBooleanExtra("geometry", false);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         FrameLayout root = new FrameLayout(this);
@@ -56,7 +61,9 @@ public final class OriginProbeActivity extends Activity {
         root.addView(frame, pane);
         for (int i = 0; i < editors.length; i++) {
             EditText editor = sessionCase ? new NoOriginEditor(this) : new EditText(this);
-            editor.setId(101 + i);
+            int id = focusCheck ? getResources().getIdentifier(i == 0 ? "editor_a" : "editor_b", "id", getPackageName()) : 101 + i;
+            if (id == 0) throw new IllegalStateException("missing fixture resource");
+            editor.setId(id);
             editor.setSingleLine(true);
             editor.setSaveEnabled(false);
             FrameLayout.LayoutParams position = new FrameLayout.LayoutParams(200, 70);
@@ -84,6 +91,11 @@ public final class OriginProbeActivity extends Activity {
     /** A standard bounds-producing editor whose separate origin query is explicitly unsupported. */
     private final class NoOriginEditor extends EditText {
         NoOriginEditor(Context context) { super(context); }
+
+        @Override public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+            super.onInitializeAccessibilityNodeInfo(info);
+            if (focusCheck && this == editors[1] && getId() != 102) info.setEditable(false);
+        }
 
         @Override public InputConnection onCreateInputConnection(EditorInfo attributes) {
             InputConnection editor = super.onCreateInputConnection(attributes);
@@ -114,6 +126,17 @@ public final class OriginProbeActivity extends Activity {
         active.setText(stage == 1 || stage == 2 ? "SYNTHETIC" : "");
         active.requestFocus();
         getSystemService(InputMethodManager.class).showSoftInput(active, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    void continueFocusCheck(int observedStage) {
+        if (!focusCheck || stage != observedStage + 1 || stage >= 4) throw new IllegalStateException("stage changed");
+        if (stage == 1) {
+            FrameLayout.LayoutParams size = (FrameLayout.LayoutParams) editors[0].getLayoutParams();
+            size.width += 12;
+            editors[0].setLayoutParams(size);
+        }
+        if (stage == 3) editors[1].setId(102); // Runtime ID without a matching resource entry.
+        frame.post(this::startStage);
     }
 
     private static Rect screenRect(EditText view) {
@@ -167,7 +190,8 @@ public final class OriginProbeActivity extends Activity {
                 if (sessionCase) {
                     int rejected = intent.getIntExtra("deferred_rejected", -1);
                     int revisited = intent.getIntExtra("revisited_rejected", -1);
-                    pass &= rejected == Math.min(stage, 2) && revisited == (stage >= 2 ? 1 : 0);
+                    boolean sameFieldRevisited = stage >= 2 && !(focusCheck && stage == 3);
+                    pass &= rejected == Math.min(stage, 2) && revisited == (sameFieldRevisited ? 1 : 0);
                     row.put("unsupported_origin_requests", originRequests.get())
                         .put("deferred_rejected", rejected).put("revisited_rejected", revisited);
                 }
@@ -195,11 +219,12 @@ public final class OriginProbeActivity extends Activity {
                 try (FileOutputStream stream = new FileOutputStream(partial)) {
                     stream.write(report.toString().getBytes(StandardCharsets.UTF_8));
                 }
-                String prefix = sessionCase ? "session-bounds-" : geometry ? "bounds-" : "";
+                String prefix = focusCheck ? "focus-bounds-" : sessionCase ? "session-bounds-" : geometry ? "bounds-" : "";
                 if (!partial.renameTo(new File(getFilesDir(), prefix + (stage == 4 ? "result.json" : "progress.json")))) {
                     throw new IllegalStateException("receipt rename");
                 }
-                if (stage < 4) frame.post(OriginProbeActivity.this::startStage);
+                if (focusCheck) focusSamples.add(new Intent(intent));
+                else if (stage < 4) frame.post(OriginProbeActivity.this::startStage);
             } catch (Exception e) {
                 throw new IllegalStateException("synthetic receipt", e);
             }
