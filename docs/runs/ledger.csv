@@ -198,3 +198,5 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-21T09:24:46,wechat-editor-window-field,1,codex,,1,91328,267,71936,0,,31,fail,,,executor=gateway | 复用 4862535 免安装五次读取，同一右窗及标题核实通过，四边为空且为 before_sample/node_not_focused；四项设置、资源与 vivo 服务系统绑定均独立核实一致,verify-fail
 2026-11-21T10:42:52,wechat-editor-unfocused-field,1,codex,,1,131627,400,103424,0,,80,fail,,,executor=gateway | 同签更新 2341c7d 后第 4 次读取因新网关 revision 变化返回 page-changed，未查四边；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail
 2026-11-21T10:46:32,wechat-editor-unfocused-field,1,codex,,1,90381,256,71424,0,,27,fail,,,executor=gateway | 复用 2341c7d 免安装五次读取，同一右窗及标题核实通过，四边为空且仍为 before_sample/node_not_focused；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail
+2026-11-21T11:53:55,wechat-editor-corroborated-unfocused,1,codex,,1,78294,245,59008,0,,33,fail,,,executor=gateway | 同签更新 f503328 后第 4 次读取因新网关 revision 变化返回 page-changed，未查四边；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail
+2026-11-21T11:57:27,wechat-editor-corroborated-unfocused,1,codex,,1,91742,273,72704,0,,27,fail,,,executor=gateway | 复用 f503328 免安装五次读取，同一右窗及标题核实通过，四边为空且为 before_sample/node_not_visible；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail

@@ -96,6 +96,8 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 针对该断点，草稿候选 `2341c7d` 仅在服务级与根级输入焦点均为空时放行未聚焦的唯一窗口字段节点，离线全量检查 9/9 通过（Debug 503 项、Release 406 项单测及 Lint、构建通过）。11 月 21 日在 PA2553 上同签保数据更新至 `2341c7d` 后进行了两轮只读诊断：首轮（80 秒，4 次调用）在新网关重启后于第 4 次标题复核遇 `page-changed` 停止，未执行四边查询；随后的免安装复测（27 秒，5 次调用）在切换输入法前后均核实同一微信右窗与标题，唯一一次四边查询仍返回 `before_sample / node_not_focused`。按 `2341c7d` 源码，该回执证明服务级或窗口根的 `findFocus(FOCUS_INPUT)` 实际返回了非空焦点节点，但节点刷新后 `isFocused` 为假。两轮收尾均经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定及网关资源回到基线。[2341c7d 真机回执](docs/knowledge/apps/wechat.md#候选-2341c7d-免安装复测仍返回-node_not_focused) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
 
+草稿候选 `f503328` 随后对未聚焦节点统一采用活动窗、非冲突焦点与 `EditorInfo.fieldId` 交叉核验，离线全量检查 9/9 通过（Debug 509 项、Release 412 项单测及 Lint、构建通过）。同日在 PA2553 同签保数据更新至 `f503328` 后进行两轮只读诊断：首轮（33 秒，4 次调用）在安装重启后的第 4 次标题复核遇 `page-changed` 停止；免安装复测（27 秒，5 次调用）在同一微信右窗及标题核对通过后，唯一一次四边查询返回 `before_sample / node_not_visible`。对比 `2341c7d`（`node_not_focused`）与 `f503328`（`node_not_visible`），证实服务级 `findFocus(FOCUS_INPUT)` 实际返回了非空节点，但该节点同时报告 `isFocused=false` 且 `isVisibleToUser=false`，依然在发出输入法四边请求前停止。两轮收尾均经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定及网关资源回到基线。[f503328 真机回执](docs/knowledge/apps/wechat.md#候选-f503328-免安装复测返回-node_not_visible) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
 ## 2026-11-15 精简
 
 按用户要求处理过度建设（[PR #17](https://github.com/MaginaLW/agent-for-mobile/pull/17)）：删除平板双窗研究栈、M1 spike 探针和派单中已退役的 Claude 分支；STATUS/backlog/README/AGENTS 压缩，历史过程记录移出主树。跟踪文件 484 → 240，完整离线门 19 项约 15 分钟 → 9 项约 3.5 分钟，9/9 通过；未做真机验证。
