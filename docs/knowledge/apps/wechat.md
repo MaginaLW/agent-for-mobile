@@ -246,6 +246,16 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 按 `2341c7d` 源码，`currentFocus` 仅在以下两处抛出 `node_not_focused`：其一是服务级 `findFocus(FOCUS_INPUT)` 返回了非空节点且刷新后 `node.isFocused` 为假；其二是服务级焦点为空、窗口字段查得唯一可见同窗同包节点后，`root.findFocus(FOCUS_INPUT)` 返回同一节点但 `node.isFocused` 为假。换言之，本次已排除“服务级与根级焦点均为空”的路径——Android 无障碍焦点查询本身已返回非空节点，但微信该节点在 `node.refresh()` 后仍报告 `isFocused=false`。回执目前无法区分这两处中的哪一处，也尚未进入输入法四边采样。
 
+### 候选 f503328 免安装复测返回 node_not_visible
+
+2026-11-21，草稿候选 `f503328` 移除两处 `node_not_focused` 拦截，对未聚焦节点统一要求可见、同窗、同包、非冲突根焦点及取样前 `EditorInfo.fieldId` 交叉核验，完整离线检查 9/9 通过（Debug 509 项、Release 412 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `2341c7d` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/f50332839cc88f637d6d8740bdf65a9870eaf8bf)
+
+首轮在 PA2553 已聚焦微信右窗「文件传输助手」完成同签保数据覆盖安装并核实在机摘要（`install_attempts=1`）。新网关重启并临时切换至 `GatewayIme` 后，第 3 次 `foreground_app` 核实同一右窗（`revision=3`），第 4 次标题复核期间因重启后的 `revision` 变化触发过滤器 `page-changed` 终止；本轮耗时 33 秒、4 次读取、未执行四边查询，微信内零点击、零输入、零发送。收尾回选原 vivo 默认输入法并按授权补回缺失的单项 vivo 无障碍服务一次，独立核实四项设置、网关资源与系统绑定（`hasBound=true`）一致。
+
+随后另获授权执行一次免安装复用复测（`install_attempts=0`，使用独立回执目录）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次读取即唯一一次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample` 与 `node_not_visible`。该轮耗时 27 秒，安装、微信内点击、输入及发送均为零。收尾同样回选原默认输入法、按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项设置、网关服务、端口转发及组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `f503328`。
+
+对比 `2341c7d` 与 `f503328` 的执行顺序：`2341c7d` 仅在 `serviceFocus != null` 时先于 `isVisibleToUser` 检查 `isFocused`，若此前走的是 `serviceFocus == null` 路径则本应在 `2341c7d` 就先报 `node_not_visible`。两次连续实测共同证实：在 PA2553 微信右窗已聚焦并弹起键盘时，`service.findFocus(FOCUS_INPUT)` 返回了非空节点，但该节点同时报告 `isFocused=false` 且 `isVisibleToUser=false`。因 `node_not_visible` 仍在 `node.windowId`、`packageName`、`rootFocus`、`EditorInfo.fieldId` 校验与输入法四边请求之前触发，目前仍无法判断该服务级焦点节点是否跨窗/错控件，也尚未观测到微信是否返回输入法四边回调。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
