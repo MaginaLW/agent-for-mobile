@@ -314,6 +314,12 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 网关从字段信息和会话代次生成输入法会话标识，从窗口、资源名、类名、包名和矩形生成无障碍节点标识。两者没有可直接对照的键。项目编译用的 Android API 35 在无障碍节点上提供 `getUniqueId()`，输入法的 `EditorInfo` 和 `CursorAnchorInfo` 均未提供对应的节点标识。网关从当前输入契约为四边样本附上 `fieldId`，因此样本与契约中的字段值来自同一处。重开横屏就位还需要能独立核实当前输入连接对应哪一个右窗编辑框、并能比对该框四边的证据。[输入法会话标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L21-L44) · [四边样本来源](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L302-L312) · [无障碍节点标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/a11y/FocusedInputIdentity.kt#L5-L17)
 
+#### 无名编辑框保持焦点时重启输入连接
+
+在全新 Android 16（API 36）模拟器上，基于主线 `16a0b56` 的四场景合成实验订阅 `TYPE_VIEW_FOCUSED`，按事件来源节点及窗口与系统输入焦点逐次核对。四个场景各取得一条来源相符的事件。最后的无名编辑框也收到了该事件，输入法与无障碍读到的四边一致，身份核对仍返回 `missing_id`。[基础实验与四个场景](../../runs/fixtures/editor-origin/README.md#用当前输入焦点核对身份和四边)
+
+保持最后一个编辑框的焦点，测试应用对它调用一次 `InputMethodManager.restartInput(view)`。应用为该框创建输入连接的次数由 1 增至 2，独立输入法进程收到 `onStartInput(restarting=true)`，代次由 5 变为 6。重启前后系统焦点指向同一窗口的同一无名节点，四边相同。从调用起的 1,244 毫秒内，该应用的焦点事件数为 0。因此，最近一次焦点事件可以指示曾获得焦点的节点，单凭它无法区分该节点上先后建立的两个输入连接。PA2553 的两个无名候选仍缺少与当前输入连接的独立对应证据。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
