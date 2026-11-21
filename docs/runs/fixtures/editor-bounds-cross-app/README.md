@@ -35,6 +35,19 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 
 ### 服务级输入焦点为空时的字段核对
 
-沿用 `INPUT_NULL`。候选从当前输入连接取得 `EditorInfo.fieldId`，在目标应用的资源表中解析全限定 ID，然后在已核实的活动窗口内按名查找。每次必须唯一命中，刷新后的节点须有输入焦点、可见、与窗口和应用相符，且通过密码及敏感字段检查。窗口根若返回另一个焦点节点，查询随即结束。字段 ID 可缺失；缺失或无法解析时返回空四边。[Android 字段 ID 约定](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#fieldId) · [窗口内的资源名查找](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String))
+沿用 `INPUT_NULL`。当服务级输入焦点非空时，原有全部检查与顺序保持不变：节点未报告聚焦仍返回 `focus_unavailable` / `node_not_focused`，活动根返回的输入焦点不等于该节点仍返回 `root_focus_mismatch`。
 
-取样前后须取得同一节点、窗口、具名资源和屏幕四边，输入会话须稳定，输入法回调中的字段名及完整矩形须与窗口测量匹配。对照用例包含同窗同名、不同焦点、不同窗口、敏感字段和采样期间更换节点。在成功回执中，只有用过按字段查找的阶段才会产生 `ime_editor_bounds.window_field_phase`，取值为 `before_sample`、`after_sample` 或 `both`。该回执仅供几何诊断。
+仅当服务级输入焦点为空时，候选从当前输入连接取得非敏感的 `EditorInfo.fieldId`，在目标应用的资源表中解析全限定 `id/...` 资源名，然后在已核实的活动聚焦应用窗口内按名唯一查找。字段 ID 缺失、非 `id/...` 或无法解析时返回 `missing_id`；窗口内无命中返回 `input_focus_missing`，多命中返回 `ambiguous_id`。[Android 字段 ID 约定](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#fieldId) · [窗口内的资源名查找](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String))
+
+命中并完成 `node.refresh()` 后，继续校验 `isVisibleToUser`、窗口号与包名，再查询活动根输入焦点 `rootFocus = root.findFocus(FOCUS_INPUT)`：
+
+- `rootFocus != null && rootFocus != node`：返回 `focus_unavailable` / `root_focus_mismatch`（他节点持焦时绝不放行）。
+- `rootFocus == node && !node.isFocused`：返回 `focus_unavailable` / `node_not_focused`（矛盾状态拒绝）。
+- 仅当 `rootFocus == null && !node.isFocused` 时，允许节点以未聚焦状态继续执行非密码/非敏感检查、`viewIdResourceName == fieldName`、二次唯一查表、非空且完全落于活动窗口内的四边校验，以及输入法四边采样。
+
+取样前后须取得同一节点、窗口、具名资源、可编辑状态、聚焦状态和屏幕四边（任一字段变化含采样前后焦点翻转均返回 `context_changed`），默认输入法须仍为网关输入法、输入会话须稳定，输入法回调中的字段名须与节点一致且四边按 `Float` 逐边精确匹配（不截断小数）。对照用例覆盖服务级焦点未聚焦、根焦点指向他节点、根焦点等于节点但自报未聚焦、不可见、跨窗/跨包、密码与敏感字段、首查/复查重名、字段名不符、四边像素/小数偏差、空或越界矩形、采样前后焦点翻转、空采样与超时。
+
+回执保持只读诊断语义，不生成操作引用或输入身份，也不新增 `ime_editor_bounds_reason` 或 `ime_editor_focus_check` 枚举值：
+
+- `ime_editor_bounds.window_field_phase`：仅在至少一个阶段用过按字段查找的成功回执中出现，取值为 `before_sample`、`after_sample` 或 `both`。
+- `ime_editor_bounds.node_focused`：仅在成功回执依赖未报告聚焦的节点（`node.isFocused == false`）时出现在 `ime_editor_bounds` 内，固定为 `false`（此时采样前后必均走窗口字段查找，`window_field_phase` 为 `both`）。正常聚焦成功路径与所有失败回执均省略该字段，顶层响应也不出现该字段。
