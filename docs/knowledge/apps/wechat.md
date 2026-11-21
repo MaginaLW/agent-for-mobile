@@ -337,6 +337,8 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 能否沿用 vivo 输入法，从无障碍服务直接取得这份几何？核对项目编译所用 API 35 的公开方法和 Android 16 框架源码，无障碍输入法可取得当前 `EditorInfo` 并接收选区变化。它拿到的 `AccessibilityInputConnection` 缺少普通 `InputConnection` 上的 `requestTextBoundsInfo` 和 `requestCursorUpdates`。因此，只启用无障碍输入法标志，仍无法沿用网关现有的原点与四边查询。这次接口核对没有切换设备输入法。[Android 无障碍输入连接](https://developer.android.com/reference/android/accessibilityservice/InputMethod.AccessibilityInputConnection) · [Android 16 框架实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/accessibilityservice/InputMethod.java)
 
+API 36 隔离实验随后验证了一种独立对应方式。实验输入法读取当前连接的原生自动填充标识，自动填充服务从同一窗口的结构找到候选，靶应用另行记录哪一侧真正收到了连接请求。同一对无名原生控件左右交接均选对，四边重合与焦点冲突均停止。微信是否暴露可供这种比对的结构仍待验证。[四场实测及适用范围](../../runs/fixtures/editor-autofill/README.md#隔离模拟器实测)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
