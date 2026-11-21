@@ -29,7 +29,7 @@
 
 11 月 22 日，PA2553 已同签保数据更新至模拟器实测的 `b029ac1`。从操作者已聚焦的右窗开始，五步派单核实了切换输入法前后的窗口和标题，第五步返回 `missing_id`，未取得两行候选及四边。四项设置、网关资源和原 vivo 服务的系统绑定均已核实恢复。旧回执无法定位失败步骤，横屏唯一识别仍阻塞。桌面和左窗起点、现场发送及竖屏 P0 继续待验。[本轮真机结果](knowledge/apps/wechat.md#pa2553-双候选诊断返回-missing_id)
 
-草稿 #47 已给 `missing_id` 增加采样阶段和失败位置。宿主离线回放覆盖全部九种有效组合、旧回执和九种无效回执，均在第五步停止。候选 `2289925` 已通过隔离模拟器五例实测，其中动态 ID 一例在采样前因服务焦点节点缺少资源名而停止。要确定 PA2553 命中哪一项，仍需新候选的现场回执。[模拟器五例结果](knowledge/apps/wechat.md#在隔离模拟器上定位一次-missing_id) · [诊断字段](runs/fixtures/editor-bounds-cross-app/README.md#missing_id-停在哪一步)
+草稿 #47 已给 `missing_id` 增加采样阶段和失败位置。候选 `2289925` 的宿主回放和隔离模拟器五例均通过。PA2553 同签更新后，已就位右窗的第五步返回 `before_sample / field_id_unresolved`。现已定位到输入法采样前的字段 ID 解析，具体字段值及其资源类型仍未知。右窗编辑框唯一识别继续阻塞，竖屏 P0 暂缓。[真机结果与恢复](knowledge/apps/wechat.md#pa2553-在采样前无法解析字段-id) · [模拟器对照](knowledge/apps/wechat.md#在隔离模拟器上定位一次-missing_id) · [诊断字段](runs/fixtures/editor-bounds-cross-app/README.md#missing_id-停在哪一步)
 
 ## 2. 按需再做（有具体任务需要时才排）
 
