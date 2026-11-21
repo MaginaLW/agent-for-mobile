@@ -218,17 +218,16 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     }
     if (!node.refresh()) missing("node_refresh_failed")
     val focused = node.isFocused
-    if (serviceFocus != null && !focused) missing("node_not_focused")
     if (!node.isVisibleToUser) missing("node_not_visible")
     if (node.windowId != window.id) missing("node_window_mismatch")
     if (node.packageName != pkg) missing("node_package_mismatch")
     val rootFocus = root.findInputFocus()
-    // 按名定向查找时允许根查询为空；根一旦指出其他节点即拒绝，指向本节点却自报未聚焦同样拒绝。
+    // 服务级焦点非空时要求活动根焦点指向同一节点；按窗口字段查找时允许根焦点为空或指向本节点，指向他节点一律拒绝。
     if (rootFocus != node && (serviceFocus != null || rootFocus != null)) missing("root_focus_mismatch")
-    if (!focused && rootFocus != null) missing("node_not_focused")
     if (node.isPassword || node.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
+    val expectedFieldName = fieldName ?: if (!focused) resolveWindowFieldName(env, pkg) else null
     val name = node.viewIdResourceName?.takeIf { it.isNotBlank() } ?: throw Unavailable("missing_id")
-    if (fieldName != null && fieldName != name) throw Unavailable("different_id")
+    if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
     if (root.findNodesByViewId(name).singleOrNull() != node) throw Unavailable("ambiguous_id")
     val bounds = node.boundsInScreen()
     if (bounds.isEmpty || !window.boundsInScreen().contains(bounds)) throw Unavailable("invalid_bounds")
