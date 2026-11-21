@@ -12,18 +12,22 @@ import android.view.inputmethod.EditorBoundsInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import dev.magina.gateway.ime.EditorOriginProbe;
+import java.util.ArrayDeque;
 
 /** A single immediate update per stage. CursorAnchorInfo has no request ID. */
 public final class BoundsProbeIme extends InputMethodService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private int lastStage = -1;
     private Sample pending;
+    private final ArrayDeque<Sample> deferred = new ArrayDeque<>();
 
     private static final class Sample {
         final int stage;
         final int fieldId;
         final InputConnection connection;
         boolean accepted, originReceived, anchorReceived;
+        boolean testDeferred;
+        int rejected, revisitedRejected;
         PointF origin;
         RectF bounds;
 
@@ -45,6 +49,15 @@ public final class BoundsProbeIme extends InputMethodService {
             lastStage = stage;
             Sample sample = new Sample(stage, editor.fieldId, connection);
             pending = sample;
+            sample.testDeferred = editor.extras != null && editor.extras.getBoolean(OriginProbeActivity.SESSION_CASE);
+            if (sample.testDeferred) {
+                for (Sample prior : deferred) {
+                    if (!acceptBounds(prior, prior.bounds)) {
+                        sample.rejected++;
+                        if (prior.fieldId == sample.fieldId) sample.revisitedRejected++;
+                    }
+                }
+            }
             sample.accepted = connection.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE,
                 InputConnection.CURSOR_UPDATE_FILTER_EDITOR_BOUNDS);
             EditorOriginProbe.request(connection, getMainExecutor(),
@@ -66,9 +79,16 @@ public final class BoundsProbeIme extends InputMethodService {
         if (editor == null || editor.getEditorBounds() == null) return;
         RectF bounds = new RectF(editor.getEditorBounds());
         info.getMatrix().mapRect(bounds);
+        acceptBounds(sample, bounds);
+    }
+
+    // Preserve the recipient observed at callback entry when consumption is deferred.
+    private boolean acceptBounds(Sample sample, RectF bounds) {
+        if (pending != sample || getCurrentInputConnection() != sample.connection) return false;
         sample.bounds = bounds;
         sample.anchorReceived = true;
         complete(sample, false);
+        return true;
     }
 
     private void complete(Sample sample, boolean timedOut) {
@@ -82,6 +102,14 @@ public final class BoundsProbeIme extends InputMethodService {
         if (sample.origin != null) receipt.putExtra("origin", new float[]{sample.origin.x, sample.origin.y});
         RectF r = sample.bounds;
         if (r != null) receipt.putExtra("observed_bounds", new float[]{r.left, r.top, r.right, r.bottom});
+        if (sample.testDeferred) {
+            receipt.putExtra("deferred_rejected", sample.rejected)
+                .putExtra("revisited_rejected", sample.revisitedRejected);
+            if (r != null) {
+                if (deferred.size() == 2) deferred.removeFirst();
+                deferred.addLast(sample);
+            }
+        }
         sendBroadcast(receipt);
     }
 
