@@ -196,3 +196,5 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
 2026-11-20T23:50:13,wechat-editor-bounds,1,codex,,1,91052,272,84864,0,,49,fail,,,executor=gateway | 两次核实同一微信右窗及标题。四边为空且原因为 focus_unavailable。原 vivo 输入法和无障碍服务均已恢复并独立核实,verify-fail
 2026-11-21T00:52:18,wechat-editor-focus-positioned,1,codex,,1,171786,485,151296,0,,303,fail,,,executor=gateway | 同一右窗及标题核实通过。四边为空，取样前无障碍输入焦点节点缺失。四项设置和资源已恢复，vivo 服务的系统绑定已核实,verify-fail
 2026-11-21T09:24:46,wechat-editor-window-field,1,codex,,1,91328,267,71936,0,,31,fail,,,executor=gateway | 复用 4862535 免安装五次读取，同一右窗及标题核实通过，四边为空且为 before_sample/node_not_focused；四项设置、资源与 vivo 服务系统绑定均独立核实一致,verify-fail
+2026-11-21T10:42:52,wechat-editor-unfocused-field,1,codex,,1,131627,400,103424,0,,80,fail,,,executor=gateway | 同签更新 2341c7d 后第 4 次读取因新网关 revision 变化返回 page-changed，未查四边；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail
+2026-11-21T10:46:32,wechat-editor-unfocused-field,1,codex,,1,90381,256,71424,0,,27,fail,,,executor=gateway | 复用 2341c7d 免安装五次读取，同一右窗及标题核实通过，四边为空且仍为 before_sample/node_not_focused；补回 vivo 服务后四项设置、资源与系统绑定均独立核实一致,verify-fail
