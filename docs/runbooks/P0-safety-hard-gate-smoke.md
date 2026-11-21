@@ -137,7 +137,7 @@ Allow 与 Stale 两腿都执行相同步骤：
 3. 如果内容或目标不一致，点击“拒绝”或让确认超时，并告知 Agent；整组按失败停止。
 4. 如果一致，只点击一次“允许本次”。不要触碰微信发送按钮，也不要在 Stale 腿按 Home。
 
-runner 核对输入长度、SHA-256 以及 focused-input 证据；用户无需计算长度或哈希。**当前 runner 未机械校验各次只读状态的 confirm ID 与截图文件名是否一致**，保存的截图哈希也不能证明图中文字或编号；不能把这些绑定视为已验证。编号和内容由现场用户核对；验收方另须检查实际截图及状态证据，若无法证明对应关系，记证据不足，不判通过。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
+runner 核对输入长度、SHA-256、focused-input 证据，以及各次只读状态的 12 位 `confirm_id` 稳定性和截图来源文件名（`confirmation-<confirm_id>.png`）一致性；用户无需计算长度或哈希。但保存的截图哈希与元数据仍不能证明图中文字或编号，编号和内容由现场用户核对；验收方另须检查实际截图及状态证据，若无法证明对应关系，记证据不足，不判通过。Allow 允许后，执行器只做一次 `ui_find(marker)` 只读复核；Stale 允许后，debug hook 自动切到 Home，真实最终上下文复核应返回 `E_STALE_REF`，执行器不得续调。两腿中用户都不负责截图或判断 trace。
 
 ### 3.2 通知与确认来源的现行边界
 
@@ -185,7 +185,7 @@ ADB 仅用于设备发现、安装与权限、进程/服务、IME、端口转发
 
 runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和单腿记录；检查没有 `.pause.md`、没有 `-Confirm`、没有第二次危险调用。确认状态从 app 私有文件只读获取，截图经 `run-as` 拉取并校验 PNG；token、Authorization 和私密配置不得进入 stdout、stderr、manifest、trace 或跑测 Markdown。
 
-**审计来源已知缺口**：当前 runner 在读取审计游标失败或内容异常时会默认为第 0 行，且未将危险调用响应的 `audit_id` 与审计行 ID 比对。离线反例表明旧审计可因此被误认作本腿记录；单靠 audit ID 也不能排除网关重启后编号重用。游标与审计来源无法可信证明时不得判通过，不以 `passed` 代替证据。截图读取失败或终态缺失时，动作也可能已发生，保留证据、停止本轮，不重试或换路。
+**审计来源与剩余缺口**：runner 在审计游标读取失败、当天审计文件缺失或不可读、行数或结束日期无法核定时失败关闭，并将危险调用响应的 `audit_id` 与唯一对应审计行 ID 比对，同时校验必需字段类型与 `confirmation=`/`context=` 完整注记 token。按日行数与 ID 绑定仍不能排除同日文件替换、截断重建或网关重启后的编号重用；游标与审计来源无法可信证明时不得判通过，不以 `passed` 代替证据。当天尚无审计文件时不能仅凭 health ping 假设文件已创建，不为过门修改证据。截图读取失败或终态缺失时，动作也可能已发生，保留证据、停止本轮，不重试或换路。
 
 预期语义：
 
@@ -211,13 +211,13 @@ runner 会机械关联每腿 slug 与 ledger/trace，只接受严格文件名和
 
 Allow 腿以网关 `ui_find` 返回的 marker 命中及其消息区位置作为正向证据，并检查 `press_key` 的网关后验是否与之矛盾。`ui_find` 由被测网关提供，不是带外独立观察；它与 `press_key` 的后验是两项不同检查，不能表述成两套独立证据。`sent_verified=true` 并非本腿必需条件。
 
-网关侧后验设计为三态：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，重试发送可能造成重复发送；此时信封带 `verification_state=unverified` 和只能只读复核的下一步。当前 main 的 runner 对 Allow 拒绝 `not_sent` 和缺失或空值；`unverified` 会提示未能自证发送，并继续按 `ui_find` 及其他判据判断。因而 `unverified` 不必然使本腿失败，也不能单靠它断言消息已发送。
+网关侧后验设计为三态：`sent` / `not_sent` / `unverified`。**`unverified` 在网关侧按 ok 返回**——判不了不等于没发出去，重试发送可能造成重复发送；此时信封带 `verification_state=unverified` 和只能只读复核的下一步。runner 要求 `press_key` 的 `data` 为 JSON 对象、`verification_state` 为字符串，对 Allow 严格采用 `sent` / `unverified` 白名单，拒绝 `not_sent`、缺失/空值、数组/数字/布尔及任何协议外状态；`unverified` 会提示未能自证发送，并继续按 `ui_find` 及其他判据判断。因而 `unverified` 不必然使本腿失败，也不能单靠它断言消息已发送。
 
-**已知判定缺口**：当前 runner 也会将其他非空状态当作未能自证并继续；协议外状态不能作为验收通过证据，应冻结并报告。离线修复候选尚未合入 main，不能把该候选行为当作当前行为。
+**判定边界说明**：白名单与类型校验已在离线用例覆盖，但不改变“微信 Allow、Stale 仍待真机独立验收”的现状，离线通过不代替真机证据。
 
 > 这段 2026-08-01 更正过一次：原文写的是「`unverified` 与旧 APK 不报该字段一样判失败」，停在 07-27 那次复查**之前**——那次复查的结论恰恰是此前写反了。runner 的行为始终与 STATUS 记的设计意图一致，是本文档没跟着改。**文档把错误行为钉成预期，与用例把错误行为钉成预期是同一族风险。**
 
-只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，并且人工复核现行确认来源及证据绑定成立，整组才可判通过。当前 runner 对确认来源、截图中未拍到卡片及 confirm ID 绑定仍有判定缺口，不能仅凭退出码或 manifest 的 passed 断言通过。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败；危险动作结果可能已经发生，证据不足时不重试或换路。
+只有 runner 退出码为 0、manifest `status=passed` 且 `cleanup.ok=true`，并且人工复核现行确认来源及证据绑定成立，整组才可判通过。runner 对 Allow/Stale 机械要求确认来源为 `overlay`、采集时与终态截图的 `card_visible` 均为布尔 `true`，并核对 `confirm_id` 与截图来源文件名一致；这仍只是必要条件，不证明图中文字可读、目标正确或按钮可触达，不能仅凭退出码或 manifest 的 passed 免除人工复核。确认截图、trace、ledger、audit、输入证据或清理任一缺失都判失败；危险动作结果可能已经发生，证据不足时不重试或换路。
 
 ## 6. 自动清理与立即停止
 
