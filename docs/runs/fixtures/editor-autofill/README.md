@@ -10,6 +10,6 @@
 
 1. 使用[本地测试台](../../../runbooks/本地测试台.md)的全新 API 36 AVD、禁用 USB 和 mDNS 的私有 ADB、启动前空设备表及专属端口。准备两个目录的独立 APK；构建步骤同[原点实验](../editor-origin/README.md#构建)，每个 APK 仅编译各自目录的 Java。靶应用无资源目录，链接清单时省略资源包。观察器有两个 XML 资源；用 API 35 编译时，通过方法名调用 API 36 的公开接口。两包用一次性实验签名签署。
 2. 仅在核实归属的模拟器上安装两包，读回包摘要和 UID。保存默认输入法、已启用输入法清单和自动填充服务。选用实验组件 `dev.magina.autofillobserver/.ProbeIme` 和 `dev.magina.autofillobserver/.ProbeAutofillService`。
-3. 启动 `dev.magina.autofilltarget/.TargetActivity`，传入字符串参数 `scenario=left`。保存靶应用私有的 `files/oracle.json` 与观察器的 `files/result.json`。取走旧回执后，以 single-top 将 `scenario=right` 传给原 Activity。核实实例标记相同、两框均沿用，实际收到探针的连接已从左换到右。
+3. 启动 `dev.magina.autofilltarget/.TargetActivity`，传入字符串参数 `scenario=left`。保存靶应用私有的 `files/oracle.json` 与观察器的 `files/result.json`。取走旧回执后，确认同一个靶 Activity 仍在前台。仅在专属模拟器上向左场回执中已测得的右框内部执行一次触摸。核实实例标记相同、两框均沿用，实际收到探针的连接已从左换到右。
 4. 分别以干净状态运行 `overlap` 和 `conflict`。前者把两框放在同一屏幕矩形；后者让左框保持实际焦点和连接，在右框请求自动填充，并在结构中报告右侧焦点。验收同时检查具体拒绝原因、选中侧为空、最终矩形为空。每场单独保存回执。
 5. 将三项设置恢复到入场值并读回，关闭本轮创建的模拟器和私有 ADB，核对专属端口已释放。

@@ -2,12 +2,12 @@ package dev.magina.autofilltarget;
 
 import android.app.Activity;
 import android.content.ComponentName;
-import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.RectF;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewStructure;
 import android.view.WindowInsets;
@@ -38,7 +38,8 @@ public final class TargetActivity extends Activity {
     private Editor left, right, desired, connection, probed, requested;
     private final String instance = UUID.randomUUID().toString();
     private boolean started, finished, settled;
-    private int stageIndex, autofillRequests;
+    private int stageIndex, autofillRequests, touchDownCount, touchUpCount, restartInputCalls;
+    private Boolean imeActiveRight;
     private final Runnable timeout = () -> finishOracle("timeout");
 
     @Override public void onCreate(Bundle state) {
@@ -59,12 +60,9 @@ public final class TargetActivity extends Activity {
         root.postDelayed(timeout, 15000);
     }
 
-    @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        if (!settled || !"left".equals(scenario) || !"right".equals(intent.getStringExtra("scenario"))
+    private void beginRightTouch() {
+        if (!settled || !"left".equals(scenario) || !hasWindowFocus()
                 || new File(getFilesDir(), "oracle.json").exists()) return;
-
-        setIntent(intent);
         stageIndex++;
         scenario = "right";
         desired = right;
@@ -72,13 +70,8 @@ public final class TargetActivity extends Activity {
         autofillRequests = 0;
         left.resetMeasurements();
         right.resetMeasurements();
-        finished = settled = started = false;
+        finished = settled = false;
         root.postDelayed(timeout, 15000);
-        if (!desired.requestFocus()) {
-            finishOracle("focus_unavailable");
-            return;
-        }
-        if (hasWindowFocus()) startFocusedStage();
     }
 
     private Editor addEditor(int horizontalGravity) {
@@ -129,6 +122,20 @@ public final class TargetActivity extends Activity {
             reportedFocused = null;
         }
 
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (this == right && action == MotionEvent.ACTION_DOWN) {
+                beginRightTouch();
+                if (stageIndex == 1 && !finished) touchDownCount++;
+            }
+            boolean handled = super.onTouchEvent(event);
+            if (this == right && stageIndex == 1 && !finished && action == MotionEvent.ACTION_UP) {
+                touchUpCount++;
+                if (touchUpCount == 1) root.post(TargetActivity.this::afterRightTouch);
+            }
+            return handled;
+        }
+
         @Override public InputConnection onCreateInputConnection(EditorInfo info) {
             InputConnection input = super.onCreateInputConnection(info);
             if (input == null) return null;
@@ -171,12 +178,34 @@ public final class TargetActivity extends Activity {
         }
     }
 
+    private void afterRightTouch() {
+        if (finished) return;
+        if (getCurrentFocus() != right || !hasWindowFocus()) {
+            finishOracle("touch_focus_mismatch");
+            return;
+        }
+        InputMethodManager manager = getSystemService(InputMethodManager.class);
+        imeActiveRight = manager.isActive(right);
+        if (right.connections == 0) {
+            manager.showSoftInput(right, 0);
+            if (right.connections == 0) {
+                restartInputCalls++;
+                manager.restartInput(right);
+            }
+        }
+        if (probed != null) requestForProbedEditor();
+    }
+
     private void receiveProbe(Editor editor) {
         if (finished) return;
         editor.probes++;
         probed = editor;
+        if (stageIndex == 0 || imeActiveRight != null) requestForProbedEditor();
+    }
+
+    private void requestForProbedEditor() {
         if (requested != null) return;
-        if (editor != desired || connection != desired || getCurrentFocus() != desired || !hasWindowFocus()) {
+        if (probed != desired || connection != desired || getCurrentFocus() != desired || !hasWindowFocus()) {
             finishOracle("probe_focus_mismatch");
             return;
         }
@@ -214,6 +243,9 @@ public final class TargetActivity extends Activity {
         try {
             JSONObject row = new JSONObject().put("scenario", scenario).put("status", status).put("settled", settled)
                     .put("instance", instance).put("stageIndex", stageIndex).put("samePairHandoff", stageIndex == 1)
+                    .put("touchDownCount", touchDownCount).put("touchUpCount", touchUpCount)
+                    .put("windowFocus", hasWindowFocus()).put("restartInputCalls", restartInputCalls)
+                    .put("imeActiveRight", imeActiveRight == null ? JSONObject.NULL : imeActiveRight)
                     .put("leftViewInstance", System.identityHashCode(left))
                     .put("rightViewInstance", System.identityHashCode(right))
                     .put("focusSide", side(getCurrentFocus())).put("connectionSide", side(connection))
