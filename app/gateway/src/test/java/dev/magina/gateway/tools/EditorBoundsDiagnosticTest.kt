@@ -5,6 +5,7 @@ import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.ime.ImeEditorContract
 import dev.magina.gateway.ime.ImeSessionIdentity
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -131,6 +132,7 @@ class EditorBoundsDiagnosticTest {
 
     private inner class FakeEnv(
         override var sdkInt: Int = 34,
+        override var isLandscape: Boolean = false,
         var session: ImeSessionIdentity? = ImeSessionIdentity(sessionId, pkg, connected = true),
         var contract: ImeEditorContract? = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = fieldId),
         var foregroundPackage: String = pkg,
@@ -197,6 +199,144 @@ class EditorBoundsDiagnosticTest {
             imeRequestCalls++
             onSampleRequest?.invoke(this)
             return requestFactory(this, session)
+        }
+    }
+
+    private fun landscapeRows(): JSONArray = javaClass.getResourceAsStream("/anonymous-editor-landscape.json")!!
+        .bufferedReader().use { JSONArray(it.readText()) }
+
+    private fun JSONObject.rect(key: String): IntBounds = getJSONArray(key).let {
+        IntBounds(it.getInt(0), it.getInt(1), it.getInt(2), it.getInt(3))
+    }
+
+    private fun JSONObject.reportedBounds() = IntBounds(getInt("left"), getInt("top"), getInt("right"), getInt("bottom"))
+
+    private fun landscapeEnv(row: JSONObject): FakeEnv {
+        fun phase(reverse: Boolean): PhaseSnapshot {
+            val nodes = listOf("left", "right").map { side ->
+                FakeNode(side, isFocused = row.getString("focused") == side, viewIdResourceName = null, bounds = row.rect(side))
+            }
+            fun focusCopy(key: String): FakeNode {
+                val reading = row.getJSONObject(key)
+                return nodes.single { it.id == reading.getString("side") }.cloneInstance().apply {
+                    isFocused = reading.getBoolean("focused")
+                    isVisibleToUser = reading.getBoolean("visible")
+                    // 即使 refresh 恢复两项属性，也应保留原始查询的矛盾。
+                    onRefresh = { it.isFocused = true; it.isVisibleToUser = true }
+                }
+            }
+            return PhaseSnapshot(window = FakeWindow(bounds = IntBounds(0, 0, 2340, 1080)),
+                serviceFocus = focusCopy("service"), rootFocus = focusCopy("root"),
+                defaultNodesById = mapOf(fieldName to if (reverse) nodes.reversed() else nodes))
+        }
+        val ime = row.rect("ime")
+        return FakeEnv(isLandscape = true, beforePhase = phase(false), afterPhase = phase(true),
+            requestFactory = { _, _ -> FakeRequest { EditorBoundsMeasurement(fieldId,
+                FloatBounds(ime.left.toFloat(), ime.top.toFloat(), ime.right.toFloat(), ime.bottom.toFloat())) } })
+    }
+
+    @Test fun landscapeReplaysNineAnonymousEditorObservationsThroughDiagnostic() {
+        val rows = landscapeRows()
+        assertEquals(9, rows.length())
+        for (i in 0 until rows.length()) {
+            val row = rows.getJSONObject(i)
+            val env = landscapeEnv(row)
+            val reply = readEditorBounds(env, JSONObject())
+            val receipt = reply.getJSONObject("ime_editor_anonymous_pair")
+            val selected = row.getString("selected")
+            val success = selected != "none"
+            assertEquals("case $i", row.getString("outcome"), receipt.getString("outcome"))
+            assertEquals(if (success) "after_sample" else "before_sample", receipt.getString("phase"))
+            assertEquals(if (success) 1 else 0, env.imeRequestCalls)
+            if (success) {
+                assertFalse(reply.has("ime_editor_bounds_reason"))
+                assertEquals(row.rect(selected), reply.getJSONObject("ime_editor_bounds").reportedBounds())
+            } else {
+                assertTrue(reply.isNull("ime_editor_bounds"))
+                assertEquals(row.getString("outcome"), reply.getString("ime_editor_bounds_reason"))
+            }
+            for (source in listOf("service", "root")) {
+                val raw = receipt.getJSONObject(source + "_focus")
+                for (flag in listOf("focused", "visible")) {
+                    assertEquals(row.getJSONObject(source).getBoolean(flag), raw.getBoolean(flag))
+                }
+            }
+            val candidates = receipt.getJSONArray("candidates")
+            assertEquals(2, candidates.length())
+            for (side in listOf("left", "right")) {
+                val focused = row.getString("focused") == side
+                val candidate = (0..1).map(candidates::getJSONObject).single { it.getBoolean("focused") == focused }
+                assertEquals(row.rect(side), candidate.reportedBounds())
+                assertTrue(candidate.getBoolean("editable"))
+                assertTrue(candidate.getBoolean("visible"))
+                for (source in listOf("service", "root")) {
+                    assertEquals(row.getJSONObject(source).getString("side") == side, candidate.getBoolean(source + "_focus"))
+                }
+                assertTrue(candidate.has("matches_ime_bounds"))
+                if (success) assertEquals(side == selected, candidate.getBoolean("matches_ime_bounds"))
+                else assertTrue(candidate.isNull("matches_ime_bounds"))
+            }
+        }
+    }
+
+    @Test fun anonymousPairRechecksBothCandidatesAndFocusAfterSampling() {
+        val row = landscapeRows().getJSONObject(0)
+        for (reason in listOf("focus_conflict", "same_bounds", "context_changed", "sensitive_field")) {
+            val env = landscapeEnv(row)
+            val peer = env.afterPhase.defaultNodesById.getValue(fieldName).single { it.id == "right" }
+            when (reason) {
+                "focus_conflict" -> env.afterPhase.rootFocus!!.isVisibleToUser = false
+                "same_bounds" -> peer.bounds = row.rect("left")
+                "context_changed" -> peer.bounds = peer.bounds.copy(bottom = peer.bounds.bottom + 1)
+                "sensitive_field" -> peer.isPassword = true
+            }
+            val reply = readEditorBounds(env, JSONObject())
+            assertEquals(1, env.imeRequestCalls)
+            assertEquals(reason, reply.getString("ime_editor_bounds_reason"))
+            assertTrue(reply.isNull("ime_editor_bounds"))
+            if (reason == "context_changed" || reason == "sensitive_field") assertFalse(reply.has("ime_editor_anonymous_pair"))
+            else assertEquals("after_sample", reply.getJSONObject("ime_editor_anonymous_pair").getString("phase"))
+        }
+    }
+
+    @Test fun anonymousPairRequiresExactImeGeometryAndNumericFieldId() {
+        val row = landscapeRows().getJSONObject(0)
+        val right = row.rect("right")
+        val wrongBounds = FloatBounds(right.left.toFloat(), right.top.toFloat(), right.right.toFloat(), right.bottom.toFloat())
+        for (reason in listOf("focus_conflict", "geometry_unverified", "different_id")) {
+            val env = landscapeEnv(row)
+            val sampleId = if (reason == "different_id") otherFieldId else fieldId
+            val sample = if (reason == "geometry_unverified") wrongBounds.copy(top = wrongBounds.top + 0.5f) else wrongBounds
+            env.resources[sampleId] = ResourceNameResult.Found(fieldName)
+            env.requestFactory = { _, _ -> FakeRequest { EditorBoundsMeasurement(sampleId, sample) } }
+            val reply = readEditorBounds(env, JSONObject())
+            assertEquals(reason, reply.getString("ime_editor_bounds_reason"))
+            assertTrue(reply.isNull("ime_editor_bounds"))
+            if (reason == "focus_conflict") {
+                val candidates = reply.getJSONObject("ime_editor_anonymous_pair").getJSONArray("candidates")
+                val matched = (0..1).map(candidates::getJSONObject).single { it.getBoolean("matches_ime_bounds") }
+                assertFalse(matched.getBoolean("focused"))
+            }
+        }
+    }
+
+    @Test fun anonymousPairRequiresLandscapeDistinctSafeNodesAndOneFocusedCandidate() {
+        val row = landscapeRows().getJSONObject(0)
+        for (reason in listOf("missing_id", "ambiguous_id", "sensitive_field", "focus_conflict", "target_unusable")) {
+            val env = landscapeEnv(row)
+            val nodes = env.beforePhase.defaultNodesById.getValue(fieldName)
+            when (reason) {
+                "missing_id" -> env.isLandscape = false
+                "ambiguous_id" -> env.beforePhase.defaultNodesById = mapOf(fieldName to listOf(nodes[0], nodes[0]))
+                "sensitive_field" -> nodes[1].isAccessibilityDataSensitive = true
+                "focus_conflict" -> nodes[1].isFocused = true
+                "target_unusable" -> nodes[0].isEditable = false
+            }
+            val reply = readEditorBounds(env, JSONObject())
+            assertEquals(reason, reply.getString("ime_editor_bounds_reason"))
+            assertTrue(reply.isNull("ime_editor_bounds"))
+            assertEquals(0, env.imeRequestCalls)
+            if (reason in listOf("missing_id", "ambiguous_id", "sensitive_field")) assertFalse(reply.has("ime_editor_anonymous_pair"))
         }
     }
 

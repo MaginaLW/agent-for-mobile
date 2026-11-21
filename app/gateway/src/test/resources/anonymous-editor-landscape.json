@@ -1,0 +1,11 @@
+[
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"left","service":{"side":"left","focused":true,"visible":true},"root":{"side":"left","focused":true,"visible":true},"ime":[485,70,685,140],"outcome":"selected","selected":"left"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"right","service":{"side":"right","focused":true,"visible":true},"root":{"side":"right","focused":true,"visible":true},"ime":[1655,70,1855,140],"outcome":"selected","selected":"right"},
+  {"left":[485,70,685,140],"right":[485,70,685,140],"focused":"left","service":{"side":"left","focused":true,"visible":true},"root":{"side":"left","focused":true,"visible":true},"ime":[485,70,685,140],"outcome":"same_bounds","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"left","service":{"side":"right","focused":false,"visible":true},"root":{"side":"left","focused":true,"visible":true},"ime":[1655,70,1855,140],"outcome":"focus_conflict","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"left","service":{"side":"left","focused":false,"visible":true},"root":{"side":"left","focused":true,"visible":true},"ime":[485,70,685,140],"outcome":"focus_conflict","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"right","service":{"side":"right","focused":true,"visible":false},"root":{"side":"right","focused":true,"visible":true},"ime":[1655,70,1855,140],"outcome":"focus_conflict","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"left","service":{"side":"left","focused":true,"visible":true},"root":{"side":"left","focused":false,"visible":true},"ime":[485,70,685,140],"outcome":"focus_conflict","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"right","service":{"side":"right","focused":true,"visible":true},"root":{"side":"right","focused":true,"visible":false},"ime":[1655,70,1855,140],"outcome":"focus_conflict","selected":"none"},
+  {"left":[485,70,685,140],"right":[1655,70,1855,140],"focused":"left","service":{"side":"left","focused":false,"visible":false},"root":{"side":"left","focused":true,"visible":true},"ime":[485,70,685,140],"outcome":"focus_conflict","selected":"none"}
+]

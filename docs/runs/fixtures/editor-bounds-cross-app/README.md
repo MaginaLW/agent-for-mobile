@@ -35,6 +35,8 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 
 ### 服务级输入焦点失效兜底与未聚焦节点的交叉核验
 
+本节描述常规路径。横屏显式查询会先按字段 ID 检查是否命中两个无名候选，命中时采用下文的独立判定。以下查表次数只计算常规路径自身。
+
 沿用 `INPUT_NULL`。完成清理缓存与活动应用窗口核验（`TYPE_APPLICATION`、活动、获焦且包名匹配）后，读取一次服务级输入焦点 `serviceFocus`：
 
 - **活动窗密码/敏感快速拒绝**：若 `serviceFocus != null` 且 `serviceFocus.refresh()` 成功、与活动窗口同窗同包，且 `isPassword || isAccessibilityDataSensitive`，立即返回 `sensitive_field`（绝不兜底、零输入法请求、省略 `ime_editor_focus_diag`）。
@@ -58,7 +60,7 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 
 ### `focus_unavailable` 脱敏诊断快照（`ime_editor_focus_diag`）
 
-仅当活动根与活动窗口均已核实、且最终落入 `focus_unavailable` 时，在顶层响应附带只读脱敏对象 `ime_editor_focus_diag`；成功、非 `focus_unavailable` 失败（含 `sensitive_field`）以及 `cache_clear_failed` / `active_root_missing` / `active_window_missing` 均省略该字段。每次阶段核对最多调用一次 `root.findFocus(FOCUS_INPUT)`；正常成功路径不额外调用 `EditorInfo` 或按名查表。
+仅当活动根与活动窗口均已核实、且最终落入 `focus_unavailable` 时，在顶层响应附带只读脱敏对象 `ime_editor_focus_diag`。每次阶段核对最多调用一次 `root.findFocus(FOCUS_INPUT)`。横屏显式诊断会读取当前输入连接的字段 ID 并在活动窗口查表。
 
 该对象严格限于下表 23 个固定键，值只允许布尔、非负整数、`null` 或固定小写枚举，不包含任何文本、草稿、包名、资源名、屏幕坐标或窗口号：
 
@@ -90,8 +92,25 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 
 调用 `findNodesByViewId` 且未触发 `sensitive_field` 时，上述 6 项互斥分桶满足严格守恒：`refresh_failed + wrong_window_or_package + id_mismatch + empty_bounds + outside_window + bounds_in_window == total`（其中窗内但不可见节点数即 `bounds_in_window - visible_in_window`）。
 
-回执保持只读诊断语义，不生成操作引用或输入身份，也不新增 `ime_editor_bounds_reason` 或 `ime_editor_focus_check` 枚举值：
+以下字段记录已通过核对的编辑框，仅供只读诊断。
 
-- `ime_editor_bounds.window_field_phase`：仅在至少一个阶段（`serviceFocus == null` 或失效服务焦点转兜底）用过按字段查找的成功回执中出现，取值为 `before_sample`、`after_sample` 或 `both`；两阶段均由有效服务级焦点直接取得时（即使 `node_focused` 为 `false`）省略该字段。
+- `ime_editor_bounds.window_field_phase` 记录依据字段查表取得目标的阶段，取值为 `before_sample`、`after_sample` 或 `both`。横屏双无名候选成功时为 `both`。两阶段均直接采用服务级焦点时省略。
 - `ime_editor_bounds.filtered_visible_field`：仅在至少一个阶段经过多命中可见子集筛选（`filtered_unique`）取得候选节点的成功回执中出现在 `ime_editor_bounds` 内，固定为 `true`；未经多命中筛选的成功回执、全部失败回执与顶层响应均省略该字段。
 - `ime_editor_bounds.node_focused`：仅在成功回执依赖未报告聚焦的节点（`node.isFocused == false`）时出现在 `ime_editor_bounds` 内，固定为 `false`（此时 `window_field_phase` 可省略，或为 `before_sample`、`after_sample`、`both`）。正常聚焦成功路径与所有失败回执均省略该字段，顶层响应也不出现该字段。
+
+### 横屏两个候选均缺少资源名
+
+显式调用 `keyboard_state({"probe_editor_bounds":true})` 时，若当前输入连接的同一字段 ID 在活动窗恰好命中两个不同节点，且两者刷新后同窗、同包、非敏感、均无资源名，网关会核对两者。顶层 `ime_editor_anonymous_pair.candidates` 各行给出四边 `left/top/right/bottom`、`focused/visible/editable`、是否为服务或窗口根查到的输入焦点（`service_focus/root_focus`），以及是否与输入法四边一致（`matches_ime_bounds`）。行序可变。对象内的 `service_focus`、`root_focus` 分别保留两次焦点查询当时的 `focused/visible`。缺少可归属的焦点副本时，其属性为 `null`。
+
+| 判定 | 回执 |
+|---|---|
+| 两个候选四边全部相同 | `same_bounds`，停止。 |
+| 没有唯一聚焦候选，或任一焦点来源缺失、指向其他节点、未聚焦、不可见 | `focus_conflict`，停止。 |
+| 聚焦候选不可编辑、不可见、四边为空或超出活动窗 | `target_unusable`，停止。 |
+| 两次清缓存查询一致，输入连接、字段 ID 和窗口稳定，且仅聚焦候选的四边与输入法逐边精确相等 | `selected`，在 `ime_editor_bounds` 返回该候选。 |
+| 输入法四边唯一匹配另一个候选 | `focus_conflict`，停止。 |
+| 输入法四边没有唯一匹配 | `geometry_unverified`，停止。 |
+
+`phase` 标明判定发生在 `before_sample` 或 `after_sample`。采样前即可判定的冲突发起零次输入法请求。通过初查时只请求一次，再查两侧。尚未核对输入法四边时，两行的 `matches_ime_bounds` 都是 `null`。所有停止结果均返回空的 `ime_editor_bounds`。上下文变化或遇到敏感字段时省略候选明细。整个回执只用于诊断。
+
+宿主单测 `EditorBoundsDiagnosticTest.landscapeReplaysNineAnonymousEditorObservationsThroughDiagnostic` 通过网关诊断入口回放隔离模拟器的九组读数。左右轮流持有输入连接各选中一次，四边重合停止一次，焦点矛盾停止六次。这些样本来自实验应用。

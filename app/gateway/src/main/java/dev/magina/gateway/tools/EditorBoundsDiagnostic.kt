@@ -3,6 +3,7 @@ package dev.magina.gateway.tools
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Rect
 import android.os.Build
@@ -82,6 +83,7 @@ internal interface EditorFocusRoot {
 
 internal interface EditorBoundsEnvironment {
     val sdkInt: Int
+    val isLandscape: Boolean
     fun session(): ImeSessionIdentity?
     fun editorContract(): ImeEditorContract?
     fun foregroundPackage(): String
@@ -109,6 +111,7 @@ private data class ResolvedFocus(
     val focus: EditorFocus,
     val usedWindowField: Boolean,
     val filteredAmbiguous: Boolean,
+    val anonymousPair: AnonymousEditorPair? = null,
 )
 
 private data class FilteredFieldMatch(
@@ -129,9 +132,11 @@ private data class MultiMatchScan(
     val outsideWindowMatches: Int,
     val visibleMatches: Int,
     val usable: List<FilteredFieldMatch>,
+    val anonymous: List<AnonymousEditor>,
 )
 
 private class Unavailable(val reason: String) : Exception(reason)
+private class AnonymousPairStopped(val pair: AnonymousEditorPair, val phase: String, val reason: String) : Exception(reason)
 private class FocusUnavailable(
     val phase: String,
     val check: String,
@@ -140,7 +145,7 @@ private class FocusUnavailable(
 ) : Exception()
 
 private sealed interface WindowFieldNameResult {
-    data class Found(val name: String) : WindowFieldNameResult
+    data class Found(val name: String, val id: Int) : WindowFieldNameResult
     data object NoContract : WindowFieldNameResult
     data object MissingId : WindowFieldNameResult
     data object ResourcesUnavailable : WindowFieldNameResult
@@ -212,9 +217,11 @@ internal fun readEditorBounds(
     if (pkg.isBlank() || !session.belongsTo(pkg)) return unavailable("no_input_target")
     env.ensurePackageAllowed(pkg)
     env.checkNotMainThread()
+    var beforePair: AnonymousEditorPair? = null
     return try {
         if (!env.isGatewayImeSelected()) return unavailable("no_input_target")
         val beforeResolved = currentFocus(env, pkg, "before_sample")
+        beforePair = beforeResolved.anonymousPair
         val before = beforeResolved.focus
         val request = env.requestEditorBounds(session)
         val sample = try {
@@ -232,11 +239,24 @@ internal fun readEditorBounds(
         val imeName = requireResourceName(env, pkg, sample.fieldId)
         val afterResolved = currentFocus(env, pkg, "after_sample")
         val after = afterResolved.focus
-        if (before != after || env.foregroundPackage() != pkg || !env.isGatewayImeSelected() || env.session() != session) {
+        val pair = afterResolved.anonymousPair
+        if (before != after || beforePair != pair || env.foregroundPackage() != pkg ||
+            !env.isGatewayImeSelected() || env.session() != session || (pair != null && !env.isLandscape)) {
             return unavailable("context_changed")
         }
-        if (imeName != after.resourceName) return unavailable("different_id")
-        if (!after.bounds.matchesFloat(sample.bounds)) return unavailable("different_bounds")
+        if (imeName != after.resourceName || (pair != null && pair.fieldId != sample.fieldId)) return unavailable("different_id")
+        if (pair != null) {
+            val matched = pair.candidates.singleOrNull { it.bounds.matchesFloat(sample.bounds) }
+            val reason = when {
+                matched == null -> "geometry_unverified"
+                !matched.focused -> "focus_conflict"
+                else -> null
+            }
+            if (reason != null) return unavailable(reason)
+                .put("ime_editor_anonymous_pair", pair.receipt("after_sample", reason, sample.bounds))
+        } else if (!after.bounds.matchesFloat(sample.bounds)) {
+            return unavailable("different_bounds")
+        }
         val bounds = JSONObject().put("window_id", after.windowId)
             .put("session_id", session.id).put("editable", after.editable)
             .put("left", after.bounds.left).put("top", after.bounds.top)
@@ -254,7 +274,19 @@ internal fun readEditorBounds(
         if (!after.focused) {
             bounds.put("node_focused", false)
         }
+        if (pair != null) state.put("ime_editor_anonymous_pair", pair.receipt("after_sample", "selected", sample.bounds))
         state.put("ime_editor_bounds", bounds)
+    } catch (e: AnonymousPairStopped) {
+        try {
+            if (env.session() != session || env.foregroundPackage() != pkg || !env.isGatewayImeSelected() ||
+                !env.isLandscape || (e.phase == "after_sample" && beforePair?.hasSameScope(e.pair) != true)) {
+                unavailable("context_changed")
+            } else {
+                unavailable(e.reason).put("ime_editor_anonymous_pair", e.pair.receipt(e.phase, e.reason))
+            }
+        } catch (_: SecurityException) {
+            unavailable("access_denied")
+        }
     } catch (e: FocusUnavailable) {
         unavailable("focus_unavailable")
             .put("ime_editor_focus_phase", e.phase)
@@ -302,7 +334,7 @@ private fun resolveWindowFieldNameResult(env: EditorBoundsEnvironment, pkg: Stri
     if (id == 0 || id == -1) return WindowFieldNameResult.MissingId
     return when (val result = env.resourceName(pkg, id)) {
         is ResourceNameResult.Found ->
-            if (result.name.substringAfter(':', "").startsWith("id/")) WindowFieldNameResult.Found(result.name)
+            if (result.name.substringAfter(':', "").startsWith("id/")) WindowFieldNameResult.Found(result.name, id)
             else WindowFieldNameResult.MissingId
         ResourceNameResult.Missing -> WindowFieldNameResult.MissingId
         ResourceNameResult.ResourcesUnavailable -> WindowFieldNameResult.ResourcesUnavailable
@@ -399,6 +431,7 @@ private fun scanMultiMatches(
     pkg: String,
     fieldName: String,
     windowBounds: IntBounds,
+    readAnonymousPair: Boolean = false,
 ): MultiMatchScan {
     var boundsInWindowCount = 0
     var refreshFailedCount = 0
@@ -409,6 +442,7 @@ private fun scanMultiMatches(
     var outsideWindowCount = 0
     var visibleCount = 0
     val usable = mutableListOf<FilteredFieldMatch>()
+    val anonymous = mutableListOf<AnonymousEditor>()
     for (m in nodes) {
         if (!m.refresh()) {
             refreshFailedCount++
@@ -422,7 +456,12 @@ private fun scanMultiMatches(
         val name = m.viewIdResourceName
         if (name != fieldName) {
             idMismatchCount++
-            if (name.isNullOrBlank()) missingNameCount++
+            if (name.isNullOrBlank()) {
+                missingNameCount++
+                if (readAnonymousPair) {
+                    anonymous += AnonymousEditor(m, m.boundsInScreen(), m.isFocused, m.isVisibleToUser, m.isEditable)
+                }
+            }
             continue
         }
         val visible = m.isVisibleToUser
@@ -457,6 +496,7 @@ private fun scanMultiMatches(
         outsideWindowMatches = outsideWindowCount,
         visibleMatches = visibleCount,
         usable = usable,
+        anonymous = anonymous,
     )
 }
 
@@ -479,7 +519,17 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         return cachedRootFocus
     }
 
+    fun focusReading(node: EditorFocusNode?): InputFocusReading {
+        if (node == null || node.windowId != window.id || node.packageName != pkg) return InputFocusReading(null, null, null)
+        if (node.isPassword || node.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
+        return InputFocusReading(node, node.isFocused, node.isVisibleToUser)
+    }
+
+    val landscape = env.isLandscape
     val sfNode = env.serviceFocus()
+    // 在 refresh 或字段枚举改变缓存前，分别保存服务和窗口根两次焦点查询的原始属性。
+    val serviceReading = if (landscape) focusReading(sfNode) else null
+    val rootReading = if (landscape) focusReading(getRootFocus()) else null
     val sf = if (sfNode == null) {
         ServiceFocusSnapshot(null, null, null, null, null, null, sensitive = false, viewId = null)
     } else if (!sfNode.refresh()) {
@@ -506,6 +556,27 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         throw FocusUnavailable(phase, check, buildFocusDiag(sf, getRootFocus(), field), missingNames)
     }
 
+    val lookup = if (landscape || !sf.valid) resolveWindowFieldNameResult(env, pkg) else null
+    val field = lookup as? WindowFieldNameResult.Found
+    val fieldMatches = field?.let { root.findNodesByViewId(it.name) }.orEmpty()
+    val windowBounds by lazy(LazyThreadSafetyMode.NONE) { window.boundsInScreen() }
+    val fieldScan = if (field != null && fieldMatches.size >= 2 && (!sf.valid || fieldMatches.size == 2)) {
+        scanMultiMatches(fieldMatches, window.id, pkg, field.name, windowBounds,
+            readAnonymousPair = landscape && fieldMatches.size == 2)
+    } else null
+    if (field != null && fieldScan?.anonymous?.size == 2) {
+        val candidates = fieldScan.anonymous
+        if (candidates[0].node == candidates[1].node) throw Unavailable("ambiguous_id")
+        val pair = AnonymousEditorPair(field.id, window.id, windowBounds, checkNotNull(serviceReading),
+            checkNotNull(rootReading), candidates.toSet())
+        val reason = pair.stopReason() ?: if (!sf.valid || sf.focused != true ||
+            (sf.viewId != null && sf.viewId != field.name)) "focus_conflict" else null
+        if (reason != null) throw AnonymousPairStopped(pair, phase, reason)
+        val target = checkNotNull(pair.focused)
+        return ResolvedFocus(EditorFocus(target.node, window.id, field.name, target.bounds,
+            target.editable, target.focused), usedWindowField = true, filteredAmbiguous = false, anonymousPair = pair)
+    }
+
     // 有效服务焦点严格沿用原路径，禁止因 root_focus_mismatch 或 different_id 绕过兜底。
     if (sf.valid) {
         val node = checkNotNull(sf.node)
@@ -517,7 +588,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         val expectedFieldName = if (!focused) resolveWindowFieldName(env, pkg) else null
         val name = sf.viewId ?: throw Unavailable("missing_id")
         if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
-        if (root.findNodesByViewId(name).singleOrNull() != node) throw Unavailable("ambiguous_id")
+        val byName = if (landscape && field?.name == name) fieldMatches else root.findNodesByViewId(name)
+        if (byName.singleOrNull() != node) throw Unavailable("ambiguous_id")
         val bounds = node.boundsInScreen()
         if (bounds.isEmpty || !window.boundsInScreen().contains(bounds)) throw Unavailable("invalid_bounds")
         return ResolvedFocus(
@@ -529,7 +601,7 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
 
     // 服务焦点缺失或未通过活动窗可用性检查时，尝试按活动窗内 EditorInfo.fieldId 定向查找。
     val sfFailureCheck = sf.unavailableCheck
-    val fieldName = when (val result = resolveWindowFieldNameResult(env, pkg)) {
+    val fieldName = when (val result = checkNotNull(lookup)) {
         is WindowFieldNameResult.Found -> result.name
         WindowFieldNameResult.NoContract -> {
             if (sfFailureCheck == null) throw Unavailable("missing_id")
@@ -545,7 +617,7 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         }
     }
 
-    val matches = root.findNodesByViewId(fieldName)
+    val matches = fieldMatches
     if (matches.isEmpty()) {
         val check = sfFailureCheck ?: "input_focus_missing"
         missingField(
@@ -566,7 +638,6 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         )
     }
 
-    val windowBounds = window.boundsInScreen()
     if (matches.size == 1) {
         val candidate = matches[0]
         val sameAsService = sf.node != null && candidate == sf.node
@@ -645,7 +716,7 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     }
 
     // 多命中（matches.size >= 2）：全量刷新并优先做同窗同包敏感 fail-closed 检查，再按可见且窗内有效子集筛选。
-    val scan = scanMultiMatches(matches, window.id, pkg, fieldName, windowBounds)
+    val scan = checkNotNull(fieldScan)
     if (scan.usable.size != 1) {
         val wf = WindowFieldSnapshot(
             lookup = "ambiguous",
@@ -747,6 +818,7 @@ private class AndroidEditorBoundsEnvironment(private val service: GatewayA11ySer
     private val gatewayIme by lazy(LazyThreadSafetyMode.NONE) { ComponentName(service, GatewayIme::class.java) }
 
     override val sdkInt: Int get() = Build.VERSION.SDK_INT
+    override val isLandscape: Boolean get() = service.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     override fun session(): ImeSessionIdentity? = ImeBridge.session()
     override fun editorContract(): ImeEditorContract? = ImeBridge.editorContract
     override fun foregroundPackage(): String = service.foregroundPackage()

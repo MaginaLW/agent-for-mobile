@@ -118,7 +118,7 @@ object ToolRegistry {
         },
         ToolSpec("keyboard_state", "读取软键盘可见性与高度。", Level.R, schema(emptyList(),
             "probe_editor_origin" to prop("boolean", "可选。用已在位的网关输入法查询当前编辑器的屏幕原点；原点只供诊断。"),
-            "probe_editor_bounds" to prop("boolean", "可选。用当前输入焦点独立核对网关输入法观察到的编辑框四边，只返回诊断读数。与原点查询分次使用。"),
+            "probe_editor_bounds" to prop("boolean", "可选。核对输入焦点和输入法观察到的编辑框四边。横屏命中两个无名候选时报告各自的焦点属性和四边。仅供诊断，与原点查询分次使用。"),
         )) {
             SystemTools.keyboardState(it.opt("probe_editor_origin") == true, it.opt("probe_editor_bounds") == true)
         },
