@@ -256,6 +256,17 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 对比 `2341c7d` 与 `f503328` 的执行顺序：`2341c7d` 仅在 `serviceFocus != null` 时先于 `isVisibleToUser` 检查 `isFocused`，若此前走的是 `serviceFocus == null` 路径则本应在 `2341c7d` 就先报 `node_not_visible`。两次连续实测共同证实：在 PA2553 微信右窗已聚焦并弹起键盘时，`service.findFocus(FOCUS_INPUT)` 返回了非空节点，但该节点同时报告 `isFocused=false` 且 `isVisibleToUser=false`。因 `node_not_visible` 仍在 `node.windowId`、`packageName`、`rootFocus`、`EditorInfo.fieldId` 校验与输入法四边请求之前触发，目前仍无法判断该服务级焦点节点是否跨窗/错控件，也尚未观测到微信是否返回输入法四边回调。
 
+### 候选 b37c018 取得 14 键诊断快照
+
+2026-11-21，草稿候选 `b37c018` 新增失效服务焦点下的活动窗 `EditorInfo.fieldId` 兜底与仅在 `focus_unavailable` 时产出的 14 键脱敏诊断对象 `ime_editor_focus_diag`，完整离线检查 9/9 通过（Debug 516 项、Release 419 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `f503328` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/b37c018bee88f260a6800ce819022b09410d595c)
+
+为避免安装重启引起中途 `page-changed`，按授权先单独对 PA2553 执行一次同签保数据覆盖安装并独立核实在机 APK 摘要与右窗 `ChattingUI` 焦点，再执行单次免安装只读诊断（`install_attempts=0`，耗时 33 秒，5 次读取，微信内零点击、零输入、零发送）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample / node_not_visible` 以及完整 14 键脱敏诊断快照：
+
+- 服务与根焦点状态：`service_focus_present=true`、`service_focus_refreshed=true`、`service_focus_same_window=true`、`service_focus_same_package=true`、`root_focus_state=matches_service`、`service_focus_focused=false`、`service_focus_visible=false`、`service_focus_matches_field=null`（按源码此时已解析出非敏感 `fieldName`，故表明该节点无 `viewIdResourceName`）。
+- 活动右窗字段查找：`window_field_lookup=ambiguous`（当前输入连接的 `EditorInfo.fieldId` 成功解析出非敏感 `id/...` 资源名，但在微信右窗中命中多于一个节点，尚未筛选可见/窗内有效子集，也尚未发起输入法四边请求）。
+
+收尾阶段宿主一次回选原 vivo 默认输入法并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `b37c018`。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
