@@ -19,7 +19,7 @@ param(
     [string]$Slug,
     [ValidateRange(1, 60)][int]$TimeoutMin = 15,
     [string]$Model = '',
-    [ValidateSet('codex')][string]$Brain = 'codex',
+    [string]$Brain = 'codex',
     [ValidateSet('gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')][string]$ExpectedDeviceSerial,
@@ -34,6 +34,11 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
+
+if ($Brain -ne 'codex') {
+    throw "Brain 参数只接受 codex（Claude 已退役；收到：$Brain）。"
+}
+$Brain = 'codex'
 
 $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'

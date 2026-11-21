@@ -239,6 +239,8 @@ function Invoke-Dispatch {
     $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.StandardErrorEncoding = [Text.Encoding]::UTF8
     $start.CreateNoWindow = $true
     $start.ArgumentList.Add('-NoProfile')
     $start.ArgumentList.Add('-File')
@@ -1230,15 +1232,21 @@ public static class Program {
 
     Test-Case '非 codex brain 新请求在任何工具和仓库副作用前拒绝' {
         $effects = Get-RepoEffectState
-        foreach ($preview in @($false, $true)) {
-            $arguments = @('-Task','offline retired brain','-Slug','offline-retired',
-                '-Brain','claude','-Executor','gateway','-Model','sonnet&echo must-not-execute')
-            if ($preview) { $arguments += '-DryRun' }
-            $result = Invoke-Dispatch $arguments
-            Assert-True ($result.ExitCode -ne 0) '非 codex brain 新请求被接受。'
-            Assert-Matches $result.Text 'Brain'
-            Assert-NoExternalTools $result
-            Assert-NoRepoEffects $effects
+        foreach ($badBrain in @('claude', 'CLAUDE', 'foo')) {
+            foreach ($preview in @($false, $true)) {
+                $arguments = @('-Task','offline retired brain','-Slug','offline-retired',
+                    '-Brain',$badBrain,'-Executor','gateway','-Model','sonnet&echo must-not-execute')
+                if ($preview) { $arguments += '-DryRun' }
+                $result = Invoke-Dispatch $arguments
+                Assert-True ($result.ExitCode -ne 0) "非 codex brain($badBrain) 新请求被接受。"
+                Assert-Matches $result.Text 'Brain'
+                Assert-Contains $result.Text '只接受 codex'
+                Assert-Contains $result.Text 'Claude 已退役'
+                Assert-True $result.Text.Contains($badBrain, [StringComparison]::Ordinal) "输出未原样包含收到的 brain($badBrain)：`n$($result.Text)"
+                Assert-True (-not $result.Text.Contains([char]0xFFFD)) "非 codex brain($badBrain) 输出包含替换字符 U+FFFD。`n实际输出：`n$($result.Text)"
+                Assert-NoExternalTools $result
+                Assert-NoRepoEffects $effects
+            }
         }
     }
 
