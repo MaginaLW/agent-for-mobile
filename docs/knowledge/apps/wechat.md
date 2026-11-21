@@ -308,6 +308,12 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 后一次派单收尾时，原无障碍服务清单少一项。仅补回原有 vivo 输入法服务一次，独立读回核实四项设置、网关资源和系统绑定均已恢复。在机网关为 `123cf59`。其离线检查 9/9 通过，含 Debug 528 项、Release 431 项单测及两种构建的 Lint 和打包。
 
+#### 怎样判读两个无名候选
+
+对照该轮脱敏回执与 `123cf59` 的筛选顺序，服务焦点与窗口根焦点指向同一个节点，但该节点报告未聚焦、不可见。按输入字段查出的两个候选都通过了刷新、窗口和包名校验，随后因缺名被跳过。程序到此尚未读取这两个候选的可见性和矩形。因此，即使“窗内命中”“越界”“空边界”三项都为零，两个候选的位置仍是未知。[多候选筛选顺序](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/tools/EditorBoundsDiagnostic.kt#L412-L439)
+
+网关从字段信息和会话代次生成输入法会话标识，从窗口、资源名、类名、包名和矩形生成无障碍节点标识。两者没有可直接对照的键。项目编译用的 Android API 35 在无障碍节点上提供 `getUniqueId()`，输入法的 `EditorInfo` 和 `CursorAnchorInfo` 均未提供对应的节点标识。网关从当前输入契约为四边样本附上 `fieldId`，因此样本与契约中的字段值来自同一处。重开横屏就位还需要能独立核实当前输入连接对应哪一个右窗编辑框、并能比对该框四边的证据。[输入法会话标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L21-L44) · [四边样本来源](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L302-L312) · [无障碍节点标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/a11y/FocusedInputIdentity.kt#L5-L17)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
