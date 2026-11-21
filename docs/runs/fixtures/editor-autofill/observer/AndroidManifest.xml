@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.magina.autofillobserver">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+    <queries><package android:name="dev.magina.autofilltarget" /></queries>
+    <application android:allowBackup="false" android:debuggable="true" android:label="本地输入观察器">
+        <service android:name=".ProbeIme" android:exported="true"
+                 android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+        <service android:name=".ProbeAutofillService" android:exported="true"
+                 android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+            <intent-filter><action android:name="android.service.autofill.AutofillService" /></intent-filter>
+            <meta-data android:name="android.autofill" android:resource="@xml/autofill" />
+        </service>
+    </application>
+</manifest>
