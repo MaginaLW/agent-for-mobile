@@ -256,6 +256,12 @@ PA2553 在机候选 `2289925` 的签名 APK 仅订阅窗口状态、窗口内容
 
 从换法前建立观察起点到最终读回共 5,063 毫秒，应用的新控件焦点事件为 0，其中新输入法启动后观察了 1,207 毫秒。即使预先监听，换法前最近一次焦点事件仍不足以证明新输入连接对应哪个框。此例与同一输入法内重启连接的对照分别记录，PA2553 当时的节点与输入连接对应关系仍未知。[同一输入法内重启的对照](https://github.com/MaginaLW/agent-for-mobile/pull/71)
 
+#### 自动填充 ID 和输入法客户端的布局坐标
+
+在 Android 16（`android-16.0.0_r1`）上，系统建立输入连接时把当前 View 的 `AutofillId` 填进 `EditorInfo`。虚拟编辑框可沿用容器的 ID。核对该版本的公开接口，`AccessibilityNodeInfo` 可读资源名和节点的 `uniqueId`，没有读取 `AutofillId` 的方法。框架也分别分配 View 的自动填充 ID 和无障碍 ID。即使输入法读到非空 ID，网关仍缺少能在两个无障碍候选上独立比对的同一标识。[输入连接的建立](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/inputmethod/InputMethodManager.java#L5318-L5337) · [虚拟编辑框的 ID](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#getAutofillId()) · [公开接口表](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/api/current.txt) · [两种 ID 的分配](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/View.java#L11821-L11840)
+
+历史手机笔记提到的 `mServedView` 可辅助检查输入法正在服务哪个 View。Android 16 客户端转储调用 View 的字符串表示，标准实现中的四边相对父布局。复用上节隔离模拟器的四组屏幕实测值，与按靶应用布局还原的父坐标逐组比较，直接相等为 0/4。计入该靶父布局的位置和滚动后为 4/4。第一组的父坐标为 `(22,50,222,120)`，屏幕坐标为 `(46,84,246,154)`。PA2553 那次五步回执未记录候选的身份和这层坐标变换，仍无法据此选定右框。[客户端转储](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/inputmethod/InputMethodManager.java#L5064) · [View 的四边](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/View.java#L7037-L7049) · [靶应用布局](../../runs/fixtures/editor-origin/OriginProbeActivity.java)
+
 ### PA2553 右窗四边诊断返回 focus_unavailable
 
 2026-11-20，PA2553 在微信「文件传输助手」右窗已就位。派单先核实前台和右窗标题，再同签保数据更新网关至 `50c17a2` 并临时选择网关输入法。切换后再次核实了同一窗口号、右窗范围及标题。第五次读取是本轮唯一一次四边查询，网关返回 `focus_unavailable` 和空四边，派单随即结束。49 秒内共发起五次读取，微信内零点击、零输入、零发送。

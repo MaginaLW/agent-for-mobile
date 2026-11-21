@@ -35,6 +35,8 @@
 
 已核对控件焦点事件这条线索。在隔离模拟器上，保持无名框焦点并实际切换输入法，新输入法取得连接后没有同步观察到新的焦点事件。旧事件不能补足本轮真机缺失的编辑框身份。[实际换法对照](knowledge/apps/wechat.md#保持无名框焦点并切换输入法)
 
+Android 16 的无障碍候选没有公开的 `AutofillId` 可与输入法比对。`mServedView` 的父布局坐标也不能直接当作屏幕四边。现有 PA2553 回执仍缺少左右框归属证据。[公开接口与四组坐标回放](knowledge/apps/wechat.md#自动填充-id-和输入法客户端的布局坐标)
+
 ## 2. 按需再做（有具体任务需要时才排）
 
 - M1b 占位工具：通知读取/回复、`ui_diff`、Shizuku 强停当前已从 `tools/list` 下架；按需实施与必验失败路径见 [能力现状](knowledge/android/m1b-capabilities.md)。
