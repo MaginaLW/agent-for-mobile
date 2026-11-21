@@ -1,5 +1,6 @@
 package dev.magina.gateway.tools
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.content.res.Resources
@@ -90,6 +91,7 @@ internal interface EditorBoundsEnvironment {
     fun clearCache(): Boolean
     fun activeRoot(): EditorFocusRoot?
     fun serviceFocus(): EditorFocusNode?
+    fun reportViewIds(): Boolean?
     fun resourceName(pkg: String, resId: Int): ResourceNameResult
     fun requestEditorBounds(session: ImeSessionIdentity): EditorBoundsRequest
 }
@@ -259,6 +261,15 @@ internal fun readEditorBounds(
             .put("ime_editor_focus_check", e.check)
             .also { if (e.diag != null) it.put("ime_editor_focus_diag", e.diag) }
             .putOpt("ime_editor_field_missing_name_matches", e.missingNameMatches)
+        if ((e.missingNameMatches ?: 0) > 0) {
+            val reportViewIds = try {
+                env.reportViewIds()
+            } catch (_: RuntimeException) {
+                null
+            }
+            state.put("ime_editor_report_view_ids", reportViewIds ?: JSONObject.NULL)
+        }
+        state
     } catch (e: Unavailable) {
         unavailable(e.reason)
     } catch (_: SecurityException) {
@@ -749,6 +760,13 @@ private class AndroidEditorBoundsEnvironment(private val service: GatewayA11ySer
     override fun clearCache(): Boolean = service.clearCache()
     override fun activeRoot(): EditorFocusRoot? = service.getRootInActiveWindow(0)?.let(::AndroidFocusRoot)
     override fun serviceFocus(): EditorFocusNode? = service.focusedEditable()?.let(::AndroidFocusNode)
+
+    override fun reportViewIds(): Boolean? {
+        if (GatewayA11yService.instance !== service) return null
+        val flags = service.serviceInfo?.flags ?: return null
+        if (GatewayA11yService.instance !== service) return null
+        return (flags and AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS) != 0
+    }
 
     override fun resourceName(pkg: String, resId: Int): ResourceNameResult = try {
         ResourceNameResult.Found(service.packageManager.getResourcesForApplication(pkg).getResourceName(resId))

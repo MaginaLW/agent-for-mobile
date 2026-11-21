@@ -148,6 +148,7 @@ class EditorBoundsDiagnosticTest {
         },
         var onSampleRequest: ((FakeEnv) -> Unit)? = null,
         var securityFailureAt: String? = null,
+        val readReportViewIds: () -> Boolean? = { null },
     ) : EditorBoundsEnvironment {
         var clearCacheCalls: Int = 0
         var imeRequestCalls: Int = 0
@@ -185,6 +186,7 @@ class EditorBoundsDiagnosticTest {
         override fun activeRoot(): EditorFocusRoot? = phase().toRoot()
         override fun serviceFocus(): EditorFocusNode? =
             phase().let { if (it.cloneNodes) it.serviceFocus?.cloneInstance() else it.serviceFocus }
+        override fun reportViewIds(): Boolean? = readReportViewIds()
 
         override fun resourceName(pkg: String, resId: Int): ResourceNameResult {
             if (securityFailureAt == "resource_name") throw SecurityException("denied")
@@ -480,6 +482,7 @@ class EditorBoundsDiagnosticTest {
         assertFalse(reply.has("ime_editor_focus_check"))
         assertFalse(reply.has("ime_editor_focus_diag"))
         assertFalse(reply.has("ime_editor_field_missing_name_matches"))
+        assertFalse(reply.has("ime_editor_report_view_ids"))
         assertFalse(reply.has("window_field_phase"))
         assertFalse(reply.has("filtered_visible_field"))
         assertFalse(reply.has("node_focused"))
@@ -490,6 +493,7 @@ class EditorBoundsDiagnosticTest {
         assertEquals("focus_unavailable", reply.getString("ime_editor_bounds_reason"))
         assertEquals(expectedPhase, reply.getString("ime_editor_focus_phase"))
         assertEquals(expectedCheck, reply.getString("ime_editor_focus_check"))
+        assertEquals(reply.optInt("ime_editor_field_missing_name_matches", 0) > 0, reply.has("ime_editor_report_view_ids"))
         assertFalse(reply.has("window_field_phase"))
         assertFalse(reply.has("filtered_visible_field"))
         assertFalse(reply.has("node_focused"))
@@ -528,6 +532,7 @@ class EditorBoundsDiagnosticTest {
             assertTrue(reply.getBoolean("visible"))
             assertEquals(420, reply.getInt("height_px"))
             assertFalse(reply.has("ime_editor_bounds_reason"))
+            assertFalse(reply.has("ime_editor_report_view_ids"))
             assertFalse(reply.has("ime_editor_focus_phase"))
             assertFalse(reply.has("ime_editor_focus_check"))
             assertFalse(reply.has("ime_editor_focus_diag"))
@@ -3154,6 +3159,10 @@ class EditorBoundsDiagnosticTest {
                 beforePhase = PhaseSnapshot(
                     serviceFocus = staleFocus, rootFocus = staleFocus, defaultNodesById = mapOf(fieldName to candidates),
                 ),
+                readReportViewIds = {
+                    assertTrue("only read the runtime flag for missing names", expectedMissing > 0)
+                    false
+                },
             )
             val reply = readEditorBounds(env, JSONObject())
             val diag = checkNotNull(assertFocusUnavailable(reply, "before_sample", "node_not_visible"))
@@ -3162,6 +3171,34 @@ class EditorBoundsDiagnosticTest {
             assertFalse(reply.toString().contains(otherFieldName))
             assertEquals(0, env.imeRequestCalls)
         }
+    }
+
+    @Test
+    fun `runtime view ID flag preserves the missing name refusal when set clear or unreadable`() {
+        fun checkResponse(expected: Any, readFlag: () -> Boolean?) {
+            val stale = FakeNode("stale", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+            val candidates = listOf(FakeNode("first", viewIdResourceName = null), FakeNode("second", viewIdResourceName = " "))
+            val env = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = stale, rootFocus = stale, defaultNodesById = mapOf(fieldName to candidates),
+                ),
+                readReportViewIds = readFlag,
+            )
+            val reply = readEditorBounds(env, JSONObject())
+            assertFocusUnavailable(reply, "before_sample", "node_not_visible")
+            assertEquals(2, reply.getInt("ime_editor_field_missing_name_matches"))
+            assertEquals(expected, reply.get("ime_editor_report_view_ids"))
+            assertEquals(
+                setOf("ime_editor_bounds", "ime_editor_bounds_reason", "ime_editor_focus_phase", "ime_editor_focus_check",
+                    "ime_editor_focus_diag", "ime_editor_field_missing_name_matches", "ime_editor_report_view_ids"),
+                reply.keys().asSequence().toSet(),
+            )
+            assertEquals(0, env.imeRequestCalls)
+        }
+        checkResponse(true) { true }
+        checkResponse(false) { false }
+        checkResponse(JSONObject.NULL) { null }
+        checkResponse(JSONObject.NULL) { throw SecurityException("denied") }
     }
 
     @Test
