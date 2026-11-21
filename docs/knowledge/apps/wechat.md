@@ -288,6 +288,18 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 第一次独立收尾读回发现原无障碍服务清单少一项，其余三项设置与网关资源均匹配。仅补回入场时已启用的 vivo 输入法无障碍服务一次，随后独立核实原清单、四项设置、网关服务、端口转发及该服务的系统绑定。
 
+### 候选 39bfaed 的两个节点均未返回可用资源名
+
+2026-11-21，PA2553 从 `0b4b4d4` 同签保数据更新至 `39bfaed`。在机摘要、入场设置和右窗焦点均已核对。宿主 `696ca58` 从已就位的「文件传输助手」右窗派单一次，用时 27 秒。输入法切换前后共四次读取均通过窗口和标题复核。第五次查询返回 `before_sample / node_not_visible`。全程零导航、零输入、零截图、零发送，未触发业务确认卡。
+
+按字段查到 2 个节点，刷新后 2 个资源名未匹配。新增脱敏计数为 `ime_editor_field_missing_name_matches=2`，即 2 个名字均为 null、空串或纯空白，具名异名为 0。节点在读取边界前即被排除，实际坐标、刷新前的名字及唯一编辑框身份仍未知。该计数只保存在本机回执。草稿代码的完整离线检查 9/9 通过，含 Debug 527 项及 Release 430 项单测。[草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+独立核查同一签名 APK 的编译资源，网关无障碍配置为 `0x53`，含 `FLAG_REPORT_VIEW_IDS`（`0x10`）。此次派单回执没有记录实际连接的服务标志。Android 16 的参考实现按数值视图 ID 查找后创建无障碍节点，单凭查找命中还无法证明节点公开了资源名。[Android 标志定义](https://developer.android.com/reference/android/accessibilityservice/AccessibilityServiceInfo#FLAG_REPORT_VIEW_IDS) · [Android 16 查找实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/AccessibilityInteractionController.java#L1810-L1815)
+
+如需实测该标志，应从当次已绑定的网关连接读取 `getServiceInfo().flags`。Android 16 参考实现的 `dumpsys accessibility` 绑定服务摘要省略了该位。`39bfaed` 的网关和测试靶均未提供该项读数，后续连接的结果只能说明后续连接。[连接信息](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L506-L545) · [系统摘要字段](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L1623-L1635)
+
+初次独立收尾发现已启用的无障碍服务少一项。按入场基线仅补回原 vivo 输入法无障碍服务一次，随后核实原清单、四项设置、网关服务及转发均一致，并独立观察到系统客户端已重新绑定该服务。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
