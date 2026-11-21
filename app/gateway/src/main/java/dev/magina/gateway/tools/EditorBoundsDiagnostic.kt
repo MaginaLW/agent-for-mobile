@@ -136,6 +136,7 @@ private data class MultiMatchScan(
 )
 
 private class Unavailable(val reason: String) : Exception(reason)
+private class MissingIdUnavailable(val phase: String, val source: String) : Exception("missing_id")
 private class AnonymousPairStopped(val pair: AnonymousEditorPair, val phase: String, val reason: String) : Exception(reason)
 private class FocusUnavailable(
     val phase: String,
@@ -302,6 +303,10 @@ internal fun readEditorBounds(
             state.put("ime_editor_report_view_ids", reportViewIds ?: JSONObject.NULL)
         }
         state
+    } catch (e: MissingIdUnavailable) {
+        unavailable("missing_id")
+            .put("ime_editor_missing_id_phase", e.phase)
+            .put("ime_editor_missing_id_source", e.source)
     } catch (e: Unavailable) {
         unavailable(e.reason)
     } catch (_: SecurityException) {
@@ -314,7 +319,7 @@ internal fun readEditorBounds(
 private fun requireResourceName(env: EditorBoundsEnvironment, pkg: String, resId: Int): String =
     when (val result = env.resourceName(pkg, resId)) {
         is ResourceNameResult.Found -> result.name
-        ResourceNameResult.Missing -> throw Unavailable("missing_id")
+        ResourceNameResult.Missing -> throw MissingIdUnavailable("after_sample", "ime_sample_field_unresolved")
         ResourceNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
 
@@ -341,10 +346,11 @@ private fun resolveWindowFieldNameResult(env: EditorBoundsEnvironment, pkg: Stri
     }
 }
 
-private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String): String =
+private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String, phase: String): String =
     when (val result = resolveWindowFieldNameResult(env, pkg)) {
         is WindowFieldNameResult.Found -> result.name
-        WindowFieldNameResult.NoContract, WindowFieldNameResult.MissingId -> throw Unavailable("missing_id")
+        WindowFieldNameResult.NoContract -> throw MissingIdUnavailable(phase, "field_contract_absent")
+        WindowFieldNameResult.MissingId -> throw MissingIdUnavailable(phase, "field_id_unresolved")
         WindowFieldNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
 
@@ -585,8 +591,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         if (rootFocus != node) {
             missingField("root_focus_mismatch", WindowFieldSnapshot("not_attempted"))
         }
-        val expectedFieldName = if (!focused) resolveWindowFieldName(env, pkg) else null
-        val name = sf.viewId ?: throw Unavailable("missing_id")
+        val expectedFieldName = if (!focused) resolveWindowFieldName(env, pkg, phase) else null
+        val name = sf.viewId ?: throw MissingIdUnavailable(phase, "service_node_unnamed")
         if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
         val byName = if (landscape && field?.name == name) fieldMatches else root.findNodesByViewId(name)
         if (byName.singleOrNull() != node) throw Unavailable("ambiguous_id")
@@ -604,11 +610,11 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     val fieldName = when (val result = checkNotNull(lookup)) {
         is WindowFieldNameResult.Found -> result.name
         WindowFieldNameResult.NoContract -> {
-            if (sfFailureCheck == null) throw Unavailable("missing_id")
+            if (sfFailureCheck == null) throw MissingIdUnavailable(phase, "field_contract_absent")
             missingField(sfFailureCheck, WindowFieldSnapshot("no_contract"))
         }
         WindowFieldNameResult.MissingId -> {
-            if (sfFailureCheck == null) throw Unavailable("missing_id")
+            if (sfFailureCheck == null) throw MissingIdUnavailable(phase, "field_id_unresolved")
             missingField(sfFailureCheck, WindowFieldSnapshot("missing_id"))
         }
         WindowFieldNameResult.ResourcesUnavailable -> {
@@ -704,7 +710,7 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             val check = if (sameAsService) checkNotNull(sfFailureCheck) else "root_focus_mismatch"
             missingField(check, wf)
         }
-        val name = candViewId ?: throw Unavailable("missing_id")
+        val name = candViewId ?: throw MissingIdUnavailable(phase, "candidate_node_unnamed")
         if (name != fieldName) throw Unavailable("different_id")
         if (root.findNodesByViewId(name).singleOrNull() != candidate) throw Unavailable("ambiguous_id")
         if (!candBoundsInWindow) throw Unavailable("invalid_bounds")

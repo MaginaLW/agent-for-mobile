@@ -98,6 +98,20 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 - `ime_editor_bounds.filtered_visible_field`：仅在至少一个阶段经过多命中可见子集筛选（`filtered_unique`）取得候选节点的成功回执中出现在 `ime_editor_bounds` 内，固定为 `true`；未经多命中筛选的成功回执、全部失败回执与顶层响应均省略该字段。
 - `ime_editor_bounds.node_focused`：仅在成功回执依赖未报告聚焦的节点（`node.isFocused == false`）时出现在 `ime_editor_bounds` 内，固定为 `false`（此时 `window_field_phase` 可省略，或为 `before_sample`、`after_sample`、`both`）。正常聚焦成功路径与所有失败回执均省略该字段，顶层响应也不出现该字段。
 
+### `missing_id` 停在哪一步
+
+当 `ime_editor_bounds_reason` 为 `missing_id` 时，四边为空。网关用两个固定枚举记录失败位置。`ime_editor_missing_id_phase` 为 `before_sample` 表示尚未请求输入法四边，为 `after_sample` 表示已取得输入法样本。两种情况下都保留原停止结果。
+
+| `ime_editor_missing_id_source` | 触发条件 |
+|---|---|
+| `field_contract_absent` | 按活动窗口查输入字段时，读不到编辑器契约。 |
+| `field_id_unresolved` | 契约中的字段 ID 为 0 或 -1，或无法解析为 ID 类型的资源名。 |
+| `service_node_unnamed` | 服务焦点与活动根焦点指向同一节点，该节点没有资源名。 |
+| `candidate_node_unnamed` | 按字段查到的候选通过前置校验，但节点自身没有资源名。 |
+| `ime_sample_field_unresolved` | 已收到输入法样本，样本中的字段 ID 找不到资源名。只在 `after_sample` 出现。 |
+
+旧版本只返回 `missing_id`。例如 PA2553 上 `b029ac1` 的回执，采样阶段和失败位置均未知。
+
 ### 横屏两个候选均缺少资源名
 
 显式调用 `keyboard_state({"probe_editor_bounds":true})` 时，若当前输入连接的同一字段 ID 在活动窗恰好命中两个不同节点，且两者刷新后同窗、同包、非敏感、均无资源名，网关会核对两者。顶层 `ime_editor_anonymous_pair.candidates` 各行给出四边 `left/top/right/bottom`、`focused/visible/editable`、是否为服务或窗口根查到的输入焦点（`service_focus/root_focus`），以及是否与输入法四边一致（`matches_ime_bounds`）。行序可变。对象内的 `service_focus`、`root_focus` 分别保留两次焦点查询当时的 `focused/visible`。缺少可归属的焦点副本时，其属性为 `null`。

@@ -628,6 +628,17 @@ class EditorBoundsDiagnosticTest {
         assertFalse(reply.has("node_focused"))
     }
 
+    private fun assertMissingIdAttribution(reply: JSONObject, phase: String, source: String) {
+        assertEquals("missing_id", reply.getString("ime_editor_bounds_reason"))
+        assertEquals(phase, reply.getString("ime_editor_missing_id_phase"))
+        assertEquals(source, reply.getString("ime_editor_missing_id_source"))
+    }
+
+    private fun assertNoMissingIdAttribution(reply: JSONObject) {
+        assertFalse(reply.has("ime_editor_missing_id_phase"))
+        assertFalse(reply.has("ime_editor_missing_id_source"))
+    }
+
     private fun assertFocusUnavailable(reply: JSONObject, expectedPhase: String, expectedCheck: String): JSONObject? {
         assertTrue(reply.has("ime_editor_bounds") && reply.isNull("ime_editor_bounds"))
         assertEquals("focus_unavailable", reply.getString("ime_editor_bounds_reason"))
@@ -1099,6 +1110,149 @@ class EditorBoundsDiagnosticTest {
         }
         assertFailure(readEditorBounds(imeMismatchEnv, JSONObject()), "different_id")
         assertEquals(1, imeMismatchEnv.imeRequestCalls)
+    }
+
+    @Test
+    fun `missing_id receipts distinguish phase source and ime sampling without extra fields`() {
+        data class MissingIdCase(
+            val phase: String,
+            val source: String,
+            val env: FakeEnv,
+            val expectedRequests: Int,
+        )
+
+        val cases = listOf(
+            MissingIdCase(
+                "before_sample",
+                "field_contract_absent",
+                unfocusedWindowFieldEnv().apply { contract = null },
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "field_contract_absent",
+                unfocusedWindowFieldEnv().apply {
+                    onSampleRequest = { contract = null }
+                },
+                1,
+            ),
+            MissingIdCase(
+                "before_sample",
+                "field_contract_absent",
+                unfocusedServiceEnv().apply { contract = null },
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "field_contract_absent",
+                unfocusedServiceEnv().apply {
+                    onSampleRequest = { contract = null }
+                },
+                1,
+            ),
+            MissingIdCase(
+                "before_sample",
+                "field_id_unresolved",
+                unfocusedWindowFieldEnv().apply {
+                    contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0)
+                },
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "field_id_unresolved",
+                unfocusedWindowFieldEnv().apply {
+                    onSampleRequest = {
+                        contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0)
+                    }
+                },
+                1,
+            ),
+            MissingIdCase(
+                "before_sample",
+                "field_id_unresolved",
+                unfocusedServiceEnv().apply {
+                    contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0)
+                },
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "field_id_unresolved",
+                unfocusedServiceEnv().apply {
+                    onSampleRequest = {
+                        contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0)
+                    }
+                },
+                1,
+            ),
+            MissingIdCase(
+                "before_sample",
+                "service_node_unnamed",
+                unfocusedServiceEnv(
+                    beforeNode = FakeNode(id = "n1", isFocused = false, viewIdResourceName = null),
+                ),
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "service_node_unnamed",
+                focusedServiceEnv(
+                    afterNode = FakeNode(id = "n1", isFocused = true, viewIdResourceName = null),
+                ),
+                1,
+            ),
+            MissingIdCase(
+                "before_sample",
+                "candidate_node_unnamed",
+                unfocusedWindowFieldEnv(
+                    beforeNode = FakeNode(id = "n1", viewIdResourceName = null),
+                ),
+                0,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "candidate_node_unnamed",
+                unfocusedWindowFieldEnv(
+                    afterNode = FakeNode(id = "n1", viewIdResourceName = null),
+                ),
+                1,
+            ),
+            MissingIdCase(
+                "after_sample",
+                "ime_sample_field_unresolved",
+                unfocusedWindowFieldEnv().apply {
+                    onSampleRequest = { resources[fieldId] = ResourceNameResult.Missing }
+                },
+                1,
+            ),
+        )
+
+        for (c in cases) {
+            val reply = readEditorBounds(c.env, JSONObject())
+            assertFailure(reply, "missing_id")
+            assertMissingIdAttribution(reply, c.phase, c.source)
+            assertEquals(c.expectedRequests, c.env.imeRequestCalls)
+        }
+
+        val resourcesUnavailableReply = readEditorBounds(
+            unfocusedWindowFieldEnv().apply { resources[fieldId] = ResourceNameResult.ResourcesUnavailable },
+            JSONObject(),
+        )
+        assertFailure(resourcesUnavailableReply, "resources_unavailable")
+        assertNoMissingIdAttribution(resourcesUnavailableReply)
+
+        val invisibleService = FakeNode(id = "sf", isFocused = false, isVisibleToUser = false)
+        val focusUnavailableReply = readEditorBounds(
+            unfocusedServiceEnv(beforeNode = invisibleService).apply { contract = null },
+            JSONObject(),
+        )
+        assertFocusUnavailable(focusUnavailableReply, "before_sample", "node_not_visible")
+        assertNoMissingIdAttribution(focusUnavailableReply)
+
+        val successReply = readEditorBounds(focusedServiceEnv(), JSONObject())
+        assertTrue(successReply.has("ime_editor_bounds"))
+        assertNoMissingIdAttribution(successReply)
     }
 
     @Test
