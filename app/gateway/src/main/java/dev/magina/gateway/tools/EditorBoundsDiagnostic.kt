@@ -119,6 +119,12 @@ private data class FilteredFieldMatch(
 private data class MultiMatchScan(
     val totalMatches: Int,
     val boundsInWindowMatches: Int,
+    val refreshFailedMatches: Int,
+    val wrongWindowOrPackageMatches: Int,
+    val idMismatchMatches: Int,
+    val emptyBoundsMatches: Int,
+    val outsideWindowMatches: Int,
+    val visibleMatches: Int,
     val usable: List<FilteredFieldMatch>,
 )
 
@@ -171,6 +177,12 @@ private class WindowFieldSnapshot(
     val totalMatches: Int? = null,
     val visibleInWindowMatches: Int? = null,
     val boundsInWindowMatches: Int? = null,
+    val refreshFailedMatches: Int? = null,
+    val wrongWindowOrPackageMatches: Int? = null,
+    val idMismatchMatches: Int? = null,
+    val emptyBoundsMatches: Int? = null,
+    val outsideWindowMatches: Int? = null,
+    val visibleMatches: Int? = null,
 )
 
 /** 只读回执。即使两份独立测量一致，也不生成操作引用或输入身份。 */
@@ -289,7 +301,7 @@ private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String): S
         WindowFieldNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
 
-/** 仅输出固定 17 键脱敏状态（布尔、非负整数、null 或固定小写枚举），不含文本、包名、资源名、坐标或窗口号。 */
+/** 仅输出固定 23 键脱敏状态（布尔、非负整数、null 或固定小写枚举），不含文本、包名、资源名、坐标或窗口号。 */
 private fun buildFocusDiag(
     sf: ServiceFocusSnapshot,
     rootFocus: EditorFocusNode?,
@@ -332,6 +344,12 @@ private fun buildFocusDiag(
         .put("window_field_total_matches", wf.totalMatches ?: JSONObject.NULL)
         .put("window_field_visible_in_window_matches", wf.visibleInWindowMatches ?: JSONObject.NULL)
         .put("window_field_bounds_in_window_matches", wf.boundsInWindowMatches ?: JSONObject.NULL)
+        .put("window_field_refresh_failed_matches", wf.refreshFailedMatches ?: JSONObject.NULL)
+        .put("window_field_wrong_window_or_package_matches", wf.wrongWindowOrPackageMatches ?: JSONObject.NULL)
+        .put("window_field_id_mismatch_matches", wf.idMismatchMatches ?: JSONObject.NULL)
+        .put("window_field_empty_bounds_matches", wf.emptyBoundsMatches ?: JSONObject.NULL)
+        .put("window_field_outside_window_matches", wf.outsideWindowMatches ?: JSONObject.NULL)
+        .put("window_field_visible_matches", wf.visibleMatches ?: JSONObject.NULL)
 }
 
 /**
@@ -368,16 +386,40 @@ private fun scanMultiMatches(
     windowBounds: IntBounds,
 ): MultiMatchScan {
     var boundsInWindowCount = 0
+    var refreshFailedCount = 0
+    var wrongWindowOrPackageCount = 0
+    var idMismatchCount = 0
+    var emptyBoundsCount = 0
+    var outsideWindowCount = 0
+    var visibleCount = 0
     val usable = mutableListOf<FilteredFieldMatch>()
     for (m in nodes) {
-        if (!m.refresh()) continue
-        if (m.windowId != windowId || m.packageName != pkg) continue
+        if (!m.refresh()) {
+            refreshFailedCount++
+            continue
+        }
+        if (m.windowId != windowId || m.packageName != pkg) {
+            wrongWindowOrPackageCount++
+            continue
+        }
         if (m.isPassword || m.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
-        if (m.viewIdResourceName != fieldName) continue
+        if (m.viewIdResourceName != fieldName) {
+            idMismatchCount++
+            continue
+        }
+        val visible = m.isVisibleToUser
+        if (visible) visibleCount++
         val bounds = m.boundsInScreen()
-        if (bounds.isEmpty || !windowBounds.contains(bounds)) continue
+        if (bounds.isEmpty) {
+            emptyBoundsCount++
+            continue
+        }
+        if (!windowBounds.contains(bounds)) {
+            outsideWindowCount++
+            continue
+        }
         boundsInWindowCount++
-        if (m.isVisibleToUser) {
+        if (visible) {
             usable += FilteredFieldMatch(
                 node = m,
                 bounds = bounds,
@@ -389,6 +431,12 @@ private fun scanMultiMatches(
     return MultiMatchScan(
         totalMatches = nodes.size,
         boundsInWindowMatches = boundsInWindowCount,
+        refreshFailedMatches = refreshFailedCount,
+        wrongWindowOrPackageMatches = wrongWindowOrPackageCount,
+        idMismatchMatches = idMismatchCount,
+        emptyBoundsMatches = emptyBoundsCount,
+        outsideWindowMatches = outsideWindowCount,
+        visibleMatches = visibleCount,
         usable = usable,
     )
 }
@@ -487,6 +535,12 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
                     totalMatches = 0,
                     visibleInWindowMatches = 0,
                     boundsInWindowMatches = 0,
+                    refreshFailedMatches = 0,
+                    wrongWindowOrPackageMatches = 0,
+                    idMismatchMatches = 0,
+                    emptyBoundsMatches = 0,
+                    outsideWindowMatches = 0,
+                    visibleMatches = 0,
                 ),
             ),
         )
@@ -504,6 +558,12 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
                 totalMatches = 1,
                 visibleInWindowMatches = 0,
                 boundsInWindowMatches = 0,
+                refreshFailedMatches = 1,
+                wrongWindowOrPackageMatches = 0,
+                idMismatchMatches = 0,
+                emptyBoundsMatches = 0,
+                outsideWindowMatches = 0,
+                visibleMatches = 0,
             )
             val check = if (sameAsService) checkNotNull(sfFailureCheck) else "node_refresh_failed"
             missing(check, buildFocusDiag(sf, getRootFocus(), wf))
@@ -516,7 +576,9 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         val candBounds = candidate.boundsInScreen()
         val candBoundsInWindow = !candBounds.isEmpty && windowBounds.contains(candBounds)
         val candViewId = candidate.viewIdResourceName?.takeIf { it.isNotBlank() }
-        val inWindowQualified = candSameWindow && candSamePackage && candViewId == fieldName && candBoundsInWindow
+        val sameWindowAndPkg = candSameWindow && candSamePackage
+        val idMatched = sameWindowAndPkg && candViewId == fieldName
+        val inWindowQualified = idMatched && candBoundsInWindow
         val wf = WindowFieldSnapshot(
             lookup = "unique",
             fieldName = fieldName,
@@ -528,6 +590,12 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             totalMatches = 1,
             visibleInWindowMatches = if (inWindowQualified && candVisible) 1 else 0,
             boundsInWindowMatches = if (inWindowQualified) 1 else 0,
+            refreshFailedMatches = 0,
+            wrongWindowOrPackageMatches = if (!sameWindowAndPkg) 1 else 0,
+            idMismatchMatches = if (sameWindowAndPkg && !idMatched) 1 else 0,
+            emptyBoundsMatches = if (idMatched && candBounds.isEmpty) 1 else 0,
+            outsideWindowMatches = if (idMatched && !candBounds.isEmpty && !windowBounds.contains(candBounds)) 1 else 0,
+            visibleMatches = if (idMatched && candVisible) 1 else 0,
         )
         val candidateFocusCheck = when {
             !candVisible -> "node_not_visible"
@@ -564,6 +632,12 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             totalMatches = scan.totalMatches,
             visibleInWindowMatches = scan.usable.size,
             boundsInWindowMatches = scan.boundsInWindowMatches,
+            refreshFailedMatches = scan.refreshFailedMatches,
+            wrongWindowOrPackageMatches = scan.wrongWindowOrPackageMatches,
+            idMismatchMatches = scan.idMismatchMatches,
+            emptyBoundsMatches = scan.emptyBoundsMatches,
+            outsideWindowMatches = scan.outsideWindowMatches,
+            visibleMatches = scan.visibleMatches,
         )
         if (sfFailureCheck != null) {
             missing(sfFailureCheck, buildFocusDiag(sf, getRootFocus(), wf))
@@ -586,6 +660,12 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         totalMatches = scan.totalMatches,
         visibleInWindowMatches = 1,
         boundsInWindowMatches = scan.boundsInWindowMatches,
+        refreshFailedMatches = scan.refreshFailedMatches,
+        wrongWindowOrPackageMatches = scan.wrongWindowOrPackageMatches,
+        idMismatchMatches = scan.idMismatchMatches,
+        emptyBoundsMatches = scan.emptyBoundsMatches,
+        outsideWindowMatches = scan.outsideWindowMatches,
+        visibleMatches = scan.visibleMatches,
     )
     val rootFocus = getRootFocus()
     if (!isFallbackRootFocusAllowed(sf, candidate, rootFocus)) {

@@ -51,16 +51,16 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
     2. `rootFocus == candidate`；
     3. 仅豁免 PA2553 已证实的退化形态：`candidate != serviceFocus && rootFocus == serviceFocus && serviceFocus.refreshed == true && !serviceFocus.isFocused && !serviceFocus.isVisibleToUser && serviceFocus.viewId == null && !serviceFocus.sensitive`。
   - **兜底失败归因**：
-    - `serviceFocus == null` 时沿用原错因（`missing_id`、`resources_unavailable`、`input_focus_missing`、多命中 `usable.size >= 2` 报 `ambiguous_id`，或 `candidate` 对应的失败）；若多命中但 `usable.size == 0`，返回 `focus_unavailable` / `node_not_visible` 并附 17 键 `ime_editor_focus_diag`（`window_field_lookup = "ambiguous"` 与三个整数计数）。
+    - `serviceFocus == null` 时沿用原错因（`missing_id`、`resources_unavailable`、`input_focus_missing`、多命中 `usable.size >= 2` 报 `ambiguous_id`，或 `candidate` 对应的失败）；若多命中但 `usable.size == 0`，返回 `focus_unavailable` / `node_not_visible` 并附 23 键 `ime_editor_focus_diag`（`window_field_lookup = "ambiguous"` 与 9 个非负整数计数）。
     - `serviceFocus != null` 时，若兜底未产生有效唯一节点（`no_contract` / `missing_id` / `resources_unavailable` / `zero_matches` / 多命中 `usable.size != 1` 记 `ambiguous`）或命中与 `serviceFocus` 相同的失效节点，按原顺序返回 `serviceFocus` 的原始 `focus_unavailable`（`node_refresh_failed` → `node_not_visible` → `node_window_mismatch` → `node_package_mismatch`）；若命中**不同于 `serviceFocus` 的唯一节点 `candidate`**（`unique` 或 `filtered_unique`）且 `candidate` 自身校验失败，则按 `candidate` 归因（非 `focus_unavailable` 错误省略 `ime_editor_focus_diag`）。
 
-取样前后须取得同一节点、窗口、具名资源、可编辑状态、聚焦状态和屏幕四边（任一字段变化含采样前后焦点双向翻转均返回 `context_changed`），默认输入法须仍为网关输入法、输入会话须稳定，输入法回调中的字段名须与节点一致（`different_id`）且四边按 `Float` 逐边精确匹配（`different_bounds`，不截断小数）。对照用例覆盖正常聚焦不依赖 `EditorInfo`、失效服务焦点（刷新失败/不可见/跨窗/跨包）由活动窗唯一字段或多命中可见子集筛选成功兜底及混合阶段、PA2553 匿名不可见未聚焦根焦点豁免与具名/聚焦/可见/未刷新/敏感/第三节点边界拒绝、有效服务焦点冲突绝不被兜底绕过、未聚焦节点（`rootFocus == node` / `null`）、活动窗密码节点与多命中同窗同包敏感重复框（含二次查表）及密码 `EditorInfo` 快速拒绝（零 IME 请求）、不可见同节点复现与多命中零可见/多可见 17 键诊断、另一候选失败归因、首查/复查重名、四边像素/小数偏差、空或越界矩形、采样前后焦点双向翻转（含 `cloneNodes=false` 原地刷新翻转）、空采样、超时与中断。
+取样前后须取得同一节点、窗口、具名资源、可编辑状态、聚焦状态和屏幕四边（任一字段变化含采样前后焦点双向翻转均返回 `context_changed`），默认输入法须仍为网关输入法、输入会话须稳定，输入法回调中的字段名须与节点一致（`different_id`）且四边按 `Float` 逐边精确匹配（`different_bounds`，不截断小数）。对照用例覆盖正常聚焦不依赖 `EditorInfo`、失效服务焦点（刷新失败/不可见/跨窗/跨包）由活动窗唯一字段或多命中可见子集筛选成功兜底及混合阶段、PA2553 匿名不可见未聚焦根焦点豁免与具名/聚焦/可见/未刷新/敏感/第三节点边界拒绝、有效服务焦点冲突绝不被兜底绕过、未聚焦节点（`rootFocus == node` / `null`）、活动窗密码节点与多命中同窗同包敏感重复框（含二次查表）及密码 `EditorInfo` 快速拒绝（零 IME 请求）、不可见同节点复现与多命中零可见/多可见及 6 项淘汰原因细分 23 键诊断、另一候选失败归因、首查/复查重名、四边像素/小数偏差、空或越界矩形、采样前后焦点双向翻转（含 `cloneNodes=false` 原地刷新翻转）、空采样、超时与中断。
 
 ### `focus_unavailable` 脱敏诊断快照（`ime_editor_focus_diag`）
 
 仅当活动根与活动窗口均已核实、且最终落入 `focus_unavailable` 时，在顶层响应附带只读脱敏对象 `ime_editor_focus_diag`；成功、非 `focus_unavailable` 失败（含 `sensitive_field`）以及 `cache_clear_failed` / `active_root_missing` / `active_window_missing` 均省略该字段。每次阶段核对最多调用一次 `root.findFocus(FOCUS_INPUT)`；正常成功路径不额外调用 `EditorInfo` 或按名查表。
 
-该对象严格限于下表 17 个固定键，值只允许布尔、非负整数、`null` 或固定小写枚举，不包含任何文本、草稿、包名、资源名、屏幕坐标或窗口号：
+该对象严格限于下表 23 个固定键，值只允许布尔、非负整数、`null` 或固定小写枚举，不包含任何文本、草稿、包名、资源名、屏幕坐标或窗口号：
 
 | 键名 | 类型 / 固定枚举 | 语义 |
 |---|---|---|
@@ -81,6 +81,14 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 | `window_field_total_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为原始命中总数（`>= 0`） |
 | `window_field_visible_in_window_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为按统一口径刷新成功、同窗同包、非敏感、资源名匹配、四边非空且落于活动窗内且 `isVisibleToUser == true` 的节点数（`0..total`） |
 | `window_field_bounds_in_window_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为同上条件但不限 `isVisibleToUser` 的节点数（`0..total`） |
+| `window_field_refresh_failed_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为 `refresh() == false` 被淘汰的节点数（`0..total`） |
+| `window_field_wrong_window_or_package_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为已刷新但 `windowId != window.id` 或 `packageName != pkg` 被淘汰的节点数（`0..total`） |
+| `window_field_id_mismatch_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为已刷新、同窗同包、非敏感但 `viewIdResourceName != fieldName` 被淘汰的节点数（`0..total`） |
+| `window_field_empty_bounds_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为已刷新、同窗同包、非敏感、资源名匹配但 `bounds.isEmpty` 被淘汰的节点数（`0..total`） |
+| `window_field_outside_window_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为已刷新、同窗同包、非敏感、资源名匹配、四边非空但 `!windowBounds.contains(bounds)` 被淘汰的节点数（`0..total`） |
+| `window_field_visible_matches` | `Int?` | 未调用 `findNodesByViewId` 时为 `null`；调用后为已刷新、同窗同包、非敏感、资源名匹配且 `isVisibleToUser == true` 的节点数（不限四边是否为空或落于窗内；满足 `visible_in_window <= visible <= empty_bounds + outside_window + bounds_in_window <= total`） |
+
+调用 `findNodesByViewId` 且未触发 `sensitive_field` 时，上述 6 项互斥分桶满足严格守恒：`refresh_failed + wrong_window_or_package + id_mismatch + empty_bounds + outside_window + bounds_in_window == total`（其中窗内但不可见节点数即 `bounds_in_window - visible_in_window`）。
 
 回执保持只读诊断语义，不生成操作引用或输入身份，也不新增 `ime_editor_bounds_reason` 或 `ime_editor_focus_check` 枚举值：
 

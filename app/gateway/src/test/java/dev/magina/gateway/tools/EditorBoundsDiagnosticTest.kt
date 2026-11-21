@@ -271,6 +271,12 @@ class EditorBoundsDiagnosticTest {
         "window_field_total_matches",
         "window_field_visible_in_window_matches",
         "window_field_bounds_in_window_matches",
+        "window_field_refresh_failed_matches",
+        "window_field_wrong_window_or_package_matches",
+        "window_field_id_mismatch_matches",
+        "window_field_empty_bounds_matches",
+        "window_field_outside_window_matches",
+        "window_field_visible_matches",
     )
 
     private val diagNullableBoolKeys = setOf(
@@ -291,6 +297,12 @@ class EditorBoundsDiagnosticTest {
         "window_field_total_matches",
         "window_field_visible_in_window_matches",
         "window_field_bounds_in_window_matches",
+        "window_field_refresh_failed_matches",
+        "window_field_wrong_window_or_package_matches",
+        "window_field_id_mismatch_matches",
+        "window_field_empty_bounds_matches",
+        "window_field_outside_window_matches",
+        "window_field_visible_matches",
     )
 
     private val rootFocusStates = setOf(
@@ -326,7 +338,7 @@ class EditorBoundsDiagnosticTest {
     )
 
     private fun assertDiagSchema(diag: JSONObject) {
-        assertEquals(17, diag.length())
+        assertEquals(23, diag.length())
         val actualKeys = buildSet {
             val it = diag.keys()
             while (it.hasNext()) add(it.next())
@@ -357,17 +369,42 @@ class EditorBoundsDiagnosticTest {
             }
         } else {
             val total = diag.get("window_field_total_matches") as Int
-            val visible = diag.get("window_field_visible_in_window_matches") as Int
+            val visibleInWindow = diag.get("window_field_visible_in_window_matches") as Int
             val bounds = diag.get("window_field_bounds_in_window_matches") as Int
-            assertTrue("expected 0 <= visible($visible) <= bounds($bounds) <= total($total)", visible in 0..bounds && bounds <= total)
+            val refreshFailed = diag.get("window_field_refresh_failed_matches") as Int
+            val wrongWindowOrPkg = diag.get("window_field_wrong_window_or_package_matches") as Int
+            val idMismatch = diag.get("window_field_id_mismatch_matches") as Int
+            val emptyBounds = diag.get("window_field_empty_bounds_matches") as Int
+            val outsideWindow = diag.get("window_field_outside_window_matches") as Int
+            val visible = diag.get("window_field_visible_matches") as Int
+            val idMatchedTotal = emptyBounds + outsideWindow + bounds
+            assertEquals(
+                "partition sum must equal total($total)",
+                total,
+                refreshFailed + wrongWindowOrPkg + idMismatch + idMatchedTotal,
+            )
+            assertTrue(
+                "expected 0 <= visibleInWindow($visibleInWindow) <= bounds($bounds) <= total($total)",
+                visibleInWindow in 0..bounds && bounds <= total,
+            )
+            assertTrue(
+                "expected visibleInWindow($visibleInWindow) <= visible($visible) <= idMatchedTotal($idMatchedTotal)",
+                visible in visibleInWindow..idMatchedTotal,
+            )
             when (lookup) {
-                "zero_matches" -> assertTrue(total == 0 && visible == 0 && bounds == 0)
+                "zero_matches" -> assertTrue(
+                    total == 0 && visibleInWindow == 0 && bounds == 0 &&
+                        refreshFailed == 0 && wrongWindowOrPkg == 0 && idMismatch == 0 &&
+                        emptyBounds == 0 && outsideWindow == 0 && visible == 0,
+                )
                 "unique" -> assertEquals(1, total)
-                "ambiguous" -> assertTrue("ambiguous must have total >= 2 and visible != 1", total >= 2 && visible != 1)
-                "filtered_unique" -> assertTrue("filtered_unique must have total >= 2 and visible == 1", total >= 2 && visible == 1 && bounds >= 1)
+                "ambiguous" -> assertTrue("ambiguous must have total >= 2 and visible != 1", total >= 2 && visibleInWindow != 1)
+                "filtered_unique" -> assertTrue("filtered_unique must have total >= 2 and visible == 1", total >= 2 && visibleInWindow == 1 && bounds >= 1)
             }
         }
     }
+
+    private val unspecifiedDiagInt = -1
 
     private fun assertDiagEquals(
         diag: JSONObject,
@@ -388,6 +425,12 @@ class EditorBoundsDiagnosticTest {
         windowFieldTotalMatches: Int? = null,
         windowFieldVisibleInWindowMatches: Int? = null,
         windowFieldBoundsInWindowMatches: Int? = null,
+        windowFieldRefreshFailedMatches: Int? = unspecifiedDiagInt,
+        windowFieldWrongWindowOrPackageMatches: Int? = unspecifiedDiagInt,
+        windowFieldIdMismatchMatches: Int? = unspecifiedDiagInt,
+        windowFieldEmptyBoundsMatches: Int? = unspecifiedDiagInt,
+        windowFieldOutsideWindowMatches: Int? = unspecifiedDiagInt,
+        windowFieldVisibleMatches: Int? = unspecifiedDiagInt,
     ) {
         assertDiagSchema(diag)
         fun assertNullableBool(key: String, expected: Boolean?) {
@@ -398,6 +441,7 @@ class EditorBoundsDiagnosticTest {
             }
         }
         fun assertNullableInt(key: String, expected: Int?) {
+            if (expected == unspecifiedDiagInt) return
             if (expected == null) {
                 assertTrue("$key expected null, got ${diag.get(key)}", diag.isNull(key))
             } else {
@@ -421,6 +465,12 @@ class EditorBoundsDiagnosticTest {
         assertNullableInt("window_field_total_matches", windowFieldTotalMatches)
         assertNullableInt("window_field_visible_in_window_matches", windowFieldVisibleInWindowMatches)
         assertNullableInt("window_field_bounds_in_window_matches", windowFieldBoundsInWindowMatches)
+        assertNullableInt("window_field_refresh_failed_matches", windowFieldRefreshFailedMatches)
+        assertNullableInt("window_field_wrong_window_or_package_matches", windowFieldWrongWindowOrPackageMatches)
+        assertNullableInt("window_field_id_mismatch_matches", windowFieldIdMismatchMatches)
+        assertNullableInt("window_field_empty_bounds_matches", windowFieldEmptyBoundsMatches)
+        assertNullableInt("window_field_outside_window_matches", windowFieldOutsideWindowMatches)
+        assertNullableInt("window_field_visible_matches", windowFieldVisibleMatches)
     }
 
     private fun assertFailure(reply: JSONObject, expectedReason: String) {
@@ -2917,7 +2967,7 @@ class EditorBoundsDiagnosticTest {
     }
 
     @Test
-    fun `all eight window_field_lookup enums are reachable and obey 17-key schema invariants`() {
+    fun `all eight window_field_lookup enums are reachable and obey 23-key schema invariants`() {
         val validSf = FakeNode(id = "sf_valid", isFocused = true, isVisibleToUser = true)
         val invisibleSf = FakeNode(id = "sf_inv", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
         val visibleCand = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
@@ -2976,5 +3026,351 @@ class EditorBoundsDiagnosticTest {
             observed += actualLookup
         }
         assertEquals(windowFieldLookups, observed)
+    }
+
+    @Test
+    fun `pa2553 ambiguous total 2 bounds 0 breakdown pinpoints each drop reason and visibility`() {
+        val paSf = FakeNode(id = "pa2553_sf", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+        data class DropCase(
+            val nodes: List<FakeNode>,
+            val refreshFailed: Int = 0,
+            val wrongWindowOrPkg: Int = 0,
+            val idMismatch: Int = 0,
+            val emptyBounds: Int = 0,
+            val outsideWindow: Int = 0,
+            val visible: Int = 0,
+        )
+
+        val cases = listOf(
+            // 1) 两个均为空矩形，其中一个报告可见
+            DropCase(
+                nodes = listOf(
+                    FakeNode(id = "e1", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 0, 0, 0)),
+                    FakeNode(id = "e2", isFocused = false, isVisibleToUser = false, bounds = IntBounds(100, 100, 100, 120)),
+                ),
+                emptyBounds = 2,
+                visible = 1,
+            ),
+            // 2) 一个空矩形不可见 + 一个非空矩形越出右窗（模拟平行视界坐标左移）且报告可见
+            DropCase(
+                nodes = listOf(
+                    FakeNode(id = "e3", isFocused = false, isVisibleToUser = false, bounds = IntBounds(0, 0, 0, 0)),
+                    FakeNode(id = "o1", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 1420, 1080, 1540)),
+                ),
+                emptyBounds = 1,
+                outsideWindow = 1,
+                visible = 1,
+            ),
+            // 3) 两个均越出活动右窗且不可见
+            DropCase(
+                nodes = listOf(
+                    FakeNode(id = "o2", isFocused = false, isVisibleToUser = false, bounds = IntBounds(1040, 1500, 2120, 1620)),
+                    FakeNode(id = "o3", isFocused = false, isVisibleToUser = false, bounds = IntBounds(900, 1420, 2120, 1540)),
+                ),
+                outsideWindow = 2,
+                visible = 0,
+            ),
+            // 4) 一个 refresh 失败 + 一个属于左窗 windowId=6
+            DropCase(
+                nodes = listOf(
+                    FakeNode(id = "r1", refreshResult = false),
+                    FakeNode(id = "w1", windowId = 6, isVisibleToUser = true),
+                ),
+                refreshFailed = 1,
+                wrongWindowOrPkg = 1,
+                visible = 0,
+            ),
+            // 5) 一个跨包 + 一个刷新后资源名不匹配
+            DropCase(
+                nodes = listOf(
+                    FakeNode(id = "p1", packageName = "com.other.app", isVisibleToUser = true),
+                    FakeNode(id = "id1", viewIdResourceName = otherFieldName, isVisibleToUser = true),
+                ),
+                wrongWindowOrPkg = 1,
+                idMismatch = 1,
+                visible = 0,
+            ),
+        )
+
+        for (c in cases) {
+            val env = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = paSf,
+                    rootFocus = paSf,
+                    defaultNodesById = mapOf(fieldName to c.nodes),
+                ),
+            )
+            val diag = checkNotNull(
+                assertFocusUnavailable(readEditorBounds(env, JSONObject()), "before_sample", "node_not_visible"),
+            )
+            assertDiagEquals(
+                diag,
+                serviceFocusPresent = true,
+                serviceFocusRefreshed = true,
+                serviceFocusFocused = false,
+                serviceFocusVisible = false,
+                serviceFocusSameWindow = true,
+                serviceFocusSamePackage = true,
+                serviceFocusMatchesField = null,
+                rootFocusState = "matches_service",
+                windowFieldLookup = "ambiguous",
+                windowFieldTotalMatches = 2,
+                windowFieldVisibleInWindowMatches = 0,
+                windowFieldBoundsInWindowMatches = 0,
+                windowFieldRefreshFailedMatches = c.refreshFailed,
+                windowFieldWrongWindowOrPackageMatches = c.wrongWindowOrPkg,
+                windowFieldIdMismatchMatches = c.idMismatch,
+                windowFieldEmptyBoundsMatches = c.emptyBounds,
+                windowFieldOutsideWindowMatches = c.outsideWindow,
+                windowFieldVisibleMatches = c.visible,
+            )
+            assertEquals(0, env.imeRequestCalls)
+        }
+    }
+
+    @Test
+    fun `mixed multi-match drop buckets conserve total across ambiguous and filtered_unique`() {
+        val paSf = FakeNode(id = "pa2553_sf", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+        val thirdRoot = FakeNode(id = "third_root", isFocused = true, isVisibleToUser = true)
+        val baseNodes = listOf(
+            FakeNode(id = "n_refresh", refreshResult = false),
+            FakeNode(id = "n_win", windowId = 6, isVisibleToUser = true),
+            FakeNode(id = "n_pkg", packageName = "other.pkg", isVisibleToUser = true),
+            FakeNode(id = "n_id", viewIdResourceName = otherFieldName, isVisibleToUser = true),
+            FakeNode(id = "n_empty", isVisibleToUser = true, bounds = IntBounds(0, 0, 0, 0)),
+            FakeNode(id = "n_out", isVisibleToUser = true, bounds = IntBounds(0, 1420, 1080, 1540)),
+            FakeNode(id = "n_in_hidden", isFocused = false, isVisibleToUser = false, bounds = editorBounds),
+        )
+
+        val ambiguousEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = paSf,
+                rootFocus = paSf,
+                defaultNodesById = mapOf(fieldName to baseNodes),
+            ),
+        )
+        val ambiguousDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(ambiguousEnv, JSONObject()), "before_sample", "node_not_visible"),
+        )
+        assertDiagEquals(
+            ambiguousDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = false,
+            serviceFocusVisible = false,
+            serviceFocusSameWindow = true,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = null,
+            rootFocusState = "matches_service",
+            windowFieldLookup = "ambiguous",
+            windowFieldTotalMatches = 7,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 1,
+            windowFieldRefreshFailedMatches = 1,
+            windowFieldWrongWindowOrPackageMatches = 2,
+            windowFieldIdMismatchMatches = 1,
+            windowFieldEmptyBoundsMatches = 1,
+            windowFieldOutsideWindowMatches = 1,
+            windowFieldVisibleMatches = 2,
+        )
+
+        val visibleInWin = FakeNode(id = "n_in_visible", isFocused = false, isVisibleToUser = true, bounds = editorBounds)
+        val filteredEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = paSf,
+                rootFocus = thirdRoot,
+                defaultNodesById = mapOf(fieldName to (baseNodes + visibleInWin)),
+            ),
+        )
+        val filteredDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(filteredEnv, JSONObject()), "before_sample", "root_focus_mismatch"),
+        )
+        assertDiagEquals(
+            filteredDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = false,
+            serviceFocusVisible = false,
+            serviceFocusSameWindow = true,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = null,
+            rootFocusState = "other",
+            windowFieldLookup = "filtered_unique",
+            windowFieldSameAsService = false,
+            windowFieldVisible = true,
+            windowFieldFocused = false,
+            windowFieldSameWindow = true,
+            windowFieldBoundsInWindow = true,
+            windowFieldTotalMatches = 8,
+            windowFieldVisibleInWindowMatches = 1,
+            windowFieldBoundsInWindowMatches = 2,
+            windowFieldRefreshFailedMatches = 1,
+            windowFieldWrongWindowOrPackageMatches = 2,
+            windowFieldIdMismatchMatches = 1,
+            windowFieldEmptyBoundsMatches = 1,
+            windowFieldOutsideWindowMatches = 1,
+            windowFieldVisibleMatches = 3,
+        )
+    }
+
+    @Test
+    fun `unique match failure populates exact single-node drop bucket and sensitive multi-match still fails closed`() {
+        val paSf = FakeNode(id = "pa2553_sf", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+        val thirdRoot = FakeNode(id = "third_root", isFocused = true, isVisibleToUser = true)
+        data class UniqueCase(
+            val node: FakeNode,
+            val rootFocus: FakeNode,
+            val expectedCheck: String,
+            val expectedRootState: String,
+            val expectedVisible: Boolean?,
+            val expectedFocused: Boolean?,
+            val expectedSameWindow: Boolean?,
+            val expectedBoundsInWindow: Boolean?,
+            val boundsInWindowMatches: Int = 0,
+            val visibleInWindowMatches: Int = 0,
+            val refreshFailed: Int = 0,
+            val wrongWindowOrPkg: Int = 0,
+            val idMismatch: Int = 0,
+            val emptyBounds: Int = 0,
+            val outsideWindow: Int = 0,
+            val visibleMatches: Int = 0,
+        )
+
+        val cases = listOf(
+            UniqueCase(
+                node = FakeNode(id = "u_rf", refreshResult = false),
+                rootFocus = paSf,
+                expectedCheck = "node_refresh_failed",
+                expectedRootState = "matches_service",
+                expectedVisible = null,
+                expectedFocused = null,
+                expectedSameWindow = null,
+                expectedBoundsInWindow = null,
+                refreshFailed = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_win", windowId = 6, isFocused = false, isVisibleToUser = true),
+                rootFocus = paSf,
+                expectedCheck = "node_window_mismatch",
+                expectedRootState = "matches_service",
+                expectedVisible = true,
+                expectedFocused = false,
+                expectedSameWindow = false,
+                expectedBoundsInWindow = true,
+                wrongWindowOrPkg = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_pkg", packageName = "other.app", isFocused = false, isVisibleToUser = true),
+                rootFocus = paSf,
+                expectedCheck = "node_package_mismatch",
+                expectedRootState = "matches_service",
+                expectedVisible = true,
+                expectedFocused = false,
+                expectedSameWindow = true,
+                expectedBoundsInWindow = true,
+                wrongWindowOrPkg = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_id", viewIdResourceName = otherFieldName, isFocused = false, isVisibleToUser = false),
+                rootFocus = paSf,
+                expectedCheck = "node_not_visible",
+                expectedRootState = "matches_service",
+                expectedVisible = false,
+                expectedFocused = false,
+                expectedSameWindow = true,
+                expectedBoundsInWindow = true,
+                idMismatch = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_empty", isFocused = false, isVisibleToUser = false, bounds = IntBounds(0, 0, 0, 0)),
+                rootFocus = paSf,
+                expectedCheck = "node_not_visible",
+                expectedRootState = "matches_service",
+                expectedVisible = false,
+                expectedFocused = false,
+                expectedSameWindow = true,
+                expectedBoundsInWindow = false,
+                emptyBounds = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_out_vis", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 1420, 1080, 1540)),
+                rootFocus = thirdRoot,
+                expectedCheck = "root_focus_mismatch",
+                expectedRootState = "other",
+                expectedVisible = true,
+                expectedFocused = false,
+                expectedSameWindow = true,
+                expectedBoundsInWindow = false,
+                outsideWindow = 1,
+                visibleMatches = 1,
+            ),
+            UniqueCase(
+                node = FakeNode(id = "u_in_inv", isFocused = false, isVisibleToUser = false, bounds = editorBounds),
+                rootFocus = paSf,
+                expectedCheck = "node_not_visible",
+                expectedRootState = "matches_service",
+                expectedVisible = false,
+                expectedFocused = false,
+                expectedSameWindow = true,
+                expectedBoundsInWindow = true,
+                boundsInWindowMatches = 1,
+            ),
+        )
+
+        for (c in cases) {
+            val env = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = paSf,
+                    rootFocus = c.rootFocus,
+                    defaultNodesById = mapOf(fieldName to listOf(c.node)),
+                ),
+            )
+            val diag = checkNotNull(
+                assertFocusUnavailable(readEditorBounds(env, JSONObject()), "before_sample", c.expectedCheck),
+            )
+            assertDiagEquals(
+                diag,
+                serviceFocusPresent = true,
+                serviceFocusRefreshed = true,
+                serviceFocusFocused = false,
+                serviceFocusVisible = false,
+                serviceFocusSameWindow = true,
+                serviceFocusSamePackage = true,
+                serviceFocusMatchesField = null,
+                rootFocusState = c.expectedRootState,
+                windowFieldLookup = "unique",
+                windowFieldSameAsService = false,
+                windowFieldVisible = c.expectedVisible,
+                windowFieldFocused = c.expectedFocused,
+                windowFieldSameWindow = c.expectedSameWindow,
+                windowFieldBoundsInWindow = c.expectedBoundsInWindow,
+                windowFieldTotalMatches = 1,
+                windowFieldVisibleInWindowMatches = c.visibleInWindowMatches,
+                windowFieldBoundsInWindowMatches = c.boundsInWindowMatches,
+                windowFieldRefreshFailedMatches = c.refreshFailed,
+                windowFieldWrongWindowOrPackageMatches = c.wrongWindowOrPkg,
+                windowFieldIdMismatchMatches = c.idMismatch,
+                windowFieldEmptyBoundsMatches = c.emptyBounds,
+                windowFieldOutsideWindowMatches = c.outsideWindow,
+                windowFieldVisibleMatches = c.visibleMatches,
+            )
+        }
+
+        // 多命中中混入同窗同包敏感空矩形节点仍必须优先 fail-closed 为 sensitive_field 且省略诊断对象
+        val sensitiveEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = paSf,
+                rootFocus = paSf,
+                defaultNodesById = mapOf(
+                    fieldName to listOf(
+                        FakeNode(id = "drop_rf", refreshResult = false),
+                        FakeNode(id = "drop_win", windowId = 6),
+                        FakeNode(id = "pwd_empty", isPassword = true, isVisibleToUser = false, bounds = IntBounds(0, 0, 0, 0)),
+                    ),
+                ),
+            ),
+        )
+        assertFailure(readEditorBounds(sensitiveEnv, JSONObject()), "sensitive_field")
+        assertEquals(0, sensitiveEnv.imeRequestCalls)
     }
 }
