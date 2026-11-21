@@ -202,6 +202,14 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 遇到 `window_id_mismatch` 时，可按 `recent_events.seq` 对齐切换前后的记录，同时核对 `tracked_identity.window_id`、`selected_window_id` 与靶应用自报窗口号。本轮在首个场景的前台核对处停止，四边查询为零。模拟器四项设置均已恢复，网关服务、转发和专用端口均已释放。
 
+#### 靶应用事件来源与四例实测
+
+随后在同一 API 36 模拟器的独立副本上复用网关 `b029ac1`，仅给合成靶应用增加事件记录。左框场景中，Activity 主窗口和两个编辑框的无障碍窗口号均为 13。Android 在首次布局和窗口获得焦点时各发出一次窗口状态事件，靶应用在两次事件回调中都读到 13。网关接受了来自靶 Activity 的 13，所记录的前台身份与活动窗口一致。Android 设置事件来源时从源视图取得窗口号。[Android 16 事件来源实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/accessibility/AccessibilityRecord.java#L144-L163)
+
+系统窗口快照中出现了启动画面（`APPLICATION_STARTING`）和 Activity 主窗口（`BASE_APPLICATION`）。两者的窗口客户端不同，有五份快照同时看到两者。本轮切换期间未重现编号 12 的事件，模拟器 shell 读取无障碍注册跟踪文件时返回 `Permission denied`。现有证据能识别 13 对应的主窗口，仍无法确认上轮 12 是否属于启动画面，或上轮为何收到 12。
+
+四个场景的前台身份逐例核实，沿用原校验。左右编辑框轮流持有输入连接时，网关分别选中左框和右框，各向对应输入连接请求一次四边。两框四边重合时返回 `same_bounds`，焦点矛盾时返回 `focus_conflict`，两例均在采样前停止。四项模拟器设置恢复，网关服务、转发及专用端口释放。
+
 ### PA2553 右窗四边诊断返回 focus_unavailable
 
 2026-11-20，PA2553 在微信「文件传输助手」右窗已就位。派单先核实前台和右窗标题，再同签保数据更新网关至 `50c17a2` 并临时选择网关输入法。切换后再次核实了同一窗口号、右窗范围及标题。第五次读取是本轮唯一一次四边查询，网关返回 `focus_unavailable` 和空四边，派单随即结束。49 秒内共发起五次读取，微信内零点击、零输入、零发送。
