@@ -267,6 +267,19 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 收尾阶段宿主一次回选原 vivo 默认输入法并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `b37c018`。
 
+### 候选 8f0baa0 取得 17 键计数并证实 0/2 窗内命中
+
+2026-11-21，草稿候选 `8f0baa0` 在多命中活动窗字段兜底中新增同窗同包敏感优先 fail-closed、可见窗内子集筛选与 17 键脱敏诊断快照（在 14 键基础上新增 `window_field_total_matches`、`window_field_visible_in_window_matches`、`window_field_bounds_in_window_matches`）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `b37c018` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/8f0baa0c1632d765cabf045fd30ac1fd842dd86a)
+
+按授权先对 PA2553 独立执行一次同签保数据 `adb install -r` 更新至 `8f0baa0`，并核实在机 APK 摘要及微信右窗 `ChattingUI` 焦点。随后因本机 Codex CLI 升级，前两次诊断均在零业务调用前退出且独立收尾全绿（`all_match=true`，零输入法与无障碍设置改动）：首次冻结宿主按精确白名单拒绝未知版本 `codex-cli 0.171.0`；合入 `0.171.0` 契约（[PR #62](https://github.com/MaginaLW/agent-for-mobile/pull/62)）后刷新宿主重跑，因 `toolchain/codex/` 仅放了 `codex.exe` 而缺少同目录配套的 `codex-code-mode-host.exe`（`0.171.0` 默认模型远端元数据强制进入 `ToolMode::CodeModeOnly` 且不回退 `Direct`），Codex 在第 1 次工具调用前 fail-closed 退出（耗时 14 秒）。
+
+经授权补齐同源、OpenAI 签名有效的 `codex-code-mode-host.exe` 后，在新轮次目录执行单次免安装只读诊断（`install_attempts=0`，耗时 25 秒，5 次读取，stderr 为空，微信内零点击、零输入、零发送）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample / node_not_visible` 以及完整 17 键脱敏诊断快照：
+
+- 既有 14 键与 `b37c018` 一致：`service_focus_present=true`、`service_focus_refreshed=true`、`service_focus_same_window=true`、`service_focus_same_package=true`、`root_focus_state=matches_service`、`service_focus_focused=false`、`service_focus_visible=false`、`service_focus_matches_field=null`、`window_field_lookup=ambiguous`。
+- 新增 3 项命中计数：`window_field_total_matches=2`、`window_field_bounds_in_window_matches=0`、`window_field_visible_in_window_matches=0`。按 `8f0baa0` 源码 `scanMultiMatches`，当前输入连接的 `EditorInfo.fieldId` 在微信右窗确实命中 2 个非敏感节点，但两者在进入 `isVisibleToUser` 筛选前均已被前置条件（`refresh()`、同窗同包、`viewIdResourceName == fieldName`、`!bounds.isEmpty` 或 `windowBounds.contains(bounds)`）全部淘汰，尚未发起输入法四边请求。
+
+收尾阶段宿主一次回选原 vivo 默认输入法、恢复启用输入法清单并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `8f0baa0`。针对本轮发现，派单侧已通过 [PR #63](https://github.com/MaginaLW/agent-for-mobile/pull/63) 为 `0.171.0` 补齐配套 `codex-code-mode-host.exe` 存在性与 OpenAI 验签门禁；草稿 PR #47 已推进至 `0b4b4d4`，将 `ime_editor_focus_diag` 细化为 23 键（新增 6 项互斥/可见淘汰原因计数），待离线准备后申请单次真机读取。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
