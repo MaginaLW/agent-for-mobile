@@ -479,6 +479,7 @@ class EditorBoundsDiagnosticTest {
         assertFalse(reply.has("ime_editor_focus_phase"))
         assertFalse(reply.has("ime_editor_focus_check"))
         assertFalse(reply.has("ime_editor_focus_diag"))
+        assertFalse(reply.has("ime_editor_field_missing_name_matches"))
         assertFalse(reply.has("window_field_phase"))
         assertFalse(reply.has("filtered_visible_field"))
         assertFalse(reply.has("node_focused"))
@@ -494,11 +495,18 @@ class EditorBoundsDiagnosticTest {
         assertFalse(reply.has("node_focused"))
         return if (expectedCheck in preWindowFocusChecks) {
             assertFalse(reply.has("ime_editor_focus_diag"))
+            assertFalse(reply.has("ime_editor_field_missing_name_matches"))
             null
         } else {
             assertTrue(reply.has("ime_editor_focus_diag"))
             val diag = reply.getJSONObject("ime_editor_focus_diag")
             assertDiagSchema(diag)
+            val mismatches = diag.optInt("window_field_id_mismatch_matches", 0)
+            assertEquals(mismatches > 0, reply.has("ime_editor_field_missing_name_matches"))
+            if (mismatches > 0) {
+                val missing = reply.get("ime_editor_field_missing_name_matches")
+                assertTrue(missing is Int && missing in 0..mismatches)
+            }
             diag
         }
     }
@@ -3124,6 +3132,34 @@ class EditorBoundsDiagnosticTest {
                 windowFieldOutsideWindowMatches = c.outsideWindow,
                 windowFieldVisibleMatches = c.visible,
             )
+            assertEquals(0, env.imeRequestCalls)
+        }
+    }
+
+    @Test
+    fun `missing names are counted after refresh without exposing names or requesting IME bounds`() {
+        val cases = listOf(
+            listOf(null, " ") to 2,
+            listOf(null, otherFieldName) to 1,
+            listOf(otherFieldName, otherFieldName) to 0,
+            listOf(null) to 1,
+            listOf(otherFieldName) to 0,
+        )
+        for ((names, expectedMissing) in cases) {
+            val staleFocus = FakeNode("stale", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+            val candidates = names.mapIndexed { index, name ->
+                FakeNode("field$index", isVisibleToUser = false, onRefresh = { it.viewIdResourceName = name })
+            }
+            val env = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = staleFocus, rootFocus = staleFocus, defaultNodesById = mapOf(fieldName to candidates),
+                ),
+            )
+            val reply = readEditorBounds(env, JSONObject())
+            val diag = checkNotNull(assertFocusUnavailable(reply, "before_sample", "node_not_visible"))
+            assertEquals(names.size, diag.getInt("window_field_id_mismatch_matches"))
+            assertEquals(expectedMissing, reply.getInt("ime_editor_field_missing_name_matches"))
+            assertFalse(reply.toString().contains(otherFieldName))
             assertEquals(0, env.imeRequestCalls)
         }
     }
