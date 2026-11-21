@@ -320,6 +320,23 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 保持最后一个编辑框的焦点，测试应用对它调用一次 `InputMethodManager.restartInput(view)`。应用为该框创建输入连接的次数由 1 增至 2，独立输入法进程收到 `onStartInput(restarting=true)`，代次由 5 变为 6。重启前后系统焦点指向同一窗口的同一无名节点，四边相同。从调用起的 1,244 毫秒内，该应用的焦点事件数为 0。因此，最近一次焦点事件可以指示曾获得焦点的节点，单凭它无法区分该节点上先后建立的两个输入连接。PA2553 的两个无名候选仍缺少与当前输入连接的独立对应证据。
 
+#### 横屏编辑框的四边能否单独确定输入目标
+
+11 月 22 日记录的 PA2553 派单从操作者已聚焦的微信右窗开始。在机候选 `2289925` 在切换输入法前后均核实了同一右窗和「文件传输助手」标题，约 28 秒收到第五次读取的结果 `missing_id / before_sample / field_id_unresolved`。这次已取得输入契约，解析字段 ID 时停止，尚未向输入法请求矩形。具体字段值、候选数和编辑框位置均未知。全程零导航点击、零输入、零发送、零业务确认卡。收尾补回原有 vivo 服务一项，独立读回核实四项设置、系统绑定、网关服务和端口转发均恢复。[该轮真机记录](https://github.com/MaginaLW/agent-for-mobile/blob/ae93377c71cdb9b3a488b6205003b31871a32099/docs/knowledge/apps/wechat.md#pa2553-在采样前无法解析字段-id)
+
+用草稿 #47 的九行固定样本检验只看四边的做法。逐行将样本的 `ime` 与 `left`、`right` 四个坐标精确比较，仅一侧吻合时选该侧，再核对同一行的 `focused` 和预期 `outcome`。[回放数据](https://github.com/MaginaLW/agent-for-mobile/blob/ae93377c71cdb9b3a488b6205003b31871a32099/app/gateway/src/test/resources/anonymous-editor-landscape.json)
+
+| 样本 | 只按四边作出的选择 | 样本中的焦点证据 |
+|---|---|---|
+| 1–2 | 左、右各选中一次 | 分别与持焦侧一致 |
+| 3 | 两侧都匹配，无法选择 | 两框四边重合 |
+| 4 | 唯一匹配右框 | 持焦侧是左框，服务焦点与窗口根焦点矛盾 |
+| 5–9 | 五例均有唯一匹配 | 服务或窗口根返回的焦点、可见性读数有冲突，五例均应停止 |
+
+这里的 `ime` 来自固定回放输入。候选网关在焦点冲突时先停止采样；PA2553 的第五次读取也没有编辑框四边。后续判读须同时保留输入连接、两侧焦点与矩形各自的来源。[候选判定实现](https://github.com/MaginaLW/agent-for-mobile/blob/ae93377c71cdb9b3a488b6205003b31871a32099/app/gateway/src/main/java/dev/magina/gateway/tools/AnonymousEditorPair.kt)
+
+能否沿用 vivo 输入法，从无障碍服务直接取得这份几何？核对项目编译所用 API 35 的公开方法和 Android 16 框架源码，无障碍输入法可取得当前 `EditorInfo` 并接收选区变化。它拿到的 `AccessibilityInputConnection` 缺少普通 `InputConnection` 上的 `requestTextBoundsInfo` 和 `requestCursorUpdates`。因此，只启用无障碍输入法标志，仍无法沿用网关现有的原点与四边查询。这次接口核对没有切换设备输入法。[Android 无障碍输入连接](https://developer.android.com/reference/android/accessibilityservice/InputMethod.AccessibilityInputConnection) · [Android 16 框架实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/accessibilityservice/InputMethod.java)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
