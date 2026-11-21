@@ -885,7 +885,8 @@ public static class Program {
             'codex-cli 0.147.0',
             'codex-cli 0.149.0',
             'codex-cli 0.149.0-alpha.4.1',
-            'codex-cli 0.167.0-alpha.4.1'
+            'codex-cli 0.167.0-alpha.4.1',
+            'codex-cli 0.171.0'
         )) {
             Assert-True (Test-DispatchSupportedCodexVersion -VersionOutput $version) `
                 "已验证 Codex 版本被误拒：$version"
@@ -897,6 +898,9 @@ public static class Program {
             'codex-cli 0.167.0',
             'codex-cli 0.167.0-alpha.4.2',
             'codex-cli 0.167.1-alpha.4.1',
+            'codex-cli 0.171.0-alpha.13',
+            'codex-cli 0.171.1',
+            'codex-cli 0.172.0',
             "warning`ncodex-cli 0.149.0",
             'codex-cli 0.149.0 extra',
             ''
@@ -905,7 +909,9 @@ public static class Program {
                 "未验证或带污染的 Codex 版本被误放行：$version"
         }
         Assert-True ((Get-DispatchCodexVersionContract 'codex-cli 0.167.0-alpha.4.1') -ceq '0.167') `
-            '新精确版本未使用独立契约。'
+            '0.167 精确版本未使用独立契约。'
+        Assert-True ((Get-DispatchCodexVersionContract 'codex-cli 0.171.0') -ceq '0.171') `
+            '0.171 精确版本未使用独立契约。'
     }
 
     Test-Case 'Codex 版本探针 Assign 失败不遗留 suspended orphan' {
@@ -1006,6 +1012,12 @@ public static class Program {
                 LastWriteTimeUtc = [datetime]'2000-01-01'
             },
             [pscustomobject]@{
+                Path = (Join-Path $TestRoot '0001-latest-stable\codex.exe')
+                VersionOutput = 'codex-cli 0.171.0'
+                Sha256 = '71'
+                LastWriteTimeUtc = [datetime]'1999-01-01'
+            },
+            [pscustomobject]@{
                 Path = (Join-Path $TestRoot 'current-alpha\codex.exe')
                 VersionOutput = 'codex-cli 0.167.0-alpha.4.1'
                 Sha256 = '67'
@@ -1023,13 +1035,19 @@ public static class Program {
             }
         )
         $selection = Select-DispatchCodexExecutableCandidate -Candidates $candidates
-        Assert-True ($selection.VersionOutput -ceq 'codex-cli 0.149.0') `
-            'mtime 更新的旧版/未知版盖过了显式 0.149 stable 优先级。'
-        Assert-True ($selection.SelectedPath -like '*0000-older*') `
+        Assert-True ($selection.VersionOutput -ceq 'codex-cli 0.171.0') `
+            'mtime 更新的旧版/未知版盖过了显式 0.171.0 stable 优先级。'
+        Assert-True ($selection.Contract -ceq '0.171') `
+            '0.171.0 候选未绑定 0.171 契约。'
+        Assert-True ($selection.SelectedPath -like '*0001-latest-stable*') `
             '候选选择仍受随机目录名或 mtime 影响。'
         Assert-True ($selection.UnknownVersions -contains 'codex-cli 0.150.0-alpha.1') `
             '已知与未知候选并存时没有保留未知版本诊断。'
-        $withoutStable = @($candidates | Where-Object VersionOutput -CNE 'codex-cli 0.149.0')
+        $without0171 = @($candidates | Where-Object VersionOutput -CNE 'codex-cli 0.171.0')
+        $selection0149 = Select-DispatchCodexExecutableCandidate -Candidates $without0171
+        Assert-True ($selection0149.VersionOutput -ceq 'codex-cli 0.149.0' -and $selection0149.SelectedPath -like '*0000-older*') `
+            '缺少 0.171.0 时未回落到 0.149.0 stable 优先级。'
+        $withoutStable = @($without0171 | Where-Object VersionOutput -CNE 'codex-cli 0.149.0')
         Assert-True ((Select-DispatchCodexExecutableCandidate -Candidates $withoutStable).VersionOutput -ceq
             'codex-cli 0.167.0-alpha.4.1') '新精确 alpha 没有排在旧 alpha/旧 stable 前。'
         Assert-True ((Select-DispatchCodexExecutableCandidate -Candidates @(
@@ -1315,31 +1333,52 @@ public static class Program {
             $oldVersionSeam = "-CodexVersionOverride 'codex-cli 0.149.0'"
             Assert-True ($fixtureBeforeNewVersion.Contains($oldVersionSeam)) '现有consumer版本seam缺失。'
             $oldArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
-            Assert-NotMatches $oldArgv '(?m)^sleep_tool\r?$'
+            Assert-NotMatches $oldArgv '(?m)^(sleep_tool|daemon_auto_start)\r?$'
             $oldBearerEnv = [regex]::Match($oldArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
             try {
-                [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion.Replace(
-                    $oldVersionSeam, "-CodexVersionOverride 'codex-cli 0.167.0-alpha.4.1'"))
-                $env:DISPATCH_TEST_CODEX_SCENARIO = 'success'
-                $newVersionResult = Invoke-Dispatch @(
-                    '-Task','offline fake codex contract','-Slug','offline-codex-current-alpha',
-                    '-Executor','gateway','-Brain','codex'
-                )
-                Assert-ExitCode $newVersionResult 0
-                Assert-Contains $newVersionResult.Text '派单结果：success'
-                Assert-NotMatches $newVersionResult.Text 'fixture-bearer-value-must-never-leak|must-not-reach-fake-codex'
-                $newArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
-                foreach ($required in @('exec','--json','--ephemeral','--ignore-user-config','--ignore-rules',
-                    '--strict-config','read-only','mcp_servers={}')) { Assert-Contains $newArgv $required }
-                Assert-Matches $newArgv '(?m)^--disable\r?\nsleep_tool\r?$'
-                Assert-Matches $newArgv 'mcp_servers\.gateway\.url="http://127\.0\.0\.1:8848/mcp"'
-                Assert-NotMatches $newArgv 'fixture-bearer-value-must-never-leak|(?m)^--model\s*$'
-                $newBearerEnv = [regex]::Match($newArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
-                Assert-True ($newBearerEnv.Length -gt 0 -and $newBearerEnv -cne $oldBearerEnv) `
-                    '新版本consumer未使用本次随机bearer环境键。'
-                foreach ($sentinel in @('codex-secret-ok.txt','codex-environment-ok.txt','codex-cwd-empty.txt')) {
-                    Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir $sentinel) -Raw).Trim() -ceq 'true') `
-                        "新版本consumer隔离检查失败：$sentinel"
+                foreach ($versionCase in @(
+                    @{
+                        Version = 'codex-cli 0.167.0-alpha.4.1'
+                        Slug = 'offline-codex-current-alpha'
+                        RequireDisabled = @('sleep_tool')
+                        ForbidDisabled = @('daemon_auto_start')
+                    },
+                    @{
+                        Version = 'codex-cli 0.171.0'
+                        Slug = 'offline-codex-stable-0171'
+                        RequireDisabled = @('sleep_tool', 'daemon_auto_start')
+                        ForbidDisabled = @()
+                    }
+                )) {
+                    [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion.Replace(
+                        $oldVersionSeam, "-CodexVersionOverride '$($versionCase.Version)'"))
+                    $env:DISPATCH_TEST_CODEX_SCENARIO = 'success'
+                    $newVersionResult = Invoke-Dispatch @(
+                        '-Task','offline fake codex contract','-Slug',$versionCase.Slug,
+                        '-Executor','gateway','-Brain','codex'
+                    )
+                    Assert-ExitCode $newVersionResult 0
+                    Assert-Contains $newVersionResult.Text '派单结果：success'
+                    Assert-NotMatches $newVersionResult.Text 'fixture-bearer-value-must-never-leak|must-not-reach-fake-codex'
+                    $newArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
+                    foreach ($required in @('exec','--json','--ephemeral','--ignore-user-config','--ignore-rules',
+                        '--strict-config','read-only','mcp_servers={}')) { Assert-Contains $newArgv $required }
+                    foreach ($feature in $versionCase.RequireDisabled) {
+                        Assert-Matches $newArgv "(?m)^--disable\r?\n$([regex]::Escape($feature))\r?$"
+                    }
+                    foreach ($feature in $versionCase.ForbidDisabled) {
+                        Assert-NotMatches $newArgv "(?m)^$([regex]::Escape($feature))\r?$"
+                    }
+                    Assert-Matches $newArgv 'mcp_servers\.gateway\.url="http://127\.0\.0\.1:8848/mcp"'
+                    Assert-NotMatches $newArgv 'fixture-bearer-value-must-never-leak|(?m)^--model\s*$'
+                    $newBearerEnv = [regex]::Match($newArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
+                    Assert-True ($newBearerEnv.Length -gt 0 -and $newBearerEnv -cne $oldBearerEnv) `
+                        "新版本 $($versionCase.Version) consumer 未使用本次随机 bearer 环境键。"
+                    $oldBearerEnv = $newBearerEnv
+                    foreach ($sentinel in @('codex-secret-ok.txt','codex-environment-ok.txt','codex-cwd-empty.txt')) {
+                        Assert-True ((Get-Content -LiteralPath (Join-Path $SentinelDir $sentinel) -Raw).Trim() -ceq 'true') `
+                            "新版本 $($versionCase.Version) consumer 隔离检查失败：$sentinel"
+                    }
                 }
             }
             finally { [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion) }
