@@ -268,6 +268,9 @@ class EditorBoundsDiagnosticTest {
         "window_field_focused",
         "window_field_same_window",
         "window_field_bounds_in_window",
+        "window_field_total_matches",
+        "window_field_visible_in_window_matches",
+        "window_field_bounds_in_window_matches",
     )
 
     private val diagNullableBoolKeys = setOf(
@@ -282,6 +285,12 @@ class EditorBoundsDiagnosticTest {
         "window_field_focused",
         "window_field_same_window",
         "window_field_bounds_in_window",
+    )
+
+    private val diagNullableIntKeys = setOf(
+        "window_field_total_matches",
+        "window_field_visible_in_window_matches",
+        "window_field_bounds_in_window_matches",
     )
 
     private val rootFocusStates = setOf(
@@ -300,6 +309,14 @@ class EditorBoundsDiagnosticTest {
         "zero_matches",
         "ambiguous",
         "unique",
+        "filtered_unique",
+    )
+
+    private val lookupWithoutNodeQuery = setOf(
+        "not_attempted",
+        "no_contract",
+        "missing_id",
+        "resources_unavailable",
     )
 
     private val preWindowFocusChecks = setOf(
@@ -309,7 +326,7 @@ class EditorBoundsDiagnosticTest {
     )
 
     private fun assertDiagSchema(diag: JSONObject) {
-        assertEquals(14, diag.length())
+        assertEquals(17, diag.length())
         val actualKeys = buildSet {
             val it = diag.keys()
             while (it.hasNext()) add(it.next())
@@ -323,10 +340,33 @@ class EditorBoundsDiagnosticTest {
                 value is Boolean || value === JSONObject.NULL,
             )
         }
+        for (key in diagNullableIntKeys) {
+            val value = diag.get(key)
+            assertTrue(
+                "$key must be non-negative Int or JSONObject.NULL, got $value",
+                (value is Int && value >= 0) || value === JSONObject.NULL,
+            )
+        }
         val rootState = diag.get("root_focus_state")
         assertTrue("root_focus_state must be valid enum, got $rootState", rootState is String && rootState in rootFocusStates)
         val lookup = diag.get("window_field_lookup")
         assertTrue("window_field_lookup must be valid enum, got $lookup", lookup is String && lookup in windowFieldLookups)
+        if (lookup in lookupWithoutNodeQuery) {
+            for (key in diagNullableIntKeys) {
+                assertTrue("$key must be null when lookup=$lookup", diag.isNull(key))
+            }
+        } else {
+            val total = diag.get("window_field_total_matches") as Int
+            val visible = diag.get("window_field_visible_in_window_matches") as Int
+            val bounds = diag.get("window_field_bounds_in_window_matches") as Int
+            assertTrue("expected 0 <= visible($visible) <= bounds($bounds) <= total($total)", visible in 0..bounds && bounds <= total)
+            when (lookup) {
+                "zero_matches" -> assertTrue(total == 0 && visible == 0 && bounds == 0)
+                "unique" -> assertEquals(1, total)
+                "ambiguous" -> assertTrue("ambiguous must have total >= 2 and visible != 1", total >= 2 && visible != 1)
+                "filtered_unique" -> assertTrue("filtered_unique must have total >= 2 and visible == 1", total >= 2 && visible == 1 && bounds >= 1)
+            }
+        }
     }
 
     private fun assertDiagEquals(
@@ -345,9 +385,19 @@ class EditorBoundsDiagnosticTest {
         windowFieldFocused: Boolean? = null,
         windowFieldSameWindow: Boolean? = null,
         windowFieldBoundsInWindow: Boolean? = null,
+        windowFieldTotalMatches: Int? = null,
+        windowFieldVisibleInWindowMatches: Int? = null,
+        windowFieldBoundsInWindowMatches: Int? = null,
     ) {
         assertDiagSchema(diag)
         fun assertNullableBool(key: String, expected: Boolean?) {
+            if (expected == null) {
+                assertTrue("$key expected null, got ${diag.get(key)}", diag.isNull(key))
+            } else {
+                assertEquals("$key mismatch", expected, diag.get(key))
+            }
+        }
+        fun assertNullableInt(key: String, expected: Int?) {
             if (expected == null) {
                 assertTrue("$key expected null, got ${diag.get(key)}", diag.isNull(key))
             } else {
@@ -368,6 +418,9 @@ class EditorBoundsDiagnosticTest {
         assertNullableBool("window_field_focused", windowFieldFocused)
         assertNullableBool("window_field_same_window", windowFieldSameWindow)
         assertNullableBool("window_field_bounds_in_window", windowFieldBoundsInWindow)
+        assertNullableInt("window_field_total_matches", windowFieldTotalMatches)
+        assertNullableInt("window_field_visible_in_window_matches", windowFieldVisibleInWindowMatches)
+        assertNullableInt("window_field_bounds_in_window_matches", windowFieldBoundsInWindowMatches)
     }
 
     private fun assertFailure(reply: JSONObject, expectedReason: String) {
@@ -377,6 +430,7 @@ class EditorBoundsDiagnosticTest {
         assertFalse(reply.has("ime_editor_focus_check"))
         assertFalse(reply.has("ime_editor_focus_diag"))
         assertFalse(reply.has("window_field_phase"))
+        assertFalse(reply.has("filtered_visible_field"))
         assertFalse(reply.has("node_focused"))
     }
 
@@ -386,6 +440,7 @@ class EditorBoundsDiagnosticTest {
         assertEquals(expectedPhase, reply.getString("ime_editor_focus_phase"))
         assertEquals(expectedCheck, reply.getString("ime_editor_focus_check"))
         assertFalse(reply.has("window_field_phase"))
+        assertFalse(reply.has("filtered_visible_field"))
         assertFalse(reply.has("node_focused"))
         return if (expectedCheck in preWindowFocusChecks) {
             assertFalse(reply.has("ime_editor_focus_diag"))
@@ -419,6 +474,7 @@ class EditorBoundsDiagnosticTest {
             assertFalse(reply.has("ime_editor_focus_check"))
             assertFalse(reply.has("ime_editor_focus_diag"))
             assertFalse(reply.has("window_field_phase"))
+            assertFalse(reply.has("filtered_visible_field"))
             assertFalse(reply.has("node_focused"))
 
             val bounds = reply.getJSONObject("ime_editor_bounds")
@@ -430,6 +486,7 @@ class EditorBoundsDiagnosticTest {
             assertEquals(editorBounds.right, bounds.getInt("right"))
             assertEquals(editorBounds.bottom, bounds.getInt("bottom"))
             assertFalse(bounds.has("window_field_phase"))
+            assertFalse(bounds.has("filtered_visible_field"))
             assertFalse(bounds.has("node_focused"))
             assertFalse(bounds.has("ime_editor_focus_diag"))
             assertEquals(0, env.editorContractCalls)
@@ -465,9 +522,11 @@ class EditorBoundsDiagnosticTest {
             val reply = readEditorBounds(env, JSONObject())
             assertFalse(reply.has("ime_editor_bounds_reason"))
             assertFalse(reply.has("window_field_phase"))
+            assertFalse(reply.has("filtered_visible_field"))
             assertFalse(reply.has("node_focused"))
             val bounds = reply.getJSONObject("ime_editor_bounds")
             assertEquals(expectedPhase, bounds.getString("window_field_phase"))
+            assertFalse(bounds.has("filtered_visible_field"))
             assertFalse(bounds.has("node_focused"))
         }
     }
@@ -1416,9 +1475,11 @@ class EditorBoundsDiagnosticTest {
                     assertFalse(reply.has("ime_editor_focus_phase"))
                     assertFalse(reply.has("ime_editor_focus_check"))
                     assertFalse(reply.has("ime_editor_focus_diag"))
+                    assertFalse(reply.has("filtered_visible_field"))
                     val bounds = reply.getJSONObject("ime_editor_bounds")
                     assertEquals(7, bounds.getInt("window_id"))
                     assertEquals("both", bounds.getString("window_field_phase"))
+                    assertFalse(bounds.has("filtered_visible_field"))
                     assertFalse(bounds.has("ime_editor_focus_diag"))
                     if (candFocused) {
                         assertFalse(bounds.has("node_focused"))
@@ -1684,6 +1745,9 @@ class EditorBoundsDiagnosticTest {
                     windowFieldFocused = false,
                     windowFieldSameWindow = true,
                     windowFieldBoundsInWindow = expectedInWindow,
+                    windowFieldTotalMatches = 1,
+                    windowFieldVisibleInWindowMatches = 0,
+                    windowFieldBoundsInWindowMatches = if (expectedInWindow && sfViewId == fieldName) 1 else 0,
                 )
                 assertEquals(1, env.beforePhase.rootFocusCalls)
                 assertEquals(1, env.beforePhase.viewIdLookupCalls)
@@ -1691,7 +1755,7 @@ class EditorBoundsDiagnosticTest {
             }
         }
 
-        // serviceFocus 与同一 candidate 均 refresh 失败时：所有依赖 refresh 的布尔键均为 null
+        // serviceFocus 与同一 candidate 均 refresh 失败时：所有依赖 refresh 的布尔键均为 null，但已查表故整数计数为 1/0/0
         val deadNode = FakeNode(id = "dead", isFocused = false, isVisibleToUser = false, refreshResult = false)
         val deadEnv = FakeEnv(
             beforePhase = PhaseSnapshot(
@@ -1719,6 +1783,9 @@ class EditorBoundsDiagnosticTest {
             windowFieldFocused = null,
             windowFieldSameWindow = null,
             windowFieldBoundsInWindow = null,
+            windowFieldTotalMatches = 1,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 0,
         )
         assertEquals(1, deadEnv.beforePhase.rootFocusCalls)
         assertEquals(0, deadEnv.imeRequestCalls)
@@ -1729,16 +1796,25 @@ class EditorBoundsDiagnosticTest {
         val invisibleSf = FakeNode(id = "sf_inv", isFocused = false, isVisibleToUser = false, viewIdResourceName = fieldName)
         val other = FakeNode(id = "other", isFocused = true)
 
-        val lookupFailureCases: List<Triple<String, FakeEnv.() -> Unit, Boolean?>> = listOf(
-            Triple("no_contract", { contract = null }, null),
-            Triple("missing_id", { contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0) }, null),
-            Triple("missing_id", { contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = -1) }, null),
-            Triple("missing_id", { resources[fieldId] = ResourceNameResult.Missing }, null),
-            Triple("missing_id", { resources[fieldId] = ResourceNameResult.Found("$pkg:string/chat_input") }, null),
-            Triple("missing_id", { resources[fieldId] = ResourceNameResult.Found("id/chat_input") }, null),
-            Triple("resources_unavailable", { resources[fieldId] = ResourceNameResult.ResourcesUnavailable }, null),
-            Triple("zero_matches", { beforePhase.defaultNodesById = emptyMap() }, true),
-            Triple(
+        data class LookupFailureCase(
+            val expectedLookup: String,
+            val mutate: FakeEnv.() -> Unit,
+            val expectedMatchesField: Boolean?,
+            val total: Int? = null,
+            val visible: Int? = null,
+            val bounds: Int? = null,
+        )
+
+        val lookupFailureCases = listOf(
+            LookupFailureCase("no_contract", { contract = null }, null),
+            LookupFailureCase("missing_id", { contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0) }, null),
+            LookupFailureCase("missing_id", { contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = -1) }, null),
+            LookupFailureCase("missing_id", { resources[fieldId] = ResourceNameResult.Missing }, null),
+            LookupFailureCase("missing_id", { resources[fieldId] = ResourceNameResult.Found("$pkg:string/chat_input") }, null),
+            LookupFailureCase("missing_id", { resources[fieldId] = ResourceNameResult.Found("id/chat_input") }, null),
+            LookupFailureCase("resources_unavailable", { resources[fieldId] = ResourceNameResult.ResourcesUnavailable }, null),
+            LookupFailureCase("zero_matches", { beforePhase.defaultNodesById = emptyMap() }, true, 0, 0, 0),
+            LookupFailureCase(
                 "ambiguous",
                 {
                     beforePhase.defaultNodesById = mapOf(
@@ -1746,16 +1822,19 @@ class EditorBoundsDiagnosticTest {
                     )
                 },
                 true,
+                2,
+                2,
+                2,
             ),
         )
-        for ((expectedLookup, mutate, expectedMatchesField) in lookupFailureCases) {
+        for (c in lookupFailureCases) {
             val env = FakeEnv(
                 beforePhase = PhaseSnapshot(
                     serviceFocus = invisibleSf,
                     rootFocus = invisibleSf,
                     defaultNodesById = mapOf(fieldName to listOf(invisibleSf)),
                 ),
-            ).apply(mutate)
+            ).apply(c.mutate)
             val diag = checkNotNull(
                 assertFocusUnavailable(readEditorBounds(env, JSONObject()), "before_sample", "node_not_visible"),
             )
@@ -1767,9 +1846,12 @@ class EditorBoundsDiagnosticTest {
                 serviceFocusVisible = false,
                 serviceFocusSameWindow = true,
                 serviceFocusSamePackage = true,
-                serviceFocusMatchesField = expectedMatchesField,
+                serviceFocusMatchesField = c.expectedMatchesField,
                 rootFocusState = "matches_service",
-                windowFieldLookup = expectedLookup,
+                windowFieldLookup = c.expectedLookup,
+                windowFieldTotalMatches = c.total,
+                windowFieldVisibleInWindowMatches = c.visible,
+                windowFieldBoundsInWindowMatches = c.bounds,
             )
             assertEquals(1, env.beforePhase.rootFocusCalls)
             assertEquals(0, env.imeRequestCalls)
@@ -1805,6 +1887,9 @@ class EditorBoundsDiagnosticTest {
             serviceFocusMatchesField = null,
             rootFocusState = "missing",
             windowFieldLookup = "zero_matches",
+            windowFieldTotalMatches = 0,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 0,
         )
         assertEquals(1, crossWindowEnv.beforePhase.rootFocusCalls)
         assertEquals(0, crossWindowEnv.imeRequestCalls)
@@ -1837,7 +1922,7 @@ class EditorBoundsDiagnosticTest {
             windowFieldLookup = "no_contract",
         )
 
-        // serviceFocus == null 且 0 命中 -> input_focus_missing + 14 键 diag
+        // serviceFocus == null 且 0 命中 -> input_focus_missing + 17 键 diag
         for ((rf, expectedRootState) in listOf(null to "missing", other to "other")) {
             val nullSfEnv = unfocusedWindowFieldEnv(beforeRootFocus = rf).apply {
                 beforePhase.defaultNodesById = emptyMap()
@@ -1850,6 +1935,9 @@ class EditorBoundsDiagnosticTest {
                 serviceFocusPresent = false,
                 rootFocusState = expectedRootState,
                 windowFieldLookup = "zero_matches",
+                windowFieldTotalMatches = 0,
+                windowFieldVisibleInWindowMatches = 0,
+                windowFieldBoundsInWindowMatches = 0,
             )
             assertEquals(1, nullSfEnv.beforePhase.rootFocusCalls)
             assertEquals(0, nullSfEnv.imeRequestCalls)
@@ -1895,6 +1983,9 @@ class EditorBoundsDiagnosticTest {
             windowFieldFocused = false,
             windowFieldSameWindow = true,
             windowFieldBoundsInWindow = true,
+            windowFieldTotalMatches = 1,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 1,
         )
         assertEquals(1, candInvisibleEnv.beforePhase.rootFocusCalls)
         assertEquals(0, candInvisibleEnv.imeRequestCalls)
@@ -1922,6 +2013,9 @@ class EditorBoundsDiagnosticTest {
             rootFocusState = "missing",
             windowFieldLookup = "unique",
             windowFieldSameAsService = false,
+            windowFieldTotalMatches = 1,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 0,
         )
         assertEquals(1, candRefreshEnv.beforePhase.rootFocusCalls)
 
@@ -1933,7 +2027,29 @@ class EditorBoundsDiagnosticTest {
                 defaultNodesById = mapOf(fieldName to listOf(candWrongPkg)),
             ),
         )
-        assertFocusUnavailable(readEditorBounds(candWrongPkgEnv, JSONObject()), "before_sample", "node_package_mismatch")
+        val candWrongPkgDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(candWrongPkgEnv, JSONObject()), "before_sample", "node_package_mismatch"),
+        )
+        assertDiagEquals(
+            candWrongPkgDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = true,
+            serviceFocusVisible = true,
+            serviceFocusSameWindow = false,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = false,
+            rootFocusState = "missing",
+            windowFieldLookup = "unique",
+            windowFieldSameAsService = false,
+            windowFieldVisible = true,
+            windowFieldFocused = true,
+            windowFieldSameWindow = true,
+            windowFieldBoundsInWindow = true,
+            windowFieldTotalMatches = 1,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 0,
+        )
         assertEquals(1, candWrongPkgEnv.beforePhase.rootFocusCalls)
 
         val candVisible = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
@@ -1964,6 +2080,9 @@ class EditorBoundsDiagnosticTest {
                 windowFieldFocused = false,
                 windowFieldSameWindow = true,
                 windowFieldBoundsInWindow = true,
+                windowFieldTotalMatches = 1,
+                windowFieldVisibleInWindowMatches = 1,
+                windowFieldBoundsInWindowMatches = 1,
             )
             assertEquals(1, candRootMismatchEnv.beforePhase.rootFocusCalls)
             assertEquals(0, candRootMismatchEnv.imeRequestCalls)
@@ -2070,5 +2189,792 @@ class EditorBoundsDiagnosticTest {
             "after_sample",
             "active_window_missing",
         )
+    }
+
+    // ---- 多命中可见子集筛选、匿名退化根焦点豁免与 17 键脱敏诊断 ----
+
+    @Test
+    fun `pa2553 anonymous invisible unfocused serviceFocus matching rootFocus succeeds via filtered visible field`() {
+        val anonSf = FakeNode(
+            id = "pa2553_anon_sf",
+            isFocused = false,
+            isVisibleToUser = false,
+            windowId = 7,
+            packageName = pkg,
+            viewIdResourceName = null,
+        )
+        val hiddenDuplicates = listOf(
+            // 1) 同窗同包、不可见、在窗内有四边的隐藏复用框
+            FakeNode(id = "dup_invisible", isFocused = false, isVisibleToUser = false, bounds = editorBounds),
+            // 2) 0x0 空四边重复框（即使报告可见也不可用）
+            FakeNode(id = "dup_empty", isFocused = false, isVisibleToUser = true, bounds = IntBounds(1040, 1420, 1040, 1420)),
+            // 3) 越出活动窗四边的重复框（如左窗或屏外缓存项）
+            FakeNode(id = "dup_outside", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 1420, 900, 1540)),
+            // 4) 跨窗重复框（含跨窗敏感节点不阻断活动右窗非敏感字段）
+            FakeNode(id = "dup_xwin_pwd", isFocused = false, isVisibleToUser = true, windowId = 5, isPassword = true),
+            // 5) 跨包重复框
+            FakeNode(id = "dup_xpkg_sens", isFocused = false, isVisibleToUser = true, packageName = "com.other.app", isAccessibilityDataSensitive = true),
+            // 6) refresh 失败的陈旧重复框（即使陈旧位带密码标志也因未刷新成功跳过）
+            FakeNode(id = "dup_stale", isFocused = false, isVisibleToUser = true, refreshResult = false, isPassword = true),
+            // 7) 刷新后 viewIdResourceName 不一致的重复框
+            FakeNode(id = "dup_diff_id", isFocused = false, isVisibleToUser = true, viewIdResourceName = otherFieldName),
+        )
+
+        for (hidden in hiddenDuplicates) {
+            for (candFocused in listOf(false, true)) {
+                for (editable in listOf(true, false)) {
+                    val visibleEditor = FakeNode(
+                        id = "right_editor",
+                        isFocused = candFocused,
+                        isVisibleToUser = true,
+                        isEditable = editable,
+                        windowId = 7,
+                        packageName = pkg,
+                        viewIdResourceName = fieldName,
+                        bounds = editorBounds,
+                    )
+                    // 两种排列顺序（隐藏在前 / 可见在前）均应稳定通过
+                    for (nodes in listOf(listOf(hidden, visibleEditor), listOf(visibleEditor, hidden))) {
+                        val env = FakeEnv(
+                            beforePhase = PhaseSnapshot(
+                                serviceFocus = anonSf,
+                                rootFocus = anonSf,
+                                defaultNodesById = mapOf(fieldName to nodes),
+                            ),
+                            afterPhase = PhaseSnapshot(
+                                serviceFocus = anonSf,
+                                rootFocus = anonSf,
+                                defaultNodesById = mapOf(fieldName to nodes),
+                            ),
+                        )
+                        val reply = readEditorBounds(env, JSONObject().put("visible", true))
+                        assertTrue(reply.getBoolean("visible"))
+                        assertFalse(reply.has("ime_editor_bounds_reason"))
+                        assertFalse(reply.has("ime_editor_focus_phase"))
+                        assertFalse(reply.has("ime_editor_focus_check"))
+                        assertFalse(reply.has("ime_editor_focus_diag"))
+                        assertFalse(reply.has("window_field_phase"))
+                        assertFalse(reply.has("filtered_visible_field"))
+                        assertFalse(reply.has("node_focused"))
+
+                        val bounds = reply.getJSONObject("ime_editor_bounds")
+                        assertEquals(7, bounds.getInt("window_id"))
+                        assertEquals(sessionId, bounds.getString("session_id"))
+                        assertEquals(editable, bounds.getBoolean("editable"))
+                        assertEquals(editorBounds.left, bounds.getInt("left"))
+                        assertEquals(editorBounds.top, bounds.getInt("top"))
+                        assertEquals(editorBounds.right, bounds.getInt("right"))
+                        assertEquals(editorBounds.bottom, bounds.getInt("bottom"))
+                        assertEquals("both", bounds.getString("window_field_phase"))
+                        assertTrue(bounds.getBoolean("filtered_visible_field"))
+                        assertFalse(bounds.has("ime_editor_focus_diag"))
+                        if (candFocused) {
+                            assertFalse(bounds.has("node_focused"))
+                        } else {
+                            assertFalse(bounds.getBoolean("node_focused"))
+                        }
+                        assertEquals(1, env.beforePhase.rootFocusCalls)
+                        assertEquals(1, env.afterPhase.rootFocusCalls)
+                        assertEquals(2, env.beforePhase.viewIdLookupCalls)
+                        assertEquals(2, env.afterPhase.viewIdLookupCalls)
+                        assertEquals(1, env.imeRequestCalls)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `filtered visible field handles mixed phases unique rootFocus exemption and single refresh before rootFocus`() {
+        val anonSf = FakeNode(
+            id = "pa2553_anon_sf",
+            isFocused = false,
+            isVisibleToUser = false,
+            windowId = 7,
+            packageName = pkg,
+            viewIdResourceName = null,
+        )
+        val visibleEditor = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
+        val hiddenDup = FakeNode(id = "hidden_dup", isFocused = false, isVisibleToUser = false)
+
+        // 1) 单命中（unique）同样适用 PA2553 匿名退化 rootFocus == serviceFocus 豁免，但省略 filtered_visible_field
+        val uniqueAnonEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor)),
+            ),
+        )
+        val uniqueAnonReply = readEditorBounds(uniqueAnonEnv, JSONObject())
+        assertFalse(uniqueAnonReply.has("ime_editor_bounds_reason"))
+        assertFalse(uniqueAnonReply.has("ime_editor_focus_diag"))
+        val uniqueAnonBounds = uniqueAnonReply.getJSONObject("ime_editor_bounds")
+        assertEquals("both", uniqueAnonBounds.getString("window_field_phase"))
+        assertFalse(uniqueAnonBounds.has("filtered_visible_field"))
+        assertFalse(uniqueAnonBounds.getBoolean("node_focused"))
+
+        // 2) serviceFocus == null 时多命中筛选出唯一可见节点也能成功并标出 filtered_visible_field = true
+        val nullSfFilteredEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = null,
+                rootFocus = null,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenDup, visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = null,
+                rootFocus = visibleEditor,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor, hiddenDup)),
+            ),
+        )
+        val nullSfBounds = readEditorBounds(nullSfFilteredEnv, JSONObject()).getJSONObject("ime_editor_bounds")
+        assertEquals("both", nullSfBounds.getString("window_field_phase"))
+        assertTrue(nullSfBounds.getBoolean("filtered_visible_field"))
+        assertFalse(nullSfBounds.getBoolean("node_focused"))
+
+        // 3) 混合阶段：仅 before 走 filtered_unique / 仅 after 走 filtered_unique / 一边 filtered_unique 一边 unique
+        val beforeFilteredEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenDup, visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = visibleEditor,
+                rootFocus = visibleEditor,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor)),
+            ),
+        )
+        val beforeFilteredBounds = readEditorBounds(beforeFilteredEnv, JSONObject()).getJSONObject("ime_editor_bounds")
+        assertEquals("before_sample", beforeFilteredBounds.getString("window_field_phase"))
+        assertTrue(beforeFilteredBounds.getBoolean("filtered_visible_field"))
+
+        val afterFilteredEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = visibleEditor,
+                rootFocus = visibleEditor,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenDup, visibleEditor)),
+            ),
+        )
+        val afterFilteredBounds = readEditorBounds(afterFilteredEnv, JSONObject()).getJSONObject("ime_editor_bounds")
+        assertEquals("after_sample", afterFilteredBounds.getString("window_field_phase"))
+        assertTrue(afterFilteredBounds.getBoolean("filtered_visible_field"))
+
+        val mixedUniqueAndFilteredEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenDup, visibleEditor)),
+            ),
+        )
+        val mixedBounds = readEditorBounds(mixedUniqueAndFilteredEnv, JSONObject()).getJSONObject("ime_editor_bounds")
+        assertEquals("both", mixedBounds.getString("window_field_phase"))
+        assertTrue(mixedBounds.getBoolean("filtered_visible_field"))
+
+        // 4) filtered_unique 选中 candidate 后绝不重复调用 candidate.refresh()（在 rootFocus 失败前只刷 1 次）
+        var candRefreshes = 0
+        val trackedCand = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true).apply {
+            onRefresh = { candRefreshes++ }
+        }
+        val trackedHidden = FakeNode(id = "hidden_dup", isFocused = false, isVisibleToUser = false)
+        val other = FakeNode(id = "other", isFocused = true)
+        val singleRefreshCheckEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = other,
+                defaultNodesById = mapOf(fieldName to listOf(trackedHidden, trackedCand)),
+                cloneNodes = false,
+            ),
+        )
+        assertFocusUnavailable(readEditorBounds(singleRefreshCheckEnv, JSONObject()), "before_sample", "root_focus_mismatch")
+        assertEquals(1, candRefreshes)
+        assertEquals(1, singleRefreshCheckEnv.beforePhase.viewIdLookupCalls)
+        assertEquals(0, singleRefreshCheckEnv.imeRequestCalls)
+    }
+
+    @Test
+    fun `multi-match fallback fails closed on any refreshed same-window same-package sensitive duplicate`() {
+        val anonSf = FakeNode(
+            id = "pa2553_anon_sf",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+        )
+        val visibleEditor = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
+        val sensitiveDuplicates = listOf(
+            FakeNode(id = "dup_pwd_vis", isVisibleToUser = true, isPassword = true),
+            FakeNode(id = "dup_pwd_inv", isVisibleToUser = false, isPassword = true),
+            FakeNode(id = "dup_pwd_empty", isVisibleToUser = false, isPassword = true, bounds = IntBounds(0, 0, 0, 0)),
+            FakeNode(id = "dup_pwd_diff_id", isVisibleToUser = false, isPassword = true, viewIdResourceName = otherFieldName),
+            FakeNode(id = "dup_sens_vis", isVisibleToUser = true, isAccessibilityDataSensitive = true),
+            FakeNode(id = "dup_sens_inv", isVisibleToUser = false, isAccessibilityDataSensitive = true),
+            FakeNode(id = "dup_sens_outside", isVisibleToUser = false, isAccessibilityDataSensitive = true, bounds = IntBounds(0, 0, 100, 100)),
+        )
+
+        for (sf in listOf<FakeNode?>(null, anonSf)) {
+            for (sens in sensitiveDuplicates) {
+                for (nodes in listOf(listOf(visibleEditor, sens), listOf(sens, visibleEditor))) {
+                    val env = FakeEnv(
+                        beforePhase = PhaseSnapshot(
+                            serviceFocus = sf,
+                            rootFocus = sf,
+                            defaultNodesById = mapOf(fieldName to nodes),
+                        ),
+                    )
+                    assertFailure(readEditorBounds(env, JSONObject()), "sensitive_field")
+                    assertEquals(0, env.beforePhase.rootFocusCalls)
+                    assertEquals(0, env.imeRequestCalls)
+                }
+            }
+        }
+
+        // 二次查表复核时若同窗同包重复节点变为密码/敏感，也必须立即 sensitive_field（零 IME 请求、无 diag）
+        val hiddenDup = FakeNode(id = "hidden_dup", isVisibleToUser = false)
+        for (secondSens in listOf(
+            FakeNode(id = "hidden_dup", isVisibleToUser = false, isPassword = true),
+            FakeNode(id = "hidden_dup", isVisibleToUser = false, isAccessibilityDataSensitive = true),
+        )) {
+            val secondSensEnv = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = anonSf,
+                    rootFocus = anonSf,
+                    firstLookup = { listOf(visibleEditor, hiddenDup) },
+                    secondLookup = { listOf(visibleEditor, secondSens) },
+                ),
+            )
+            assertFailure(readEditorBounds(secondSensEnv, JSONObject()), "sensitive_field")
+            assertEquals(2, secondSensEnv.beforePhase.viewIdLookupCalls)
+            assertEquals(0, secondSensEnv.imeRequestCalls)
+        }
+    }
+
+    @Test
+    fun `multi-match fallback with zero or multiple visible matches fails closed with exact 17-key diag`() {
+        val anonSf = FakeNode(
+            id = "pa2553_anon_sf",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+        )
+        val vis1 = FakeNode(id = "vis1", isFocused = false, isVisibleToUser = true)
+        val vis2 = FakeNode(id = "vis2", isFocused = false, isVisibleToUser = true)
+        val invInWindow = FakeNode(id = "inv1", isFocused = false, isVisibleToUser = false, bounds = editorBounds)
+        val invInWindow2 = FakeNode(id = "inv2", isFocused = false, isVisibleToUser = false, bounds = editorBounds)
+        val outOfWindow = FakeNode(id = "out1", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 0, 100, 100))
+        val emptyBounds = FakeNode(id = "empty1", isFocused = false, isVisibleToUser = true, bounds = IntBounds(1040, 1420, 1040, 1420))
+        val other = FakeNode(id = "other", isFocused = true)
+
+        // 1) 2 个可见窗内重复框 + serviceFocus == null -> ambiguous_id（零 diag、零 IME 请求）
+        val nullSfTwoVisible = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = null,
+                rootFocus = null,
+                defaultNodesById = mapOf(fieldName to listOf(vis1, vis2, invInWindow)),
+            ),
+        )
+        assertFailure(readEditorBounds(nullSfTwoVisible, JSONObject()), "ambiguous_id")
+        assertEquals(0, nullSfTwoVisible.beforePhase.rootFocusCalls)
+        assertEquals(0, nullSfTwoVisible.imeRequestCalls)
+
+        // 2) 2 个可见窗内重复框 + serviceFocus != null -> 保留 sfFailureCheck 并附 17 键 diag（准确计数）
+        val sfTwoVisibleEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(vis1, vis2)),
+            ),
+        )
+        val sfTwoVisibleDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(sfTwoVisibleEnv, JSONObject()), "before_sample", "node_not_visible"),
+        )
+        assertDiagEquals(
+            sfTwoVisibleDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = false,
+            serviceFocusVisible = false,
+            serviceFocusSameWindow = true,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = null,
+            rootFocusState = "matches_service",
+            windowFieldLookup = "ambiguous",
+            windowFieldTotalMatches = 2,
+            windowFieldVisibleInWindowMatches = 2,
+            windowFieldBoundsInWindowMatches = 2,
+        )
+        assertEquals(1, sfTwoVisibleEnv.beforePhase.rootFocusCalls)
+        assertEquals(0, sfTwoVisibleEnv.imeRequestCalls)
+
+        // 3) 0 个可见但有窗内四边（bounds = 2 / 1 / 0）+ serviceFocus != null -> sfFailureCheck + 17 键 diag
+        val zeroVisibleCases = listOf(
+            Triple(listOf(invInWindow, invInWindow2), 2, 2),
+            Triple(listOf(invInWindow, outOfWindow), 2, 1),
+            Triple(listOf(outOfWindow, emptyBounds), 2, 0),
+        )
+        for ((nodes, expectedTotal, expectedBounds) in zeroVisibleCases) {
+            val sfZeroVisEnv = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = anonSf,
+                    rootFocus = anonSf,
+                    defaultNodesById = mapOf(fieldName to nodes),
+                ),
+            )
+            val sfZeroVisDiag = checkNotNull(
+                assertFocusUnavailable(readEditorBounds(sfZeroVisEnv, JSONObject()), "before_sample", "node_not_visible"),
+            )
+            assertDiagEquals(
+                sfZeroVisDiag,
+                serviceFocusPresent = true,
+                serviceFocusRefreshed = true,
+                serviceFocusFocused = false,
+                serviceFocusVisible = false,
+                serviceFocusSameWindow = true,
+                serviceFocusSamePackage = true,
+                serviceFocusMatchesField = null,
+                rootFocusState = "matches_service",
+                windowFieldLookup = "ambiguous",
+                windowFieldTotalMatches = expectedTotal,
+                windowFieldVisibleInWindowMatches = 0,
+                windowFieldBoundsInWindowMatches = expectedBounds,
+            )
+            assertEquals(1, sfZeroVisEnv.beforePhase.rootFocusCalls)
+            assertEquals(0, sfZeroVisEnv.imeRequestCalls)
+
+            // 4) 0 个可见 + serviceFocus == null -> FocusUnavailable(node_not_visible) + 17 键 diag
+            for ((rf, expectedRootState) in listOf(null to "missing", other to "other")) {
+                val nullSfZeroVisEnv = FakeEnv(
+                    beforePhase = PhaseSnapshot(
+                        serviceFocus = null,
+                        rootFocus = rf,
+                        defaultNodesById = mapOf(fieldName to nodes),
+                    ),
+                )
+                val nullSfZeroVisDiag = checkNotNull(
+                    assertFocusUnavailable(readEditorBounds(nullSfZeroVisEnv, JSONObject()), "before_sample", "node_not_visible"),
+                )
+                assertDiagEquals(
+                    nullSfZeroVisDiag,
+                    serviceFocusPresent = false,
+                    rootFocusState = expectedRootState,
+                    windowFieldLookup = "ambiguous",
+                    windowFieldTotalMatches = expectedTotal,
+                    windowFieldVisibleInWindowMatches = 0,
+                    windowFieldBoundsInWindowMatches = expectedBounds,
+                )
+                assertEquals(1, nullSfZeroVisEnv.beforePhase.rootFocusCalls)
+                assertEquals(0, nullSfZeroVisEnv.imeRequestCalls)
+            }
+        }
+
+        // 5) 活动窗口本身为空矩形时，多命中不放行任何节点（bounds = 0, visible = 0）
+        val emptyWindowMultiEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                window = FakeWindow(bounds = IntBounds(2400, 0, 960, 1600)),
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(vis1, invInWindow)),
+            ),
+        )
+        val emptyWindowDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(emptyWindowMultiEnv, JSONObject()), "before_sample", "node_not_visible"),
+        )
+        assertDiagEquals(
+            emptyWindowDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = false,
+            serviceFocusVisible = false,
+            serviceFocusSameWindow = true,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = null,
+            rootFocusState = "matches_service",
+            windowFieldLookup = "ambiguous",
+            windowFieldTotalMatches = 2,
+            windowFieldVisibleInWindowMatches = 0,
+            windowFieldBoundsInWindowMatches = 0,
+        )
+    }
+
+    @Test
+    fun `filtered visible field enforces secondary uniqueness stability and pixel-exact float bounds`() {
+        val anonSf = FakeNode(
+            id = "pa2553_anon_sf",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+        )
+        val vis1 = FakeNode(id = "vis1", isFocused = false, isVisibleToUser = true)
+        val vis2 = FakeNode(id = "vis2", isFocused = false, isVisibleToUser = true)
+        val invDup = FakeNode(id = "inv_dup", isFocused = false, isVisibleToUser = false)
+
+        // 1) 二次查表冒出第 2 个可见节点 / 换成了另一个可见节点 / 均不可见 / 变空 -> 均抛 ambiguous_id
+        val badSecondLookups = listOf(
+            listOf(vis1, vis2),
+            listOf(vis2, invDup),
+            listOf(FakeNode(id = "vis1", isFocused = false, isVisibleToUser = false), invDup),
+            emptyList(),
+        )
+        for (secondResult in badSecondLookups) {
+            val env = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = anonSf,
+                    rootFocus = anonSf,
+                    firstLookup = { listOf(vis1, invDup) },
+                    secondLookup = { secondResult },
+                ),
+            )
+            assertFailure(readEditorBounds(env, JSONObject()), "ambiguous_id")
+            assertEquals(2, env.beforePhase.viewIdLookupCalls)
+            assertEquals(0, env.imeRequestCalls)
+        }
+
+        // 2) cloneNodes = false 原地翻转焦点（before 为 false，after 刷新时翻为 true）-> context_changed
+        val sharedCand = FakeNode(id = "vis1", isFocused = false, isVisibleToUser = true)
+        var refreshCalls = 0
+        sharedCand.onRefresh = { node ->
+            refreshCalls++
+            if (refreshCalls == 3) node.isFocused = true
+        }
+        val inPlaceFlipEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(invDup, sharedCand)),
+                cloneNodes = false,
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(invDup, sharedCand)),
+                cloneNodes = false,
+            ),
+        )
+        assertFailure(readEditorBounds(inPlaceFlipEnv, JSONObject()), "context_changed")
+        assertEquals(4, refreshCalls)
+
+        // 3) 采样前后四边变化 -> context_changed
+        val boundsDriftEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(invDup, vis1)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(
+                    fieldName to listOf(
+                        invDup,
+                        FakeNode(id = "vis1", isFocused = false, isVisibleToUser = true, bounds = IntBounds(1040, 1420, 2132, 1540)),
+                    ),
+                ),
+            ),
+        )
+        assertFailure(readEditorBounds(boundsDriftEnv, JSONObject()), "context_changed")
+
+        // 4) Float 小数精度偏差 -> different_bounds
+        val floatDriftEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(invDup, vis1)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(invDup, vis1)),
+            ),
+            requestFactory = { _, _ ->
+                FakeRequest { EditorBoundsMeasurement(fieldId, FloatBounds(1040f, 1420.5f, 2120f, 1540f)) }
+            },
+        )
+        assertFailure(readEditorBounds(floatDriftEnv, JSONObject()), "different_bounds")
+    }
+
+    @Test
+    fun `anonymous degenerate rootFocus exemption rejects named focused visible unrefreshed sensitive or third-node rootFocus`() {
+        val visibleEditor = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
+        val hiddenInWindow = FakeNode(id = "hidden_dup", isFocused = false, isVisibleToUser = false, bounds = editorBounds)
+        val hiddenOutside = FakeNode(id = "hidden_out", isFocused = false, isVisibleToUser = true, bounds = IntBounds(0, 0, 100, 100))
+        val thirdNode = FakeNode(id = "third_node", isFocused = true)
+
+        data class RejectSfCase(
+            val sf: FakeNode,
+            val expectedRefreshed: Boolean,
+            val expectedFocused: Boolean?,
+            val expectedVisible: Boolean?,
+            val expectedSameWindow: Boolean?,
+            val expectedSamePackage: Boolean?,
+            val expectedMatchesField: Boolean?,
+        )
+
+        val rejectedSelfRootCases = listOf(
+            // 1) 具名（同字段名）
+            RejectSfCase(
+                FakeNode(id = "sf_named_same", isFocused = false, isVisibleToUser = false, viewIdResourceName = fieldName),
+                expectedRefreshed = true,
+                expectedFocused = false,
+                expectedVisible = false,
+                expectedSameWindow = true,
+                expectedSamePackage = true,
+                expectedMatchesField = true,
+            ),
+            // 2) 具名（不同字段名）
+            RejectSfCase(
+                FakeNode(id = "sf_named_other", isFocused = false, isVisibleToUser = false, viewIdResourceName = otherFieldName),
+                expectedRefreshed = true,
+                expectedFocused = false,
+                expectedVisible = false,
+                expectedSameWindow = true,
+                expectedSamePackage = true,
+                expectedMatchesField = false,
+            ),
+            // 3) focused = true（即便匿名且不可见）
+            RejectSfCase(
+                FakeNode(id = "sf_focused", isFocused = true, isVisibleToUser = false, viewIdResourceName = null),
+                expectedRefreshed = true,
+                expectedFocused = true,
+                expectedVisible = false,
+                expectedSameWindow = true,
+                expectedSamePackage = true,
+                expectedMatchesField = null,
+            ),
+            // 4) visible = true（跨窗导致 sf.valid = false，即便匿名且未聚焦）
+            RejectSfCase(
+                FakeNode(id = "sf_visible_xwin", isFocused = false, isVisibleToUser = true, windowId = 5, viewIdResourceName = null),
+                expectedRefreshed = true,
+                expectedFocused = false,
+                expectedVisible = true,
+                expectedSameWindow = false,
+                expectedSamePackage = true,
+                expectedMatchesField = null,
+            ),
+            // 5) refresh 失败（即便匿名、未聚焦、不可见）
+            RejectSfCase(
+                FakeNode(id = "sf_unrefreshed", isFocused = false, isVisibleToUser = false, viewIdResourceName = null, refreshResult = false),
+                expectedRefreshed = false,
+                expectedFocused = null,
+                expectedVisible = null,
+                expectedSameWindow = null,
+                expectedSamePackage = null,
+                expectedMatchesField = null,
+            ),
+            // 6) 跨窗敏感节点（viewId 因敏感被清为 null，必须被 !sf.sensitive 拦下）
+            RejectSfCase(
+                FakeNode(id = "sf_xwin_pwd", isFocused = false, isVisibleToUser = false, windowId = 5, isPassword = true, viewIdResourceName = null),
+                expectedRefreshed = true,
+                expectedFocused = false,
+                expectedVisible = false,
+                expectedSameWindow = false,
+                expectedSamePackage = true,
+                expectedMatchesField = null,
+            ),
+            RejectSfCase(
+                FakeNode(id = "sf_xpkg_sens", isFocused = false, isVisibleToUser = false, packageName = "com.other.app", isAccessibilityDataSensitive = true, viewIdResourceName = null),
+                expectedRefreshed = true,
+                expectedFocused = false,
+                expectedVisible = false,
+                expectedSameWindow = true,
+                expectedSamePackage = false,
+                expectedMatchesField = null,
+            ),
+        )
+
+        val lookupVariants = listOf(
+            Triple(listOf(hiddenInWindow, visibleEditor), "filtered_unique", 2 to 2),
+            Triple(listOf(hiddenOutside, visibleEditor), "filtered_unique", 2 to 1),
+            Triple(listOf(visibleEditor), "unique", 1 to 1),
+        )
+
+        for ((nodes, expectedLookup, counts) in lookupVariants) {
+            val (expectedTotal, expectedBounds) = counts
+            for (c in rejectedSelfRootCases) {
+                val env = FakeEnv(
+                    beforePhase = PhaseSnapshot(
+                        serviceFocus = c.sf,
+                        rootFocus = c.sf,
+                        defaultNodesById = mapOf(fieldName to nodes),
+                    ),
+                )
+                val diag = checkNotNull(
+                    assertFocusUnavailable(readEditorBounds(env, JSONObject()), "before_sample", "root_focus_mismatch"),
+                )
+                assertDiagEquals(
+                    diag,
+                    serviceFocusPresent = true,
+                    serviceFocusRefreshed = c.expectedRefreshed,
+                    serviceFocusFocused = c.expectedFocused,
+                    serviceFocusVisible = c.expectedVisible,
+                    serviceFocusSameWindow = c.expectedSameWindow,
+                    serviceFocusSamePackage = c.expectedSamePackage,
+                    serviceFocusMatchesField = c.expectedMatchesField,
+                    rootFocusState = "matches_service",
+                    windowFieldLookup = expectedLookup,
+                    windowFieldSameAsService = false,
+                    windowFieldVisible = true,
+                    windowFieldFocused = false,
+                    windowFieldSameWindow = true,
+                    windowFieldBoundsInWindow = true,
+                    windowFieldTotalMatches = expectedTotal,
+                    windowFieldVisibleInWindowMatches = 1,
+                    windowFieldBoundsInWindowMatches = expectedBounds,
+                )
+                assertEquals(1, env.beforePhase.rootFocusCalls)
+                assertEquals(1, env.beforePhase.viewIdLookupCalls)
+                assertEquals(0, env.imeRequestCalls)
+            }
+
+            // PA2553 匿名退化 serviceFocus 下，若 rootFocus 指向第三节点，仍必须严格拒为 root_focus_mismatch
+            val anonSf = FakeNode(id = "pa2553_anon_sf", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+            val thirdRootEnv = FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = anonSf,
+                    rootFocus = thirdNode,
+                    defaultNodesById = mapOf(fieldName to nodes),
+                ),
+            )
+            val thirdRootDiag = checkNotNull(
+                assertFocusUnavailable(readEditorBounds(thirdRootEnv, JSONObject()), "before_sample", "root_focus_mismatch"),
+            )
+            assertDiagEquals(
+                thirdRootDiag,
+                serviceFocusPresent = true,
+                serviceFocusRefreshed = true,
+                serviceFocusFocused = false,
+                serviceFocusVisible = false,
+                serviceFocusSameWindow = true,
+                serviceFocusSamePackage = true,
+                serviceFocusMatchesField = null,
+                rootFocusState = "other",
+                windowFieldLookup = expectedLookup,
+                windowFieldSameAsService = false,
+                windowFieldVisible = true,
+                windowFieldFocused = false,
+                windowFieldSameWindow = true,
+                windowFieldBoundsInWindow = true,
+                windowFieldTotalMatches = expectedTotal,
+                windowFieldVisibleInWindowMatches = 1,
+                windowFieldBoundsInWindowMatches = expectedBounds,
+            )
+            assertEquals(1, thirdRootEnv.beforePhase.rootFocusCalls)
+            assertEquals(0, thirdRootEnv.imeRequestCalls)
+        }
+
+        // after_sample 中同样严格执行匿名豁免边界（不因 before 通过而放松 after）
+        val anonSf = FakeNode(id = "pa2553_anon_sf", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+        val namedSf = FakeNode(id = "sf_named", isFocused = false, isVisibleToUser = false, viewIdResourceName = fieldName)
+        val afterMismatchEnv = FakeEnv(
+            beforePhase = PhaseSnapshot(
+                serviceFocus = anonSf,
+                rootFocus = anonSf,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenInWindow, visibleEditor)),
+            ),
+            afterPhase = PhaseSnapshot(
+                serviceFocus = namedSf,
+                rootFocus = namedSf,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenInWindow, visibleEditor)),
+            ),
+        )
+        val afterDiag = checkNotNull(
+            assertFocusUnavailable(readEditorBounds(afterMismatchEnv, JSONObject()), "after_sample", "root_focus_mismatch"),
+        )
+        assertDiagEquals(
+            afterDiag,
+            serviceFocusPresent = true,
+            serviceFocusRefreshed = true,
+            serviceFocusFocused = false,
+            serviceFocusVisible = false,
+            serviceFocusSameWindow = true,
+            serviceFocusSamePackage = true,
+            serviceFocusMatchesField = true,
+            rootFocusState = "matches_service",
+            windowFieldLookup = "filtered_unique",
+            windowFieldSameAsService = false,
+            windowFieldVisible = true,
+            windowFieldFocused = false,
+            windowFieldSameWindow = true,
+            windowFieldBoundsInWindow = true,
+            windowFieldTotalMatches = 2,
+            windowFieldVisibleInWindowMatches = 1,
+            windowFieldBoundsInWindowMatches = 2,
+        )
+        assertEquals(1, afterMismatchEnv.afterPhase.rootFocusCalls)
+        assertEquals(1, afterMismatchEnv.imeRequestCalls)
+    }
+
+    @Test
+    fun `all eight window_field_lookup enums are reachable and obey 17-key schema invariants`() {
+        val validSf = FakeNode(id = "sf_valid", isFocused = true, isVisibleToUser = true)
+        val invisibleSf = FakeNode(id = "sf_inv", isFocused = false, isVisibleToUser = false, viewIdResourceName = null)
+        val visibleCand = FakeNode(id = "right_editor", isFocused = false, isVisibleToUser = true)
+        val hiddenCand = FakeNode(id = "hidden_dup", isFocused = false, isVisibleToUser = false)
+        val other = FakeNode(id = "other", isFocused = true)
+
+        val cases: List<Pair<String, FakeEnv>> = listOf(
+            "not_attempted" to FakeEnv(
+                beforePhase = PhaseSnapshot(serviceFocus = validSf, rootFocus = other),
+            ),
+            "no_contract" to FakeEnv(
+                contract = null,
+                beforePhase = PhaseSnapshot(serviceFocus = invisibleSf, rootFocus = invisibleSf),
+            ),
+            "missing_id" to FakeEnv(
+                contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT, 0, 0, null, fieldId = 0),
+                beforePhase = PhaseSnapshot(serviceFocus = invisibleSf, rootFocus = invisibleSf),
+            ),
+            "resources_unavailable" to FakeEnv(
+                beforePhase = PhaseSnapshot(serviceFocus = invisibleSf, rootFocus = invisibleSf),
+            ).apply { resources[fieldId] = ResourceNameResult.ResourcesUnavailable },
+            "zero_matches" to FakeEnv(
+                beforePhase = PhaseSnapshot(serviceFocus = invisibleSf, rootFocus = invisibleSf, defaultNodesById = emptyMap()),
+            ),
+            "ambiguous" to FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = invisibleSf,
+                    rootFocus = invisibleSf,
+                    defaultNodesById = mapOf(fieldName to listOf(hiddenCand, FakeNode(id = "hidden_dup_2", isVisibleToUser = false))),
+                ),
+            ),
+            "unique" to FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = invisibleSf,
+                    rootFocus = other,
+                    defaultNodesById = mapOf(fieldName to listOf(visibleCand)),
+                ),
+            ),
+            "filtered_unique" to FakeEnv(
+                beforePhase = PhaseSnapshot(
+                    serviceFocus = invisibleSf,
+                    rootFocus = other,
+                    defaultNodesById = mapOf(fieldName to listOf(hiddenCand, visibleCand)),
+                ),
+            ),
+        )
+
+        val observed = mutableSetOf<String>()
+        for ((expectedLookup, env) in cases) {
+            val reply = readEditorBounds(env, JSONObject())
+            assertEquals("focus_unavailable", reply.getString("ime_editor_bounds_reason"))
+            val diag = reply.getJSONObject("ime_editor_focus_diag")
+            assertDiagSchema(diag)
+            val actualLookup = diag.getString("window_field_lookup")
+            assertEquals(expectedLookup, actualLookup)
+            observed += actualLookup
+        }
+        assertEquals(windowFieldLookups, observed)
     }
 }
