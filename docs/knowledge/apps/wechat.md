@@ -210,6 +210,12 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 四个场景的前台身份逐例核实，沿用原校验。左右编辑框轮流持有输入连接时，网关分别选中左框和右框，各向对应输入连接请求一次四边。两框四边重合时返回 `same_bounds`，焦点矛盾时返回 `focus_conflict`，两例均在采样前停止。四项模拟器设置恢复，网关服务、转发及专用端口释放。
 
+#### 用图层核实启动画面与主窗口
+
+再用发生错配时的原版靶应用和网关，在首次切窗时采集 10 秒 Perfetto 图层跟踪。Android 按窗口令牌把无障碍窗口号写入对应图层的 `METADATA_ACCESSIBILITY_ID`。95 帧图层快照中，启动画面（`Splash Screen`）有 71 帧标为 12，主窗口（`EditorActivity`）有 61 帧标为 13，其中 38 帧同时看见两者。网关先收到带靶包名的窗口 12 事件，当时选中的仍是网关窗口 10，因此暂存；随后收到靶 Activity 的窗口 13 事件，与活动窗口一致，于是接受。靶应用自己的编辑框回执也报 13。启动期间仅凭事件包名无法区分这两个窗口。[Android 16 写入图层窗口号](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/core/java/com/android/server/wm/WindowManagerService.java#L7872-L7882) · [Android 图层跟踪说明](https://source.android.com/docs/core/graphics/winscope/capture/adb#surfaceflinger-layers)
+
+原失败轮收到 12 时已选中 13，后续记录里没有可接受的靶窗口状态事件，因此停在前台核对。那一轮没有同步图层跟踪，12 的归属只能根据本次复现推断。本次沿用原前台校验，四个场景分别核实活动窗口 13、15、17、19，左、右框各选对一次，四边重合及焦点矛盾均在采样前停止。PA2553 的微信右窗仍待独立验证。
+
 ### PA2553 右窗四边诊断返回 focus_unavailable
 
 2026-11-20，PA2553 在微信「文件传输助手」右窗已就位。派单先核实前台和右窗标题，再同签保数据更新网关至 `50c17a2` 并临时选择网关输入法。切换后再次核实了同一窗口号、右窗范围及标题。第五次读取是本轮唯一一次四边查询，网关返回 `focus_unavailable` 和空四边，派单随即结束。49 秒内共发起五次读取，微信内零点击、零输入、零发送。
