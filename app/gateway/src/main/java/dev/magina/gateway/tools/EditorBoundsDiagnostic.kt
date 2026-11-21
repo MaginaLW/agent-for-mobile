@@ -104,7 +104,52 @@ private data class EditorFocus(
 )
 
 private class Unavailable(val reason: String) : Exception(reason)
-private class FocusUnavailable(val phase: String, val check: String) : Exception()
+private class FocusUnavailable(
+    val phase: String,
+    val check: String,
+    val diag: JSONObject? = null,
+) : Exception()
+
+private sealed interface WindowFieldNameResult {
+    data class Found(val name: String) : WindowFieldNameResult
+    data object NoContract : WindowFieldNameResult
+    data object MissingId : WindowFieldNameResult
+    data object ResourcesUnavailable : WindowFieldNameResult
+}
+
+private class ServiceFocusSnapshot(
+    val node: EditorFocusNode?,
+    val refreshed: Boolean?,
+    val focused: Boolean?,
+    val visible: Boolean?,
+    val sameWindow: Boolean?,
+    val samePackage: Boolean?,
+    val sensitive: Boolean,
+    val viewId: String?,
+) {
+    val valid: Boolean
+        get() = node != null && refreshed == true && visible == true && sameWindow == true && samePackage == true
+
+    val unavailableCheck: String?
+        get() = when {
+            node == null -> null
+            refreshed != true -> "node_refresh_failed"
+            visible != true -> "node_not_visible"
+            sameWindow != true -> "node_window_mismatch"
+            samePackage != true -> "node_package_mismatch"
+            else -> null
+        }
+}
+
+private class WindowFieldSnapshot(
+    val lookup: String,
+    val fieldName: String? = null,
+    val candidate: EditorFocusNode? = null,
+    val visible: Boolean? = null,
+    val focused: Boolean? = null,
+    val sameWindow: Boolean? = null,
+    val boundsInWindow: Boolean? = null,
+)
 
 /** 只读回执。即使两份独立测量一致，也不生成操作引用或输入身份。 */
 internal fun readEditorBounds(service: GatewayA11yService, state: JSONObject): JSONObject {
@@ -170,6 +215,7 @@ internal fun readEditorBounds(
         unavailable("focus_unavailable")
             .put("ime_editor_focus_phase", e.phase)
             .put("ime_editor_focus_check", e.check)
+            .also { if (e.diag != null) it.put("ime_editor_focus_diag", e.diag) }
     } catch (e: Unavailable) {
         unavailable(e.reason)
     } catch (_: SecurityException) {
@@ -186,52 +232,208 @@ private fun requireResourceName(env: EditorBoundsEnvironment, pkg: String, resId
         ResourceNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
 
-private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String): String {
-    val contract = env.editorContract() ?: throw Unavailable("missing_id")
-    when (contract.inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)) {
+private fun isPasswordInputType(inputType: Int): Boolean =
+    when (inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)) {
         InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
         InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
         InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
-        InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD -> throw Unavailable("sensitive_field")
+        InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD -> true
+        else -> false
     }
+
+private fun resolveWindowFieldNameResult(env: EditorBoundsEnvironment, pkg: String): WindowFieldNameResult {
+    val contract = env.editorContract() ?: return WindowFieldNameResult.NoContract
+    if (isPasswordInputType(contract.inputType)) throw Unavailable("sensitive_field")
     val id = contract.fieldId
-    if (id == 0 || id == -1) throw Unavailable("missing_id")
-    val name = requireResourceName(env, pkg, id)
-    if (!name.substringAfter(':', "").startsWith("id/")) throw Unavailable("missing_id")
-    return name
+    if (id == 0 || id == -1) return WindowFieldNameResult.MissingId
+    return when (val result = env.resourceName(pkg, id)) {
+        is ResourceNameResult.Found ->
+            if (result.name.substringAfter(':', "").startsWith("id/")) WindowFieldNameResult.Found(result.name)
+            else WindowFieldNameResult.MissingId
+        ResourceNameResult.Missing -> WindowFieldNameResult.MissingId
+        ResourceNameResult.ResourcesUnavailable -> WindowFieldNameResult.ResourcesUnavailable
+    }
+}
+
+private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String): String =
+    when (val result = resolveWindowFieldNameResult(env, pkg)) {
+        is WindowFieldNameResult.Found -> result.name
+        WindowFieldNameResult.NoContract, WindowFieldNameResult.MissingId -> throw Unavailable("missing_id")
+        WindowFieldNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
+    }
+
+/** 仅输出固定 14 键脱敏状态（布尔、null 或固定小写枚举），不含文本、包名、资源名、坐标或窗口号。 */
+private fun buildFocusDiag(
+    sf: ServiceFocusSnapshot,
+    rootFocus: EditorFocusNode?,
+    wf: WindowFieldSnapshot,
+): JSONObject {
+    val matchesService = rootFocus != null && sf.node != null && rootFocus == sf.node
+    val matchesWindowField = rootFocus != null && wf.candidate != null && rootFocus == wf.candidate
+    val rootFocusState = when {
+        rootFocus == null -> "missing"
+        matchesService && matchesWindowField -> "matches_both"
+        matchesService -> "matches_service"
+        matchesWindowField -> "matches_window_field"
+        else -> "other"
+    }
+    val serviceMatchesField = if (sf.refreshed == true && !sf.sensitive && sf.viewId != null && wf.fieldName != null) {
+        sf.viewId == wf.fieldName
+    } else {
+        null
+    }
+    val sameAsService = if (wf.lookup == "unique" && sf.node != null) {
+        wf.candidate == sf.node
+    } else {
+        null
+    }
+    return JSONObject()
+        .put("service_focus_present", sf.node != null)
+        .put("service_focus_refreshed", sf.refreshed ?: JSONObject.NULL)
+        .put("service_focus_focused", sf.focused ?: JSONObject.NULL)
+        .put("service_focus_visible", sf.visible ?: JSONObject.NULL)
+        .put("service_focus_same_window", sf.sameWindow ?: JSONObject.NULL)
+        .put("service_focus_same_package", sf.samePackage ?: JSONObject.NULL)
+        .put("service_focus_matches_field", serviceMatchesField ?: JSONObject.NULL)
+        .put("root_focus_state", rootFocusState)
+        .put("window_field_lookup", wf.lookup)
+        .put("window_field_same_as_service", sameAsService ?: JSONObject.NULL)
+        .put("window_field_visible", wf.visible ?: JSONObject.NULL)
+        .put("window_field_focused", wf.focused ?: JSONObject.NULL)
+        .put("window_field_same_window", wf.sameWindow ?: JSONObject.NULL)
+        .put("window_field_bounds_in_window", wf.boundsInWindow ?: JSONObject.NULL)
 }
 
 private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: String): Pair<EditorFocus, Boolean> {
-    fun missing(check: String): Nothing = throw FocusUnavailable(phase, check)
+    fun missing(check: String, diag: JSONObject? = null): Nothing = throw FocusUnavailable(phase, check, diag)
     if (!env.clearCache()) missing("cache_clear_failed")
     val root = env.activeRoot() ?: missing("active_root_missing")
     val window = root.window() ?: missing("active_window_missing")
     if (!window.isApplicationType || !window.isActive || !window.isFocused || root.packageName != pkg) {
         throw Unavailable("window_mismatch")
     }
-    val serviceFocus = env.serviceFocus()
-    val fieldName = if (serviceFocus == null) resolveWindowFieldName(env, pkg) else null
-    val node = serviceFocus ?: run {
-        val matches = root.findNodesByViewId(checkNotNull(fieldName))
-        if (matches.isEmpty()) missing("input_focus_missing")
-        matches.singleOrNull() ?: throw Unavailable("ambiguous_id")
+
+    var rootFocusLoaded = false
+    var cachedRootFocus: EditorFocusNode? = null
+    fun getRootFocus(): EditorFocusNode? {
+        if (!rootFocusLoaded) {
+            cachedRootFocus = root.findInputFocus()
+            rootFocusLoaded = true
+        }
+        return cachedRootFocus
     }
-    if (!node.refresh()) missing("node_refresh_failed")
-    val focused = node.isFocused
-    if (!node.isVisibleToUser) missing("node_not_visible")
-    if (node.windowId != window.id) missing("node_window_mismatch")
-    if (node.packageName != pkg) missing("node_package_mismatch")
-    val rootFocus = root.findInputFocus()
-    // 服务级焦点非空时要求活动根焦点指向同一节点；按窗口字段查找时允许根焦点为空或指向本节点，指向他节点一律拒绝。
-    if (rootFocus != node && (serviceFocus != null || rootFocus != null)) missing("root_focus_mismatch")
-    if (node.isPassword || node.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
-    val expectedFieldName = fieldName ?: if (!focused) resolveWindowFieldName(env, pkg) else null
-    val name = node.viewIdResourceName?.takeIf { it.isNotBlank() } ?: throw Unavailable("missing_id")
-    if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
-    if (root.findNodesByViewId(name).singleOrNull() != node) throw Unavailable("ambiguous_id")
-    val bounds = node.boundsInScreen()
-    if (bounds.isEmpty || !window.boundsInScreen().contains(bounds)) throw Unavailable("invalid_bounds")
-    return EditorFocus(node, window.id, name, bounds, node.isEditable, focused) to (serviceFocus == null)
+
+    val sfNode = env.serviceFocus()
+    val sf = if (sfNode == null) {
+        ServiceFocusSnapshot(null, null, null, null, null, null, sensitive = false, viewId = null)
+    } else if (!sfNode.refresh()) {
+        ServiceFocusSnapshot(sfNode, false, null, null, null, null, sensitive = false, viewId = null)
+    } else {
+        val sameWindow = sfNode.windowId == window.id
+        val samePackage = sfNode.packageName == pkg
+        val sensitive = sfNode.isPassword || sfNode.isAccessibilityDataSensitive
+        if (sameWindow && samePackage && sensitive) throw Unavailable("sensitive_field")
+        ServiceFocusSnapshot(
+            node = sfNode,
+            refreshed = true,
+            focused = sfNode.isFocused,
+            visible = sfNode.isVisibleToUser,
+            sameWindow = sameWindow,
+            samePackage = samePackage,
+            sensitive = sensitive,
+            viewId = if (sensitive) null else sfNode.viewIdResourceName?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    // 有效服务焦点严格沿用原路径，禁止因 root_focus_mismatch 或 different_id 绕过兜底。
+    if (sf.valid) {
+        val node = checkNotNull(sf.node)
+        val focused = checkNotNull(sf.focused)
+        val rootFocus = getRootFocus()
+        if (rootFocus != node) {
+            missing("root_focus_mismatch", buildFocusDiag(sf, rootFocus, WindowFieldSnapshot("not_attempted")))
+        }
+        val expectedFieldName = if (!focused) resolveWindowFieldName(env, pkg) else null
+        val name = sf.viewId ?: throw Unavailable("missing_id")
+        if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
+        if (root.findNodesByViewId(name).singleOrNull() != node) throw Unavailable("ambiguous_id")
+        val bounds = node.boundsInScreen()
+        if (bounds.isEmpty || !window.boundsInScreen().contains(bounds)) throw Unavailable("invalid_bounds")
+        return EditorFocus(node, window.id, name, bounds, node.isEditable, focused) to false
+    }
+
+    // 服务焦点缺失或未通过活动窗可用性检查时，尝试按活动窗内 EditorInfo.fieldId 定向查找。
+    val sfFailureCheck = sf.unavailableCheck
+    val fieldName = when (val result = resolveWindowFieldNameResult(env, pkg)) {
+        is WindowFieldNameResult.Found -> result.name
+        WindowFieldNameResult.NoContract -> {
+            if (sfFailureCheck == null) throw Unavailable("missing_id")
+            missing(sfFailureCheck, buildFocusDiag(sf, getRootFocus(), WindowFieldSnapshot("no_contract")))
+        }
+        WindowFieldNameResult.MissingId -> {
+            if (sfFailureCheck == null) throw Unavailable("missing_id")
+            missing(sfFailureCheck, buildFocusDiag(sf, getRootFocus(), WindowFieldSnapshot("missing_id")))
+        }
+        WindowFieldNameResult.ResourcesUnavailable -> {
+            if (sfFailureCheck == null) throw Unavailable("resources_unavailable")
+            missing(sfFailureCheck, buildFocusDiag(sf, getRootFocus(), WindowFieldSnapshot("resources_unavailable")))
+        }
+    }
+
+    val matches = root.findNodesByViewId(fieldName)
+    if (matches.isEmpty()) {
+        val check = sfFailureCheck ?: "input_focus_missing"
+        missing(check, buildFocusDiag(sf, getRootFocus(), WindowFieldSnapshot("zero_matches", fieldName = fieldName)))
+    }
+    val candidate = matches.singleOrNull() ?: run {
+        if (sfFailureCheck == null) throw Unavailable("ambiguous_id")
+        missing(sfFailureCheck, buildFocusDiag(sf, getRootFocus(), WindowFieldSnapshot("ambiguous", fieldName = fieldName)))
+    }
+
+    val sameAsService = sf.node != null && candidate == sf.node
+    val windowBounds = window.boundsInScreen()
+    if (!candidate.refresh()) {
+        val wf = WindowFieldSnapshot("unique", fieldName = fieldName, candidate = candidate)
+        val check = if (sameAsService) checkNotNull(sfFailureCheck) else "node_refresh_failed"
+        missing(check, buildFocusDiag(sf, getRootFocus(), wf))
+    }
+    if (candidate.isPassword || candidate.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
+    val candFocused = candidate.isFocused
+    val candVisible = candidate.isVisibleToUser
+    val candSameWindow = candidate.windowId == window.id
+    val candSamePackage = candidate.packageName == pkg
+    val candBounds = candidate.boundsInScreen()
+    val candBoundsInWindow = !candBounds.isEmpty && windowBounds.contains(candBounds)
+    val wf = WindowFieldSnapshot(
+        lookup = "unique",
+        fieldName = fieldName,
+        candidate = candidate,
+        visible = candVisible,
+        focused = candFocused,
+        sameWindow = candSameWindow,
+        boundsInWindow = candBoundsInWindow,
+    )
+    val candidateFocusCheck = when {
+        !candVisible -> "node_not_visible"
+        !candSameWindow -> "node_window_mismatch"
+        !candSamePackage -> "node_package_mismatch"
+        else -> null
+    }
+    if (candidateFocusCheck != null) {
+        val check = if (sameAsService) checkNotNull(sfFailureCheck) else candidateFocusCheck
+        missing(check, buildFocusDiag(sf, getRootFocus(), wf))
+    }
+    val rootFocus = getRootFocus()
+    // 兜底查找允许根焦点为空或指向本节点，指向他节点一律拒绝。
+    if (rootFocus != null && rootFocus != candidate) {
+        val check = if (sameAsService) checkNotNull(sfFailureCheck) else "root_focus_mismatch"
+        missing(check, buildFocusDiag(sf, rootFocus, wf))
+    }
+    val name = candidate.viewIdResourceName?.takeIf { it.isNotBlank() } ?: throw Unavailable("missing_id")
+    if (name != fieldName) throw Unavailable("different_id")
+    if (root.findNodesByViewId(name).singleOrNull() != candidate) throw Unavailable("ambiguous_id")
+    if (!candBoundsInWindow) throw Unavailable("invalid_bounds")
+    return EditorFocus(candidate, window.id, name, candBounds, candidate.isEditable, candFocused) to true
 }
 
 /** 必须用 data class 把 equals/hashCode 委托给底层 AccessibilityNodeInfo，避免跨次 Binder 对象引用不等。 */

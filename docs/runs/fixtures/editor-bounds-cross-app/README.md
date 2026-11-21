@@ -33,23 +33,45 @@ Activity 启动后，每 250 毫秒检查一次该场景的回执，最多等 12
 
 这两个字段仅含固定标记。成功或其他失败原因的回执省略它们。旧候选的 `focus_unavailable` 回执无法追溯到具体检查；`node_not_focused` 枚举在 `2341c7d` 及更早候选上出现，新候选对通过下述交叉核验的未聚焦节点改为进入四边比对并在 `ime_editor_bounds` 中标出 `node_focused: false`。
 
-### 服务级输入焦点为空与未聚焦节点的交叉核验
+### 服务级输入焦点失效兜底与未聚焦节点的交叉核验
 
-沿用 `INPUT_NULL`。当服务级输入焦点非空且 `node.refresh()` 后 `node.isFocused == true`（正常聚焦路径）时，原有检查与顺序保持不变，取样前不依赖 `EditorInfo`，活动根焦点不等于该节点（含为空或指向他节点）仍返回 `focus_unavailable` / `root_focus_mismatch`。
+沿用 `INPUT_NULL`。完成清理缓存与活动应用窗口核验（`TYPE_APPLICATION`、活动、获焦且包名匹配）后，读取一次服务级输入焦点 `serviceFocus`：
 
-当服务级输入焦点为空时，候选先经 `EditorInfo.fieldId` 解析非敏感的全限定 `id/...` 资源名（4 类密码 `inputType` 返回 `sensitive_field`；字段 ID 缺失、非带冒号的 `id/...` 或无法解析返回 `missing_id`；资源表不可用返回 `resources_unavailable`），再在已核实的活动聚焦应用窗口内按名唯一查找（无命中返回 `input_focus_missing`，多命中返回 `ambiguous_id`）。[Android 字段 ID 约定](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#fieldId) · [窗口内的资源名查找](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String))
+- **活动窗密码/敏感快速拒绝**：若 `serviceFocus != null` 且 `serviceFocus.refresh()` 成功、与活动窗口同窗同包，且 `isPassword || isAccessibilityDataSensitive`，立即返回 `sensitive_field`（绝不兜底、零输入法请求、省略 `ime_editor_focus_diag`）。
+- **有效服务焦点路径**：若 `serviceFocus != null` 且 `refresh()` 成功、`isVisibleToUser == true`、同窗、同包且非敏感，严格沿用原有检查与顺序，**禁止**因 `root_focus_mismatch`、`different_id`、`ambiguous_id` 或 `invalid_bounds` 绕过兜底：`isFocused == true` 取样前不依赖 `EditorInfo`；`isFocused == false` 仍要求活动根输入焦点 `rootFocus == serviceFocus` 且取样前 `EditorInfo.fieldId` 交叉核验与节点资源名一致。若 `rootFocus != serviceFocus`，直接返回 `focus_unavailable` / `root_focus_mismatch`，且不额外调用 `EditorInfo` 或按名查表（`window_field_lookup = "not_attempted"`）。
+- **服务焦点缺失或无效时的活动窗字段兜底**：仅当 `serviceFocus == null`，或 `serviceFocus` 未通过活动窗可用性检查（`!refresh()`、`!isVisibleToUser`、`windowId != window.id` 或 `packageName != pkg`）时，尝试经 `EditorInfo.fieldId` 解析非敏感的全限定 `id/...` 资源名，再在已核实的活动聚焦应用窗口内按名唯一查找。[Android 字段 ID 约定](https://developer.android.com/reference/android/view/inputmethod/EditorInfo#fieldId) · [窗口内的资源名查找](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String))
+  - 4 类密码 `EditorInfo.inputType` 立即 fail-closed 返回 `sensitive_field`（绝不静默吞掉敏感拒绝，且省略 `ime_editor_focus_diag`）。
+  - 若查到唯一节点 `candidate`：须完整通过 `candidate.refresh()`、活动窗密码/敏感快速拒绝（`sensitive_field`）、`isVisibleToUser`（`node_not_visible`）、`windowId`（`node_window_mismatch`）、`packageName`（`node_package_mismatch`）、单次活动根输入焦点校验（允许 `rootFocus == null || rootFocus == candidate`，指向他节点报 `root_focus_mismatch`）、`viewIdResourceName == fieldName`（`missing_id` / `different_id`）、窗口内二次唯一查表（`ambiguous_id`）及非空且完整落于非空活动窗口内的四边校验（`invalid_bounds`）。
+  - **兜底失败归因**：
+    - `serviceFocus == null` 时沿用原错因（`missing_id`、`resources_unavailable`、`input_focus_missing`、`ambiguous_id` 或 `candidate` 对应的失败）。
+    - `serviceFocus != null` 时，若兜底未产生有效唯一节点（`no_contract` / `missing_id` / `resources_unavailable` / `zero_matches` / `ambiguous`）或命中与 `serviceFocus` 相同的失效节点，按原顺序返回 `serviceFocus` 的原始 `focus_unavailable`（`node_refresh_failed` → `node_not_visible` → `node_window_mismatch` → `node_package_mismatch`）；若命中**不同于 `serviceFocus` 的唯一节点 `candidate`** 且 `candidate` 自身校验失败，则按 `candidate` 归因（非 `focus_unavailable` 错误省略 `ime_editor_focus_diag`）。
 
-不论服务级输入焦点是否为空，取得节点并完成 `node.refresh()` 后，按顺序继续校验 `isVisibleToUser`（`node_not_visible`）、`windowId`（`node_window_mismatch`）与 `packageName`（`node_package_mismatch`），并单次查询活动根输入焦点 `rootFocus = root.findFocus(FOCUS_INPUT)`：
+取样前后须取得同一节点、窗口、具名资源、可编辑状态、聚焦状态和屏幕四边（任一字段变化含采样前后焦点双向翻转均返回 `context_changed`），默认输入法须仍为网关输入法、输入会话须稳定，输入法回调中的字段名须与节点一致（`different_id`）且四边按 `Float` 逐边精确匹配（`different_bounds`，不截断小数）。对照用例覆盖正常聚焦不依赖 `EditorInfo`、失效服务焦点（刷新失败/不可见/跨窗/跨包）由活动窗唯一字段成功兜底及混合阶段、有效服务焦点冲突绝不被兜底绕过、未聚焦节点（`rootFocus == node` / `null`）、活动窗密码节点与密码 `EditorInfo` 快速拒绝（零 IME 请求）、不可见同节点复现与非唯一兜底失败诊断、另一候选失败归因、首查/复查重名、四边像素/小数偏差、空或越界矩形、采样前后焦点双向翻转（含原地刷新翻转）、空采样、超时与中断。
 
-- 服务级焦点非空（`serviceFocus != null`）：必须满足 `rootFocus == node`，否则（含 `rootFocus == null` 或指向他节点）返回 `focus_unavailable` / `root_focus_mismatch`。
-- 服务级焦点为空（`serviceFocus == null`）：允许 `rootFocus == null` 或 `rootFocus == node`；一旦 `rootFocus != null && rootFocus != node`（他节点持焦），返回 `focus_unavailable` / `root_focus_mismatch`。
-- 节点为密码或无障碍敏感数据时返回 `sensitive_field`。
-- 只要 `node.refresh()` 后 `node.isFocused == false`（即使来自 `serviceFocus != null`），发出输入法四边请求前**必须**通过 `EditorInfo.fieldId` 交叉核验：校验 `EditorInfo.inputType` 非 4 类密码（否则 `sensitive_field`）、`fieldId` 有效且解析为带冒号的 `id/...` 资源名（否则 `missing_id` 或 `resources_unavailable`），且解析结果与 `node.viewIdResourceName` 精确相等（不符返回 `different_id`，节点缺少资源名返回 `missing_id`）。
-- 继续执行窗口内按 `viewIdResourceName` 唯一查表（`ambiguous_id`）及非空且完整落于非空活动窗口内的四边校验（`invalid_bounds`），随后发起输入法四边采样并在取样后复核。
+### `focus_unavailable` 脱敏诊断快照（`ime_editor_focus_diag`）
 
-取样前后须取得同一节点、窗口、具名资源、可编辑状态、聚焦状态和屏幕四边（任一字段变化含采样前后焦点双向翻转均返回 `context_changed`），默认输入法须仍为网关输入法、输入会话须稳定，输入法回调中的字段名须与节点一致（`different_id`）且四边按 `Float` 逐边精确匹配（`different_bounds`，不截断小数）。对照用例覆盖正常聚焦不依赖 `EditorInfo`、服务级未聚焦与窗口字段未聚焦（`rootFocus == node` / `null`）及混合阶段、根焦点为空或指向他节点、不可见、跨窗/跨包、密码与敏感字段（零 IME 请求）、缺失/不匹配 `EditorInfo.fieldId`（零 IME 请求）、首查/复查重名、四边像素/小数偏差、空或越界矩形、采样前后焦点双向翻转、空采样、超时与中断。
+仅当活动根与活动窗口均已核实、且最终落入 `focus_unavailable` 时，在顶层响应附带只读脱敏对象 `ime_editor_focus_diag`；成功、非 `focus_unavailable` 失败（含 `sensitive_field`）以及 `cache_clear_failed` / `active_root_missing` / `active_window_missing` 均省略该字段。每次阶段核对最多调用一次 `root.findFocus(FOCUS_INPUT)`；正常成功路径不额外调用 `EditorInfo` 或按名查表。
+
+该对象严格限于下表 14 个固定键，值只允许布尔、`null` 或固定小写枚举，不包含任何文本、草稿、包名、资源名、屏幕坐标或窗口号：
+
+| 键名 | 类型 / 固定枚举 | 语义 |
+|---|---|---|
+| `service_focus_present` | `Boolean` | `serviceFocus != null` |
+| `service_focus_refreshed` | `Boolean?` | `serviceFocus.refresh()` 结果；`serviceFocus == null` 时为 `null` |
+| `service_focus_focused` | `Boolean?` | `serviceFocus.isFocused`；未刷新成功时为 `null` |
+| `service_focus_visible` | `Boolean?` | `serviceFocus.isVisibleToUser`；未刷新成功时为 `null` |
+| `service_focus_same_window` | `Boolean?` | `serviceFocus.windowId == window.id`；未刷新成功时为 `null` |
+| `service_focus_same_package` | `Boolean?` | `serviceFocus.packageName == pkg`；未刷新成功时为 `null` |
+| `service_focus_matches_field` | `Boolean?` | 仅当 `serviceFocus` 已刷新、非密码/非敏感、具名资源非空且兜底已解析出非敏感 `fieldName` 时为相等比较结果，否则 `null` |
+| `root_focus_state` | `"missing"` \| `"matches_service"` \| `"matches_window_field"` \| `"matches_both"` \| `"other"` | 单次 `root.findFocus(FOCUS_INPUT)` 与 `serviceFocus` 及唯一兜底候选的归属关系 |
+| `window_field_lookup` | `"not_attempted"` \| `"no_contract"` \| `"missing_id"` \| `"resources_unavailable"` \| `"zero_matches"` \| `"ambiguous"` \| `"unique"` | 活动窗 `EditorInfo.fieldId` 兜底查找结果（有效 `serviceFocus` 遇 `root_focus_mismatch` 时为 `"not_attempted"`；密码 `EditorInfo` 直接走 `sensitive_field` 且省略整个诊断对象） |
+| `window_field_same_as_service` | `Boolean?` | 仅当 `window_field_lookup == "unique"` 且 `serviceFocus != null` 时为 `candidate == serviceFocus`，否则 `null` |
+| `window_field_visible` | `Boolean?` | 仅当 `window_field_lookup == "unique"` 且 `candidate.refresh()` 成功时为 `candidate.isVisibleToUser`，否则 `null` |
+| `window_field_focused` | `Boolean?` | 同上，`candidate.isFocused` |
+| `window_field_same_window` | `Boolean?` | 同上，`candidate.windowId == window.id` |
+| `window_field_bounds_in_window` | `Boolean?` | 同上，`!bounds.isEmpty && windowBounds.contains(bounds)` |
 
 回执保持只读诊断语义，不生成操作引用或输入身份，也不新增 `ime_editor_bounds_reason` 或 `ime_editor_focus_check` 枚举值：
 
-- `ime_editor_bounds.window_field_phase`：仅在至少一个阶段（`serviceFocus == null`）用过按字段查找的成功回执中出现，取值为 `before_sample`、`after_sample` 或 `both`；两阶段均由服务级焦点取得时（即使 `node_focused` 为 `false`）省略该字段。
+- `ime_editor_bounds.window_field_phase`：仅在至少一个阶段（`serviceFocus == null` 或失效服务焦点转兜底）用过按字段查找的成功回执中出现，取值为 `before_sample`、`after_sample` 或 `both`；两阶段均由有效服务级焦点直接取得时（即使 `node_focused` 为 `false`）省略该字段。
 - `ime_editor_bounds.node_focused`：仅在成功回执依赖未报告聚焦的节点（`node.isFocused == false`）时出现在 `ime_editor_bounds` 内，固定为 `false`（此时 `window_field_phase` 可省略，或为 `before_sample`、`after_sample`、`both`）。正常聚焦成功路径与所有失败回执均省略该字段，顶层响应也不出现该字段。
