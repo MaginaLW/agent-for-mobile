@@ -31,6 +31,8 @@
 
 草稿 #47 已给 `missing_id` 增加采样阶段和失败位置。候选 `2289925` 的宿主回放和隔离模拟器五例均通过。PA2553 同签更新后，已就位右窗的第五步返回 `before_sample / field_id_unresolved`。现已定位到输入法采样前的字段 ID 解析，具体字段值及其资源类型仍未知。右窗编辑框唯一识别继续阻塞，竖屏 P0 暂缓。[真机结果与恢复](knowledge/apps/wechat.md#pa2553-在采样前无法解析字段-id) · [模拟器对照](knowledge/apps/wechat.md#在隔离模拟器上定位一次-missing_id) · [诊断字段](runs/fixtures/editor-bounds-cross-app/README.md#missing_id-停在哪一步)
 
+在双无名候选的离线对照中，左、右框实际持有输入连接时都可得到上述真机回执。保持当次异常焦点条件，仅修正字段 ID，四个对照仍停在 `focus_conflict`。横屏下一步需要能在同一时刻区分左右输入目标的独立证据；单独细分字段 ID 错因不足以解除阻塞。[分支与对照结果](knowledge/apps/wechat.md#pa2553-在采样前无法解析字段-id)
+
 ## 2. 按需再做（有具体任务需要时才排）
 
 - M1b 占位工具：通知读取/回复、`ui_diff`、Shizuku 强停当前已从 `tools/list` 下架；按需实施与必验失败路径见 [能力现状](knowledge/android/m1b-capabilities.md)。
