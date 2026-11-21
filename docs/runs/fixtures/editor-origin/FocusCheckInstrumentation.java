@@ -61,14 +61,15 @@ public final class FocusCheckInstrumentation extends Instrumentation {
                     && java.util.Objects.equals(first.id, second.id) && first.editable == second.editable
                     && first.rect.equals(second.rect);
                 String match = second.compare(sample, context.getResources());
+                boolean boundsMatch = second.matchesBounds(sample);
                 String prior = stage == 0 ? "none" : second.compare(previous[stage - 1], context.getResources());
                 String revisit = stage == 2 ? second.compare(previous[0], context.getResources()) : "none";
-                boolean rowPass = stable && (stage == 3 ? "missing_id" : "matched").equals(match)
+                boolean rowPass = stable && boundsMatch && (stage == 3 ? "missing_id" : "matched").equals(match)
                     && second.editable == (stage != 1)
                     && (stage == 0 || (stage == 3 ? "missing_id" : "different_id").equals(prior))
                     && (stage != 2 || "different_bounds".equals(revisit));
                 rows.put(new JSONObject().put("stage", stage).put("stable", stable).put("editable", second.editable)
-                    .put("current", match).put("previous", prior).put("before_resize", revisit)
+                    .put("current", match).put("bounds_match", boundsMatch).put("previous", prior).put("before_resize", revisit)
                     .put("focus_bounds", new JSONArray(new int[]{second.rect.left, second.rect.top,
                         second.rect.right, second.rect.bottom})).put("pass", rowPass));
                 if (!rowPass) throw new IllegalStateException("comparison");
@@ -133,9 +134,13 @@ public final class FocusCheckInstrumentation extends Instrumentation {
                 return "missing_id";
             }
             if (!id.equals(imeId)) return "different_id";
+            return matchesBounds(sample) ? "matched" : "different_bounds";
+        }
+
+        boolean matchesBounds(Intent sample) {
             float[] b = sample.getFloatArrayExtra("observed_bounds");
             return b != null && b.length == 4 && b[0] == rect.left && b[1] == rect.top
-                && b[2] == rect.right && b[3] == rect.bottom ? "matched" : "different_bounds";
+                && b[2] == rect.right && b[3] == rect.bottom;
         }
     }
 }
