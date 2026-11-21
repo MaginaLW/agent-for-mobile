@@ -278,7 +278,15 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 - 既有 14 键与 `b37c018` 一致：`service_focus_present=true`、`service_focus_refreshed=true`、`service_focus_same_window=true`、`service_focus_same_package=true`、`root_focus_state=matches_service`、`service_focus_focused=false`、`service_focus_visible=false`、`service_focus_matches_field=null`、`window_field_lookup=ambiguous`。
 - 新增 3 项命中计数：`window_field_total_matches=2`、`window_field_bounds_in_window_matches=0`、`window_field_visible_in_window_matches=0`。按 `8f0baa0` 源码 `scanMultiMatches`，当前输入连接的 `EditorInfo.fieldId` 在微信右窗确实命中 2 个非敏感节点，但两者在进入 `isVisibleToUser` 筛选前均已被前置条件（`refresh()`、同窗同包、`viewIdResourceName == fieldName`、`!bounds.isEmpty` 或 `windowBounds.contains(bounds)`）全部淘汰，尚未发起输入法四边请求。
 
-收尾阶段宿主一次回选原 vivo 默认输入法、恢复启用输入法清单并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `8f0baa0`。针对本轮发现，派单侧已通过 [PR #63](https://github.com/MaginaLW/agent-for-mobile/pull/63) 为 `0.171.0` 补齐配套 `codex-code-mode-host.exe` 存在性与 OpenAI 验签门禁；草稿 PR #47 已推进至 `0b4b4d4`，将 `ime_editor_focus_diag` 细化为 23 键（新增 6 项互斥/可见淘汰原因计数），并已完成基于 `696ca58` 宿主的离线调试包（540 个非签名条目）绑定与 23 键过滤器（27 项）、入场（11 项）、收尾（7 项）及真实 `0.171.0` 配套验签离线预演（零设备访问、零实签），待另获授权后执行同签与单次真机读取。
+收尾阶段宿主一次回选原 vivo 默认输入法、恢复启用输入法清单并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `8f0baa0`。针对本轮发现，派单侧已通过 [PR #63](https://github.com/MaginaLW/agent-for-mobile/pull/63) 为 `0.171.0` 补齐配套 `codex-code-mode-host.exe` 存在性与 OpenAI 验签门禁；草稿 PR #47 已推进至 `0b4b4d4`，将 `ime_editor_focus_diag` 细化为 23 键（新增 6 项互斥/可见淘汰原因计数），并已完成基于 `696ca58` 宿主的离线调试包（540 个非签名条目）绑定与 23 键过滤器（27 项）、入场（11 项）、收尾（7 项）及真实 `0.171.0` 配套验签离线预演（零设备访问、零实签）。
+
+### 候选 0b4b4d4 的两个节点均在资源名核对时被排除
+
+2026-11-21，PA2553 从 `8f0baa0` 同签保数据更新至 `0b4b4d4`。安装前后已核实在机摘要、右窗会话焦点和设置基线。本轮从已聚焦的微信右窗开始，使用 `696ca58` 宿主免安装派单一次，用时 28 秒。切换输入法前后共四次读取均核实了同一右窗及「文件传输助手」标题。第五次读取编辑框四边返回 `before_sample / node_not_visible`。本轮没有导航、输入、截图、发送或设备端发送确认卡。
+
+23 项脱敏诊断中，`window_field_total_matches=2`，`window_field_id_mismatch_matches=2`，刷新失败、窗包不符、空边界、越界及窗内命中的计数均为 0。服务级与窗口根的输入焦点仍指向同一个未聚焦、不可见的节点。按候选源码，两个字段候选均已刷新且匹配窗口与包，资源名精确比较失败后即跳过可见性与边界读取。回执没有区分资源名缺失与返回其他名字，两节点的实际位置和编辑框身份仍未知。[受测判断](https://github.com/MaginaLW/agent-for-mobile/blob/0b4b4d4fb3c0792445522f777397feb021ad6c5c/app/gateway/src/main/java/dev/magina/gateway/tools/EditorBoundsDiagnostic.kt#L396-L412)
+
+第一次独立收尾读回发现原无障碍服务清单少一项，其余三项设置与网关资源均匹配。仅补回入场时已启用的 vivo 输入法无障碍服务一次，随后独立核实原清单、四项设置、网关服务、端口转发及该服务的系统绑定。
 
 ### 历史手机实测
 
