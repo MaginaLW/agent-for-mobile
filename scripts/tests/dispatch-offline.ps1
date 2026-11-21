@@ -1335,6 +1335,8 @@ public static class Program {
             $oldArgv = Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-argv.txt') -Raw -Encoding utf8
             Assert-NotMatches $oldArgv '(?m)^(sleep_tool|daemon_auto_start)\r?$'
             $oldBearerEnv = [regex]::Match($oldArgv, 'AGENT_MOBILE_MCP_[A-F0-9]{32}').Value
+            $fakeCompanionExe = Join-Path $TestRoot 'fake-codex-code-mode-host.exe'
+            Copy-Item -LiteralPath $fakeCodexExe -Destination $fakeCompanionExe -Force
             try {
                 foreach ($versionCase in @(
                     @{
@@ -1342,16 +1344,23 @@ public static class Program {
                         Slug = 'offline-codex-current-alpha'
                         RequireDisabled = @('sleep_tool')
                         ForbidDisabled = @('daemon_auto_start')
+                        CompanionOverride = ''
                     },
                     @{
                         Version = 'codex-cli 0.171.0'
                         Slug = 'offline-codex-stable-0171'
                         RequireDisabled = @('sleep_tool', 'daemon_auto_start')
                         ForbidDisabled = @()
+                        CompanionOverride = $fakeCompanionExe
                     }
                 )) {
+                    $overrideSuffix = if ([string]::IsNullOrWhiteSpace($versionCase.CompanionOverride)) {
+                        "-CodexVersionOverride '$($versionCase.Version)'"
+                    } else {
+                        "-CodexVersionOverride '$($versionCase.Version)' -CompanionExecutableOverride '$($versionCase.CompanionOverride)'"
+                    }
                     [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion.Replace(
-                        $oldVersionSeam, "-CodexVersionOverride '$($versionCase.Version)'"))
+                        $oldVersionSeam, $overrideSuffix))
                     $env:DISPATCH_TEST_CODEX_SCENARIO = 'success'
                     $newVersionResult = Invoke-Dispatch @(
                         '-Task','offline fake codex contract','-Slug',$versionCase.Slug,
@@ -1380,8 +1389,33 @@ public static class Program {
                             "新版本 $($versionCase.Version) consumer 隔离检查失败：$sentinel"
                     }
                 }
+
+                # wrapper 级 companion SHA-256 篡改拦截：验证启动前复核失败且不执行 fake codex
+                $argvSentinelPath = Join-Path $SentinelDir 'codex-argv.txt'
+                Remove-Item -LiteralPath $argvSentinelPath -Force -ErrorAction SilentlyContinue
+                $tamperNeedle = '$expectedCompanionSha256 = [string]$launchSpec.ExpectedCompanionSha256'
+                Assert-True ($fixtureBeforeNewVersion.Contains($tamperNeedle)) '测试设施错误：缺少 companion SHA-256 seam。'
+                $tamperedSource = $fixtureBeforeNewVersion.Replace(
+                    $oldVersionSeam,
+                    "-CodexVersionOverride 'codex-cli 0.171.0' -CompanionExecutableOverride '$fakeCompanionExe'"
+                ).Replace(
+                    $tamperNeedle,
+                    "`$expectedCompanionSha256 = $('0' * 64)"
+                )
+                [IO.File]::WriteAllText($DispatchPath, $tamperedSource)
+                $env:DISPATCH_TEST_CODEX_SCENARIO = 'success'
+                $tamperResult = Invoke-Dispatch @(
+                    '-Task','offline companion tamper must fail closed','-Slug','offline-codex-companion-tamper',
+                    '-Executor','gateway','-Brain','codex'
+                )
+                Assert-True ($tamperResult.ExitCode -ne 0) 'companion SHA-256 不匹配未被 wrapper 拦截。'
+                Assert-True (-not (Test-Path -LiteralPath $argvSentinelPath)) `
+                    'companion 启动前复核失败后仍启动了 fake codex。'
             }
-            finally { [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion) }
+            finally {
+                [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeNewVersion)
+                Remove-Item -LiteralPath $fakeCompanionExe -Force -ErrorAction Stop
+            }
 
             foreach ($flood in @(
                 @{ Scenario='stdout-flood'; Slug='offline-codex-stdout-flood'; Cap=16L*1024L*1024L; Extension='.jsonl' },
@@ -2429,6 +2463,92 @@ exit /b 98
         }
         catch { $fellBack = $_.Exception.Message -match 'bundled codex\.exe' }
         Assert-True $fellBack '空 toolchain\codex 目录未正常回退检查官方目录。'
+    }
+
+    Test-Case 'Codex 0.171.0 配套 codex-code-mode-host.exe 存在性、非链接与 OpenAI 验签门禁' {
+        Assert-True (Test-DispatchCodexRequiresCompanionHost -Contract '0.171') `
+            '0.171 契约未要求配套 codex-code-mode-host.exe。'
+        foreach ($older in @('0.167', '0.149', '0.147', '')) {
+            Assert-True (-not (Test-DispatchCodexRequiresCompanionHost -Contract $older)) `
+                "旧契约 '$older' 不应强求 codex-code-mode-host.exe。"
+        }
+
+        $missingDir = Join-Path $TestRoot 'companion-missing'
+        New-Item -ItemType Directory -Path $missingDir -Force | Out-Null
+        $missingCodex = Join-Path $missingDir 'codex.exe'
+        Copy-Item -LiteralPath $fakeCodexExe -Destination $missingCodex -Force
+        $missingRejected = $false
+        try { $null = Resolve-DispatchTrustedCodexCompanionHost -CodexExecutablePath $missingCodex }
+        catch { $missingRejected = $_.Exception.Message -match '缺少同目录配套的 codex-code-mode-host\.exe' }
+        Assert-True $missingRejected '缺失配套 codex-code-mode-host.exe 时未 fail closed。'
+
+        $dirHostRoot = Join-Path $TestRoot 'companion-is-dir'
+        New-Item -ItemType Directory -Path (Join-Path $dirHostRoot 'codex-code-mode-host.exe') -Force | Out-Null
+        $dirHostRejected = $false
+        try { $null = Resolve-DispatchTrustedCodexCompanionHost -CodexExecutablePath (Join-Path $dirHostRoot 'codex.exe') }
+        catch { $dirHostRejected = $_.Exception.Message -match '不是普通文件或含 reparse/link' }
+        Assert-True $dirHostRejected '目录冒充 codex-code-mode-host.exe 未被拦截。'
+
+        $junctionHostRoot = Join-Path $TestRoot 'companion-is-junction'
+        $junctionHostTarget = Join-Path $TestRoot 'companion-junction-target'
+        New-Item -ItemType Directory -Path $junctionHostRoot, $junctionHostTarget -Force | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $junctionHostRoot 'codex-code-mode-host.exe') -Target $junctionHostTarget | Out-Null
+        $junctionHostRejected = $false
+        try { $null = Resolve-DispatchTrustedCodexCompanionHost -CodexExecutablePath (Join-Path $junctionHostRoot 'codex.exe') }
+        catch { $junctionHostRejected = $_.Exception.Message -match '不是普通文件或含 reparse/link' }
+        Assert-True $junctionHostRejected 'junction 形态的 codex-code-mode-host.exe 未被拦截。'
+
+        $unsignedHostRoot = Join-Path $TestRoot 'companion-unsigned'
+        New-Item -ItemType Directory -Path $unsignedHostRoot -Force | Out-Null
+        Copy-Item -LiteralPath $fakeCodexExe -Destination (Join-Path $unsignedHostRoot 'codex-code-mode-host.exe') -Force
+        $unsignedHostRejected = $false
+        try { $null = Resolve-DispatchTrustedCodexCompanionHost -CodexExecutablePath (Join-Path $unsignedHostRoot 'codex.exe') }
+        catch { $unsignedHostRejected = $_.Exception.Message -match 'OpenAI OpCo' }
+        Assert-True $unsignedHostRejected '未签名的 codex-code-mode-host.exe 未被拦截。'
+
+        $profile = Get-ExecutorProfile -Executor gateway -RepoRoot $RepoRoot -ScriptsRoot (Join-Path $RepoRoot 'scripts')
+        $configPath = Join-Path $SentinelDir 'companion-override-gateway.json'
+        Set-Content -LiteralPath $configPath -Encoding utf8 `
+            -Value '{"mcpServers":{"gateway":{"type":"http","url":"http://127.0.0.1:8848/mcp","timeout":420000,"headers":{"Authorization":"Bearer fixture"}}}}'
+        try {
+            $orphanRejected = $false
+            try {
+                $null = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+                    -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+                    -CompanionExecutableOverride $fakeCodexExe
+            }
+            catch { $orphanRejected = $_.Exception.Message -match '只能配合 Codex executable override' }
+            Assert-True $orphanRejected '单独传入 CompanionExecutableOverride 未被拒绝。'
+
+            $dirOverrideRejected = $false
+            try {
+                $null = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+                    -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+                    -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.171.0' `
+                    -CompanionExecutableOverride (Join-Path $dirHostRoot 'codex-code-mode-host.exe')
+            }
+            catch { $dirOverrideRejected = $_.Exception.Message -match '不是普通文件或含 reparse/link' }
+            Assert-True $dirOverrideRejected 'CompanionExecutableOverride 指向目录未被拒绝。'
+
+            $pairedSpec = New-DispatchCodexLaunchSpec -Profile $profile -ConfigPath $configPath `
+                -WorkspacePath $TestRoot -Model '' -ModelWasExplicit $false -Leg 1 `
+                -CodexExecutableOverride $fakeCodexExe -CodexVersionOverride 'codex-cli 0.171.0' `
+                -CompanionExecutableOverride (Join-Path $unsignedHostRoot 'codex-code-mode-host.exe')
+            try {
+                $expectedHostHash = (Get-FileHash -LiteralPath (Join-Path $unsignedHostRoot 'codex-code-mode-host.exe') -Algorithm SHA256).Hash
+                Assert-True ($pairedSpec.CompanionExecutable -ceq [IO.Path]::GetFullPath((Join-Path $unsignedHostRoot 'codex-code-mode-host.exe'))) `
+                    'CompanionExecutable 路径未规范化透传。'
+                Assert-True ($pairedSpec.ExpectedCompanionSha256 -ceq $expectedHostHash) `
+                    'ExpectedCompanionSha256 与实际文件摘要不一致。'
+            }
+            finally {
+                foreach ($key in @($pairedSpec.SensitiveEnvironment.Keys)) {
+                    $pairedSpec.SensitiveEnvironment[$key] = $null
+                    [void]$pairedSpec.SensitiveEnvironment.Remove($key)
+                }
+            }
+        }
+        finally { Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue }
     }
 
     Test-Case '程序化 RESUME 只进入 gateway 恢复流程，消费后拒绝重放' {
