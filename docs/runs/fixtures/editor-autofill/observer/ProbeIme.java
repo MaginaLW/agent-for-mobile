@@ -13,12 +13,14 @@ import android.view.inputmethod.InputConnection;
 public final class ProbeIme extends InputMethodService {
     static final String TARGET = "dev.magina.autofilltarget";
     static Focus active;
+    private static long generation;
 
     static final class Focus {
         final ProbeIme owner;
         final InputConnection connection;
         final AutofillId id;
         final String error;
+        final long generation = ++ProbeIme.generation;
         final long started = SystemClock.uptimeMillis();
 
         Focus(ProbeIme owner, InputConnection connection, AutofillId id, String error) {

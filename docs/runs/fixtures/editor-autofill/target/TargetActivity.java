@@ -5,6 +5,7 @@ import android.content.ComponentName;
 import android.content.res.Configuration;
 import android.graphics.RectF;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -37,20 +38,26 @@ public final class TargetActivity extends Activity {
     private FrameLayout root;
     private Editor left, right, desired, connection, probed, requested;
     private final String instance = UUID.randomUUID().toString();
-    private boolean started, finished, settled;
+    private boolean started, finished, settled, observeAutomatic;
+    private long stageStartUptime;
     private int stageIndex, autofillRequests, touchDownCount, touchUpCount, restartInputCalls;
     private Boolean imeActiveRight;
     private final Runnable timeout = () -> finishOracle("timeout");
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        stageStartUptime = SystemClock.uptimeMillis();
         scenario = getIntent().getStringExtra("scenario");
-        if (!"left".equals(scenario) && !"right".equals(scenario)
+        observeAutomatic = "automatic".equals(scenario) || "optout".equals(scenario);
+        if (!observeAutomatic && !"left".equals(scenario) && !"right".equals(scenario)
                 && !"overlap".equals(scenario) && !"conflict".equals(scenario)) {
             throw new IllegalArgumentException("unknown scenario");
         }
         root = new FrameLayout(this);
         root.setFocusableInTouchMode(true);
+        if ("optout".equals(scenario)) {
+            root.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
         left = addEditor(Gravity.LEFT);
         right = addEditor("overlap".equals(scenario) ? Gravity.LEFT : Gravity.RIGHT);
         desired = "right".equals(scenario) ? right : left;
@@ -61,10 +68,11 @@ public final class TargetActivity extends Activity {
     }
 
     private void beginRightTouch() {
-        if (!settled || !"left".equals(scenario) || !hasWindowFocus()
-                || new File(getFilesDir(), "oracle.json").exists()) return;
+        if (!settled || stageIndex != 0 || (!"left".equals(scenario) && !"automatic".equals(scenario))
+                || !hasWindowFocus() || new File(getFilesDir(), "oracle.json").exists()) return;
+        stageStartUptime = SystemClock.uptimeMillis();
         stageIndex++;
-        scenario = "right";
+        if (!observeAutomatic) scenario = "right";
         desired = right;
         connection = probed = requested = null;
         autofillRequests = 0;
@@ -92,11 +100,15 @@ public final class TargetActivity extends Activity {
         if (started || finished) return;
         started = true;
         root.post(() -> {
-            AutofillManager manager = getSystemService(AutofillManager.class);
-            ComponentName service = manager == null ? null : manager.getAutofillServiceComponentName();
-            if (service == null || !"dev.magina.autofillobserver".equals(service.getPackageName())) {
-                finishOracle("observer_service_unavailable");
-            } else if (desired.requestFocus()) {
+            if (!observeAutomatic) {
+                AutofillManager manager = getSystemService(AutofillManager.class);
+                ComponentName service = manager == null ? null : manager.getAutofillServiceComponentName();
+                if (service == null || !"dev.magina.autofillobserver".equals(service.getPackageName())) {
+                    finishOracle("observer_service_unavailable");
+                    return;
+                }
+            }
+            if (desired.requestFocus()) {
                 getSystemService(InputMethodManager.class).showSoftInput(desired, 0);
             } else {
                 finishOracle("focus_unavailable");
@@ -113,7 +125,7 @@ public final class TargetActivity extends Activity {
             setSingleLine(true);
             setInputType(InputType.TYPE_CLASS_TEXT);
             setImeOptions(EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
-            setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+            if (!observeAutomatic) setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
             setSaveEnabled(false);
         }
 
@@ -165,10 +177,10 @@ public final class TargetActivity extends Activity {
                 focused = this == right;
                 structure.setFocused(focused);
             }
-            if (!finished && autofillRequests == 1) {
+            if (!finished && (observeAutomatic || autofillRequests == 1)) {
                 reportedFocused = focused;
                 structureWrites++;
-                if (left.structureWrites > 0 && right.structureWrites > 0) {
+                if (!observeAutomatic && left.structureWrites > 0 && right.structureWrites > 0) {
                     int structureStage = stageIndex;
                     root.post(() -> {
                         if (structureStage == stageIndex) finishOracle("observed");
@@ -186,27 +198,31 @@ public final class TargetActivity extends Activity {
         }
         InputMethodManager manager = getSystemService(InputMethodManager.class);
         imeActiveRight = manager.isActive(right);
-        if (right.connections == 0) {
+        if (!observeAutomatic && right.connections == 0) {
             manager.showSoftInput(right, 0);
             if (right.connections == 0) {
                 restartInputCalls++;
                 manager.restartInput(right);
             }
         }
-        if (probed != null) requestForProbedEditor();
+        if (probed != null) onProbedFocus();
     }
 
     private void receiveProbe(Editor editor) {
         if (finished) return;
         editor.probes++;
         probed = editor;
-        if (stageIndex == 0 || imeActiveRight != null) requestForProbedEditor();
+        if (stageIndex == 0 || imeActiveRight != null) onProbedFocus();
     }
 
-    private void requestForProbedEditor() {
+    private void onProbedFocus() {
         if (requested != null) return;
         if (probed != desired || connection != desired || getCurrentFocus() != desired || !hasWindowFocus()) {
             finishOracle("probe_focus_mismatch");
+            return;
+        }
+        if (observeAutomatic) {
+            finishOracle("probe_observed");
             return;
         }
         requested = "conflict".equals(scenario) ? right : desired;
@@ -236,13 +252,19 @@ public final class TargetActivity extends Activity {
         finished = true;
         root.removeCallbacks(timeout);
         boolean landscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
-        settled = "observed".equals(status) && connection == desired && probed == desired
+        settled = ("observed".equals(status) || "probe_observed".equals(status))
+                && connection == desired && probed == desired
                 && getCurrentFocus() == desired && hasWindowFocus() && landscape && root.getWidth() > root.getHeight();
         File receipt = new File(getFilesDir(), "oracle.json");
         File temporary = new File(getFilesDir(), "oracle.tmp");
         try {
             JSONObject row = new JSONObject().put("scenario", scenario).put("status", status).put("settled", settled)
                     .put("instance", instance).put("stageIndex", stageIndex).put("samePairHandoff", stageIndex == 1)
+                    .put("stageStartUptime", stageStartUptime).put("stageEndUptime", SystemClock.uptimeMillis())
+                    .put("desiredSide", side(desired)).put("manual_request_count", autofillRequests)
+                    .put("rootAutofillImportance", root.getImportantForAutofill())
+                    .put("leftAutofillImportance", left.getImportantForAutofill())
+                    .put("rightAutofillImportance", right.getImportantForAutofill())
                     .put("touchDownCount", touchDownCount).put("touchUpCount", touchUpCount)
                     .put("windowFocus", hasWindowFocus()).put("restartInputCalls", restartInputCalls)
                     .put("imeActiveRight", imeActiveRight == null ? JSONObject.NULL : imeActiveRight)
