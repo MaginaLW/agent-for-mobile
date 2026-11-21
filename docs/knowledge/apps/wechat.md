@@ -236,6 +236,16 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 宿主在收尾阶段一次回选原 vivo 默认输入法并恢复启用输入法清单，释放网关前台服务与端口转发。独立只读收尾核实：在机 APK 仍匹配 `4862535`，四项系统设置与入场逐字相等（未出现 vivo 无障碍服务丢失，无需补写），网关服务与转发均回到缺席状态；另一次只读组件检查确认原 vivo 输入法无障碍服务在当前用户下仅有唯一记录且已绑定系统客户端（`hasBound=true`）。
 
+### 候选 2341c7d 免安装复测仍返回 node_not_focused
+
+2026-11-21，草稿候选 `2341c7d` 仅在服务级与窗口根输入焦点均为空时放行未聚焦的唯一窗口字段节点，完整离线检查 9/9 通过（Debug 503 项、Release 406 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `4862535` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/2341c7d588bf5bc92aa45006f1ecd4cb5ccf030b)
+
+首轮在 PA2553 已聚焦微信右窗「文件传输助手」完成同签保数据覆盖安装并核实在机摘要（`install_attempts=1`）。新网关重启并临时切换至 `GatewayIme` 后，第 3 次 `foreground_app` 核实同一右窗（`revision=1`），第 4 次标题复核期间因重启后的 `revision` 变化触发过滤器 `page-changed` 终止；本轮耗时 80 秒、4 次读取、未执行四边查询，微信内零点击、零输入、零发送。收尾回选原 vivo 默认输入法后，独立读回检出仅缺原 vivo 输入法无障碍服务，按授权补回一次并独立核实四项设置、网关资源与系统绑定（`hasBound=true`）一致。
+
+随后另获授权执行一次免安装复用复测（`install_attempts=0`，使用独立回执目录）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次读取即唯一一次 `keyboard_state({"probe_editor_bounds":true})` 仍返回空四边、`focus_unavailable`、`before_sample` 与 `node_not_focused`。该轮耗时 27 秒，安装、微信内点击、输入及发送均为零。收尾同样回选原默认输入法、按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项设置、网关服务、端口转发及组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `2341c7d`。
+
+按 `2341c7d` 源码，`currentFocus` 仅在以下两处抛出 `node_not_focused`：其一是服务级 `findFocus(FOCUS_INPUT)` 返回了非空节点且刷新后 `node.isFocused` 为假；其二是服务级焦点为空、窗口字段查得唯一可见同窗同包节点后，`root.findFocus(FOCUS_INPUT)` 返回同一节点但 `node.isFocused` 为假。换言之，本次已排除“服务级与根级焦点均为空”的路径——Android 无障碍焦点查询本身已返回非空节点，但微信该节点在 `node.refresh()` 后仍报告 `isFocused=false`。回执目前无法区分这两处中的哪一处，也尚未进入输入法四边采样。
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。

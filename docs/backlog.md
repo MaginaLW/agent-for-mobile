@@ -21,7 +21,7 @@
 
 第 1 步已在 PA2553 已聚焦右窗的起点验到零导航点击和自动回收服务、转发。第 2 步卡在编辑框识别。右窗标题匹配且键盘可见时，原生 `role=input` 返回 `E_NOT_FOUND`。Android 16 合成靶已分别核对活动输入连接的原点和可见四边。[真机回执](knowledge/apps/wechat.md#右窗编辑栏查找与自动收尾) · [合成实验](runs/fixtures/editor-origin/README.md)
 
-11 月 21 日，PA2553 核实已装同签候选 `4862535` 后免安装完成窗口字段诊断：同一微信右窗和标题核对均通过，唯一一次四边查询返回 `before_sample / node_not_focused`，尚未请求输入法四边；四项设置、vivo 无障碍系统绑定与网关资源均独立核实回到基线。按受测源码，该回执表明活动右窗内已取得并刷新单一节点，但在 `node.isFocused` 检查停止（结合上轮 `8d02ed3` 同场景返回 `input_focus_missing`，已越过空焦点与按字段名唯一查找环节）。下一步先离线评估：在服务级输入焦点与根输入焦点均为空、仅凭 `EditorInfo.fieldId` 命中活动窗口唯一可见非敏感节点时，是否允许继续采样输入法四边并以前后稳定与四边逐像素一致作交叉核对（并在只读回执中明示节点未聚焦状态）；通过离线对照后再申请一次真机读取，取得唯一编辑框、匹配窗口号及右窗内完整四边后，再分别验桌面与左窗起点，最后验现场发送。[窗口字段实测回执](knowledge/apps/wechat.md#复用候选后节点未报告聚焦) · [离线对照](knowledge/apps/wechat.md#窗口字段与输入连接的离线核对)
+11 月 21 日，PA2553 更新至同签候选 `2341c7d` 后完成两轮只读诊断：首轮安装重启后第 4 次读取遇 `page-changed` 停止；随后免安装复测在同一微信右窗及标题核对通过后，唯一一次四边查询仍返回 `before_sample / node_not_focused`，两轮收尾（含补回 vivo 无障碍服务与系统绑定）均已独立核实回到基线。按 `2341c7d` 源码（该版本已对 `serviceFocus == null && rootFocus == null` 放行未聚焦节点），此回执将真因收窄为两类之一：`service.findFocus(FOCUS_INPUT)` 返回了非空节点但刷新后 `isFocused=false`，或 `serviceFocus == null` 但 `root.findFocus(FOCUS_INPUT)` 返回同一节点且 `isFocused=false`。下一步先在草稿 PR #47 离线排查并设计处理方案：明确区分服务级焦点与根级焦点各自返回“非空但 `isFocused=false`”节点的条件，以及在该条件下能否以 `serviceFocus == rootFocus`、可见性、同窗同包、非敏感、唯一 `EditorInfo.fieldId` 及输入法四边逐像素一致作只读交叉核对；通过离线全量检查后再申请单次真机读取。取得唯一编辑框、匹配窗口号及右窗内完整四边后，再分别验桌面与左窗起点，最后验现场发送。[2341c7d 真机回执](knowledge/apps/wechat.md#候选-2341c7d-免安装复测仍返回-node_not_focused) · [前轮 4862535 回执](knowledge/apps/wechat.md#复用候选后节点未报告聚焦)
 
 下一次汇报按起点列出准备耗时、首次派单能否就位、用户为导航或调试实际动手几次、是否出现确认卡及其决定。现场业务决定单独计数。卡前阻塞只汇总一次，写清停在哪一步、自动完成了哪些步骤，以及是否确有一项操作只能由用户完成。
 
