@@ -107,13 +107,14 @@ function Get-DispatchCodexVersionContract {
     )
 
     # 这里是经证据锁定的精确 allowlist，不是 semver 范围：0.147.0 是原验证
-    # 基线；0.149.0 是官方 stable；0.167.0-alpha.4.1 经本机帮助、固定源码与消费路径核定。
-    # 未实测的 0.148/0.150、未来 patch/alpha、其他预发标签和额外诊断行一律 fail closed。
+    # 基线；0.149.0 是旧官方 stable；0.167.0-alpha.4.1 与 0.171.0 均经本机签名、隔离探针、
+    # 固定源码与消费路径核定。未实测的 0.148/0.150、未来 patch/alpha、其他预发标签和额外诊断行一律 fail closed。
     switch -CaseSensitive ($VersionOutput) {
         'codex-cli 0.147.0' { return '0.147' }
         'codex-cli 0.149.0' { return '0.149' }
         'codex-cli 0.149.0-alpha.4.1' { return '0.149' }
         'codex-cli 0.167.0-alpha.4.1' { return '0.167' }
+        'codex-cli 0.171.0' { return '0.171' }
         default { return $null }
     }
 }
@@ -124,6 +125,7 @@ function Select-DispatchCodexExecutableCandidate {
 
     # 优先级是已审过的 CLI 契约顺序，不能拿安装目录随机 hash、mtime 或枚举顺序代替。
     $supportedOrder = @(
+        'codex-cli 0.171.0',
         'codex-cli 0.149.0',
         'codex-cli 0.167.0-alpha.4.1',
         'codex-cli 0.149.0-alpha.4.1',
@@ -811,11 +813,58 @@ function Get-DispatchVerifiedCodexCandidatesInRoot {
     return ,$probedCandidates.ToArray()
 }
 
+function Test-DispatchCodexRequiresCompanionHost {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Contract
+    )
+    # 0.171.0 默认模型元数据可强制进入 ToolMode::CodeModeOnly，需从 codex.exe 同目录拉起
+    # codex-code-mode-host.exe；缺失或未验签须在启动前 fail-closed。
+    return $Contract -ceq '0.171'
+}
+
+function Resolve-DispatchTrustedCodexCompanionHost {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$CodexExecutablePath)
+
+    $codexDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($CodexExecutablePath))
+    $companionPath = Join-Path $codexDirectory 'codex-code-mode-host.exe'
+    $companionItem = Get-Item -LiteralPath $companionPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $companionItem) {
+        throw 'Codex 0.171.0 缺少同目录配套的 codex-code-mode-host.exe，拒绝启动。'
+    }
+    if ($companionItem.PSIsContainer -or
+        ($companionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace([string]$companionItem.LinkType)) {
+        throw 'codex-code-mode-host.exe 不是普通文件或含 reparse/link，拒绝启动。'
+    }
+    $companionGuard = [IO.File]::Open($companionItem.FullName, [IO.FileMode]::Open,
+        [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        $signature = Get-AuthenticodeSignature -LiteralPath $companionItem.FullName
+        if ($signature.Status -ne 'Valid' -or
+            [string]$signature.SignerCertificate.Subject -cne $script:DispatchOpenAiSignerSubject) {
+            throw 'codex-code-mode-host.exe 签名不是有效的 OpenAI OpCo 签名。'
+        }
+        $companionGuard.Position = 0
+        $companionSha256 = (Get-FileHash -InputStream $companionGuard -Algorithm SHA256).Hash
+        return [pscustomobject]@{
+            Path = [IO.Path]::GetFullPath($companionItem.FullName)
+            Sha256 = $companionSha256
+        }
+    }
+    finally { $companionGuard.Dispose() }
+}
+
 function Resolve-DispatchTrustedCodexExecutable {
     [CmdletBinding()]
     param(
         [ref]$VersionOutput,
         [ref]$Sha256,
+        [ref]$CompanionPath,
+        [ref]$CompanionSha256,
         [string]$ToolchainBinRoot = '',
         [string]$OfficialBinRoot = ''
     )
@@ -858,11 +907,21 @@ function Resolve-DispatchTrustedCodexExecutable {
         Select-DispatchCodexRootCandidates -OfficialCandidates $officialCandidates
     }
 
+    $resolvedCompanionPath = ''
+    $resolvedCompanionSha256 = ''
+    if (Test-DispatchCodexRequiresCompanionHost -Contract $selection.Contract) {
+        $companion = Resolve-DispatchTrustedCodexCompanionHost -CodexExecutablePath $selection.SelectedPath
+        $resolvedCompanionPath = $companion.Path
+        $resolvedCompanionSha256 = $companion.Sha256
+    }
+
     if ($selection.UnknownVersions.Count -gt 0) {
         Write-Warning ('忽略未验证的 Codex CLI 候选：' + ($selection.UnknownVersions -join ', '))
     }
     if ($null -ne $VersionOutput) { $VersionOutput.Value = $selection.VersionOutput }
     if ($null -ne $Sha256) { $Sha256.Value = $selection.Sha256 }
+    if ($null -ne $CompanionPath) { $CompanionPath.Value = $resolvedCompanionPath }
+    if ($null -ne $CompanionSha256) { $CompanionSha256.Value = $resolvedCompanionSha256 }
     return $selection.SelectedPath
 }
 
@@ -877,6 +936,7 @@ function New-DispatchCodexLaunchSpec {
         [Parameter(Mandatory)][ValidateSet(1,2)][int]$Leg,
         [string]$CodexExecutableOverride = '',
         [string]$CodexVersionOverride = '',
+        [string]$CompanionExecutableOverride = '',
         [switch]$WeChatLandscapePrepare
     )
 
@@ -887,11 +947,18 @@ function New-DispatchCodexLaunchSpec {
         throw 'Codex mobile 尚无可信 npx runtime 契约；当前只允许 Codex + gateway。'
     }
 
+    $companionExecutable = ''
+    $companionSha256 = ''
     if ([string]::IsNullOrWhiteSpace($CodexExecutableOverride)) {
+        if (-not [string]::IsNullOrWhiteSpace($CompanionExecutableOverride)) {
+            throw 'Codex companion override 只能配合 Codex executable override 使用。'
+        }
         $codexVersion = ''
         $codexSha256 = ''
         $codexExecutable = Resolve-DispatchTrustedCodexExecutable -VersionOutput ([ref]$codexVersion) `
-            -Sha256 ([ref]$codexSha256)
+            -Sha256 ([ref]$codexSha256) `
+            -CompanionPath ([ref]$companionExecutable) `
+            -CompanionSha256 ([ref]$companionSha256)
         $requireOpenAiSignature = $true
     }
     else {
@@ -902,6 +969,16 @@ function New-DispatchCodexLaunchSpec {
         $codexVersion = $CodexVersionOverride
         $codexSha256 = (Get-FileHash -LiteralPath $codexExecutable -Algorithm SHA256).Hash
         $requireOpenAiSignature = $false
+        if (-not [string]::IsNullOrWhiteSpace($CompanionExecutableOverride)) {
+            $companionItem = Get-Item -LiteralPath $CompanionExecutableOverride -Force -ErrorAction Stop
+            if ($companionItem.PSIsContainer -or
+                ($companionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                -not [string]::IsNullOrWhiteSpace([string]$companionItem.LinkType)) {
+                throw 'codex-code-mode-host.exe 不是普通文件或含 reparse/link，拒绝启动。'
+            }
+            $companionExecutable = [IO.Path]::GetFullPath($companionItem.FullName)
+            $companionSha256 = (Get-FileHash -LiteralPath $companionExecutable -Algorithm SHA256).Hash
+        }
     }
     $codexVersionContract = Get-DispatchCodexVersionContract -VersionOutput $codexVersion
     if ($null -eq $codexVersionContract) { throw 'Codex launch spec 版本不在已验证的精确 allowlist 中。' }
@@ -937,8 +1014,12 @@ function New-DispatchCodexLaunchSpec {
         # 0.149 已将 view_image 暴露为 stable feature；旧 0.147 residual 不再适用。
         $disabledFeatures += 'view_image'
     }
-    if ($codexVersionContract -ceq '0.167') {
+    if ($codexVersionContract -ceq '0.167' -or $codexVersionContract -ceq '0.171') {
         $disabledFeatures += 'sleep_tool'
+    }
+    if ($codexVersionContract -ceq '0.171') {
+        # 0.171.0 将 daemon_auto_start 恢复为默认开启的 stable feature；派单子进程保持无后台自启。
+        $disabledFeatures += 'daemon_auto_start'
     }
     foreach ($argument in @(
         'exec','--json','--ephemeral','--ignore-user-config','--ignore-rules','--strict-config',
@@ -1036,6 +1117,8 @@ function New-DispatchCodexLaunchSpec {
         LedgerModel = $(if ($ModelWasExplicit) { $Model } else { '' })
         ExpectedSha256 = [string]$codexSha256
         RequireOpenAiSignature = [bool]$requireOpenAiSignature
+        CompanionExecutable = [string]$companionExecutable
+        ExpectedCompanionSha256 = [string]$companionSha256
     }
 }
 

@@ -172,6 +172,148 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 首次启动测试在第一份输入法回执到达前结束，未进行焦点核对。调整顺序，先启动观察器，再由模拟器宿主选择并读回实验输入法，四个场景均取得预期结果。用时 94 秒，含启动与收尾，两轮均恢复了原默认输入法、启用清单并释放端口。观察器和输入法均属于同一合成包。该实验能核对当前控件的身份和几何，系统首次送达回调的请求归属、第三方应用的字段可见性及微信真机结果都仍待验证。
 
+### 跨应用网关四边诊断
+
+2026-11-20，在 Android 16 隔离模拟器上，网关和测试编辑器安装为两个不同 UID 的应用。候选 `50c17a2` 保留在机 #40 的原点失败原因，新增只读参数 `keyboard_state({"probe_editor_bounds":true})`。网关在输入法取样前后核对系统输入焦点，在目标包资源表中解析输入法声明的字段，然后比对屏幕四边。普通的无参数键盘查询保持原有响应。
+
+| 测试应用提供的场景 | 网关 MCP 回执 |
+|---|---|
+| 正常具名编辑框 | 窗口号和四边均匹配。矩形为 [43, 120, 276, 190]，同原点的较大对照框被排除。 |
+| 同一布局，节点报告不可编辑 | 四边仍匹配，`editable=false`。 |
+| 字段 ID 指向另一个具名控件 | `different_id`，四边为空。 |
+| 同一具名控件，无障碍右边界从 276 变为 288 | `different_bounds`，四边为空。靶应用记录一次输入法四边请求。 |
+| 编辑框只有动态 ID | `missing_id`，四边为空。靶应用记录的四边请求为零。 |
+
+首轮五次查询均符合预期，四项设置和端口已恢复。Android 报告服务已停止，宿主把停止命令的退出码视为错误，未完成独立的服务状态读回，因此首轮整体验收记为失败。
+
+第二轮使用相同的两个 APK。在第一份无参数键盘回执中，宿主未能核实前台就是靶应用，于是停止，正式四边查询为零。收尾时记录到停止命令退出码 255 及 `Service stopped`，随后独立查询确认为空。四项设置均恢复，模拟器、私有 ADB 和端口均释放。两轮分别取得了五个场景的功能结果和独立的停止回执；完整单轮尚未通过。
+
+第三轮在首次键盘查询前增加了网关前台核对。靶应用报告窗口 13，网关也选中窗口 13，且回报该窗口活动、已聚焦。网关仍返回 `window_id_mismatch`。该轮版本 `50c17a2` 只在已跟踪的前台身份与当前应用窗口的窗口号不同时返回这个原因。宿主未保存跟踪身份的窗口号或近期事件，无法定位具体事件。首个场景随即停止，四边查询为零。宿主核实四项设置、服务和端口均已恢复。[前台身份与应用窗口的判定](https://github.com/MaginaLW/agent-for-mobile/blob/50c17a2/app/gateway/src/main/java/dev/magina/gateway/a11y/ForegroundWindowTracker.kt#L58-L82)
+
+### PA2553 右窗四边诊断返回 focus_unavailable
+
+2026-11-20，PA2553 在微信「文件传输助手」右窗已就位。派单先核实前台和右窗标题，再同签保数据更新网关至 `50c17a2` 并临时选择网关输入法。切换后再次核实了同一窗口号、右窗范围及标题。第五次读取是本轮唯一一次四边查询，网关返回 `focus_unavailable` 和空四边，派单随即结束。49 秒内共发起五次读取，微信内零点击、零输入、零发送。
+
+该版本在缓存刷新失败、活动根或窗口缺失、取不到焦点节点、节点刷新或焦点一致性检查失败时，都会返回同一原因。本轮回执无法区分具体条件，也无法判断微信编辑框是否有可用的资源名。
+
+宿主首次回选原输入法失败。独立复核时系统仍选中网关输入法，原 vivo 输入法仍在系统可选清单中。通过系统输入法管理器回选一次并读回原值后，无障碍清单只缺原 vivo 输入法服务。补回该项一次，独立读回确认默认输入法、启用的输入法、无障碍总开关及服务清单均与入场完全一致。系统客户端已收到该服务的 Binder，`hasBound=true`。网关前台服务及端口转发均已释放，候选 APK 保留在机。
+
+### 细分焦点诊断在派单前停止
+
+2026-11-21，候选 `8d02ed3` 完成与在机网关的同签校验，540 个非签名条目与受测 APK 一致。PA2553 已解锁。入场检查要求系统当前焦点与输入法目标均能唯一匹配微信会话窗口，两者的窗口令牌还须相同。本轮未满足该条件，回执没有区分具体是哪一项失败。宿主在核对会话标题前即退出，业务派单、安装、输入法切换及四边查询均为零。
+
+宿主退出时对照本轮入场值核实了四项设置和网关资源。入场检查提前终止，基线只保存在内存中。随后的独立只读核对以此前已验证的基准作比较，确认默认输入法、启用的输入法、无障碍总开关及服务清单逐项相等，网关前台服务和端口转发均已释放。原 vivo 服务已绑定系统客户端，在机 APK 仍为 `50c17a2`。
+
+### 重新就位后输入焦点节点为空
+
+2026-11-21，PA2553 在「文件传输助手」右窗重新就位。派单在切换输入法前后分别核实前台和会话标题，两次右窗的窗口号、范围均相同。候选 `8d02ed3` 已同签保数据安装并核实在机摘要。第五次读取是唯一一次四边查询，返回空矩形、`focus_unavailable`、`before_sample` 和 `input_focus_missing`。该次派单耗时 303 秒，微信内零点击、零输入、零发送。
+
+该回执表明缓存刷新、活动根和应用窗口检查均已通过。随后，无障碍服务调用 `findFocus(FOCUS_INPUT)` 得到空节点，网关在发出输入法几何请求之前结束查询。本轮没有测得编辑框四边，也没有取得窗口根查询输入焦点的结果；微信编辑框是否暴露具名节点仍未知。
+
+宿主回选了入场的 vivo 默认输入法并读回。独立核对发现仅缺入场时已启用的 vivo 输入法无障碍服务，补回一次后，默认输入法、启用的输入法、无障碍总开关和服务清单均与本轮入场值一致。系统客户端已收到该服务的 Binder，`hasBound=true`。本轮网关前台服务及端口转发均已释放，候选保留在机。
+
+### 窗口字段与输入连接的离线核对
+
+候选 `4862535` 在服务级输入焦点为空时，用当前输入连接的 `EditorInfo.fieldId` 在目标应用中解析资源名，再按该名称查询活动窗口。节点必须唯一、可见、已聚焦，且属于同一应用和窗口。随后核对输入法回报的字段和四边，采样前后的窗口、节点、会话及矩形均须一致。资源名和节点焦点由应用提供，真机仍须验证微信是否暴露了这些信息。
+
+在替代 Android 和输入法接口的 JVM 用例中，Debug 和 Release 各通过 83/83。6 个成功用例覆盖原焦点路径，以及仅采样前、仅采样后或两次都由窗口字段定位的情形。77 个拒绝用例覆盖字段缺失、重名、窗口或会话变化、四边冲突、密码或敏感节点等情况。只有成功使用字段定位时，四边结果才含 `window_field_phase`。旧版 `8d02ed3` 的对照用例复现了真机的 `input_focus_missing`。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/4862535153013d22e838acaeeb3841667019283d)
+
+### 窗口字段诊断在安装等待时终止
+
+2026-11-21，候选 `4862535` 已与在机版本核对签名，签名后的 540 个非签名条目与受测 APK 一致。PA2553 上的派单先用两次读取确认微信右窗和「文件传输助手」标题，再发起一次保数据覆盖安装。等待候选就绪的 360 秒窗口结束时，过滤器返回 `candidate-timeout`，PC 安装子进程仍在等待。该安装进程随后被单独终止，原宿主继续收尾。回执未记录平板是否显示安装确认，也无法确定等待原因。
+
+独立读回的在机摘要仍匹配 `8d02ed3`。输入法切换、四边查询、微信内点击、输入和发送均为零。四项设置与入场逐项相符，原 vivo 输入法无障碍服务仍绑定系统客户端，网关前台服务和本轮转发均已释放。该轮没有产生微信编辑框字段或四边的观测值。
+
+上述 APK 摘要采自 11 月 21 日 02:29（新加坡时间）。用户随后确认已安装，并要求暂缓执行。此后未连接平板核对新摘要，也未重跑窗口字段诊断。
+
+### 复用候选后节点未报告聚焦
+
+2026-11-21，只读核对 PA2553 在机网关 APK 摘要，与已签候选 `4862535` 一致。首次窗口检查显示微信平行视界已打开，但系统焦点与输入法目标仍停在左窗 `LauncherUI`；现场轻点一次右窗「文件传输助手」输入栏并弹出键盘后，两者同时指向同一右窗 `ChattingUI`。
+
+随后复用在机 `4862535` 执行单次只读诊断（免安装，使用独立回执目录保留上轮安装等待记录）。派单在切换网关输入法前后均核实同一活动右窗（窗口号与范围不变）及「文件传输助手」标题。第五次读取即唯一一次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample` 与 `node_not_focused`。派单耗时 31 秒，安装、微信内点击、输入及发送均为零。
+
+按受测源码，取样前依次通过了缓存清除、活动根与聚焦应用窗口校验，随后由服务级焦点或活动右窗按 `EditorInfo.fieldId` 解析出唯一非敏感 `id/...` 节点并完成 `node.refresh()`，因 `node.isFocused` 为假而在发出输入法四边请求前停止。结合上轮 `8d02ed3` 同场景返回 `input_focus_missing`，本轮已越过空焦点和唯一查找环节，但尚未观测到输入法四边回调，也尚未核对 `isVisibleToUser`、窗口号与矩形一致性。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/4862535153013d22e838acaeeb3841667019283d)
+
+宿主在收尾阶段一次回选原 vivo 默认输入法并恢复启用输入法清单，释放网关前台服务与端口转发。独立只读收尾核实：在机 APK 仍匹配 `4862535`，四项系统设置与入场逐字相等（未出现 vivo 无障碍服务丢失，无需补写），网关服务与转发均回到缺席状态；另一次只读组件检查确认原 vivo 输入法无障碍服务在当前用户下仅有唯一记录且已绑定系统客户端（`hasBound=true`）。
+
+### 候选 2341c7d 免安装复测仍返回 node_not_focused
+
+2026-11-21，草稿候选 `2341c7d` 仅在服务级与窗口根输入焦点均为空时放行未聚焦的唯一窗口字段节点，完整离线检查 9/9 通过（Debug 503 项、Release 406 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `4862535` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/2341c7d588bf5bc92aa45006f1ecd4cb5ccf030b)
+
+首轮在 PA2553 已聚焦微信右窗「文件传输助手」完成同签保数据覆盖安装并核实在机摘要（`install_attempts=1`）。新网关重启并临时切换至 `GatewayIme` 后，第 3 次 `foreground_app` 核实同一右窗（`revision=1`），第 4 次标题复核期间因重启后的 `revision` 变化触发过滤器 `page-changed` 终止；本轮耗时 80 秒、4 次读取、未执行四边查询，微信内零点击、零输入、零发送。收尾回选原 vivo 默认输入法后，独立读回检出仅缺原 vivo 输入法无障碍服务，按授权补回一次并独立核实四项设置、网关资源与系统绑定（`hasBound=true`）一致。
+
+随后另获授权执行一次免安装复用复测（`install_attempts=0`，使用独立回执目录）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次读取即唯一一次 `keyboard_state({"probe_editor_bounds":true})` 仍返回空四边、`focus_unavailable`、`before_sample` 与 `node_not_focused`。该轮耗时 27 秒，安装、微信内点击、输入及发送均为零。收尾同样回选原默认输入法、按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项设置、网关服务、端口转发及组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `2341c7d`。
+
+按 `2341c7d` 源码，`currentFocus` 仅在以下两处抛出 `node_not_focused`：其一是服务级 `findFocus(FOCUS_INPUT)` 返回了非空节点且刷新后 `node.isFocused` 为假；其二是服务级焦点为空、窗口字段查得唯一可见同窗同包节点后，`root.findFocus(FOCUS_INPUT)` 返回同一节点但 `node.isFocused` 为假。换言之，本次已排除“服务级与根级焦点均为空”的路径——Android 无障碍焦点查询本身已返回非空节点，但微信该节点在 `node.refresh()` 后仍报告 `isFocused=false`。回执目前无法区分这两处中的哪一处，也尚未进入输入法四边采样。
+
+### 候选 f503328 免安装复测返回 node_not_visible
+
+2026-11-21，草稿候选 `f503328` 移除两处 `node_not_focused` 拦截，对未聚焦节点统一要求可见、同窗、同包、非冲突根焦点及取样前 `EditorInfo.fieldId` 交叉核验，完整离线检查 9/9 通过（Debug 509 项、Release 412 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `2341c7d` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/f50332839cc88f637d6d8740bdf65a9870eaf8bf)
+
+首轮在 PA2553 已聚焦微信右窗「文件传输助手」完成同签保数据覆盖安装并核实在机摘要（`install_attempts=1`）。新网关重启并临时切换至 `GatewayIme` 后，第 3 次 `foreground_app` 核实同一右窗（`revision=3`），第 4 次标题复核期间因重启后的 `revision` 变化触发过滤器 `page-changed` 终止；本轮耗时 33 秒、4 次读取、未执行四边查询，微信内零点击、零输入、零发送。收尾回选原 vivo 默认输入法并按授权补回缺失的单项 vivo 无障碍服务一次，独立核实四项设置、网关资源与系统绑定（`hasBound=true`）一致。
+
+随后另获授权执行一次免安装复用复测（`install_attempts=0`，使用独立回执目录）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次读取即唯一一次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample` 与 `node_not_visible`。该轮耗时 27 秒，安装、微信内点击、输入及发送均为零。收尾同样回选原默认输入法、按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项设置、网关服务、端口转发及组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `f503328`。
+
+对比 `2341c7d` 与 `f503328` 的执行顺序：`2341c7d` 仅在 `serviceFocus != null` 时先于 `isVisibleToUser` 检查 `isFocused`，若此前走的是 `serviceFocus == null` 路径则本应在 `2341c7d` 就先报 `node_not_visible`。两次连续实测共同证实：在 PA2553 微信右窗已聚焦并弹起键盘时，`service.findFocus(FOCUS_INPUT)` 返回了非空节点，但该节点同时报告 `isFocused=false` 且 `isVisibleToUser=false`。因 `node_not_visible` 仍在 `node.windowId`、`packageName`、`rootFocus`、`EditorInfo.fieldId` 校验与输入法四边请求之前触发，目前仍无法判断该服务级焦点节点是否跨窗/错控件，也尚未观测到微信是否返回输入法四边回调。
+
+### 候选 b37c018 取得 14 键诊断快照
+
+2026-11-21，草稿候选 `b37c018` 新增失效服务焦点下的活动窗 `EditorInfo.fieldId` 兜底与仅在 `focus_unavailable` 时产出的 14 键脱敏诊断对象 `ime_editor_focus_diag`，完整离线检查 9/9 通过（Debug 516 项、Release 419 项单测及 Lint、构建通过）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `f503328` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/b37c018bee88f260a6800ce819022b09410d595c)
+
+为避免安装重启引起中途 `page-changed`，按授权先单独对 PA2553 执行一次同签保数据覆盖安装并独立核实在机 APK 摘要与右窗 `ChattingUI` 焦点，再执行单次免安装只读诊断（`install_attempts=0`，耗时 33 秒，5 次读取，微信内零点击、零输入、零发送）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample / node_not_visible` 以及完整 14 键脱敏诊断快照：
+
+- 服务与根焦点状态：`service_focus_present=true`、`service_focus_refreshed=true`、`service_focus_same_window=true`、`service_focus_same_package=true`、`root_focus_state=matches_service`、`service_focus_focused=false`、`service_focus_visible=false`、`service_focus_matches_field=null`（按源码此时已解析出非敏感 `fieldName`，故表明该节点无 `viewIdResourceName`）。
+- 活动右窗字段查找：`window_field_lookup=ambiguous`（当前输入连接的 `EditorInfo.fieldId` 成功解析出非敏感 `id/...` 资源名，但在微信右窗中命中多于一个节点，尚未筛选可见/窗内有效子集，也尚未发起输入法四边请求）。
+
+收尾阶段宿主一次回选原 vivo 默认输入法并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `b37c018`。
+
+### 候选 8f0baa0 取得 17 键计数并证实 0/2 窗内命中
+
+2026-11-21，草稿候选 `8f0baa0` 在多命中活动窗字段兜底中新增同窗同包敏感优先 fail-closed、可见窗内子集筛选与 17 键脱敏诊断快照（在 14 键基础上新增 `window_field_total_matches`、`window_field_visible_in_window_matches`、`window_field_bounds_in_window_matches`）。同签后的 540 个非签名条目与受测调试 APK 一致，与在机 `b37c018` 仅 `classes3.dex` 存在预期差异。[受测候选](https://github.com/MaginaLW/agent-for-mobile/commit/8f0baa0c1632d765cabf045fd30ac1fd842dd86a)
+
+按授权先对 PA2553 独立执行一次同签保数据 `adb install -r` 更新至 `8f0baa0`，并核实在机 APK 摘要及微信右窗 `ChattingUI` 焦点。随后因本机 Codex CLI 升级，前两次诊断均在零业务调用前退出且独立收尾全绿（`all_match=true`，零输入法与无障碍设置改动）：首次冻结宿主按精确白名单拒绝未知版本 `codex-cli 0.171.0`；合入 `0.171.0` 契约（[PR #62](https://github.com/MaginaLW/agent-for-mobile/pull/62)）后刷新宿主重跑，因 `toolchain/codex/` 仅放了 `codex.exe` 而缺少同目录配套的 `codex-code-mode-host.exe`（`0.171.0` 默认模型远端元数据强制进入 `ToolMode::CodeModeOnly` 且不回退 `Direct`），Codex 在第 1 次工具调用前 fail-closed 退出（耗时 14 秒）。
+
+经授权补齐同源、OpenAI 签名有效的 `codex-code-mode-host.exe` 后，在新轮次目录执行单次免安装只读诊断（`install_attempts=0`，耗时 25 秒，5 次读取，stderr 为空，微信内零点击、零输入、零发送）。输入法切换前后均核实同一活动右窗（窗口号、范围与 `revision` 均一致）及「文件传输助手」标题。第五次 `keyboard_state({"probe_editor_bounds":true})` 返回空四边、`focus_unavailable`、`before_sample / node_not_visible` 以及完整 17 键脱敏诊断快照：
+
+- 既有 14 键与 `b37c018` 一致：`service_focus_present=true`、`service_focus_refreshed=true`、`service_focus_same_window=true`、`service_focus_same_package=true`、`root_focus_state=matches_service`、`service_focus_focused=false`、`service_focus_visible=false`、`service_focus_matches_field=null`、`window_field_lookup=ambiguous`。
+- 新增 3 项命中计数：`window_field_total_matches=2`、`window_field_bounds_in_window_matches=0`、`window_field_visible_in_window_matches=0`。按 `8f0baa0` 源码 `scanMultiMatches`，当前输入连接的 `EditorInfo.fieldId` 在微信右窗确实命中 2 个非敏感节点，但两者在进入 `isVisibleToUser` 筛选前均已被前置条件（`refresh()`、同窗同包、`viewIdResourceName == fieldName`、`!bounds.isEmpty` 或 `windowBounds.contains(bounds)`）全部淘汰，尚未发起输入法四边请求。
+
+收尾阶段宿主一次回选原 vivo 默认输入法、恢复启用输入法清单并释放网关前台服务与端口转发；按授权补回缺失的单项 vivo 无障碍服务一次，独立只读核实四项系统设置、网关资源与组件系统绑定（`hasBound=true`）全部回到基线，在机 APK 保持为 `8f0baa0`。针对本轮发现，派单侧已通过 [PR #63](https://github.com/MaginaLW/agent-for-mobile/pull/63) 为 `0.171.0` 补齐配套 `codex-code-mode-host.exe` 存在性与 OpenAI 验签门禁；草稿 PR #47 已推进至 `0b4b4d4`，将 `ime_editor_focus_diag` 细化为 23 键（新增 6 项互斥/可见淘汰原因计数），并已完成基于 `696ca58` 宿主的离线调试包（540 个非签名条目）绑定与 23 键过滤器（27 项）、入场（11 项）、收尾（7 项）及真实 `0.171.0` 配套验签离线预演（零设备访问、零实签）。
+
+### 候选 0b4b4d4 的两个节点均在资源名核对时被排除
+
+2026-11-21，PA2553 从 `8f0baa0` 同签保数据更新至 `0b4b4d4`。安装前后已核实在机摘要、右窗会话焦点和设置基线。本轮从已聚焦的微信右窗开始，使用 `696ca58` 宿主免安装派单一次，用时 28 秒。切换输入法前后共四次读取均核实了同一右窗及「文件传输助手」标题。第五次读取编辑框四边返回 `before_sample / node_not_visible`。本轮没有导航、输入、截图、发送或设备端发送确认卡。
+
+23 项脱敏诊断中，`window_field_total_matches=2`，`window_field_id_mismatch_matches=2`，刷新失败、窗包不符、空边界、越界及窗内命中的计数均为 0。服务级与窗口根的输入焦点仍指向同一个未聚焦、不可见的节点。按候选源码，两个字段候选均已刷新且匹配窗口与包，资源名精确比较失败后即跳过可见性与边界读取。回执没有区分资源名缺失与返回其他名字，两节点的实际位置和编辑框身份仍未知。[受测判断](https://github.com/MaginaLW/agent-for-mobile/blob/0b4b4d4fb3c0792445522f777397feb021ad6c5c/app/gateway/src/main/java/dev/magina/gateway/tools/EditorBoundsDiagnostic.kt#L396-L412)
+
+第一次独立收尾读回发现原无障碍服务清单少一项，其余三项设置与网关资源均匹配。仅补回入场时已启用的 vivo 输入法无障碍服务一次，随后独立核实原清单、四项设置、网关服务、端口转发及该服务的系统绑定。
+
+### 候选 39bfaed 的两个节点均未返回可用资源名
+
+2026-11-21，PA2553 从 `0b4b4d4` 同签保数据更新至 `39bfaed`。在机摘要、入场设置和右窗焦点均已核对。宿主 `696ca58` 从已就位的「文件传输助手」右窗派单一次，用时 27 秒。输入法切换前后共四次读取均通过窗口和标题复核。第五次查询返回 `before_sample / node_not_visible`。全程零导航、零输入、零截图、零发送，未触发业务确认卡。
+
+按字段查到 2 个节点，刷新后 2 个资源名未匹配。新增脱敏计数为 `ime_editor_field_missing_name_matches=2`，即 2 个名字均为 null、空串或纯空白，具名异名为 0。节点在读取边界前即被排除，实际坐标、刷新前的名字及唯一编辑框身份仍未知。该计数只保存在本机回执。草稿代码的完整离线检查 9/9 通过，含 Debug 527 项及 Release 430 项单测。[草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+独立核查同一签名 APK 的编译资源，网关无障碍配置为 `0x53`，含 `FLAG_REPORT_VIEW_IDS`（`0x10`）。此次派单回执没有记录实际连接的服务标志。Android 16 的参考实现按数值视图 ID 查找后创建无障碍节点，单凭查找命中还无法证明节点公开了资源名。[Android 标志定义](https://developer.android.com/reference/android/accessibilityservice/AccessibilityServiceInfo#FLAG_REPORT_VIEW_IDS) · [Android 16 查找实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/AccessibilityInteractionController.java#L1810-L1815)
+
+如需实测该标志，应从当次已绑定的网关连接读取 `getServiceInfo().flags`。Android 16 参考实现的 `dumpsys accessibility` 绑定服务摘要省略了该位。`39bfaed` 的网关和测试靶均未提供该项读数，后续连接的结果只能说明后续连接。[连接信息](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L506-L545) · [系统摘要字段](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/accessibility/java/com/android/server/accessibility/AbstractAccessibilityServiceConnection.java#L1623-L1635)
+
+初次独立收尾发现已启用的无障碍服务少一项。按入场基线仅补回原 vivo 输入法无障碍服务一次，随后核实原清单、四项设置、网关服务及转发均一致，并独立观察到系统客户端已重新绑定该服务。
+
+### 候选 123cf59 在资源名报告已开启时仍有两个无名节点
+
+2026-11-21，PA2553 从 `39bfaed` 同签保数据更新至 `123cf59`。独立安装一次，读回在机摘要，四项设置、网关服务和端口转发均匹配。首次进入五步诊断时，系统焦点和输入法目标各有一条读数，两者都没有指向微信会话。宿主在启动派单前退出，业务调用、输入法切换均为零。独立收尾核实基线与原 vivo 服务绑定。
+
+现场重新就位后，宿主 `696ca58` 沿用在机版本发起一次只读派单，用时 28 秒。前四次调用核实了切换输入法前后的同一微信右窗及「文件传输助手」标题。第五次查询得到 `before_sample / node_not_visible`。查到 2 个字段候选，刷新后资源名未匹配的有 2 个，缺名的也有 2 个，具名异名为 0。在同一份回执中，网关从当前服务连接读到 `ime_editor_report_view_ids=true`。该次连接已请求系统报告资源名，两个节点仍未提供可核验的标识。在比较边界前结束，编辑框四边、唯一身份和消息投递均未获证实。全程零输入、零发送，业务确认卡出现次数为零。[源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+后一次派单收尾时，原无障碍服务清单少一项。仅补回原有 vivo 输入法服务一次，独立读回核实四项设置、网关资源和系统绑定均已恢复。在机网关为 `123cf59`。其离线检查 9/9 通过，含 Debug 528 项、Release 431 项单测及两种构建的 Lint 和打包。
+
+#### 怎样判读两个无名候选
+
+对照该轮脱敏回执与 `123cf59` 的筛选顺序，服务焦点与窗口根焦点指向同一个节点，但该节点报告未聚焦、不可见。按输入字段查出的两个候选都通过了刷新、窗口和包名校验，随后因缺名被跳过。程序到此尚未读取这两个候选的可见性和矩形。因此，即使“窗内命中”“越界”“空边界”三项都为零，两个候选的位置仍是未知。[多候选筛选顺序](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/tools/EditorBoundsDiagnostic.kt#L412-L439)
+
+网关从字段信息和会话代次生成输入法会话标识，从窗口、资源名、类名、包名和矩形生成无障碍节点标识。两者没有可直接对照的键。项目编译用的 Android API 35 在无障碍节点上提供 `getUniqueId()`，输入法的 `EditorInfo` 和 `CursorAnchorInfo` 均未提供对应的节点标识。网关从当前输入契约为四边样本附上 `fieldId`，因此样本与契约中的字段值来自同一处。重开横屏就位还需要能独立核实当前输入连接对应哪一个右窗编辑框、并能比对该框四边的证据。[输入法会话标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L21-L44) · [四边样本来源](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/ime/GatewayIme.kt#L302-L312) · [无障碍节点标识](https://github.com/MaginaLW/agent-for-mobile/blob/123cf590f5ad4ee10584331d55d30a8435781652/app/gateway/src/main/java/dev/magina/gateway/a11y/FocusedInputIdentity.kt#L5-L17)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
