@@ -362,17 +362,28 @@ class IsolatedRunner:
     def prepare_device(self):
         self.state["phase"] = "save_settings_and_install"
         self.save_state()
+        self.shell("input keyevent KEYCODE_WAKEUP", check=False)
+        self.shell("wm dismiss-keyguard", check=False)
+        # Wait for IMMS first-boot initialization so default/enabled IMEs are populated (not "null").
+        ime_deadline = time.monotonic() + 45.0
+        while time.monotonic() < ime_deadline:
+            d_ime = self.read_setting("secure", "default_input_method")
+            e_ime = self.read_setting("secure", "enabled_input_methods")
+            if d_ime not in ("", "null") and "/" in d_ime and e_ime not in ("", "null"):
+                break
+            time.sleep(1.0)
         for ns, key in SETTINGS_KEYS:
             self.saved_settings[f"{ns}:{key}"] = self.read_setting(ns, key)
         self.state["saved_settings"] = dict(self.saved_settings)
+        if (self.saved_settings["secure:default_input_method"] in ("", "null")
+                or self.saved_settings["secure:enabled_input_methods"] in ("", "null")):
+            raise RuntimeError(f"IMMS default/enabled IME never initialized: {self.saved_settings}")
 
         self.shell("cmd connectivity airplane-mode enable", check=False)
         self.shell("svc wifi disable", check=False)
         self.write_setting("secure", "immersive_mode_confirmations", "confirmed")
         self.write_setting("system", "accelerometer_rotation", "0")
         self.write_setting("system", "user_rotation", "1")
-        self.shell("input keyevent KEYCODE_WAKEUP", check=False)
-        self.shell("wm dismiss-keyguard", check=False)
 
         self.adb("install", "-r", str(self.files["observer_apk"]), timeout=60)
         self.adb("install", "-r", str(self.files["target_apk"]), timeout=60)
@@ -569,16 +580,22 @@ class IsolatedRunner:
                     self.adb("uninstall", OBSERVER_PKG, check=False)
                     for ns, key in SETTINGS_KEYS:
                         orig = self.saved_settings[f"{ns}:{key}"]
-                        self.write_setting(ns, key, orig)
+                        if ns == "secure" and key == "default_input_method" and orig not in ("", "null"):
+                            self.shell(f"ime set {sh_single_quote(orig)}", check=False)
+                        else:
+                            self.write_setting(ns, key, orig)
                     settle_deadline = time.monotonic() + 5.0
+                    restored_actual = {}
                     while True:
                         for ns, key in SETTINGS_KEYS:
                             orig = self.saved_settings[f"{ns}:{key}"]
                             actual = self.read_setting(ns, key)
+                            restored_actual[f"{ns}:{key}"] = actual
                             self.state["restored"][f"{ns}:{key}"] = (actual == orig)
                         if all(self.state["restored"].values()) or time.monotonic() >= settle_deadline:
                             break
                         time.sleep(0.5)
+                    self.state["restored_actual"] = restored_actual
                     pkgs = self.shell("pm list packages -u", check=False).stdout
                     self.state["cleanup"]["packages_uninstalled"] = (
                         TARGET_PKG not in pkgs and OBSERVER_PKG not in pkgs

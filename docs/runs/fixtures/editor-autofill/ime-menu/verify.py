@@ -363,6 +363,61 @@ def verify(log, scenario="opted-in"):
     return dispatch[scenario](log)
 
 
+def verify_receipts(path: Path):
+    """Independently re-verify a complete sanitized 4-scenario live API 36 receipts.json."""
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if data.get("status") != "passed" or data.get("phase") != "closed":
+        raise ValueError(f"unexpected terminal status: {data.get('status')} / {data.get('phase')}")
+    if not (data.get("initially_empty") is True and data.get("api") == "36" and data.get("hardware") == "1"):
+        raise ValueError("missing API 36 isolated emulator identity")
+    ports = data.get("ports", {})
+    if ports.get("adb") == 5037 or len({ports.get("adb"), ports.get("console"), ports.get("transport")}) != 3:
+        raise ValueError(f"invalid isolated ports: {ports}")
+    uids = data.get("uids", {})
+    if len({uids.get("observer"), uids.get("target"), uids.get("target_diffsig")}) < 2 or uids.get("observer") in (
+        uids.get("target"), uids.get("target_diffsig")
+    ):
+        raise ValueError(f"invalid UID isolation: {uids}")
+    certs = data.get("cert_sha256", {})
+    if not certs.get("primary_pair") or not certs.get("target_diffsig") or certs["primary_pair"] == certs["target_diffsig"]:
+        raise ValueError("missing or non-distinct cert_sha256 entries")
+    saved = data.get("saved_settings", {})
+    restored = data.get("restored", {})
+    actual = data.get("restored_actual", {})
+    if len(saved) != 8 or len(restored) != 8 or not all(restored.values()):
+        raise ValueError(f"incomplete settings restore: {restored}")
+    if any(actual.get(k) != v for k, v in saved.items()):
+        raise ValueError("restored_actual does not match saved_settings")
+    if saved.get("secure:default_input_method") in ("", "null", None) or "/" not in saved["secure:default_input_method"]:
+        raise ValueError(f"invalid saved default_input_method: {saved.get('secure:default_input_method')}")
+    cleanup = data.get("cleanup", {})
+    required_cleanup = ("packages_uninstalled", "emulator_stopped", "isolated_server_stopped", "avd_deleted", "ports_released")
+    if not all(cleanup.get(k) is True for k in required_cleanup) or data.get("cleanup_errors") != []:
+        raise ValueError(f"incomplete cleanup: {cleanup} errors={data.get('cleanup_errors')}")
+
+    logs = data.get("logs", {})
+    reverified = {}
+    for scenario in ("opted-in", "plain-auto", "optout-no", "swallow-ic"):
+        if scenario not in logs:
+            raise ValueError(f"missing raw scoped log for {scenario}")
+        verdict = verify(logs[scenario], scenario=scenario)
+        recorded = data.get("scenarios", {}).get(scenario)
+        if recorded is not None and recorded != verdict:
+            raise ValueError(f"recorded verdict mismatch for {scenario}")
+        reverified[scenario] = verdict
+
+    return {
+        "verified": True,
+        "api": data["api"],
+        "hardware": data["hardware"],
+        "initially_empty": True,
+        "elapsed_seconds": data.get("elapsed_seconds"),
+        "restored_settings": f"{sum(restored.values())}/{len(saved)}",
+        "cleanup_all_true": True,
+        "scenarios": reverified,
+    }
+
+
 def read_stop(directory):
     """Read the host terminal state and final synthetic event poll. No Android access."""
     state = json.loads((directory / "state.json").read_text(encoding="utf-8-sig"))
@@ -531,6 +586,7 @@ def _self_test():
 if __name__ == "__main__":
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--stopped-run", action="store_true", help="read directory of a completed readiness stop")
+    args.add_argument("--receipts", action="store_true", help="independently re-verify a 4-scenario receipts.json")
     args.add_argument("--self-test", action="store_true", help="run offline verifier unit tests")
     args.add_argument("--scenario", default="opted-in",
                       choices=("opted-in", "plain-auto", "optout-no", "swallow-ic"))
@@ -541,6 +597,10 @@ if __name__ == "__main__":
     else:
         if options.input is None:
             args.error("input path is required unless --self-test is given")
-        result = (read_stop(options.input) if options.stopped_run
-                  else verify(options.input.read_text(encoding="utf-8-sig"), scenario=options.scenario))
+        if options.stopped_run:
+            result = read_stop(options.input)
+        elif options.receipts:
+            result = verify_receipts(options.input)
+        else:
+            result = verify(options.input.read_text(encoding="utf-8-sig"), scenario=options.scenario)
     print(json.dumps(result, indent=2))
