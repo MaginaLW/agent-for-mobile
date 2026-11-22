@@ -1015,53 +1015,62 @@ class GatewayA11yService : AccessibilityService() {
             fallback = "ui_snapshot 重新定位",
         )
         val piece = Bitmap.createBitmap(full, crop.left, crop.top, crop.width(), crop.height())
-        val want = OcrEngine.norm(e.label)
-        // 动作前二次识别不得接收零置信结果；低于通用区域读回阈值直接 stale。
-        val lines = OcrEngine.recognize(piece, MIN_ACTION_OCR_CONFIDENCE)
-        // 匹配容忍两级：① 归一 contains（任意位置）；② 位置稳定（中心漂移 ≤1.2 行高）+ 字符袋
-        // 相似度 ≥0.4——CJK 形近字抖动实锤（索↔素、图标误识 Q 时有时无），纯 contains 会误报 STALE
-        val cx0 = e.bounds.centerX() - crop.left
-        val cy0 = e.bounds.centerY() - crop.top
-        val tol = 1.2f * e.bounds.height()
-        val hit = lines
-            .map { l ->
-                val got = OcrEngine.norm(l.text)
-                val contains = got.contains(want) || (want.contains(got) && got.length >= 2)
-                val drift = kotlin.math.hypot(
-                    (l.bounds.centerX() - cx0).toDouble(), (l.bounds.centerY() - cy0).toDouble(),
-                ).toFloat()
-                val s = charBagSim(want, got)
-                Triple(l, if (contains) 2f + l.conf else s + l.conf * 0.1f, contains || (drift <= tol && s >= 0.4f))
-            }
-            .filter { it.third }
-            .maxByOrNull { it.second }?.first
-            ?: throw GatewayError(
-                ErrorCode.E_STALE_REF,
-                "OCR 目标「${e.label.take(30)}」二次校验未命中（页面可能已变化；邻域实读:「${
-                    lines.joinToString(" / ") { it.text }.take(60)
-                }」）",
-                channel = "vision", fallback = "ui_snapshot 重新定位后再操作",
+        val outcome = try {
+            val want = OcrEngine.norm(e.label)
+            val cx0 = e.bounds.centerX() - crop.left
+            val cy0 = e.bounds.centerY() - crop.top
+            // 动作前二次识别不得接收低置信结果（保持 MIN_ACTION_OCR_CONFIDENCE=0.65f 不变）；
+            // 仅当 1x 零命中且初始行高 <60px 时，对固定裁区做 2x 上采样兜底并确定性映射回 1x 坐标。
+            resolveOcrWithSmallTextUpsample(
+                wantNorm = want,
+                expectedCenterXInPiece = cx0,
+                expectedCenterYInPiece = cy0,
+                expectedHeightPx = e.bounds.height(),
+                pieceWidth = piece.width,
+                pieceHeight = piece.height,
+                recognize1x = {
+                    OcrEngine.recognize(piece, MIN_ACTION_OCR_CONFIDENCE).map { l ->
+                        OcrCandidateLine(
+                            l.text,
+                            l.conf,
+                            OcrCropBox(l.bounds.left, l.bounds.top, l.bounds.right, l.bounds.bottom),
+                        )
+                    }
+                },
+                recognize2x = {
+                    val scaled = Bitmap.createScaledBitmap(piece, piece.width * 2, piece.height * 2, true)
+                    try {
+                        OcrEngine.recognize(scaled, MIN_ACTION_OCR_CONFIDENCE).map { l ->
+                            OcrCandidateLine(
+                                l.text,
+                                l.conf,
+                                OcrCropBox(l.bounds.left, l.bounds.top, l.bounds.right, l.bounds.bottom),
+                            )
+                        }
+                    } finally {
+                        if (scaled !== piece && !scaled.isRecycled) scaled.recycle()
+                    }
+                },
             )
-        val b = Rect(hit.bounds).apply { offset(crop.left, crop.top) }
+        } finally {
+            if (!piece.isRecycled) piece.recycle()
+        }
+        val hit = outcome.hit ?: throw GatewayError(
+            ErrorCode.E_STALE_REF,
+            "OCR 目标「${e.label.take(30)}」二次校验未命中（页面可能已变化；邻域实读:「${
+                outcome.observedLines.joinToString(" / ") { it.text }.take(60)
+            }」）",
+            channel = "vision", fallback = "ui_snapshot 重新定位后再操作",
+        )
+        val b = Rect(hit.box.left, hit.box.top, hit.box.right, hit.box.bottom).apply {
+            offset(crop.left, crop.top)
+        }
         // 同一 ref 始终以快照框裁图。每次返回本帧实测的框，供确认前后和落点复核比较。
         if (refs.current(ref) !== e) throw GatewayError(
             ErrorCode.E_STALE_REF, "OCR ref $ref 已被新 snapshot 取代",
             channel = "vision", fallback = "ui_snapshot 重新定位",
         )
         return Target(null, e.label, e.desc, b, "ocr", e.windowId, e.pane)
-    }
-
-    /** 字符袋相似度（0~1）：多重集交集 ×2 / 总长。短文本 OCR 抖动下比编辑距离更稳。 */
-    private fun charBagSim(a: String, b: String): Float {
-        if (a.isEmpty() || b.isEmpty()) return 0f
-        val bag = HashMap<Char, Int>()
-        for (c in a) bag[c] = (bag[c] ?: 0) + 1
-        var common = 0
-        for (c in b) {
-            val n = bag[c] ?: 0
-            if (n > 0) { bag[c] = n - 1; common++ }
-        }
-        return 2f * common / (a.length + b.length)
     }
 
     fun perform(target: Target, action: String, params: JSONObject): JSONObject {
