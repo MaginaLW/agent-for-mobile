@@ -2,6 +2,7 @@ package dev.magina.wechatparity;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -13,7 +14,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.WindowMetrics;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -65,17 +68,21 @@ public final class WeChatParityActivity extends Activity {
             throw new IllegalArgumentException("unknown lab_case: " + scenario);
         }
 
-        Rect maxBounds = getWindowManager().getMaximumWindowMetrics().getBounds();
+        WindowMetrics maxMetrics = getWindowManager().getMaximumWindowMetrics();
+        Rect maxBounds = maxMetrics.getBounds();
+        Insets safe = maxMetrics.getWindowInsets().getInsetsIgnoringVisibility(
+                WindowInsets.Type.displayCutout() | WindowInsets.Type.systemBars());
         int screenW = maxBounds.width();
         int screenH = maxBounds.height();
-        int topY = Math.min(120, Math.max(48, screenH / 10));
-        int winH = Math.max(320, screenH - topY * 2);
+        int usableW = Math.max(600, screenW - safe.left - safe.right);
+        int topY = Math.max(safe.top + 24, 96);
+        int winH = Math.max(320, screenH - safe.bottom - topY - 48);
 
         int leftW;
         if ("overlap_right".equals(scenario)) {
-            leftW = (int) (screenW * 0.80f);
+            leftW = (int) (usableW * 0.80f);
         } else {
-            leftW = (int) (screenW * 0.36f);
+            leftW = (int) (usableW * 0.36f);
         }
 
         leftRoot = buildPaneContainer("LEFT PANE (" + scenario + ")", Color.rgb(242, 245, 250));
@@ -92,10 +99,11 @@ public final class WeChatParityActivity extends Activity {
         setContentView(leftRoot);
 
         // 保持 windowIsFloating=false / windowIsTranslucent=false 使 ActivityRecord.mOccludesParent=true，
-        // 隐藏背后 Launcher，再在 setContentView() 后显式设定左栏尺寸与位置。
+        // 隐藏背后 Launcher，再在 setContentView() 后显式设定左栏尺寸与位置（关闭进场动画防抖）。
         Window win = getWindow();
         win.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
         win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        win.setWindowAnimations(0);
         win.getDecorView().setPadding(0, 0, 0, 0);
         win.setGravity(Gravity.TOP | Gravity.START);
         WindowManager.LayoutParams leftLp = win.getAttributes();
@@ -104,6 +112,7 @@ public final class WeChatParityActivity extends Activity {
         leftLp.y = topY;
         leftLp.width = leftW;
         leftLp.height = winH;
+        leftLp.windowAnimations = 0;
         leftLp.flags = (leftLp.flags & ~WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
         win.setAttributes(leftLp);
@@ -118,21 +127,26 @@ public final class WeChatParityActivity extends Activity {
     }
 
     private void attachRightWindow() {
-        Rect maxBounds = getWindowManager().getMaximumWindowMetrics().getBounds();
+        WindowMetrics maxMetrics = getWindowManager().getMaximumWindowMetrics();
+        Rect maxBounds = maxMetrics.getBounds();
+        Insets safe = maxMetrics.getWindowInsets().getInsetsIgnoringVisibility(
+                WindowInsets.Type.displayCutout() | WindowInsets.Type.systemBars());
         int screenW = maxBounds.width();
         int screenH = maxBounds.height();
-        int topY = Math.min(120, Math.max(48, screenH / 10));
-        int winH = Math.max(320, screenH - topY * 2);
+        int usableW = Math.max(600, screenW - safe.left - safe.right);
+        int topY = Math.max(safe.top + 24, 96);
+        int winH = Math.max(320, screenH - safe.bottom - topY - 48);
 
         int rightX;
         int rightW;
         if ("overlap_right".equals(scenario)) {
-            rightX = (int) (screenW * 0.25f);
-            rightW = screenW - rightX;
+            rightX = safe.left + (int) (usableW * 0.25f);
+            rightW = Math.max(300, (screenW - safe.right) - rightX);
         } else {
-            int leftW = (int) (screenW * 0.36f);
-            rightX = leftW + PANE_GAP_PX;
-            rightW = Math.max(300, screenW - rightX);
+            int leftW = (int) (usableW * 0.36f);
+            // 显式计入 safe.left（如 pixel_5 横屏左侧 136px 挖孔偏移），确保左/右两窗在物理屏幕 X 轴严格互不重叠。
+            rightX = safe.left + leftW + PANE_GAP_PX * 3;
+            rightW = Math.max(300, (screenW - safe.right) - rightX);
         }
 
         rightRoot = buildPaneContainer("RIGHT PANE (" + scenario + ")", Color.rgb(250, 248, 242));
@@ -156,6 +170,7 @@ public final class WeChatParityActivity extends Activity {
         );
         rightLp.gravity = Gravity.TOP | Gravity.START;
         rightLp.token = getWindow().getDecorView().getWindowToken();
+        rightLp.windowAnimations = 0;
         rightLp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
         getWindowManager().addView(rightRoot, rightLp);
         rightWindowAdded = true;
@@ -330,6 +345,13 @@ public final class WeChatParityActivity extends Activity {
 
                 @Override
                 public boolean requestCursorUpdates(int cursorUpdateMode, int cursorUpdateFilter) {
+                    // Android 13+/16 RemoteInputConnectionImpl 经 AIDL 把 1 参 requestCursorUpdates(mode)
+                    // 派发到应用侧 2 参入口且 cursorUpdateFilter == 0；仅对显式 API 33/34 过滤位返回 false。
+                    if (cursorUpdateFilter == 0) {
+                        legacyCursorRequests++;
+                        post(WeChatParityActivity.this::publish);
+                        return super.requestCursorUpdates(cursorUpdateMode);
+                    }
                     filteredCursorRequests++;
                     post(WeChatParityActivity.this::publish);
                     if (declineFilteredCursorUpdates) {
