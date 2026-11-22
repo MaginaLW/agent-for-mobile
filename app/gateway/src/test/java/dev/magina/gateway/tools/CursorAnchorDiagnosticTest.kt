@@ -283,11 +283,27 @@ class CursorAnchorDiagnosticTest {
         val partialAttr = attributeCursorAnchorToDisjointWindow(partialOverlap, pkg, overlapWindows)
         assertTrue(partialAttr is WindowAttributionOutcome.Rejected && partialAttr.reason == "ambiguous_window_overlap")
 
-        // 3) Foreign-package floating window overlapping PA2553 right-pane editor -> fail closed
+        // 3) Foreign-package or unknown-package TYPE_APPLICATION window (overlapping OR non-overlapping!) -> fail closed cross_app_or_unknown_window
         val foreignOverlay = VisibleAppWindow(99, "com.other.floating", isActive = false, isFocused = false, bounds = IntBounds(1200, 1700, 1600, 1950))
+        val foreignDisjoint = VisibleAppWindow(100, "com.android.launcher", isActive = false, isFocused = false, bounds = IntBounds(0, 0, 200, 200))
+        val unknownDisjoint = VisibleAppWindow(101, null, isActive = false, isFocused = false, bounds = IntBounds(0, 0, 200, 200))
         val rightEditor = sampleGeometry(dx = 1040f, dy = 1780f, localBounds = FloatRect(0f, 0f, 1000f, 120f))
-        val foreignAttr = attributeCursorAnchorToDisjointWindow(rightEditor, pkg, pa2553Windows + foreignOverlay)
-        assertTrue(foreignAttr is WindowAttributionOutcome.Rejected && foreignAttr.reason == "ambiguous_window_overlap")
+        for (extraWin in listOf(foreignOverlay, foreignDisjoint, unknownDisjoint)) {
+            val attr = attributeCursorAnchorToDisjointWindow(rightEditor, pkg, pa2553Windows + extraWin)
+            assertTrue(
+                "expected cross_app_or_unknown_window for $extraWin, got $attr",
+                attr is WindowAttributionOutcome.Rejected && attr.reason == "cross_app_or_unknown_window",
+            )
+        }
+        val crossAppEnv = FakeCursorEnv(
+            windows = pa2553Windows + foreignDisjoint,
+            onRequest = { _, _ ->
+                CursorAnchorProbeResult.Received(rightEditor, CursorUpdateRequestMode.FILTERED_2ARG, true, null)
+            },
+        )
+        val crossAppReply = readCursorAnchor(crossAppEnv, JSONObject())
+        assertTrue(crossAppReply.isNull("ime_cursor_anchor"))
+        assertEquals("cross_app_or_unknown_window", crossAppReply.getString("ime_cursor_anchor_reason"))
 
         // 4) Zero-gap adjacent windows: full-width right rect passes, but caret literally on seam x=985 fails closed
         val touchingWindows = listOf(

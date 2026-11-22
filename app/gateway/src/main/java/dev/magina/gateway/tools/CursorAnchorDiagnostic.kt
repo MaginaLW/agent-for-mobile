@@ -85,6 +85,18 @@ internal fun attributeCursorAnchorToDisjointWindow(
             totalAppWindowCount = totalCount,
         )
     }
+    // 遵循仓库三档窗口拓扑策略（仅放行 single 与 same_app_multi）：只要屏幕上存在非目标包或未知包名的
+    // TYPE_APPLICATION 窗口（无论是否与几何点相交），一律 fail-closed 拒绝。
+    val foreignOrUnknown = positive.filter { it.packageName != targetPkg }
+    if (foreignOrUnknown.isNotEmpty()) {
+        return WindowAttributionOutcome.Rejected(
+            reason = "cross_app_or_unknown_window",
+            containingWindowIds = emptyList(),
+            overlappingWindowIds = foreignOrUnknown.map { it.id },
+            samePackageWindowCount = samePkgCount,
+            totalAppWindowCount = totalCount,
+        )
+    }
 
     fun rectContainedIn(rect: FloatRect, window: VisibleAppWindow): Boolean =
         rect.left >= window.bounds.left && rect.top >= window.bounds.top &&

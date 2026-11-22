@@ -397,6 +397,12 @@ object ImeBridge {
         rawExtractor: (CursorAnchorInfo) -> RawCursorAnchorData? = ::extractRawCursorAnchor,
     ): CompletableFuture<CursorAnchorProbeResult> {
         val result = CompletableFuture<CursorAnchorProbeResult>()
+        // 调用方超时取消或任意终态结束时释放槽位，避免无回调的远端编辑器把 IME 桥永久锁死在 BUSY。
+        result.whenComplete { _, _ ->
+            synchronized(sessionLock) {
+                if (pendingCursorAnchor?.result === result) pendingCursorAnchor = null
+            }
+        }
         executor.execute {
             var pending: PendingCursorAnchor? = null
             try {

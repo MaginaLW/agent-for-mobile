@@ -272,18 +272,33 @@ class CursorAnchorGeometryAndBridgeTest {
         ImeBridge.observeCursorAnchorRaw(otherConn, RawCursorAnchorData(AffineMatrix2D.translation(10f, 10f).values))
         assertEquals(CursorAnchorProbeResult.Rejected.CONTEXT_CHANGED, live.join())
 
-        // Cancelled timed-out request keeps slot until late callback arrives, preventing cross-request bleed
-        val timedOut = ImeBridge.requestCursorAnchor(secondGen, direct, sdkInt = 35)
-        timedOut.cancel(false)
+        // Concurrent active request fails closed with BUSY while first is still pending
+        val active = ImeBridge.requestCursorAnchor(secondGen, direct, sdkInt = 35)
+        assertFalse(active.isDone)
         assertEquals(
             CursorAnchorProbeResult.Rejected.BUSY,
             ImeBridge.requestCursorAnchor(secondGen, direct, sdkInt = 35).join(),
         )
-        // Late callback consumed by cancelled request
+        // Cancelling a timed-out request releases the slot immediately (never permanently stuck in BUSY)
+        active.cancel(false)
+        assertTrue(active.isCancelled)
+        // Late callback after cancellation is ignored harmlessly when idle
         ImeBridge.observeCursorAnchorRaw(conn, RawCursorAnchorData(AffineMatrix2D.translation(10f, 10f).values))
-        assertTrue(timedOut.isCancelled)
-        // Slot is now free for a clean next call
+        // Subsequent cursor-anchor probe succeeds without BUSY
         val fresh = ImeBridge.requestCursorAnchor(secondGen, direct, sdkInt = 35)
         assertFalse(fresh.isDone)
+        ImeBridge.observeCursorAnchorRaw(
+            conn,
+            RawCursorAnchorData(
+                matrixValues = AffineMatrix2D.translation(1040f, 1800f).values,
+                localEditorBounds = FloatRect(0f, 0f, 400f, 100f),
+            ),
+        )
+        val freshOutcome = fresh.join() as CursorAnchorProbeResult.Received
+        assertEquals(FloatRect(1040f, 1800f, 1440f, 1900f), freshOutcome.geometry?.editorBounds)
+        // And subsequent requestEditorBounds is not blocked either
+        val boundsAfter = ImeBridge.requestEditorBounds(secondGen, direct)
+        assertFalse(boundsAfter.isDone)
+        boundsAfter.cancel(false)
     }
 }

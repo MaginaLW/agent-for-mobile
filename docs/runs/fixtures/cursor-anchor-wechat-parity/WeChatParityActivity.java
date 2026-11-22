@@ -91,11 +91,13 @@ public final class WeChatParityActivity extends Activity {
         }
         setContentView(leftRoot);
 
-        // 必须在 setContentView() 之后再设置浮动窗尺寸与位置，避免 PhoneWindow.generateLayout() 重置为 WRAP_CONTENT。
+        // 保持 windowIsFloating=false / windowIsTranslucent=false 使 ActivityRecord.mOccludesParent=true，
+        // 隐藏背后 Launcher，再在 setContentView() 后显式设定左栏尺寸与位置。
         Window win = getWindow();
         win.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
         win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         win.getDecorView().setPadding(0, 0, 0, 0);
+        win.setGravity(Gravity.TOP | Gravity.START);
         WindowManager.LayoutParams leftLp = win.getAttributes();
         leftLp.gravity = Gravity.TOP | Gravity.START;
         leftLp.x = 0;
@@ -237,7 +239,8 @@ public final class WeChatParityActivity extends Activity {
 
         ParityEditText editor = new ParityEditText(declineFilteredCursorUpdates);
         editor.setId(sharedId);
-        editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        // 与 PA2553 微信聊天输入框一致：0x4001（单行 + TYPE_TEXT_FLAG_CAP_SENTENCES）+ IME_ACTION_SEND(0x04)
+        editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         editor.setImeOptions(EditorInfo.IME_ACTION_SEND);
         editor.setBackgroundColor(Color.rgb(232, 244, 232));
         editor.setPadding(16, 16, 16, 16);
