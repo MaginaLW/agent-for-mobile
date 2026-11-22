@@ -11,7 +11,7 @@ from count_focus_methods import SELECTED, summarize as trace_summary
 from verify_right_first import evaluate, read, require
 
 
-def inspect_sample(sample, ime):
+def inspect_sample(sample, ime, expected_stage="assist"):
     if not sample["shown"] or not sample["args_match"] or not sample["current_at_close"]:
         return "REQUEST_OR_CONNECTION_CHANGED"
     if (sample["ime_start"], sample["generation"]) != (ime["ime_started_ms"], ime["generation"]):
@@ -20,9 +20,11 @@ def inspect_sample(sample, ime):
         return "SCREENSHOT_REQUESTED"
     if sample["target_trees_examined"] == 0:
         return "NO_STRUCTURE"
-    if (sample["stage"] != "assist" or not sample["show_flags"] & 1 or not sample["current_on_receive"]
+    if (sample["stage"] != expected_stage or not (sample["show_flags"] & 1) or not sample["current_on_receive"]
             or sample["target_trees_examined"] != 1 or sample["assist_callbacks"] != 1):
         return "UNEXPECTED_DELIVERY"
+    if sample.get("assist_blocked"):
+        return "ASSIST_BLOCKED"
     if sample.get("rejected"):
         return "REJECTED_STRUCTURE"
     if not all(type(sample[k]) is int for k in ("request", "acquired", "completed", "received", "sample_close")):
@@ -33,6 +35,76 @@ def inspect_sample(sample, ime):
     if not sample["geometry_valid"] or len(sample["editors"]) != 2 or sample["focus_count"] != 1:
         return "UNRESOLVED_GEOMETRY"
     return "CURRENT_ASSIST_STRUCTURE"
+
+
+def _rects_disjoint(a, b):
+    return a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+
+
+def _rect_contains(outer, inner):
+    return outer[0] <= inner[0] and outer[1] <= inner[1] and outer[2] >= inner[2] and outer[3] >= inner[3]
+
+
+def evaluate_multiwin(sample, expected_stage, left_bounds, right_bounds):
+    if not sample["shown"] or not sample["args_match"] or not sample["current_at_close"]:
+        return {"decision": "REQUEST_OR_CONNECTION_CHANGED"}
+    if sample["show_flags"] & 2:
+        return {"decision": "SCREENSHOT_REQUESTED"}
+    if not (sample["show_flags"] & 1) or sample["stage"] != expected_stage or not sample["current_on_receive"]:
+        return {"decision": "UNEXPECTED_DELIVERY"}
+    if sample.get("assist_blocked"):
+        return {"decision": "ASSIST_BLOCKED"}
+    if not all(type(sample[k]) is int for k in ("ime_start", "request", "acquired", "completed", "received", "sample_close")):
+        return {"decision": "UNKNOWN_ACQUISITION"}
+    if not (sample["ime_start"] < sample["request"] < sample["acquired"] <= sample["completed"]
+            <= sample["received"] <= sample["sample_close"]):
+        return {"decision": "STALE_OR_UNORDERED_STRUCTURE"}
+    if not sample["geometry_valid"]:
+        return {"decision": "INVALID_GEOMETRY"}
+
+    target_acts = [a for a in sample.get("activities", []) if a.get("target_package") is True]
+    all_windows = []
+    for act in target_acts:
+        for w in act.get("windows", []):
+            all_windows.append((act, w))
+    focused_wins = sample.get("focused_windows", [])
+    if len(all_windows) < 2:
+        return {"decision": "SINGLE_WINDOW_ONLY", "target_activities": len(target_acts), "target_windows": len(all_windows)}
+    if len(focused_wins) == 0:
+        return {"decision": "NO_FOCUSED_WINDOW", "target_activities": len(target_acts), "target_windows": len(all_windows)}
+    if len(focused_wins) > 1:
+        return {"decision": "AMBIGUOUS_FOCUSED_WINDOWS", "focused_window_count": len(focused_wins)}
+    if len(target_acts) >= 2:
+        if sample.get("focused_activity_count") != 1 or not focused_wins[0].get("state_focused"):
+            return {"decision": "AMBIGUOUS_ACTIVITY_FOCUS",
+                    "focused_activity_count": sample.get("focused_activity_count"),
+                    "state_focused": focused_wins[0].get("state_focused")}
+
+    fw = focused_wins[0]
+    other_windows = [w for act, w in all_windows
+                     if not (act["index"] == fw["activity_index"] and w["window_index"] == fw["window_index"])]
+    left_found = any(any(e["bounds"] == left_bounds and not e["focused"] for e in w["editors"]) for w in other_windows)
+    right_matches = fw["editor_bounds"] == right_bounds and _rect_contains(fw["window"], right_bounds)
+    disjoint = all(_rects_disjoint(fw["window"], w["window"]) for w in other_windows)
+    act_slots = {a.get("activity_id_slot") for a in target_acts if a.get("activity_id_slot", -1) >= 0}
+    shared_id = bool(fw.get("id_matches_ime") or fw.get("resource_matches_ime"))
+    decision = "MULTIWIN_RIGHT_DISTINGUISHED" if (right_matches and left_found) else "MULTIWIN_MISMATCH"
+    return {
+        "decision": decision,
+        "target_activities": len(target_acts),
+        "target_windows": len(all_windows),
+        "focused_activity_count": sample.get("focused_activity_count"),
+        "distinct_activity_ids": len(act_slots),
+        "focused_component": fw.get("activity_component"),
+        "focused_state_flag": fw.get("state_focused"),
+        "focused_window_bounds": fw["window"],
+        "focused_editor_bounds": fw["editor_bounds"],
+        "window_bounds_disjoint": disjoint,
+        "unfocused_left_seen": left_found,
+        "common_native_id": bool(fw.get("id_matches_ime")),
+        "common_resource_id": bool(fw.get("resource_matches_ime")),
+        "strict_shared_id": shared_id,
+    }
 
 
 def observed_stages(directory):
@@ -48,7 +120,8 @@ def observed_stages(directory):
         result[stage] = {"decision": inspect_sample(sample, ime), "delivered": sample["target_trees_examined"],
                          "acquired": sample["acquired"], "completed": sample["completed"],
                          "received": sample["received"], "current_on_receive": sample["current_on_receive"],
-                         "current_at_close": sample["current_at_close"], "rejected": sample.get("rejected")}
+                         "current_at_close": sample["current_at_close"], "rejected": sample.get("rejected"),
+                         "assist_blocked": sample.get("assist_blocked")}
     return result
 
 
@@ -76,6 +149,65 @@ def verify_setup_stop(directory):
                 connection_continuity=None, shared_field_id=None, elapsed_seconds=state["elapsed_seconds"],
                 holder_at_close=None, restored_settings=len(state["restored"]), uninstalled=len(uninstalls),
                 cleanup=state["cleanup"])
+
+
+def summarize_controls(controls_dir):
+    summary = {}
+    for stage in ("secure", "ccoptout", "obfuscated"):
+        sub = controls_dir / stage
+        if not (sub / f"assist-{stage}.json").is_file():
+            continue
+        sample = read(sub, f"assist-{stage}.json")
+        oracle = read(sub, "oracle.json")
+        ime_stub = {"ime_started_ms": sample["ime_start"], "generation": sample["generation"]}
+        decision = inspect_sample(sample, ime_stub, expected_stage=stage)
+        if stage == "secure":
+            require(oracle.get("windowSecure") is True, "secure oracle missing FLAG_SECURE")
+            require(decision == "ASSIST_BLOCKED" and sample.get("assist_blocked") is True
+                    and sample["editors"] == [] and sample["focus_count"] == 0,
+                    f"FLAG_SECURE opt-out did not fail closed: {decision}")
+            summary[stage] = {"decision": decision, "assist_blocked": True, "editors": 0, "focus_count": 0}
+        elif stage == "ccoptout":
+            require(oracle.get("ccOptOut") is True, "ccoptout oracle missing flag")
+            focused = [e for e in sample["editors"] if e["focused"]]
+            summary[stage] = {
+                "decision": decision,
+                "root_cc_importance": oracle.get("rootContentCaptureImportance"),
+                "assist_blocked": bool(sample.get("assist_blocked")),
+                "editors": len(sample["editors"]),
+                "focused_matches_right": len(focused) == 1 and focused[0]["bounds"] == oracle["rightBounds"],
+                "common_native_id": bool(sample["native_id_matches"] == 1 and sample["ime_has_native_id"]),
+            }
+        elif stage == "obfuscated":
+            require(oracle.get("a11yObfuscated") is True, "obfuscated oracle missing flag")
+            focused = [e for e in sample["editors"] if e["focused"]]
+            require(decision == "CURRENT_ASSIST_STRUCTURE" and len(focused) == 1
+                    and focused[0]["bounds"] == oracle["rightBounds"],
+                    f"a11y-obfuscated control unexpected decision: {decision}")
+            summary[stage] = {
+                "decision": decision,
+                "pierced_a11y_obfuscation": True,
+                "focused_bounds": focused[0]["bounds"],
+                "common_native_id": bool(sample["native_id_matches"] == 1 and sample["ime_has_native_id"]),
+            }
+
+    mw1 = controls_dir / "multiwin"
+    if (mw1 / "assist-multiwin.json").is_file() and (mw1 / "multiwin-dialog.json").is_file():
+        sample = read(mw1, "assist-multiwin.json")
+        oracle = read(mw1, "multiwin-dialog.json")
+        summary["multiwin_dialog"] = evaluate_multiwin(
+            sample, "multiwin", oracle["leftBounds"], oracle["rightBounds"])
+
+    mw2 = controls_dir / "multiwin2"
+    if ((mw2 / "assist-multiwin2.json").is_file()
+            and (mw2 / "pane-left.json").is_file() and (mw2 / "pane-right.json").is_file()):
+        sample = read(mw2, "assist-multiwin2.json")
+        left_o = read(mw2, "pane-left.json")
+        right_o = read(mw2, "pane-right.json")
+        summary["multiwin_tasks"] = evaluate_multiwin(
+            sample, "multiwin2", left_o["editorBounds"], right_o["editorBounds"])
+
+    return summary
 
 
 def summarize(directory):
@@ -135,6 +267,10 @@ def summarize(directory):
         traces[s] = dict(records=trace["records"], elapsed_us=trace["elapsed_us"], target=counts[editor])
     state = read(directory, "state.json")
     require(state["autofill_after_assist"] == "ABSENT", "unexpected autofill callback")
+    require(isinstance(state.get("assistant_holder_before"), str)
+            and isinstance(state.get("assistant_holder_after"), str)
+            and state["assistant_holder_after"] == state["assistant_holder_before"],
+            "assistant role holder readback missing or mismatched at closeout")
     require(state["initially_empty"] and state["hardware"] == "1" and state["api"] == "36"
             and state["disable_usb"] and state["disable_mdns"] and state["assistant_role_restored"]
             and state["assistant_role_during"] == "dev.magina.autofillobserver" and state["phase"] == "closed"
@@ -142,12 +278,19 @@ def summarize(directory):
             and len(state["restored"]) == 13 and all(state["restored"].values()) and all(state["cleanup"].values()),
             "incomplete isolated run or role restoration")
     shared = shared_id or shared_resource
-    return dict(channel="VoiceInteractionSession", generation=ime["generation"], ime_start=ime["ime_started_ms"],
-                request=fresh["request"], acquired=fresh["acquired"], completed=fresh["completed"],
-                received=fresh["received"], current_structure=True, common_native_id=bool(shared_id),
-                common_resource_id=bool(shared_resource), focused_bounds=focused[0]["bounds"], target_witness="RIGHT",
-                strict_selected_side="RIGHT" if shared else None, strict_selected_bounds=focused[0]["bounds"] if shared else None,
-                negative="NO_STRUCTURE", offline_older_structure=stale, target_wire=wire, trace=traces)
+    out = dict(channel="VoiceInteractionSession", generation=ime["generation"], ime_start=ime["ime_started_ms"],
+               request=fresh["request"], acquired=fresh["acquired"], completed=fresh["completed"],
+               received=fresh["received"], current_structure=True, common_native_id=bool(shared_id),
+               common_resource_id=bool(shared_resource), focused_bounds=focused[0]["bounds"], target_witness="RIGHT",
+               strict_selected_side="RIGHT" if shared else None,
+               strict_selected_bounds=focused[0]["bounds"] if shared else None,
+               negative="NO_STRUCTURE", offline_older_structure=stale, target_wire=wire, trace=traces,
+               assistant_holder_before=state["assistant_holder_before"],
+               assistant_holder_after=state["assistant_holder_after"])
+    controls_dir = directory / "controls"
+    if controls_dir.is_dir():
+        out["controls"] = summarize_controls(controls_dir)
+    return out
 
 
 if __name__ == "__main__":
