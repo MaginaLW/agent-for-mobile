@@ -1,0 +1,4 @@
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="dev.magina.autofillobserver.AssistSessionService"
+    android:recognitionService="dev.magina.autofillobserver.SilentRecognition"
+    android:supportsAssist="true" />

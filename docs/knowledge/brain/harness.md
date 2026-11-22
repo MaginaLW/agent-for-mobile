@@ -12,11 +12,11 @@
 - 有效做法：P0 复用 `Read-DispatchTraceTranscript` 解析 Codex 事件，再沿用已有调用顺序、结果数和完成时序判据；fake runner 必须产生真实大脑 schema。下方 Claude CLI 经验保留为已退役路线的历史资料，不作为当前调用指南。
 - 验证依据：本轮 13 个现有定向用例通过，包含 Codex `item.*` 到 manifest 的 Allow/Stale 闭环与 ledger、顺序、JSON/audit 等反例；源码与过滤用例在 `scripts/tests/dispatch-offline.ps1`、`scripts/tests/p0-supervised-runner-offline.ps1`。证据限离线 fake，不代表设备或真实模型验收。
 
-## 官方CLI更新与精确版本准入（2026-11-14）
+## 官方CLI更新与精确版本准入（2026-11-14 / 2026-11-21）
 
-- 适用条件：桌面官方CLI升级后，真实dispatch在版本解析处拒绝，而DryRun仍能组装任务。当前实例是0.167.0-alpha.4.1；放在项目内的旧CLI不会被只枚举官方bin目录的resolver自动采用，不通过更改目录或绕过签名来解阻。
-- 有效做法：核本机官方签名、隔离帮助/feature列表及固定版本源码的实际配置/工具构造，再只加入被核过的精确契约；保留文件guard/hash、官方root、环境隔离和已有禁用。0.167分支额外禁用sleep_tool；不以帮助存在或关闭几个feature声称原生utilities/扩展贡献已被穷尽枚举。
-- 验证依据：既有fake CLI真实消费回归11项一次通过，覆盖新旧版本选择、隔离argv/环境、随机bearer不入argv及未知版本拒绝；实际认证、远端metadata和MCP/设备链仍另验。见[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#官方cli精确版本兼容候选)。
+- 适用条件：桌面官方CLI升级或清理旧版桌面二进制后，真实dispatch在版本解析处拒绝，而DryRun仍能组装任务。2026-11-14 实例为 `0.167.0-alpha.4.1`；2026-11-21 实例为官方稳定版 `0.171.0`（上游 tag `rust-v0.171.0`，commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`）。未放入受控 `toolchain/codex` 或官方桌面 `bin` 目录的二进制不会被 resolver 自动采用，不通过放宽信任根或绕过签名来解阻。
+- 有效做法：核本机官方 OpenAI OpCo 签名、隔离 `--version`/帮助/feature 列表、无凭据 `--strict-config` 解析及固定版本源码（`config.schema.json`、`features/src/lib.rs`、`tools/spec_plan.rs`、`exec_events.rs`、`event_processor_with_jsonl_output.rs`），再只加入被核过的精确契约；保留文件 guard/hash、受控 root（`toolchain/codex` 优先、官方桌面 `bin` 回退）、环境隔离和已有禁用。`0.167` 分支额外禁用 `sleep_tool`；`0.171` 分支沿用 `sleep_tool` 禁用并额外禁用恢复为默认开启的 `daemon_auto_start`，`exec_events.rs` 与 `0.167` 完全一致。此外 `0.171.0` 默认模型元数据可强制进入 `ToolMode::CodeModeOnly`（覆盖 `--disable code_mode`/`code_mode_only` 且不回退 `Direct`），必须与同目录配套的 `codex-code-mode-host.exe` 成对放置；派单链路在解析与 wrapper 启动前对 `0.171` 同目录 `codex-code-mode-host.exe` 强制核验存在性、非 reparse/link、OpenAI OpCo 签名及 deny-write 句柄下的 SHA-256。不以帮助存在或关闭几个 feature 声称原生 utilities/扩展贡献已被穷尽枚举。
+- 验证依据：2026-11-14 轮见[小红书准备记录](../../runs/2026-11-14-小红书单窗口只读准备.md#官方cli精确版本兼容候选)。2026-11-21 轮在 `0.171.0` 冻结副本上实测 `Resolve-DispatchTrustedCodexExecutable` 验签/guard/hash/探针选出 `contract=0.171`，无凭据 `--strict-config` 全参数解析直达必填 gateway MCP 握手，离线回归覆盖 `0.171.0` 优先级、邻居拒绝、配套 `codex-code-mode-host.exe` 缺失/目录/junction/未签名/SHA-256 篡改拒绝与隔离 argv/环境；真机侧 `0.171.0` 仅放 `codex.exe` 时复现 `codex-code-mode-host.exe` 缺失 fail-closed，补齐同源 OpenAI 签名配套二进制后 5 次只读 MCP 调用零 stderr 跑通。
 
 ## 动态网关配置须验证真实消费路径（2026-11-14）
 

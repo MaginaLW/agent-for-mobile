@@ -28,7 +28,7 @@ apksigner verify experiment.apk
 
 ## 隔离模拟器内复现
 
-使用[本地测试台](../../../runbooks/本地测试台.md)的独占 API 36 AVD、私有 ADB、启动前空设备表、端口归属和模拟器身份检查。下例中的 `$Adb`、`$PrivatePort`、`$Serial` 来自该轮核验。以新建 AVD 或确认缺少该轮结果文件的同一自有 AVD 开始，每种模式只启动一次，先保存并在收尾恢复原 IME。
+使用[本地测试台](../../../runbooks/本地测试台.md)的独占 API 36 AVD、私有 ADB、启动前空设备表、端口归属和模拟器身份检查。下例中的 `$Adb`、`$PrivatePort`、`$Serial` 来自该轮核验。使用新临时签名时，从全新 AVD 用户数据开始。复用旧 AVD 时，须确认此次 APK 与该 AVD 中同包名实验包的签名证书一致，并确认本轮结果和进度文件均不存在。普通包清单或结果目录为空也可能遇到 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；旧签名无法核实时，保留旧 AVD，另建实例。每种模式只启动一次，先保存并在收尾恢复原 IME。
 
 ```powershell
 $target = @('-H','127.0.0.1','-P',"$PrivatePort",'-s',$Serial)
@@ -61,3 +61,16 @@ try {
 ```
 
 原点实验改用 `.OriginProbeIme`，启动时省略 `--ez geometry true`，并将 `$resultName` 设为 `result.json`。回执的 `complete`、四行 `pass` 和各项独立读数共同用于判定。再次开机读取留存回执时可用 `stat -c %Y` 核实其修改时间早于本次开机。
+
+在同一套四边实验中，用 `--ez session_bounds true` 启动并读取 `session-bounds-result.json`，可验证原点为空时的延后处理。确认本次结果和进度文件均不存在，并保留此前的回执。新模式每阶段通过实际输入连接返回一次 `CODE_UNSUPPORTED`。核对四行原点均空、矩形分别匹配当前框且不匹配对照框。`deferred_rejected` 应依次为 0、1、2、2，其中再次聚焦同一框的 `revisited_rejected` 应为 0、0、1、1。保留的旧样本从输入法已收到的事件中取得，此模式没有为系统首次送达的回调提供请求编号。
+
+## 用当前输入焦点核对身份和四边
+
+在同一私有模拟器中安装合成包，保存原默认输入法及启用清单。使用干净实例，确认实验输入法原先未启用，应用私有目录 `files` 下没有本轮的 `focus-ready`、`focus-go` 或 `focus-bounds-*.json`。
+
+1. 在第一个终端运行 `& $Adb @target shell am instrument -w -r "$pkg/.FocusCheckInstrumentation"`。它在初始化无障碍观察器后建立 `files/focus-ready`，最多等待宿主 30 秒。
+2. 在第二个终端使用同一私有端口和模拟器序列号。当 `& $Adb @target shell run-as $pkg ls files` 显示 `focus-ready` 时，依次运行 `& $Adb @target shell ime enable $ime`、`& $Adb @target shell ime set $ime`。读回默认输入法，确认与 `$ime` 相同，再运行 `& $Adb @target shell run-as $pkg touch files/focus-go`。
+3. 核对第一个终端的退出回执和四行 `focus_rows`。观察器每阶段最多等 8 秒，连续两次清缓存并读取系统当前的输入焦点，核对活动应用窗口、节点唯一性、资源名及屏幕矩形。另读应用私有的 `focus-bounds-result.json`，核对独立输入法进程、四个实际编辑框测量以及同原点对照框。首次失败即结束，保存已有结果。
+4. 在收尾中恢复原默认输入法并停用实验输入法，逐项比对原默认值和启用清单。关闭本轮独占的模拟器和 ADB 服务并核实端口释放。
+
+四个场景依次为具名甲、具名但无障碍节点报告不可编辑的乙、加宽后重新聚焦的甲，以及只有运行时 ID 的乙。预期前三次身份和四边一致，旧甲的矩形在第三次比对时因宽度不同被拒绝。第四行必须同时读到 `bounds_match=true` 和 `current=missing_id` 才能通过：无障碍焦点与输入法报告的四边逐边相等，身份核对仍因缺名停止。实验只观察元数据。

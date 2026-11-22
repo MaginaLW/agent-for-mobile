@@ -28,9 +28,9 @@
 
 ## 卡在哪
 
-**微信横屏右窗编辑框的唯一识别仍阻塞（11 月 22 日收尾）。** PA2553 上，候选 `2289925` 的前四次只读调用核实了切换输入法前后都是「文件传输助手」的同一右窗。第五次返回 `missing_id / before_sample / field_id_unresolved`，在请求编辑框四边前就已停止。保留下来的四边属于窗口，当前输入连接对应哪个编辑框仍未知。微信内点击、输入和发送均为零。收尾已核实原输入法、无障碍设置、vivo 服务绑定、网关服务和端口转发均已恢复。[真机回执与恢复](docs/knowledge/apps/wechat.md#pa2553-在采样前无法解析字段-id)
+PA2553 微信横屏的编辑框几何归属**已于 11 月 22 日通过零新增权限的 Pathway 4A（`CursorAnchorInfo` API 21 单参数降级 + 不相交双窗严格归属）在真机只读诊断中打通**（`345f897` 草稿 PR #47）；目前尚待将这套 `CursorAnchorInfo` 归属接入生产输入目标/焦点解析（待用户审阅合入 #47），再完成桌面/左窗自动就位与获授权的设备端 ConfirmOverlay 发送实测。[PA2553 实测突破](docs/knowledge/apps/wechat.md#pa2553-真机只读实测pathway-4a-打通右窗编辑框归属4b-封口无障碍节点路线) · [草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
 
-11 月 17 日的一次派单有 3 次网关调用成功、2 次向本机网关发送 HTTP 请求失败。具体断点仍未知。
+11 月 17 日派单的前三次网关调用成功；随后的 `ui_action` 和 `app_launch` 均报告 HTTP 请求发送失败，两次都没有收到网关结果。同期 stderr 的六条超时来自模型管理器。现有记录无法区分端口转发、网关服务或连接本身在哪一段中断。[派单错误的判读方法](docs/knowledge/brain/harness.md)
 
 11 月 18 日的八次小红书派单均通过预检，当天结果页空白的原因仍未知。此前的无障碍解绑和桌面深链被系统弹窗阻挡各有独立记录，长期绑定稳定性仍待观察。[无障碍记录](docs/knowledge/android/vivo-originos.md) · [小红书实测](docs/knowledge/apps/xiaohongshu.md)
 
@@ -74,8 +74,6 @@ PA2553 的一次原点诊断在旧网关预检终止。一次性宿主遮蔽了�
 
 修正入口随后在 PA2553 上派单一次，用时 82 秒。同签候选 `f913fb4` 已安装并核实摘要。切换输入法前后均核实同一微信右窗及「文件传输助手」标题，第五次读取返回 `editor-origin-unavailable`。执行器零点击、零输入、零发送。独立读回核实原输入法、启用的输入法清单、无障碍总开关、服务和转发均与入场一致。无障碍服务清单少了一项原已启用的非网关服务。[原点诊断与收尾差异](docs/knowledge/apps/wechat.md#候选网关返回原点不可用)
 
-## 11 月 20 至 21 日的微信编辑框诊断
-
 这项非网关服务已按用户授权恢复。一次写入后两次核对，原四项设置和网关资源都与入场一致，第二次还观察到系统客户端已绑定指定组件。[恢复读回](docs/knowledge/apps/wechat.md#恢复原有无障碍服务)
 
 在 PA2553 上又执行了一次 #40 真机诊断。两次读取已核实微信右窗和标题，派单等待候选就绪超时后结束，共 398 秒。随后同签候选 `e994c71` 安装完成，独立核实了 APK 摘要、原四项设置、网关资源和 vivo 输入法服务绑定。本轮未切换输入法或执行原点查询，微信内零点击、零输入、零发送。[本轮回执](docs/knowledge/apps/wechat.md#等待候选网关就绪超时)
@@ -86,15 +84,40 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 合成靶又用系统当前输入焦点独立核对了四个场景。三次具名控件的身份和四边均匹配，包括一次节点报告不可编辑。原控件加宽 12 像素后，旧矩形被拒绝。最后一个控件的坐标吻合，但缺少可核实的资源名，检查停止。微信是否暴露可交叉核对的身份仍未知。[焦点核对实测](docs/knowledge/apps/wechat.md#用当前输入焦点核对四边)
 
-源码候选在原点为空时区分输入目标缺失、上下文变化、几何未获验证、请求异常、超时和系统版本不支持。Android Debug 481 项、Release 384 项单测及两个版本的 Lint、构建通过。PA2553 已在 `e994c71` 上取得其中的 `no_verified_geometry`。[回执字段](docs/knowledge/apps/wechat.md#候选网关返回原点不可用)
-
 网关候选 `50c17a2` 在 Android 16 模拟器上取得了两个具名编辑框的正确四边。11 月 20 日，PA2553 真机在切换输入法前后均核实了微信同一右窗和「文件传输助手」标题，唯一一次四边查询返回 `focus_unavailable`，编辑框坐标仍未知。原 vivo 输入法和无障碍服务已恢复，四项设置及网关资源与入场一致，系统绑定已独立核实。[真机回执](docs/knowledge/apps/wechat.md#pa2553-右窗四边诊断返回-focus_unavailable)
 
 11 月 21 日，现场重新就位后，PA2553 保数据更新至 `8d02ed3`。输入法切换前后均核实了同一微信右窗和「文件传输助手」标题。唯一一次四边查询返回 `before_sample / input_focus_missing`：无障碍服务查询输入焦点时得到空节点，尚未向输入法请求几何数据。原输入法、四项设置和网关资源已恢复，vivo 无障碍服务的系统绑定已独立核实。[本轮回执](docs/knowledge/apps/wechat.md#重新就位后输入焦点节点为空) · [此前的入场记录](docs/knowledge/apps/wechat.md#细分焦点诊断在派单前停止)
 
+针对这次空焦点，草稿候选 `4862535` 增加了窗口字段核对。Debug 和 Release 的编译产物各通过 83 项 JVM 用例，其中 6 项取得预期四边，77 项按预期返回空四边。项目完整离线检查 9/9 通过。[核对条件与用例](docs/knowledge/apps/wechat.md#窗口字段与输入连接的离线核对) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+11 月 21 日，PA2553 窗口字段诊断核实了微信右窗与「文件传输助手」标题，随后等待候选 `4862535` 就绪 360 秒超时。02:29（新加坡时间）收尾读回的在机版本为 `8d02ed3`，输入法切换和四边查询均为零，四项设置、vivo 无障碍系统绑定及网关资源均与入场一致。用户随后确认已安装，并要求暂缓执行。安装后的 APK 摘要和微信编辑框四边均待核实。[安装等待回执与现场反馈](docs/knowledge/apps/wechat.md#窗口字段诊断在安装等待时终止)
+
+随后核对 PA2553 在机 APK 摘要与已签候选 `4862535` 一致，免安装完成窗口字段诊断。现场轻点右窗输入栏后，输入法切换前后均核实了同一微信右窗和「文件传输助手」标题。唯一一次四边查询返回 `before_sample / node_not_focused`：在活动右窗取得并刷新单一节点后，因节点未报告聚焦而在请求输入法几何前停止。派单耗时 31 秒，微信内零点击、零输入、零发送。原默认输入法、四项设置、vivo 无障碍系统绑定及网关资源均与入场一致并已独立核实。[窗口字段实测回执](docs/knowledge/apps/wechat.md#复用候选后节点未报告聚焦)
+
+针对该断点，草稿候选 `2341c7d` 仅在服务级与根级输入焦点均为空时放行未聚焦的唯一窗口字段节点，离线全量检查 9/9 通过（Debug 503 项、Release 406 项单测及 Lint、构建通过）。11 月 21 日在 PA2553 上同签保数据更新至 `2341c7d` 后进行了两轮只读诊断：首轮（80 秒，4 次调用）在新网关重启后于第 4 次标题复核遇 `page-changed` 停止，未执行四边查询；随后的免安装复测（27 秒，5 次调用）在切换输入法前后均核实同一微信右窗与标题，唯一一次四边查询仍返回 `before_sample / node_not_focused`。按 `2341c7d` 源码，该回执证明服务级或窗口根的 `findFocus(FOCUS_INPUT)` 实际返回了非空焦点节点，但节点刷新后 `isFocused` 为假。两轮收尾均经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定及网关资源回到基线。[2341c7d 真机回执](docs/knowledge/apps/wechat.md#候选-2341c7d-免安装复测仍返回-node_not_focused) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+草稿候选 `f503328` 随后对未聚焦节点统一采用活动窗、非冲突焦点与 `EditorInfo.fieldId` 交叉核验，离线全量检查 9/9 通过（Debug 509 项、Release 412 项单测及 Lint、构建通过）。同日在 PA2553 同签保数据更新至 `f503328` 后进行两轮只读诊断：首轮（33 秒，4 次调用）在安装重启后的第 4 次标题复核遇 `page-changed` 停止；免安装复测（27 秒，5 次调用）在同一微信右窗及标题核对通过后，唯一一次四边查询返回 `before_sample / node_not_visible`。对比 `2341c7d`（`node_not_focused`）与 `f503328`（`node_not_visible`），证实服务级 `findFocus(FOCUS_INPUT)` 实际返回了非空节点，但该节点同时报告 `isFocused=false` 且 `isVisibleToUser=false`，依然在发出输入法四边请求前停止。两轮收尾均经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定及网关资源回到基线。[f503328 真机回执](docs/knowledge/apps/wechat.md#候选-f503328-免安装复测返回-node_not_visible) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+草稿候选 `b37c018` 新增失效服务焦点下的活动窗 `EditorInfo.fieldId` 兜底与 14 键脱敏诊断快照（`ime_editor_focus_diag`），离线全量检查 9/9 通过（Debug 516 项、Release 419 项单测及 Lint、构建通过）。同日按授权先独立完成同签保数据安装并核实摘要，随后执行单次免安装只读诊断（33 秒，5 次调用）。输入法切换前后均核实同一微信右窗与标题，唯一一次四边查询仍返回 `before_sample / node_not_visible`，并一次性取得 14 项脱敏诊断事实：服务级与根级输入焦点指向右窗内同一节点（`same_window=true`、`same_package=true`、`root_focus_state=matches_service`），该节点无资源名（`service_focus_matches_field=null`）且 `focused=false`、`visible=false`；同时当前输入连接的 `EditorInfo.fieldId` 在右窗内命中多于一个节点（`window_field_lookup=ambiguous`）。收尾经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定及网关资源回到基线。[b37c018 诊断快照回执](docs/knowledge/apps/wechat.md#候选-b37c018-取得-14-键诊断快照) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+草稿候选 `8f0baa0` 随后对活动窗字段多命中增加可见窗内子集筛选与 17 键诊断计数，独立完成同签保数据安装并核实在机摘要与微信右窗焦点。受本机 Codex CLI 升级影响，前两次诊断均在零业务调用前终止且独立收尾全绿：首次冻结宿主拒绝未知版本 `0.171.0`；合入 `0.171.0` 契约（[PR #62](https://github.com/MaginaLW/agent-for-mobile/pull/62)）后第二次因 `toolchain/codex/` 缺失默认模型（`ToolMode::CodeModeOnly`）配套的 `codex-code-mode-host.exe` 触发 fail-closed。补齐同源 OpenAI 签名配套二进制后，单次免安装只读诊断（25 秒，5 次调用，零 stderr）在切换输入法前后均核实同一微信右窗及标题，唯一一次四边查询仍返回 `before_sample / node_not_visible` 与完整 17 键诊断快照：既有 14 键与 `b37c018` 一致，新增 3 项计数证实 `window_field_total_matches=2`、`window_field_bounds_in_window_matches=0`、`window_field_visible_in_window_matches=0`——即两个按 `fieldId` 命中的节点在进入 `isVisibleToUser` 判断前就全部被前置条件淘汰。收尾经授权补回缺失的 vivo 无障碍服务并独立核实四项设置、系统绑定与网关资源回到基线。配套验签门禁已合入 `main`（[PR #63](https://github.com/MaginaLW/agent-for-mobile/pull/63)），草稿 #47 已更新至 `0b4b4d4` 细化为 23 键淘汰原因计数（Debug 526 / Release 429 项单测及 Lint、构建通过）；基于 `696ca58` 宿主的 `0b4b4d4` 离线构建与 23 键过滤器（27 项）、入场（11 项）、收尾（7 项）及真实 `0.171.0` 配套验签预演均已通过（零设备访问、零实签）。[8f0baa0 17 键诊断回执](docs/knowledge/apps/wechat.md#候选-8f0baa0-取得-17-键计数并证实-02-窗内命中) · [源码草稿 #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+
+同日，PA2553 已同签更新至 `0b4b4d4`。从已聚焦的微信右窗派单一次，28 秒内完成两轮窗口与标题复核。第五次读取发现两个候选节点的资源名均未匹配输入法字段，未取得编辑框四边。全程零输入、零发送。收尾一次补回原有 vivo 无障碍服务后，四项设置、系统绑定和网关资源均独立核实。[23 键真机回执](docs/knowledge/apps/wechat.md#候选-0b4b4d4-的两个节点均在资源名核对时被排除)
+
+随后，PA2553 同签更新至 `39bfaed`，在已聚焦的微信右窗派单一次，用时 27 秒。两轮窗口与标题核对均通过。第五次只读查询查到两个候选，刷新后两者均未返回可用资源名，仍无法确认唯一编辑框。此次零输入、零发送。收尾补回原有 vivo 服务一次，四项设置、系统绑定和网关资源均已独立核对。[本轮真机记录](docs/knowledge/apps/wechat.md#候选-39bfaed-的两个节点均未返回可用资源名)
+
+`123cf59` 已在同一平板核实运行时的资源名报告标志。安装后的首次入场在派单前停下，系统焦点及输入法目标都不在微信会话。现场重新就位后，免安装派单 28 秒，核实同一右窗及标题。当次网关连接报告 `FLAG_REPORT_VIEW_IDS=true`，两个候选刷新后仍都缺名，四边未取得。这条按资源名识别编辑框的路径已收尾。现场发送及两个起点的自动就位仍待独立证据。[真机回执及收尾](docs/knowledge/apps/wechat.md#候选-123cf59-在资源名报告已开启时仍有两个无名节点)
+
 ## 下一步
 
-横屏诊断停在编辑框归属。恢复条件和后续两个起点的验收顺序见[横屏待办](docs/backlog.md#横屏诊断收尾与恢复条件)。平板保持现状，竖屏 P0 暂缓。[实验 PR #45](https://github.com/MaginaLW/agent-for-mobile/pull/45) 已合入，[#40](https://github.com/MaginaLW/agent-for-mobile/pull/40) 已关闭，[横屏诊断 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47) 保留草稿。
+**PA2553 微信横屏只读诊断（C）已于 2026-11-22 经用户授权完成单次 4 工具只读实测并取得关键突破（在机 `345f897` Debug APK，SHA-256 `483994bb...b9ceda`，零新增权限、零系统角色接管、零可见 IME UI，派单 45.61 秒、退出码 `0`，零点击/零输入/零发送）：**
+
+- **Pathway 4B 彻底封口无障碍节点路线**：实测证实 `service_focus` 与两个 `fieldId`（`2131365757`）命中节点均为 100% 空壳剥离桩（`bounds=[0,0,0,0]`、`input_type=0`、`focused=false`、`visible=false`、`editable=false`、`view_id_state=missing`、`class_name=null`），同时 `ime_editor_contract_diag` 核实真实输入契约（`input_type=147457`、`field_id_class=id`、`autofill_id_present=true/virtual=false`、`supported_handwriting_gestures=true`）。
+- **Pathway 4A（`probe_cursor_anchor`）在微信真机直接打通**：微信拒绝了 2 参 `requestCursorUpdates(mode, filter)`（`filtered_accepted=false`），网关自动降级至 API 21 单参数 `requestCursorUpdates(CURSOR_UPDATE_IMMEDIATE)`（`legacy_accepted=true`，`request_mode=legacy_1arg`），首次从真实微信取回完整右窗输入栏精确屏幕四边 **`[1048, 1834, 2578, 1946]`**（`1530×112` px）、`matrix_origin=(1048,1834)` 与可见闪烁插入光标 `(1067, 1864..1929)`，在不相交双窗门控下严格唯一归属至右窗 `id=364`（`[927,0,2800,1968]`，`pane="right"`，对比左窗 `358` `[0,0,923,1968]`）。
+- **收尾双重独立读回全绿**：间隔 2 秒两次读回确认 4 项基线设置逐字还原相等（含前导 `:` 与 vivo `AutoSendImageService`）、`dumpsys accessibility` 中 `GatewayA11yService` 与 vivo `AutoSendImageService` 双绑定、`GatewayService` 已停止、`adb forward --list` 为空。[PA2553 实测详情](docs/knowledge/apps/wechat.md#pa2553-真机只读实测pathway-4a-打通右窗编辑框归属4b-封口无障碍节点路线) · [草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+- **下一步顺序**：(1) 在草稿 [PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47) 中将 `CursorAnchorInfo`（`legacy_1arg` + 不相交双窗 fail-closed 归属）接入生产输入目标与焦点解析，经完整离线门后提交用户审阅与合入批准；(2) 随后依次实测 PA2553 桌面/左窗自动就位与单次获授权的设备端 ConfirmOverlay 发送验收（竖屏 P0 继续独立暂缓）。
+
+此前完成的第二轮隔离 API 36 离线攻关（[PR #75](https://github.com/MaginaLW/agent-for-mobile/pull/75)）已将三项既有夹具全部收口：`request-matrix`（`2772db0`）在三项微信等价对抗上全部 fail-closed，收口为窄 AOSP 边界；`ime-menu`（`a11ee7e`）与 `assistant-structure`（`340dddc`）作为离线已验备选保留。[四路线汇总与排序](docs/backlog.md#补充实验收尾2026-11-22-第二轮隔离-api-36-实测)
 
 ## 2026-11-15 精简
 

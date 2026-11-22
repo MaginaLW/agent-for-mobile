@@ -19,7 +19,7 @@ param(
     [string]$Slug,
     [ValidateRange(1, 60)][int]$TimeoutMin = 15,
     [string]$Model = '',
-    [ValidateSet('codex')][string]$Brain = 'codex',
+    [string]$Brain = 'codex',
     [ValidateSet('gateway')][string]$Executor = 'gateway',
     [string]$Confirm,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')][string]$ExpectedDeviceSerial,
@@ -34,6 +34,11 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 $OutputEncoding = [Text.Encoding]::UTF8
+
+if ($Brain -ne 'codex') {
+    throw "Brain 参数只接受 codex（Claude 已退役；收到：$Brain）。"
+}
+$Brain = 'codex'
 
 $RepoRoot     = Split-Path $PSScriptRoot -Parent
 $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
@@ -450,12 +455,18 @@ function Start-DispatchJobRoot {
         [Parameter(Mandatory)][string]$JobName,
         [Parameter(Mandatory)][string]$ExpectedExecutableSha256,
         [Parameter(Mandatory)][bool]$RequireOpenAiSignature,
+        [string]$CompanionExecutable = '',
+        [string]$ExpectedCompanionSha256 = '',
         [hashtable]$SensitiveEnvironment = @{},
         [string[]]$PreserveEnvironmentNames = @(),
         [string[]]$EnvironmentAllowList = @(),
         [hashtable]$ChildEnvironmentOverrides = @{}
     )
 
+    if ([string]::IsNullOrWhiteSpace($CompanionExecutable) -xor
+        [string]::IsNullOrWhiteSpace($ExpectedCompanionSha256)) {
+        throw 'Codex companion executable 与 SHA-256 必须成对提供。'
+    }
     $gateName = "Local\AgentMobileDispatch-$PID-$([guid]::NewGuid().ToString('N'))"
     $createdNew = $false
     $gate = [Threading.EventWaitHandle]::new(
@@ -472,6 +483,8 @@ function Start-DispatchJobRoot {
         job_name = $JobName
         expected_executable_sha256 = $ExpectedExecutableSha256
         require_openai_signature = $RequireOpenAiSignature
+        companion_executable = $CompanionExecutable
+        expected_companion_sha256 = $ExpectedCompanionSha256
         sensitive_environment_names = @($SensitiveEnvironment.Keys)
     } | ConvertTo-Json -Compress -Depth 4
     $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
@@ -486,25 +499,31 @@ $payload = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String($env:AGENT_MOBILE_DISPATCH_PAYLOAD)) | ConvertFrom-Json
 Remove-Item Env:AGENT_MOBILE_DISPATCH_GATE -ErrorAction SilentlyContinue
 Remove-Item Env:AGENT_MOBILE_DISPATCH_PAYLOAD -ErrorAction SilentlyContinue
-$executableItem = Get-Item -LiteralPath ([string]$payload.executable) -Force -ErrorAction Stop
-if (-not $executableItem.PSIsContainer -and
-    ($executableItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
-    [string]::IsNullOrWhiteSpace([string]$executableItem.LinkType)) {
-    $executableGuard = [IO.File]::Open($executableItem.FullName, [IO.FileMode]::Open,
-        [IO.FileAccess]::Read, [IO.FileShare]::Read)
-}
-else { throw 'dispatch brain executable 不是普通文件。' }
+$guards = [Collections.Generic.List[IO.FileStream]]::new()
 try {
-    $actualSha256 = (Get-FileHash -InputStream $executableGuard -Algorithm SHA256).Hash
-    if ($actualSha256 -cne [string]$payload.expected_executable_sha256) {
-        throw 'dispatch brain executable 在验证后发生变化。'
+    $targets = [Collections.Generic.List[object]]::new()
+    $targets.Add(@([string]$payload.executable, [string]$payload.expected_executable_sha256, 'dispatch brain executable', 'Codex executable'))
+    if (-not [string]::IsNullOrWhiteSpace([string]$payload.companion_executable)) {
+        $targets.Add(@([string]$payload.companion_executable, [string]$payload.expected_companion_sha256, 'Codex companion executable', 'Codex companion executable'))
     }
-    if ([bool]$payload.require_openai_signature) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $executableItem.FullName
-        if ($signature.Status -ne 'Valid' -or
-            [string]$signature.SignerCertificate.Subject -cne
-                'CN="OpenAI OpCo, LLC", O="OpenAI OpCo, LLC", L=San Francisco, S=California, C=US') {
-            throw 'Codex executable 启动前签名复核失败。'
+    foreach ($t in $targets) {
+        $item = Get-Item -LiteralPath $t[0] -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)) {
+            throw "$($t[2]) 不是普通文件。"
+        }
+        $guard = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $guards.Add($guard)
+        $actualSha256 = (Get-FileHash -InputStream $guard -Algorithm SHA256).Hash
+        if ($actualSha256 -cne $t[1]) { throw "$($t[2]) 在验证后发生变化。" }
+        if ([bool]$payload.require_openai_signature) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $item.FullName
+            if ($sig.Status -ne 'Valid' -or
+                [string]$sig.SignerCertificate.Subject -cne
+                    'CN="OpenAI OpCo, LLC", O="OpenAI OpCo, LLC", L=San Francisco, S=California, C=US') {
+                throw "$($t[3]) 启动前签名复核失败。"
+            }
         }
     }
 Add-Type -TypeDefinition @"
@@ -734,12 +753,15 @@ $childExit = [AgentMobileDispatchSuspendedChild]::Run(
     [string]$payload.working_directory, [string]$payload.prompt, [string]$payload.job_name,
     [string[]]@($payload.sensitive_environment_names))
 }
-finally { $executableGuard.Dispose() }
+finally {
+    foreach ($guard in $guards) { $guard.Dispose() }
+}
 exit $childExit
 '@
-    # 固定启动脚本统一使用 LF，避免 CRLF 检出放大 -EncodedCommand，超过 Windows
+    # 固定启动脚本统一使用 LF 并剔除纯缩进与整行注释，避免 -EncodedCommand 触及 Windows
     # CreateProcess 的 32767 字符上限；用户 prompt/arguments 仍由独立 payload 原样传递。
-    $wrapper = $wrapper.Replace("`r`n", "`n")
+    $wrapper = (($wrapper.Replace("`r`n", "`n") -split "`n" | ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith('#') -and -not $_.StartsWith('//') }) -join "`n")
     $wrapperEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = (Get-Process -Id $PID).Path
@@ -934,6 +956,8 @@ try {
     $LedgerModel = $launchSpec.LedgerModel
     $expectedExecutableSha256 = $launchSpec.ExpectedSha256
     $requireOpenAiSignature = $launchSpec.RequireOpenAiSignature
+    $companionExecutable = [string]$launchSpec.CompanionExecutable
+    $expectedCompanionSha256 = [string]$launchSpec.ExpectedCompanionSha256
     $childEnvironmentAllowList = @(
         'SystemRoot','WINDIR','ComSpec','OS','TEMP','TMP','PATH','PATHEXT',
         'LOCALAPPDATA','APPDATA','USERPROFILE','HOMEDRIVE','HOMEPATH','USERNAME','USERDOMAIN',
@@ -963,6 +987,8 @@ try {
         -TracePath $TraceFile -ErrorPath $ErrFile -JobName $dispatchJobName `
         -ExpectedExecutableSha256 $expectedExecutableSha256 `
         -RequireOpenAiSignature $requireOpenAiSignature `
+        -CompanionExecutable $companionExecutable `
+        -ExpectedCompanionSha256 $expectedCompanionSha256 `
         -SensitiveEnvironment $sensitiveChildEnvironment `
         -PreserveEnvironmentNames $preserveEnvironmentNames -EnvironmentAllowList $childEnvironmentAllowList `
         -ChildEnvironmentOverrides $childEnvironmentOverrides
