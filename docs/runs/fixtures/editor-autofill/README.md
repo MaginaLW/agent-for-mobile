@@ -59,4 +59,14 @@
 
 将首次左场的真实合成样本离线回放到右场，原样回放得到 `PRE_STAGE_CALLBACK`，模拟延迟送达但保留原采集时间得到 `PRE_STAGE_STRUCTURE`。两种情况都不能把左框四边带到右框。
 
-Android 16 源码中，空填充响应在特定条件下会结束会话，客户端随后可忽略已登记字段的自动进入事件。本实验没有记录框架走到的分支，右框缺少新结构的具体原因仍待核对。[系统处理空响应](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/autofill/java/com/android/server/autofill/Session.java#L6384-L6400) · [客户端过滤进入事件](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/autofill/AutofillManager.java#L1813-L1833)
+前两轮只记录了观察器收到的回调。随后在同版夹具上追踪了框架的会话和请求。
+
+### 空响应后的会话与右框请求
+
+2026-11-22，在全新 API 36 模拟器上复用 `3935880` 的两份实验 APK。临时开启自动填充详细日志，分别在启动左场和触摸右框前放置日志标记。按靶应用与系统服务各自的进程筛选事件，用系统请求历史的会话号核对空响应，并将靶 Activity 布局中的两个字段标识、控件实例及矩形与其私有回执逐项对应。
+
+左框独占连接时，靶应用手动请求数为零。系统记录了 1 次结构请求和 1 次向服务派发，两者的请求号相同。服务回调后，系统明确记录因空响应结束该会话。靶应用进程紧接着记录 `ACTIVE → FINISHED`，独立读取的 Activity 状态也是 `FINISHED`。系统及客户端记录的字段列表都含有左、右两框，此时右框尚未被触摸。[系统处理空响应](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/autofill/java/com/android/server/autofill/Session.java#L6368-L6399) · [客户端登记字段](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/autofill/AutofillManager.java#L3673-L3692)
+
+在同一 Activity 内触摸右框一次，只有右连接收到只读探针。客户端 `AutofillManager` 明确记录了 1 次忽略进入事件，原因是会话处于 `FINISHED` 且该字段已登记。日志所指的字段与右框标识一致，手动请求标志为零。系统请求历史仍只有左场那一条，右场新增会话启动、结构请求、向服务派发及服务回调均为零。右场观察窗口从开启阶段标记计时共 10.033 秒，其中取得连接回执后留观 6 秒。断点位于客户端处理右框进入事件时，观察器未输出选中侧或四边。[客户端过滤进入事件](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/autofill/AutofillManager.java#L1813-L1833)
+
+本轮共 207 秒。八项原设置全部恢复并逐项读回，自动填充日志级别也已从临时的 `verbose` 恢复为入场时的 `debug`。两个实验包已卸载，专属模拟器和私有 ADB 已停止，端口已释放。本次只覆盖这对合成控件和返回空响应的实验服务，未连接 PA2553。
