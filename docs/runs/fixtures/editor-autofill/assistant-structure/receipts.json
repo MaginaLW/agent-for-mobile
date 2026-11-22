@@ -1,0 +1,1456 @@
+{
+  "schema": 1,
+  "date": "2026-11-22",
+  "environment": {
+    "api": "36",
+    "hardware": "1",
+    "initially_empty": true,
+    "disable_usb": true,
+    "disable_mdns": true,
+    "uids": {
+      "target": "10216",
+      "observer": "10217"
+    },
+    "apk_sha256": {
+      "target": "f6cd715a61d76e0cfe57f1c3e2e8c7b007e3f9bc47227d42615f2652b628e26d",
+      "observer": "971a1fc52334573b31b92c788ab93a67db13030ce02b5a2138532033b28410db"
+    },
+    "assistant_holder_before": "com.google.android.googlequicksearchbox",
+    "assistant_role_during": "dev.magina.autofillobserver",
+    "voice_during": "dev.magina.autofillobserver/.AssistService",
+    "assistant_during": "dev.magina.autofillobserver/.AssistService",
+    "voice_recognition_during": "com.google.android.tts/com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService",
+    "assistant_holder_after": "com.google.android.googlequicksearchbox",
+    "assistant_role_restored": true,
+    "autofill_after_assist": "ABSENT",
+    "restored": {
+      "default_input_method": true,
+      "enabled_input_methods": true,
+      "autofill_service": true,
+      "immersive_mode_confirmations": true,
+      "airplane_mode_on": true,
+      "wifi_on": true,
+      "accelerometer_rotation": true,
+      "user_rotation": true,
+      "assistant": true,
+      "voice_interaction_service": true,
+      "voice_recognition_service": true,
+      "assist_structure_enabled": true,
+      "assist_screenshot_enabled": true
+    },
+    "cleanup": {
+      "ports_released": true,
+      "emulator_stopped": true,
+      "isolated_server_stopped": true,
+      "avd_cleaned": true
+    },
+    "cleanup_errors": [],
+    "status": "observed",
+    "phase": "closed",
+    "elapsed_seconds": 511
+  },
+  "a2": {
+    "ime_anchor": {
+      "generation": 1,
+      "ime_started_ms": 192583
+    },
+    "target_wire": 4,
+    "a2_autofill_verdict": {
+      "stage": 2,
+      "callback_count": 0,
+      "reason": "NO_NEW_CALLBACK",
+      "pre_switch_callbacks": [
+        {
+          "acquired_ms": 173174,
+          "callback_ms": 173251,
+          "reason": "NO_CURRENT_IME"
+        }
+      ],
+      "observation_ms": 15720,
+      "observation_after_oracle_ms": 8787
+    },
+    "oracle": {
+      "scenario": "automatic-right-switch",
+      "status": "probe_observed",
+      "settled": true,
+      "stageIndex": 0,
+      "samePairHandoff": false,
+      "stageStartUptime": 171662,
+      "stageEndUptime": 192586,
+      "desiredSide": "right",
+      "manual_request_count": 0,
+      "rootAutofillImportance": 0,
+      "leftAutofillImportance": 1,
+      "rightAutofillImportance": 1,
+      "touchDownCount": 0,
+      "touchUpCount": 0,
+      "windowFocus": true,
+      "restartInputCalls": 0,
+      "imeActiveRight": null,
+      "leftViewInstance": 131539881,
+      "rightViewInstance": 19782958,
+      "focusSide": "right",
+      "connectionSide": "right",
+      "probeSide": "right",
+      "requestedSide": "none",
+      "leftBounds": [
+        40,
+        32,
+        240,
+        102
+      ],
+      "rightBounds": [
+        2100,
+        32,
+        2300,
+        102
+      ],
+      "leftConnections": 0,
+      "rightConnections": 5,
+      "leftProbeCount": 0,
+      "rightProbeCount": 1,
+      "leftViewId": -1,
+      "rightViewId": -1,
+      "distinctAutofillIds": true,
+      "leftStructureWrites": 1,
+      "rightStructureWrites": 1,
+      "leftReportedFocused": false,
+      "rightReportedFocused": true,
+      "landscape": true,
+      "windowWidth": 2340,
+      "windowHeight": 1080,
+      "autofillRequests": 0,
+      "windowSecure": false,
+      "ccOptOut": false,
+      "rootContentCaptureImportance": 0,
+      "a11yObfuscated": false
+    },
+    "assist": {
+      "display": 0,
+      "window": [
+        0,
+        0,
+        2340,
+        1080
+      ],
+      "stage": "assist",
+      "generation": 1,
+      "ime_start": 192583,
+      "request": 217784,
+      "sample_close": 221307,
+      "shown": true,
+      "args_match": true,
+      "show_flags": 1,
+      "show_id": 1,
+      "assist_callbacks": 1,
+      "target_trees_examined": 1,
+      "acquired": 217793,
+      "completed": 217794,
+      "received": 217809,
+      "current_on_receive": true,
+      "current_at_close": true,
+      "ime_has_native_id": true,
+      "ime_has_resource_id": false,
+      "ime_input_type": 1,
+      "rejected": null,
+      "assist_blocked": false,
+      "geometry_valid": true,
+      "editors": [
+        {
+          "focused": false,
+          "has_id": false,
+          "id_matches_ime": false,
+          "has_resource_id": false,
+          "resource_matches_ime": false,
+          "input_type": 1,
+          "ime_input_type_matches": true,
+          "important_for_autofill": 0,
+          "autofill_type": 0,
+          "assist_blocked": false,
+          "bounds": [
+            40,
+            32,
+            240,
+            102
+          ]
+        },
+        {
+          "focused": true,
+          "has_id": false,
+          "id_matches_ime": false,
+          "has_resource_id": false,
+          "resource_matches_ime": false,
+          "input_type": 1,
+          "ime_input_type_matches": true,
+          "important_for_autofill": 0,
+          "autofill_type": 0,
+          "assist_blocked": false,
+          "bounds": [
+            2100,
+            32,
+            2300,
+            102
+          ]
+        }
+      ],
+      "focus_count": 1,
+      "native_id_matches": 0,
+      "state_focused": true,
+      "activity_index": 0,
+      "activity_count": 1,
+      "activity_id_hash": 23336205,
+      "window_count": 1,
+      "focused_activity_count": 1,
+      "focused_windows": [
+        {
+          "activity_index": 0,
+          "activity_component": "dev.magina.autofilltarget/.TargetActivity",
+          "state_focused": true,
+          "activity_id_slot": 0,
+          "activity_id_hash": 23336205,
+          "window_index": 0,
+          "display": 0,
+          "window": [
+            0,
+            0,
+            2340,
+            1080
+          ],
+          "editor_bounds": [
+            2100,
+            32,
+            2300,
+            102
+          ],
+          "has_id": false,
+          "id_matches_ime": false,
+          "has_resource_id": false,
+          "resource_matches_ime": false
+        }
+      ],
+      "activities": [
+        {
+          "index": 0,
+          "count": 1,
+          "state_focused": true,
+          "activity_id_slot": 0,
+          "activity_id_hash": 23336205,
+          "component": "dev.magina.autofilltarget/.TargetActivity",
+          "target_package": true,
+          "acquired": 217793,
+          "completed": 217794,
+          "received": 217809,
+          "window_count": 1,
+          "windows": [
+            {
+              "window_index": 0,
+              "display": 0,
+              "window": [
+                0,
+                0,
+                2340,
+                1080
+              ],
+              "root_assist_blocked": false,
+              "assist_blocked": false,
+              "geometry_valid": true,
+              "focus_count": 1,
+              "editors": [
+                {
+                  "focused": false,
+                  "has_id": false,
+                  "id_matches_ime": false,
+                  "has_resource_id": false,
+                  "resource_matches_ime": false,
+                  "input_type": 1,
+                  "ime_input_type_matches": true,
+                  "important_for_autofill": 0,
+                  "autofill_type": 0,
+                  "assist_blocked": false,
+                  "bounds": [
+                    40,
+                    32,
+                    240,
+                    102
+                  ]
+                },
+                {
+                  "focused": true,
+                  "has_id": false,
+                  "id_matches_ime": false,
+                  "has_resource_id": false,
+                  "resource_matches_ime": false,
+                  "input_type": 1,
+                  "ime_input_type_matches": true,
+                  "important_for_autofill": 0,
+                  "autofill_type": 0,
+                  "assist_blocked": false,
+                  "bounds": [
+                    2100,
+                    32,
+                    2300,
+                    102
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "noflag": {
+      "stage": "noflag",
+      "generation": 1,
+      "ime_start": 192583,
+      "request": 237945,
+      "sample_close": 241460,
+      "shown": true,
+      "args_match": true,
+      "show_flags": 0,
+      "show_id": 2,
+      "assist_callbacks": 1,
+      "target_trees_examined": 0,
+      "acquired": null,
+      "completed": null,
+      "received": null,
+      "current_on_receive": false,
+      "current_at_close": true,
+      "ime_has_native_id": true,
+      "ime_has_resource_id": false,
+      "ime_input_type": 1,
+      "rejected": null,
+      "assist_blocked": false,
+      "geometry_valid": true,
+      "editors": [],
+      "focus_count": 0,
+      "native_id_matches": 0,
+      "state_focused": null,
+      "activity_index": null,
+      "activity_count": null,
+      "activity_id_hash": null,
+      "window_count": null,
+      "focused_activity_count": 0,
+      "focused_windows": [],
+      "activities": [
+        {
+          "index": 0,
+          "count": 1,
+          "state_focused": true,
+          "activity_id_slot": 0,
+          "activity_id_hash": 23336205,
+          "structure_null": true
+        }
+      ]
+    },
+    "trace": {
+      "assist": {
+        "overflow": false,
+        "records": 111759,
+        "elapsed_us": 14979790,
+        "target": {
+          "onCreateInputConnection": 0,
+          "onProvideStructure": 2,
+          "onProvideAutofillStructure": 0
+        },
+        "view": {
+          "onFocusChanged": 0,
+          "onWindowFocusChanged": 0
+        }
+      },
+      "noflag": {
+        "overflow": false,
+        "records": 99718,
+        "elapsed_us": 14946951,
+        "target": {
+          "onCreateInputConnection": 0,
+          "onProvideStructure": 0,
+          "onProvideAutofillStructure": 0
+        },
+        "view": {
+          "onFocusChanged": 0,
+          "onWindowFocusChanged": 0
+        }
+      }
+    }
+  },
+  "controls": {
+    "secure": {
+      "ime_anchor": {
+        "generation": 3,
+        "ime_started_ms": 269044
+      },
+      "oracle": {
+        "scenario": "automatic-right",
+        "status": "probe_observed",
+        "settled": true,
+        "stageIndex": 0,
+        "samePairHandoff": false,
+        "stageStartUptime": 268225,
+        "stageEndUptime": 269092,
+        "desiredSide": "right",
+        "manual_request_count": 0,
+        "rootAutofillImportance": 0,
+        "leftAutofillImportance": 1,
+        "rightAutofillImportance": 1,
+        "touchDownCount": 0,
+        "touchUpCount": 0,
+        "windowFocus": true,
+        "restartInputCalls": 0,
+        "imeActiveRight": null,
+        "leftViewInstance": 131539881,
+        "rightViewInstance": 19782958,
+        "focusSide": "right",
+        "connectionSide": "right",
+        "probeSide": "right",
+        "requestedSide": "none",
+        "leftBounds": [
+          40,
+          32,
+          240,
+          102
+        ],
+        "rightBounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "leftConnections": 0,
+        "rightConnections": 2,
+        "leftProbeCount": 0,
+        "rightProbeCount": 1,
+        "leftViewId": -1,
+        "rightViewId": -1,
+        "distinctAutofillIds": true,
+        "leftStructureWrites": 1,
+        "rightStructureWrites": 1,
+        "leftReportedFocused": false,
+        "rightReportedFocused": true,
+        "landscape": true,
+        "windowWidth": 2340,
+        "windowHeight": 1080,
+        "autofillRequests": 0,
+        "windowSecure": true,
+        "ccOptOut": false,
+        "rootContentCaptureImportance": 0,
+        "a11yObfuscated": false
+      },
+      "sample": {
+        "display": 0,
+        "window": [
+          0,
+          0,
+          2340,
+          1080
+        ],
+        "stage": "secure",
+        "generation": 3,
+        "ime_start": 269044,
+        "request": 279017,
+        "sample_close": 282540,
+        "shown": true,
+        "args_match": true,
+        "show_flags": 1,
+        "show_id": 3,
+        "assist_callbacks": 1,
+        "target_trees_examined": 1,
+        "acquired": 279028,
+        "completed": 279029,
+        "received": 279043,
+        "current_on_receive": true,
+        "current_at_close": true,
+        "ime_has_native_id": true,
+        "ime_has_resource_id": false,
+        "ime_input_type": 1,
+        "rejected": "assist_blocked",
+        "assist_blocked": true,
+        "geometry_valid": false,
+        "editors": [],
+        "focus_count": 0,
+        "native_id_matches": 0,
+        "state_focused": true,
+        "activity_index": 0,
+        "activity_count": 1,
+        "activity_id_hash": 67046680,
+        "window_count": 1,
+        "focused_activity_count": 1,
+        "focused_windows": [],
+        "activities": [
+          {
+            "index": 0,
+            "count": 1,
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 67046680,
+            "component": "dev.magina.autofilltarget/.TargetActivity",
+            "target_package": true,
+            "acquired": 279028,
+            "completed": 279029,
+            "received": 279043,
+            "window_count": 1,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  0,
+                  0,
+                  2340,
+                  1080
+                ],
+                "root_assist_blocked": true,
+                "assist_blocked": true,
+                "geometry_valid": false,
+                "focus_count": 0,
+                "editors": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "ccoptout": {
+      "ime_anchor": {
+        "generation": 5,
+        "ime_started_ms": 306423
+      },
+      "oracle": {
+        "scenario": "automatic-right",
+        "status": "probe_observed",
+        "settled": true,
+        "stageIndex": 0,
+        "samePairHandoff": false,
+        "stageStartUptime": 305642,
+        "stageEndUptime": 306444,
+        "desiredSide": "right",
+        "manual_request_count": 0,
+        "rootAutofillImportance": 0,
+        "leftAutofillImportance": 1,
+        "rightAutofillImportance": 1,
+        "touchDownCount": 0,
+        "touchUpCount": 0,
+        "windowFocus": true,
+        "restartInputCalls": 0,
+        "imeActiveRight": null,
+        "leftViewInstance": 131539881,
+        "rightViewInstance": 19782958,
+        "focusSide": "right",
+        "connectionSide": "right",
+        "probeSide": "right",
+        "requestedSide": "none",
+        "leftBounds": [
+          40,
+          32,
+          240,
+          102
+        ],
+        "rightBounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "leftConnections": 0,
+        "rightConnections": 2,
+        "leftProbeCount": 0,
+        "rightProbeCount": 1,
+        "leftViewId": -1,
+        "rightViewId": -1,
+        "distinctAutofillIds": true,
+        "leftStructureWrites": 1,
+        "rightStructureWrites": 1,
+        "leftReportedFocused": false,
+        "rightReportedFocused": true,
+        "landscape": true,
+        "windowWidth": 2340,
+        "windowHeight": 1080,
+        "autofillRequests": 0,
+        "windowSecure": false,
+        "ccOptOut": true,
+        "rootContentCaptureImportance": 8,
+        "a11yObfuscated": false
+      },
+      "sample": {
+        "display": 0,
+        "window": [
+          0,
+          0,
+          2340,
+          1080
+        ],
+        "stage": "ccoptout",
+        "generation": 5,
+        "ime_start": 306423,
+        "request": 316977,
+        "sample_close": 320490,
+        "shown": true,
+        "args_match": true,
+        "show_flags": 1,
+        "show_id": 4,
+        "assist_callbacks": 1,
+        "target_trees_examined": 1,
+        "acquired": 316983,
+        "completed": 316984,
+        "received": 316992,
+        "current_on_receive": true,
+        "current_at_close": true,
+        "ime_has_native_id": true,
+        "ime_has_resource_id": false,
+        "ime_input_type": 1,
+        "rejected": null,
+        "assist_blocked": false,
+        "geometry_valid": true,
+        "editors": [
+          {
+            "focused": false,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              40,
+              32,
+              240,
+              102
+            ]
+          },
+          {
+            "focused": true,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ]
+          }
+        ],
+        "focus_count": 1,
+        "native_id_matches": 0,
+        "state_focused": true,
+        "activity_index": 0,
+        "activity_count": 1,
+        "activity_id_hash": 200360491,
+        "window_count": 1,
+        "focused_activity_count": 1,
+        "focused_windows": [
+          {
+            "activity_index": 0,
+            "activity_component": "dev.magina.autofilltarget/.TargetActivity",
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 200360491,
+            "window_index": 0,
+            "display": 0,
+            "window": [
+              0,
+              0,
+              2340,
+              1080
+            ],
+            "editor_bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ],
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false
+          }
+        ],
+        "activities": [
+          {
+            "index": 0,
+            "count": 1,
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 200360491,
+            "component": "dev.magina.autofilltarget/.TargetActivity",
+            "target_package": true,
+            "acquired": 316983,
+            "completed": 316984,
+            "received": 316992,
+            "window_count": 1,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  0,
+                  0,
+                  2340,
+                  1080
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 1,
+                "editors": [
+                  {
+                    "focused": false,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      40,
+                      32,
+                      240,
+                      102
+                    ]
+                  },
+                  {
+                    "focused": true,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      2100,
+                      32,
+                      2300,
+                      102
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "obfuscated": {
+      "ime_anchor": {
+        "generation": 7,
+        "ime_started_ms": 334552
+      },
+      "oracle": {
+        "scenario": "automatic-right",
+        "status": "probe_observed",
+        "settled": true,
+        "stageIndex": 0,
+        "samePairHandoff": false,
+        "stageStartUptime": 334115,
+        "stageEndUptime": 334565,
+        "desiredSide": "right",
+        "manual_request_count": 0,
+        "rootAutofillImportance": 0,
+        "leftAutofillImportance": 1,
+        "rightAutofillImportance": 1,
+        "touchDownCount": 0,
+        "touchUpCount": 0,
+        "windowFocus": true,
+        "restartInputCalls": 0,
+        "imeActiveRight": null,
+        "leftViewInstance": 173363557,
+        "rightViewInstance": 238984762,
+        "focusSide": "right",
+        "connectionSide": "right",
+        "probeSide": "right",
+        "requestedSide": "none",
+        "leftBounds": [
+          40,
+          32,
+          240,
+          102
+        ],
+        "rightBounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "leftConnections": 0,
+        "rightConnections": 2,
+        "leftProbeCount": 0,
+        "rightProbeCount": 1,
+        "leftViewId": -1,
+        "rightViewId": -1,
+        "distinctAutofillIds": true,
+        "leftStructureWrites": 1,
+        "rightStructureWrites": 1,
+        "leftReportedFocused": false,
+        "rightReportedFocused": true,
+        "landscape": true,
+        "windowWidth": 2340,
+        "windowHeight": 1080,
+        "autofillRequests": 0,
+        "windowSecure": false,
+        "ccOptOut": false,
+        "rootContentCaptureImportance": 0,
+        "a11yObfuscated": true
+      },
+      "sample": {
+        "display": 0,
+        "window": [
+          0,
+          0,
+          2340,
+          1080
+        ],
+        "stage": "obfuscated",
+        "generation": 7,
+        "ime_start": 334552,
+        "request": 341657,
+        "sample_close": 345167,
+        "shown": true,
+        "args_match": true,
+        "show_flags": 1,
+        "show_id": 5,
+        "assist_callbacks": 1,
+        "target_trees_examined": 1,
+        "acquired": 341662,
+        "completed": 341663,
+        "received": 341668,
+        "current_on_receive": true,
+        "current_at_close": true,
+        "ime_has_native_id": true,
+        "ime_has_resource_id": false,
+        "ime_input_type": 1,
+        "rejected": null,
+        "assist_blocked": false,
+        "geometry_valid": true,
+        "editors": [
+          {
+            "focused": false,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              40,
+              32,
+              240,
+              102
+            ]
+          },
+          {
+            "focused": true,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ]
+          }
+        ],
+        "focus_count": 1,
+        "native_id_matches": 0,
+        "state_focused": true,
+        "activity_index": 0,
+        "activity_count": 1,
+        "activity_id_hash": 131540222,
+        "window_count": 1,
+        "focused_activity_count": 1,
+        "focused_windows": [
+          {
+            "activity_index": 0,
+            "activity_component": "dev.magina.autofilltarget/.TargetActivity",
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 131540222,
+            "window_index": 0,
+            "display": 0,
+            "window": [
+              0,
+              0,
+              2340,
+              1080
+            ],
+            "editor_bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ],
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false
+          }
+        ],
+        "activities": [
+          {
+            "index": 0,
+            "count": 1,
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 131540222,
+            "component": "dev.magina.autofilltarget/.TargetActivity",
+            "target_package": true,
+            "acquired": 341662,
+            "completed": 341663,
+            "received": 341668,
+            "window_count": 1,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  0,
+                  0,
+                  2340,
+                  1080
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 1,
+                "editors": [
+                  {
+                    "focused": false,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      40,
+                      32,
+                      240,
+                      102
+                    ]
+                  },
+                  {
+                    "focused": true,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      2100,
+                      32,
+                      2300,
+                      102
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "multiwin_dialog": {
+      "ime_anchor": {
+        "generation": 9,
+        "ime_started_ms": 360786
+      },
+      "oracle": {
+        "task": 12,
+        "uptime_ms": 360798,
+        "leftWindowBounds": [
+          176,
+          40,
+          1176,
+          520
+        ],
+        "rightWindowBounds": [
+          1300,
+          40,
+          2300,
+          520
+        ],
+        "leftBounds": [
+          216,
+          72,
+          416,
+          142
+        ],
+        "rightBounds": [
+          2060,
+          72,
+          2260,
+          142
+        ],
+        "leftWindowId": -1,
+        "rightWindowId": -1,
+        "leftViewId": -1,
+        "rightViewId": -1,
+        "leftFocused": false,
+        "rightFocused": true,
+        "leftWindowFocused": false,
+        "rightWindowFocused": true,
+        "leftConnections": 0,
+        "rightConnections": 1,
+        "rightProbeCount": 1
+      },
+      "sample": {
+        "stage": "multiwin",
+        "generation": 9,
+        "ime_start": 360786,
+        "request": 368083,
+        "sample_close": 371594,
+        "shown": true,
+        "args_match": true,
+        "show_flags": 1,
+        "show_id": 6,
+        "assist_callbacks": 1,
+        "target_trees_examined": 1,
+        "acquired": 368090,
+        "completed": 368091,
+        "received": 368094,
+        "current_on_receive": true,
+        "current_at_close": true,
+        "ime_has_native_id": true,
+        "ime_has_resource_id": false,
+        "ime_input_type": 1,
+        "rejected": null,
+        "assist_blocked": false,
+        "geometry_valid": true,
+        "editors": [
+          {
+            "focused": false,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              216,
+              72,
+              416,
+              142
+            ]
+          },
+          {
+            "focused": true,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              2060,
+              72,
+              2260,
+              142
+            ]
+          }
+        ],
+        "focus_count": 1,
+        "native_id_matches": 0,
+        "state_focused": null,
+        "activity_index": null,
+        "activity_count": null,
+        "activity_id_hash": null,
+        "window_count": null,
+        "focused_activity_count": 1,
+        "focused_windows": [
+          {
+            "activity_index": 0,
+            "activity_component": "dev.magina.autofilltarget/.SplitWindowActivity",
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 115470162,
+            "window_index": 1,
+            "display": 0,
+            "window": [
+              1300,
+              40,
+              2300,
+              520
+            ],
+            "editor_bounds": [
+              2060,
+              72,
+              2260,
+              142
+            ],
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false
+          }
+        ],
+        "activities": [
+          {
+            "index": 0,
+            "count": 1,
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 115470162,
+            "component": "dev.magina.autofilltarget/.SplitWindowActivity",
+            "target_package": true,
+            "acquired": 368090,
+            "completed": 368091,
+            "received": 368094,
+            "window_count": 2,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  176,
+                  40,
+                  1176,
+                  520
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 0,
+                "editors": [
+                  {
+                    "focused": false,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      216,
+                      72,
+                      416,
+                      142
+                    ]
+                  }
+                ]
+              },
+              {
+                "window_index": 1,
+                "display": 0,
+                "window": [
+                  1300,
+                  40,
+                  2300,
+                  520
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 1,
+                "editors": [
+                  {
+                    "focused": true,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      2060,
+                      72,
+                      2260,
+                      142
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "multiwin_tasks": {
+      "ime_anchor": {
+        "generation": 12,
+        "ime_started_ms": 391959
+      },
+      "pane_left": {
+        "component": "dev.magina.autofilltarget/.LeftPaneActivity",
+        "task": 13,
+        "uptime_ms": 386354,
+        "windowBounds": [
+          0,
+          0,
+          2340,
+          1080
+        ],
+        "editorBounds": [
+          40,
+          32,
+          240,
+          102
+        ],
+        "windowId": -1,
+        "viewId": -1,
+        "focused": false
+      },
+      "pane_right": {
+        "component": "dev.magina.autofilltarget/.RightPaneActivity",
+        "task": 14,
+        "uptime_ms": 391972,
+        "windowBounds": [
+          1340,
+          40,
+          2340,
+          520
+        ],
+        "editorBounds": [
+          2100,
+          72,
+          2300,
+          142
+        ],
+        "windowId": -1,
+        "viewId": -1,
+        "focused": true,
+        "windowFocus": true,
+        "connections": 1,
+        "probeCount": 1
+      },
+      "sample": {
+        "stage": "multiwin2",
+        "generation": 12,
+        "ime_start": 391959,
+        "request": 399398,
+        "sample_close": 402914,
+        "shown": true,
+        "args_match": true,
+        "show_flags": 1,
+        "show_id": 7,
+        "assist_callbacks": 2,
+        "target_trees_examined": 2,
+        "acquired": 399405,
+        "completed": 399408,
+        "received": 399414,
+        "current_on_receive": true,
+        "current_at_close": true,
+        "ime_has_native_id": true,
+        "ime_has_resource_id": false,
+        "ime_input_type": 1,
+        "rejected": null,
+        "assist_blocked": false,
+        "geometry_valid": true,
+        "editors": [
+          {
+            "focused": true,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              2100,
+              72,
+              2300,
+              142
+            ]
+          },
+          {
+            "focused": false,
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false,
+            "input_type": 1,
+            "ime_input_type_matches": true,
+            "important_for_autofill": 0,
+            "autofill_type": 0,
+            "assist_blocked": false,
+            "bounds": [
+              40,
+              32,
+              240,
+              102
+            ]
+          }
+        ],
+        "focus_count": 1,
+        "native_id_matches": 0,
+        "state_focused": null,
+        "activity_index": null,
+        "activity_count": null,
+        "activity_id_hash": null,
+        "window_count": null,
+        "focused_activity_count": 1,
+        "focused_windows": [
+          {
+            "activity_index": 0,
+            "activity_component": "dev.magina.autofilltarget/.RightPaneActivity",
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 180284916,
+            "window_index": 0,
+            "display": 0,
+            "window": [
+              1340,
+              40,
+              2340,
+              520
+            ],
+            "editor_bounds": [
+              2100,
+              72,
+              2300,
+              142
+            ],
+            "has_id": false,
+            "id_matches_ime": false,
+            "has_resource_id": false,
+            "resource_matches_ime": false
+          }
+        ],
+        "activities": [
+          {
+            "index": 0,
+            "count": 2,
+            "state_focused": true,
+            "activity_id_slot": 0,
+            "activity_id_hash": 180284916,
+            "component": "dev.magina.autofilltarget/.RightPaneActivity",
+            "target_package": true,
+            "acquired": 399405,
+            "completed": 399405,
+            "received": 399414,
+            "window_count": 1,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  1340,
+                  40,
+                  2340,
+                  520
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 1,
+                "editors": [
+                  {
+                    "focused": true,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      2100,
+                      72,
+                      2300,
+                      142
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "count": 2,
+            "state_focused": false,
+            "activity_id_slot": 1,
+            "activity_id_hash": 206759398,
+            "component": "dev.magina.autofilltarget/.LeftPaneActivity",
+            "target_package": true,
+            "acquired": 399408,
+            "completed": 399408,
+            "received": 399414,
+            "window_count": 1,
+            "windows": [
+              {
+                "window_index": 0,
+                "display": 0,
+                "window": [
+                  0,
+                  0,
+                  2340,
+                  1080
+                ],
+                "root_assist_blocked": false,
+                "assist_blocked": false,
+                "geometry_valid": true,
+                "focus_count": 0,
+                "editors": [
+                  {
+                    "focused": false,
+                    "has_id": false,
+                    "id_matches_ime": false,
+                    "has_resource_id": false,
+                    "resource_matches_ime": false,
+                    "input_type": 1,
+                    "ime_input_type_matches": true,
+                    "important_for_autofill": 0,
+                    "autofill_type": 0,
+                    "assist_blocked": false,
+                    "bounds": [
+                      40,
+                      32,
+                      240,
+                      102
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
