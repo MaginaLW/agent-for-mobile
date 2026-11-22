@@ -1,6 +1,8 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 
 Set-StrictMode -Version 3.0
+
+. (Join-Path $PSScriptRoot 'dispatch-forensics.ps1')
 
 $script:P0PackageName = 'dev.magina.gateway'
 $script:P0AccessibilityComponent = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
@@ -260,28 +262,7 @@ function Test-P0GatewayConfig {
 function Get-P0BoundAccessibilitySection {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$DumpsysText)
 
-    $lines = @($DumpsysText -split "`r?`n")
-    $sections = [Collections.Generic.List[string]]::new()
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        $line = $lines[$index]
-        if ($line -notmatch '(?i)^(?<indent>\s*)(?:m)?bound\s*services?\s*[:=](?<inline>.*)$') { continue }
-        $headerIndent = $Matches['indent'].Length
-        $section = [Collections.Generic.List[string]]::new()
-        $inline = [string]$Matches['inline']
-        if (-not [string]::IsNullOrWhiteSpace($inline)) { $section.Add($inline.Trim()) }
-        for ($child = $index + 1; $child -lt $lines.Count; $child++) {
-            $candidate = $lines[$child]
-            if ([string]::IsNullOrWhiteSpace($candidate)) {
-                if ($section.Count -gt 0) { break }
-                continue
-            }
-            $leading = $candidate.Length - $candidate.TrimStart().Length
-            if ($leading -le $headerIndent) { break }
-            $section.Add($candidate.Trim())
-        }
-        $sections.Add(($section -join "`n"))
-    }
-    return @($sections)
+    return @(Get-GatewayBoundAccessibilitySection -DumpsysText $DumpsysText)
 }
 
 function Test-P0AccessibilityComponentBound {
@@ -291,26 +272,7 @@ function Test-P0AccessibilityComponentBound {
         [string]$Label = ''
     )
 
-    $separator = $Component.IndexOf('/')
-    if ($separator -lt 1) { return $false }
-    $packageName = $Component.Substring(0, $separator)
-    $className = $Component.Substring($separator + 1)
-    $shortComponent = if ($className.StartsWith("$packageName.", [StringComparison]::Ordinal)) {
-        "$packageName/.$($className.Substring($packageName.Length + 1))"
-    } else { $Component }
-    foreach ($section in @(Get-P0BoundAccessibilitySection -DumpsysText $DumpsysText)) {
-        if ($section.Contains($Component, [StringComparison]::Ordinal) -or
-            $section.Contains($shortComponent, [StringComparison]::Ordinal)) {
-            return $true
-        }
-        # vivo 绑定区段为 label-only（Service[label=执行网关, ...]）；组件精确性由 Enabled services 检查另行保证。
-        if (-not [string]::IsNullOrEmpty($Label) -and
-            ($section.Contains("label=$Label,", [StringComparison]::Ordinal) -or
-                $section.Contains("label=$Label]", [StringComparison]::Ordinal))) {
-            return $true
-        }
-    }
-    return $false
+    return (Test-GatewayAccessibilityComponentBound -DumpsysText $DumpsysText -Component $Component -Label $Label)
 }
 
 function Read-P0PrivateToken {
@@ -353,6 +315,9 @@ function Start-P0DeviceProvision {
         AdbPath = $AdbPath
         Serial = $serial
         OriginalIme = ''
+        OriginalAccessibilityServices = $null
+        OriginalAccessibilityEnabled = $null
+        AccessibilityRestorePending = $false
         ConfigPath = $configPath
         ConfigExisted = $configExisted
         OriginalConfig = $originalConfig
@@ -368,6 +333,28 @@ function Start-P0DeviceProvision {
     try {
         $session.OriginalIme = (Invoke-P0DeviceCommand -Session $session `
             -Arguments @('shell','settings','get','secure','default_input_method') -Operation '读取原输入法').Stdout.Trim()
+        try {
+            $a11yBaselineRead = Invoke-P0DeviceCommand -Session $session `
+                -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+                -Operation '读取原无障碍服务列表' -AllowFailure
+            if ($a11yBaselineRead.ExitCode -eq 0) {
+                $rawA11y = $a11yBaselineRead.Stdout.Trim()
+                if ($rawA11y -notmatch '[\r\n]') {
+                    $session.OriginalAccessibilityServices = $rawA11y
+                    $session.AccessibilityRestorePending = $true
+                }
+            }
+            $a11yEnabledRead = Invoke-P0DeviceCommand -Session $session `
+                -Arguments @('shell','settings','get','secure','accessibility_enabled') `
+                -Operation '读取原无障碍总开关' -AllowFailure
+            if ($a11yEnabledRead.ExitCode -eq 0) {
+                $rawEn = $a11yEnabledRead.Stdout.Trim()
+                if ($rawEn -in @('0', '1')) {
+                    $session.OriginalAccessibilityEnabled = $rawEn
+                }
+            }
+        }
+        catch {}
 
         if ($Provision) {
             if (-not (Test-Path -LiteralPath $ApkPath -PathType Leaf)) { throw "setup-fail：缺少 debug APK：$ApkPath" }
@@ -495,27 +482,100 @@ function Start-P0DeviceProvision {
 #>
 function Invoke-P0AccessibilityRebind {
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Session)
+    param(
+        [Parameter(Mandatory)]$Session,
+        [int]$RebindPauseMs = 300
+    )
 
-    $enabled = (Invoke-P0DeviceCommand -Session $Session `
+    $preRaw = (Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
         -Operation '读取无障碍配置').Stdout.Trim()
-    if ($enabled -eq 'null') { $enabled = '' }
-    $services = @($enabled -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($script:P0AccessibilityComponent -notin $services) { $services += $script:P0AccessibilityComponent }
-    $withoutGateway = @($services | Where-Object { $_ -ne $script:P0AccessibilityComponent })
-    if ($withoutGateway.Count -gt 0) {
+    if ($preRaw -ceq 'null') { $preRaw = '' }
+    $leadingColon = $preRaw.StartsWith(':')
+    $preMembers = [Collections.Generic.List[string]]::new()
+    $preSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($part in @($preRaw -split ':')) {
+        $item = $part.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($item) -and $preSeen.Add($item)) {
+            $preMembers.Add($item)
+        }
+    }
+    $preNonGateway = @($preMembers | Where-Object { $_ -cne $script:P0AccessibilityComponent })
+    if ($preNonGateway.Count -gt 0) {
+        $withoutValue = if ($leadingColon) { ':' + ($preNonGateway -join ':') } else { $preNonGateway -join ':' }
         $null = Invoke-P0DeviceCommand -Session $Session `
-            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($withoutGateway -join ':')) `
+            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',$withoutValue) `
             -Operation '重置无障碍配置以触发重绑'
     } else {
         $null = Invoke-P0DeviceCommand -Session $Session `
             -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
             -Operation '重置无障碍配置以触发重绑' -AllowFailure
     }
-    $null = Invoke-P0DeviceCommand -Session $Session `
-        -Arguments @('shell','settings','put','secure','enabled_accessibility_services',($services -join ':')) `
-        -Operation '启用 gateway 无障碍'
+    if ($RebindPauseMs -gt 0) { Start-Sleep -Milliseconds $RebindPauseMs }
+
+    $observedNonGateway = [Collections.Generic.List[string]]::new()
+    try {
+        $postProbe = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+            -Operation '重绑前复读无障碍配置' -AllowFailure
+        if ($postProbe.ExitCode -eq 0) {
+            $postRaw = $postProbe.Stdout.Trim()
+            if ($postRaw -ceq 'null') { $postRaw = '' }
+            foreach ($part in @($postRaw -split ':')) {
+                $item = $part.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($item) -and $item -cne $script:P0AccessibilityComponent) {
+                    $observedNonGateway.Add($item)
+                }
+            }
+        }
+    }
+    catch {}
+
+    $mergedNonGateway = [Collections.Generic.List[string]]::new()
+    $mergedSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $preNonGateway) {
+        if ($mergedSeen.Add($item)) { $mergedNonGateway.Add($item) }
+    }
+    foreach ($item in $observedNonGateway) {
+        if ($mergedSeen.Add($item)) { $mergedNonGateway.Add($item) }
+    }
+
+    $preHasGateway = ($script:P0AccessibilityComponent -cin $preMembers)
+    $targetValue = ''
+    if ($preHasGateway -and $mergedNonGateway.Count -eq $preNonGateway.Count) {
+        $allMatch = $true
+        for ($i = 0; $i -lt $preNonGateway.Count; $i++) {
+            if ($mergedNonGateway[$i] -cne $preNonGateway[$i]) { $allMatch = $false; break }
+        }
+        if ($allMatch -and -not [string]::IsNullOrEmpty($preRaw)) {
+            $targetValue = $preRaw
+        }
+    }
+    if ([string]::IsNullOrEmpty($targetValue)) {
+        $targetMembers = @($mergedNonGateway.ToArray()) + @($script:P0AccessibilityComponent)
+        $targetValue = if ($leadingColon) { ':' + ($targetMembers -join ':') } else { $targetMembers -join ':' }
+    }
+
+    try {
+        $null = Invoke-P0DeviceCommand -Session $Session `
+            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',$targetValue) `
+            -Operation '启用 gateway 无障碍'
+    }
+    catch {
+        try {
+            if ([string]::IsNullOrEmpty($preRaw)) {
+                $null = Invoke-P0DeviceCommand -Session $Session `
+                    -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
+                    -Operation '回滚无障碍配置' -AllowFailure
+            } else {
+                $null = Invoke-P0DeviceCommand -Session $Session `
+                    -Arguments @('shell','settings','put','secure','enabled_accessibility_services',$preRaw) `
+                    -Operation '回滚无障碍配置' -AllowFailure
+            }
+        }
+        catch {}
+        throw
+    }
     $null = Invoke-P0DeviceCommand -Session $Session `
         -Arguments @('shell','settings','put','secure','accessibility_enabled','1') `
         -Operation '启用无障碍总开关'
@@ -1247,7 +1307,11 @@ function Restore-P0Config {
 
 function Stop-P0DeviceProvision {
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Session)
+    param(
+        [Parameter(Mandatory)]$Session,
+        [int]$A11yRestoreSettleMs = 400,
+        [int]$A11yRestoreAttempts = 3
+    )
 
     $errors = [Collections.Generic.List[string]]::new()
     foreach ($issue in @($Session.CleanupIssues)) {
@@ -1261,14 +1325,123 @@ function Stop-P0DeviceProvision {
         }
     }
     catch { if (-not $errors.Contains('device_control_staging')) { $errors.Add('device_control_staging') } }
+    $imeRestored = $false
     if (-not [string]::IsNullOrWhiteSpace($Session.OriginalIme) -and $Session.OriginalIme -ne 'null') {
         try {
             $restoreIme = Invoke-P0DeviceCommand -Session $Session `
                 -Arguments @('shell','ime','set',$Session.OriginalIme) -Operation '恢复原输入法' -AllowFailure
             if ($restoreIme.ExitCode -ne 0) { $errors.Add('restore_ime') }
-            else { $Session.OriginalIme = '' }
+            else {
+                $Session.OriginalIme = ''
+                $imeRestored = $true
+            }
         }
         catch { $errors.Add('restore_ime') }
+    }
+    $hasA11yBaselineProp = $null -ne $Session.PSObject.Properties['OriginalAccessibilityServices']
+    $hasA11yPendingProp = $null -ne $Session.PSObject.Properties['AccessibilityRestorePending']
+    $shouldRestoreA11y = $hasA11yBaselineProp -and $null -ne $Session.OriginalAccessibilityServices -and
+        ($hasA11yPendingProp -and [bool]$Session.AccessibilityRestorePending)
+    if ($shouldRestoreA11y) {
+        $targetSvc = [string]$Session.OriginalAccessibilityServices
+        $targetSvcTrim = $targetSvc.Trim()
+        $targetIsCleared = ($targetSvcTrim -ceq 'null' -or [string]::IsNullOrEmpty($targetSvcTrim))
+        $hasOrigEnProp = $null -ne $Session.PSObject.Properties['OriginalAccessibilityEnabled']
+        $targetEn = if ($hasOrigEnProp -and $null -ne $Session.OriginalAccessibilityEnabled -and
+            $Session.OriginalAccessibilityEnabled -in @('0', '1')) {
+            [string]$Session.OriginalAccessibilityEnabled
+        } else { $null }
+        $maxAttempts = [Math]::Max(1, $A11yRestoreAttempts)
+        $a11yRestored = $false
+        try {
+            if ($imeRestored -and $A11yRestoreSettleMs -gt 0) {
+                Start-Sleep -Milliseconds $A11yRestoreSettleMs
+            }
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                $svcProbe = Invoke-P0DeviceCommand -Session $Session `
+                    -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+                    -Operation '核对无障碍服务列表' -AllowFailure
+                if ($svcProbe.ExitCode -ne 0) {
+                    if ($attempt -lt $maxAttempts -and $A11yRestoreSettleMs -gt 0) {
+                        Start-Sleep -Milliseconds $A11yRestoreSettleMs
+                        continue
+                    }
+                    break
+                }
+                $curSvc = $svcProbe.Stdout.Trim()
+                $curIsCleared = ($curSvc -ceq 'null' -or [string]::IsNullOrEmpty($curSvc))
+                $svcMatches = if ($targetIsCleared) { $curIsCleared } else { $curSvc -ceq $targetSvcTrim }
+
+                $enMatches = $true
+                if ($null -ne $targetEn) {
+                    $enProbe = Invoke-P0DeviceCommand -Session $Session `
+                        -Arguments @('shell','settings','get','secure','accessibility_enabled') `
+                        -Operation '核对无障碍总开关' -AllowFailure
+                    if ($enProbe.ExitCode -ne 0) { $enMatches = $false }
+                    elseif ($enProbe.Stdout.Trim() -in @('0', '1')) {
+                        $enMatches = ($enProbe.Stdout.Trim() -ceq $targetEn)
+                    }
+                }
+
+                if ($svcMatches -and $enMatches) {
+                    $a11yRestored = $true
+                    break
+                }
+
+                $writeOk = $true
+                if (-not $svcMatches) {
+                    if ($targetIsCleared) {
+                        $putSvc = Invoke-P0DeviceCommand -Session $Session `
+                            -Arguments @('shell','settings','delete','secure','enabled_accessibility_services') `
+                            -Operation '清空无障碍服务列表基线' -AllowFailure
+                    } else {
+                        $putSvc = Invoke-P0DeviceCommand -Session $Session `
+                            -Arguments @('shell','settings','put','secure','enabled_accessibility_services',$targetSvcTrim) `
+                            -Operation '恢复无障碍服务列表基线' -AllowFailure
+                    }
+                    if ($putSvc.ExitCode -ne 0) { $writeOk = $false }
+                }
+                if ($writeOk -and $null -ne $targetEn -and -not $enMatches) {
+                    $putEn = Invoke-P0DeviceCommand -Session $Session `
+                        -Arguments @('shell','settings','put','secure','accessibility_enabled',$targetEn) `
+                        -Operation '恢复无障碍总开关基线' -AllowFailure
+                    if ($putEn.ExitCode -ne 0) { $writeOk = $false }
+                }
+                if ($A11yRestoreSettleMs -gt 0) {
+                    Start-Sleep -Milliseconds $A11yRestoreSettleMs
+                }
+            }
+            if (-not $a11yRestored) {
+                $finalProbe = Invoke-P0DeviceCommand -Session $Session `
+                    -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
+                    -Operation '复核无障碍服务列表基线' -AllowFailure
+                if ($finalProbe.ExitCode -eq 0) {
+                    $finalSvc = $finalProbe.Stdout.Trim()
+                    $finalIsCleared = ($finalSvc -ceq 'null' -or [string]::IsNullOrEmpty($finalSvc))
+                    $finalSvcMatch = if ($targetIsCleared) { $finalIsCleared } else { $finalSvc -ceq $targetSvcTrim }
+                    $finalEnMatch = $true
+                    if ($null -ne $targetEn) {
+                        $finalEnProbe = Invoke-P0DeviceCommand -Session $Session `
+                            -Arguments @('shell','settings','get','secure','accessibility_enabled') `
+                            -Operation '复核无障碍总开关基线' -AllowFailure
+                        if ($finalEnProbe.ExitCode -ne 0 -or
+                            ($finalEnProbe.Stdout.Trim() -in @('0', '1') -and $finalEnProbe.Stdout.Trim() -cne $targetEn)) {
+                            $finalEnMatch = $false
+                        }
+                    }
+                    if ($finalSvcMatch -and $finalEnMatch) { $a11yRestored = $true }
+                }
+            }
+        }
+        catch { $a11yRestored = $false }
+        if ($a11yRestored) {
+            $Session.AccessibilityRestorePending = $false
+        }
+        else {
+            if (-not $errors.Contains('restore_accessibility_services')) {
+                $errors.Add('restore_accessibility_services')
+            }
+        }
     }
     if ($Session.PortForwarded) {
         try {

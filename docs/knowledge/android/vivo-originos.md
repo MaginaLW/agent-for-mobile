@@ -117,6 +117,7 @@
 ## 输入法
 
 - **vivo 默认联想输入法吞空格**（M0.5）：合成态把空格当选词确认，含空格文本无法精确录入；预测引擎还会篡改大小写。对策：自有 IME 字面注入。
+- **切换输入法触发原 vivo 输入法异步移除 `AutoSendImageService`**（2026-11 实机根因，PA2553 / OriginOS 6，依据 [wechat.md](../apps/wechat.md) `62`/`132`/`392`/`399` 行）：PA2553 切换 `GatewayIme` ↔ vivo 默认输入法时，`dumpsys settings` 证据标明原 vivo 输入法会异步改写 `enabled_accessibility_services` 并移除附带的 `.AutoSendImageService`；叠加旧脚本未采集/写回基线、`-split ':'` 丢弃前导 `:`（`:com.baidu.input_vivo/.AutoSendImageService:...`）及重绑 300ms RMW 窗口竞态，表现为收尾偶发脱落或报 `基线变化 enabled_accessibility_services`。对策：入场保存原始 `enabled_accessibility_services`（保留前导 `:`）与 `accessibility_enabled`，重绑 sleep 后重读合并非网关成员且写失败立即回滚，收尾切回原 IME 后对漂移项执行有界写回与抗延迟稳定复读确认。
 
 ## 通知与锁屏
 

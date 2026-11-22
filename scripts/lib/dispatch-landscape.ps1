@@ -386,7 +386,15 @@ function Test-LandscapeEditorReceipt {
 }
 
 function Complete-LandscapePreparation {
-    param($Device, [string]$AdbCommand, $Baseline, $PreflightState, [switch]$RequireChatFocus)
+    param(
+        $Device,
+        [string]$AdbCommand,
+        $Baseline,
+        $PreflightState,
+        [switch]$RequireChatFocus,
+        [int]$A11yRestoreSettleMs = 500,
+        [int]$A11yRestoreMaxAttempts = 3
+    )
     . (Join-Path $PSScriptRoot 'p0-device-provision.ps1')
     $problems = @()
     try { Stop-GatewayPreflightOwnedResources -State $PreflightState -AdbCommand $AdbCommand }
@@ -401,6 +409,19 @@ function Complete-LandscapePreparation {
                 $current.Service = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
                 if ($current.Service -eq 'absent' -or ($previous -eq 'unknown' -and $current.Service -eq 'unknown')) { break }
             }
+        }
+        $a11yServicesDrifted = $Baseline['enabled_accessibility_services'] -cne $current['enabled_accessibility_services']
+        $a11yEnabledValid = ($Baseline['accessibility_enabled'] -in @('0', '1')) -or ($current['accessibility_enabled'] -in @('0', '1'))
+        $a11yEnabledDrifted = $a11yEnabledValid -and ($Baseline['accessibility_enabled'] -cne $current['accessibility_enabled'])
+        if ($a11yServicesDrifted -or $a11yEnabledDrifted) {
+            $targetEnabled = if ($Baseline['accessibility_enabled'] -in @('0', '1')) { $Baseline['accessibility_enabled'] } else { $null }
+            [void](Restore-AccessibilityServicesBaseline -AdbCommand $AdbCommand `
+                -TargetServicesRaw $Baseline['enabled_accessibility_services'] `
+                -TargetEnabled $targetEnabled -UserZero `
+                -SettleDelayMs $A11yRestoreSettleMs -MaxAttempts $A11yRestoreMaxAttempts)
+            $rechecked = Read-LandscapeBaseline -Device $Device -AdbCommand $AdbCommand
+            $current['enabled_accessibility_services'] = $rechecked['enabled_accessibility_services']
+            $current['accessibility_enabled'] = $rechecked['accessibility_enabled']
         }
         foreach ($key in $Baseline.Keys) {
             if ($Baseline[$key] -cne $current[$key]) { $problems += "基线变化 $key" }
