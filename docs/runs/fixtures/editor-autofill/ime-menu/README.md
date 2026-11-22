@@ -22,3 +22,24 @@ Android 16 的标准编辑器会把被选中的自动填充菜单动作转交给
 本轮 345 秒关闭，模拟器报告 API 36 和 qemu，私有 ADB 起始设备表为空。两包 UID 不同，在机摘要与宿主一致。八项设置逐项恢复，两包均已卸载并查无，自有模拟器、私有 ADB 和三个监听端口全部回收。核对已保存的本轮原件可运行 `python -B verify.py --stopped-run <本轮私有回执目录>`。上方第 3、4 步描述计划验收，未在本轮触达。
 
 发布前在宿主复核了构建脚本。每次构建生成临时签名口令，两份合成 APK 均通过验签且使用同一证书。本次复核仅构建制品。
+
+## 根因定位与四场景对照修复（待隔离模拟器实测）
+
+基于 AOSP Android 16（`android-16.0.0_r1`）源码复核，2026-11-22 首轮停点的两项根因如下：
+
+1. **未见到输入法按钮位置（`no_menu_event_event=button name=request`）**：
+   - `pixel_5` 模拟器默认带硬键盘且 `show_ime_with_hard_keyboard=0`，原输入法隐式 `showSoftInput(right, 0)` 未使当前窗处于已请求显隐态；切到 `MenuIme` 后，IMMS `attachNewInputLocked` 与 `InputMethodService.doStartInput` 不会主动弹出新输入法窗口，原 `MenuIme` 也未调用 `requestShowSelf(InputMethod.SHOW_EXPLICIT)`，导致 `onCreateInputView` 从未触发。
+   - 同时，原 `MenuIme` 仅在按钮 `OnLayoutChangeListener` 中单次上报坐标，若首次布局发生在窗口尚未显示或动画入场期，或跨连接代次复用视图，均会漏报 `event=button`。
+   - 修复：在 `visible-opted-in` 模式下于 `onStartInput` 显式有界调用 `requestShowSelf(SHOW_EXPLICIT)`，并在 `onStartInputView` / `onWindowShown` 及布局稳定后基于 `WindowManager.getMaximumWindowMetrics()` 去重上报三个按钮坐标与完整生命周期日志。
+2. **连接对象编号失配（#3/#4/#5 间探针落到 #4，守卫要求等于最后创建的 #5）**：
+   - 切输入法时，`InputMethodManager` 在 `MSG_UNBIND` 经 `startInputInner(UNBOUND_FROM_IMMS)` 创建并送出连接 #4，将 `mServedConnecting` 置 `false`；随后收到 `MSG_BIND` 时 `startInputInner(BOUND_TO_IMMS)` 先无条件调用 `View.onCreateInputConnection()`（创建 #5），再检查 `!mServedConnecting` 后丢弃 #5 并继续沿用 #4。
+   - 因此，原靶场 `mine != generation` 守卫以及 `onTextContextMenuItem`/`onProvideAutofillStructure` 记录 `generation` 必然把仍活跃的 #4 误判为旧连接。
+   - 修复：改为在 `InputConnectionWrapper.closeConnection()` 跟踪实际失效态，并以未关闭的实测探针连接 `probedConnection` 作为当前连接标识，同时另记 `latest_created` 透明保留 #5 丢弃观测。
+3. **零配合标准 `EditText` 与零 UI 输入法对照（AOSP 16 语义与对抗场景）**：
+   - AOSP 16 `TextView` 构造会把默认 `IMPORTANT_FOR_AUTOFILL_AUTO` 提升为 `IMPORTANT_FOR_AUTOFILL_YES`；`EditableInputConnection.performContextMenuAction(android.R.id.autofill)` 经 `TextView.onTextContextMenuItem(ID_AUTOFILL)` 调用 `AutofillManager.requestAutofill(this)`（带 `FLAG_MANUAL_REQUEST`），不依赖靶应用的 `privateImeOptions`、同签名、输入连接包装或可见键盘；且 `FLAG_MANUAL_REQUEST` 同时绕过已结束会话的字段已登记拦截，并在活跃会话中强制重新采集结构。
+   - 此外，`IRemoteInputConnection.performContextMenuAction` 为 `oneway` IPC，输入法侧返回 `true` 仅表示提交请求，无法感知靶应用吞掉动作返回 `false`；而 `AssistStructure` 对 `FLAG_MANUAL_REQUEST` 会附带 `AUTOFILL_FLAG_INCLUDE_NOT_IMPORTANT_VIEWS`，因此观察服务必须自行尊重 `IMPORTANT_FOR_AUTOFILL_NO` 拒绝选框。
+   - 夹具现覆盖四场独立对照，并由 `build.py` 另签一份异签名的 `target-diffsig.apk`，配合 `verify.py --scenario ...` 与隔离驱动 `run_isolated.py` 验收：
+     - `opted-in`（同签名 + 可见 3 按钮 IME + #3/#4/#5 守卫修复 + `noop`/`expired`/`request`）；
+     - `plain-auto`（异签名 + 未子类化原生 `EditText`、默认 `IMPORTANT_FOR_AUTOFILL_AUTO`、`NO_ID`、零 `privateImeOptions` + 零 UI IME 零布局偏移）；
+     - `optout-no`（异签名 + `IMPORTANT_FOR_AUTOFILL_NO` + 零 UI IME，要求 `UNKNOWN / TARGET_OPTED_OUT` 或 0 手动回调，fail-closed）；
+     - `swallow-ic`（异签名 + 自定义 `InputConnection` 吞掉 `android.R.id.autofill` 并对 `requestTextBoundsInfo` 返回 `CODE_UNSUPPORTED` + 零 UI IME，要求 0 手动回调、fail-closed）。
