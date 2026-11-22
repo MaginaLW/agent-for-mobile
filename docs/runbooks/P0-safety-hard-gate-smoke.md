@@ -37,7 +37,7 @@
 
 设备与版本核对、网关预检、派单和回收共用设备锁。派单前后比对默认输入法、已启用输入法、无障碍服务清单、无障碍总开关、网关服务和端口转发。任务卡保留草稿，遇到登录、遮挡、误窗或工具错误即结束。已就位时导航点击为零。允许点击的目标只有左侧唯一的具名会话行和右侧唯一的原生可编辑输入框，各至多一次。
 
-就位成功需要两处读数一致。执行器核对当前右窗标题和编辑栏的输入焦点，宿主核对系统焦点与输入法目标属于同一个微信 `ChattingUI` 窗口。空栏缺少原生引用时，保留草稿，记录阻塞。键盘显隐和会话窗口焦点分别报告。
+就位成功需要两处读数一致。执行器核对当前右窗标题和编辑栏的输入焦点，宿主核对系统焦点与输入法目标属于同一个微信 `ChattingUI` 窗口。宿主回执校验（`Test-LandscapeEditorReceipt`）接受两条 fail-closed 分支：其一为右窗唯一原生 `a11y/fused` 编辑框（带 `E`/`F`、非空 `focused_input_id` 与一致的 `focused_input_bounds`）；其二为原生输入节点缺失且设备基线已启用 `GatewayIme` 时（本派单不改写输入法设置），由 `keyboard_state(probe_cursor_anchor=true)` 返回非 `TYPE_NULL`、非单位矩阵、归属右窗的 `ime_cursor_anchor`，并与同修订 `ui_find(text="文件传输助手")` 的 `focused_identity_source="ime_cursor_anchor"`、`focused_input_id=null`、`focused_input_window_id`/`focused_input_pane`/`focused_input_bounds` 交叉一致。`TYPE_NULL`、左窗或重叠窗、过期修订与纯 OCR 猜测均严格拒绝；未聚焦且缺少原生引用时仍保留草稿并记录阻塞，不盲点空白区。键盘显隐与会话窗口焦点分别报告。
 
 右窗已聚焦且顶部标题匹配时，左窗是否出现同名结果不影响继续核对编辑栏。收尾若预期服务缺席而首次读回仍有记录或状态未知，每 350 毫秒再读一次，最多三次；确认服务缺席或连续两次状态未知即结束。此窗口内只读服务状态。[真机依据](../knowledge/apps/wechat.md#已在右窗时的就位验收)
 
