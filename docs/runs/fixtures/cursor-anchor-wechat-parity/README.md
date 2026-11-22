@@ -53,27 +53,27 @@ apksigner verify wechat-parity.apk
 
 收尾时逐项还原并读回原默认/启用输入法、无障碍与旋转设置，卸载双包并在 `pm list packages -u` 确认清空，停止自建网关、转发、模拟器与私有 ADB，并确认端口释放与临时 AVD 删除。
 
-## 2026-11-22 隔离 Android 16 (API 36) 实测结果（`receipts.json`）
+## 2026-11-22 隔离 Android 16 (API 36) 实测结果（`receipts.json`，`schema_version=2`）
 
-- **运行环境与隔离证明**：`pixel_5` 横屏（`2340x1080`），`ro.build.version.sdk=36`，`ro.kernel.qemu=1`，私有 ADB 端口 `5047`（非 `5037`），AVD 控制台/传输端口 `5594/5595`，本地网关转发端口 `18852`，`ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动前 `adb devices` 为空（`initial_adb_devices_empty=true`），总耗时 `147.23s`。
+- **运行环境与隔离证明**：`pixel_5` 横屏（`2340x1080`），`ro.build.version.sdk=36`，`ro.kernel.qemu=1`，私有 ADB 端口 `5049`（非 `5037`），AVD 控制台/传输端口 `5596/5597`，本地网关转发端口 `18854`，`ADB_USB=0`、`ADB_MDNS=0`、`ADB_EMU=1`，启动前 `adb devices` 为空（`initial_adb_devices_empty=true`），总耗时 `151.28s`。
 - **在机 APK 与独立 UID 核验**：
-  - `dev.magina.gateway`（Debug APK，源码 `2b755b2a6dfdcebcd2c4ee2e08c9a2e6bccbb884`，UID `10216`）：SHA-256 `483994bbcd3252b34611b4c5fb95e8291e7a76c2c9ce2edbb1ab5f7177b9ceda`（`gateway_hash_matched=true`）
+  - `dev.magina.gateway`（Debug APK，源码 `dfb948151b61fd93bfa8633fe8b329c64c2e1f4b`，UID `10216`）：SHA-256 `73b778b0467a5d7c1562128abd329087788ea9631ed4037af67779bef505a16a`（`gateway_hash_matched=true`）
   - `dev.magina.wechatparity`（UID `10217`）：SHA-256 `c22b07694a8a558d7b4915af9bb60cdfdc64d28497475282672975e1bb21942a`（`fixture_hash_matched=true`）
-- **全部 6 场景结果**（所有场景 `foreground_app` 均核验 `window_topology="same_app_multi"` 且恰好 2 个 `dev.magina.wechatparity` `TYPE_APPLICATION` 窗口、零 Launcher）：
+- **全部 6 场景结果**（所有场景 `foreground_app` 均核验 `window_topology="same_app_multi"` 且恰好 2 个 `dev.magina.wechatparity` `TYPE_APPLICATION` 窗口、零 Launcher；所有场景 `ui_find(role="input")` 均真实抛 `E_NOT_FOUND` 且 `ui_snapshot.input_elements_count=0`，零伪造 ref）：
 
-| 场景 | 实测窗口（`left` / `right`） | 4B `probe_editor_bounds` | 4A+4B `probe_cursor_anchor` | 结论 |
+| 场景 | 双窗（`left` / `right`） | 4B `probe_editor_bounds` & 4A `probe_cursor_anchor` | 生产 `ui_find` & `ui_snapshot` 透出 | 结论 |
 |---|---|---|---|---|
-| `disjoint_right_dead_end` | `[136,96,929,966]` / `[977,144,2340,1014]`（互不重叠） | `same_bounds`，4B 遥测 `inspected=2/2, unnamed=2, empty_bounds=2, input_type_matches=0, same_as_service=1`；另测 `probe_editor_origin -> no_verified_geometry`（`text_bounds_requests=1`） | `window_id=15`, `pane="right"`, `filtered_2arg`, `editor_bounds=[1001,253,2316,352]` == 靶 `[1001,253,2316,352]`, `insertion_marker=(1017, 269..322..336, visible)` | **PASS** |
-| `disjoint_right_valid_node` | `[136,96,929,966]` / `[977,144,2340,1014]`（互不重叠） | `focus_conflict`，4B 遥测 `inspected=2/2, unnamed=2, bounds_in_window=1, empty_bounds=1, editable=1, input_type_matches=1, same_as_service=1` | `window_id=18`, `pane="right"`, `filtered_2arg`, `editor_bounds=[1001,253,2316,352]` == 靶, `a11y_cross_check`: `exact_editor_bounds_matches=1, marker_inside_node_matches=1, input_type_and_geometry_matches=1` | **PASS** |
-| `disjoint_right_legacy_1arg` | `[136,96,929,966]` / `[977,144,2340,1014]`（互不重叠） | `same_bounds`，4B 遥测 `inspected=2/2, empty_bounds=2` | `filtered_accepted=false -> legacy_accepted=true`（`filtered=1, legacy=1`）, `window_id=21`, `pane="right"`, `legacy_1arg`, `editor_bounds=[1001,253,2316,352]` == 靶 | **PASS** |
-| `disjoint_left_dead_end` | `[136,96,929,966]` / `[977,144,2340,1014]`（互不重叠） | `same_bounds`，4B 遥测 `inspected=2/2, empty_bounds=2` | `window_id=23`, `pane="left"`, `filtered_2arg`, `editor_bounds=[160,205,905,304]` == 靶 `[160,205,905,304]`, `insertion_marker=(176, 221..274..288, visible)` | **PASS** |
-| `overlap_right` | `[136,96,1899,966]` / `[687,144,2340,1014]`（真实重叠） | `same_bounds` | `ime_cursor_anchor=null`, `reason="ambiguous_window_overlap"`, `overlapping_window_ids=[27,26]` | **PASS (fail-closed)** |
-| `type_null_decor` | `[136,96,929,966]` / `[977,144,2340,1014]`（非编辑框） | `input_type_null`, `input_type_is_null=true`, `field_id_class="zero"`, API 36 `autofill_id_present=true, autofill_id_virtual=false` | `ime_cursor_anchor=null`, `reason="input_type_null"`, `filtered=0, legacy=0` | **PASS (fail-closed)** |
+| `disjoint_right_dead_end` | `[136,96,929,966]` / `[977,144,2340,1014]` | `same_bounds` + 4B (`inspected=2/2, empty=2`)；`probe_editor_origin -> no_verified_geometry`；`probe_cursor_anchor`: `win=15, pane="right", filtered_2arg`, `[1001,253,2316,352]` == 靶 (`ic=3/0`) | `source="ime_cursor_anchor"`, `id=null`, `bounds=[1001,253,2316,352]`, `window_id=15`, `pane="right"` | **PASS** |
+| `disjoint_right_valid_node` | `[136,96,929,966]` / `[977,144,2340,1014]` | `focus_conflict` + 4B (`in_window=1, editable=1, input_type=1`)；`probe_cursor_anchor`: `win=18, pane="right"`, `a11y_cross_check=1/1/1` (`ic=1/0`，生产路径零降级) | `source="a11y"`, `id="18\|\|EditText\|...\|1001,253,2316,352"`, `bounds=[1001,253,2316,352]`, `window_id=null, pane=null` | **PASS** |
+| `disjoint_right_legacy_1arg` | `[136,96,929,966]` / `[977,144,2340,1014]` | `same_bounds`；2 参拒 -> 1 参降级 (`filtered=3, legacy=3`)，`win=21, pane="right", legacy_1arg`, `[1001,253,2316,352]` == 靶 | `source="ime_cursor_anchor"`, `id=null`, `bounds=[1001,253,2316,352]`, `window_id=21`, `pane="right"` | **PASS** |
+| `disjoint_left_dead_end` | `[136,96,929,966]` / `[977,144,2340,1014]` | `same_bounds`；`probe_cursor_anchor`: `win=23, pane="left", filtered_2arg`, `[160,205,905,304]` == 靶 (`ic=3/0`) | `source="ime_cursor_anchor"`, `id=null`, `bounds=[160,205,905,304]`, `window_id=23`, `pane="left"` | **PASS** |
+| `overlap_right` | `[136,96,1899,966]` / `[687,144,2340,1014]`（重叠） | `same_bounds`；`probe_cursor_anchor -> ambiguous_window_overlap` (`ic=3/0`) | 严格退回 `source="ime_only"`, `id=null, bounds=null, window_id=null, pane=null` | **PASS (fail-closed)** |
+| `type_null_decor` | `[136,96,929,966]` / `[977,144,2340,1014]` | `probe_editor_bounds` 与 `probe_cursor_anchor` 均 `input_type_null` (`autofill_id_present=true/virtual=false`, `ic=0/0`) | 严格退回 `source="ime_only"`, `id=null, bounds=null, window_id=null, pane=null` | **PASS (fail-closed)** |
 
 - **收尾核验**：`6/6` 项设置逐字还原相等，双包卸载并在 `pm list packages -u` 清空，`emulator_stopped=true`、`isolated_adb_stopped=true`、`ports_released=true`、`avd_deleted=true`、`cleanup_errors=[]`。
 - **离线验真**：
-  - `python -B verify.py --receipts receipts.json` -> `{"verified": true, "scenarios": 6}`
-  - `python -B verify.py --self-test` -> `SELF-TEST PASS: 1 positive / 6 negative mutations caught`
+  - `python -B verify.py --receipts receipts.json --require-production-ui` -> `{"verified": true, "scenarios": 6}`
+  - `python -B verify.py --self-test` -> `SELF-TEST PASS: 1 positive / 10 negative mutations caught`
 - **已证实边界**：
   - **优势**：零新权限、零系统角色接管（不切 `ROLE_ASSISTANT` / `autofill_service`）、零可见 IME UI，直接在现有 `GatewayIme` + `GatewayA11yService` 内绕开反无障碍剥离与 `requestTextBoundsInfo -> CODE_UNSUPPORTED`，在横屏互不重叠双窗上以 0px 误差精确归属左/右窗；同时 4B 单次可读回 2 个无名节点的完整非短路遥测及 API 36 `EditorInfo.getAutofillId()` 存在性。
   - **硬限制**：`CursorAnchorInfo` 回调无 AIDL 请求编号（须依赖会话世代/窗口稳定前后核对）；双窗在目标编辑框处重叠时必然且必须 fail-closed 拒绝（`ambiguous_window_overlap`）；仍依赖真实 PA2553 微信的 `MMEditText`/`InputConnection` 正常响应该十年标准 `requestCursorUpdates()` API（待用户授权的真机只读探针最终实证）。

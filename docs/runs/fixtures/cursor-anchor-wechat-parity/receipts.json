@@ -1,10 +1,11 @@
 {
-  "source_sha": "2b755b2a6dfdcebcd2c4ee2e08c9a2e6bccbb884",
+  "schema_version": 2,
+  "source_sha": "dfb948151b61fd93bfa8633fe8b329c64c2e1f4b",
   "environment": {
-    "adb_port": 5047,
-    "console_port": 5594,
-    "transport_port": 5595,
-    "http_port": 18852,
+    "adb_port": 5049,
+    "console_port": 5596,
+    "transport_port": 5597,
+    "http_port": 18854,
     "adb_usb_disabled": true,
     "adb_mdns_disabled": true,
     "adb_emu_enabled": true,
@@ -14,7 +15,7 @@
     "qemu": "1"
   },
   "apks": {
-    "gateway_sha256": "483994bbcd3252b34611b4c5fb95e8291e7a76c2c9ce2edbb1ab5f7177b9ceda",
+    "gateway_sha256": "73b778b0467a5d7c1562128abd329087788ea9631ed4037af67779bef505a16a",
     "fixture_sha256": "c22b07694a8a558d7b4915af9bb60cdfdc64d28497475282672975e1bb21942a",
     "gateway_hash_matched": true,
     "fixture_hash_matched": true,
@@ -25,9 +26,9 @@
     "disjoint_right_dead_end": {
       "foreground_app": {
         "package": "dev.magina.wechatparity",
-        "activity": "android.widget.LinearLayout",
-        "foreground_known": true,
-        "foreground_reason": "none",
+        "activity": "",
+        "foreground_known": false,
+        "foreground_reason": "window_id_mismatch",
         "window_topology": "same_app_multi",
         "windows": [
           {
@@ -39,7 +40,7 @@
             "bounds": [
               0,
               0,
-              1080,
+              2340,
               66
             ]
           },
@@ -233,8 +234,8 @@
             2340,
             1014
           ],
-          "session_id": "ime|1c294d32ffdcdafc2de16fe1",
-          "session_generation": 6,
+          "session_id": "ime|40c13ab96b6986c00a803514",
+          "session_generation": 5,
           "geometry_source": "editor_bounds+insertion_marker",
           "filtered_accepted": true,
           "legacy_accepted": null,
@@ -319,6 +320,37 @@
           ]
         }
       },
+      "ui_find_pane": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": 15,
+        "focused_input_pane": "right",
+        "matches_count": 1
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": 15,
+        "focused_input_pane": "right",
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
+      },
       "fixture_receipt": {
         "case": "disjoint_right_dead_end",
         "uid": 10217,
@@ -341,7 +373,7 @@
         "exported_field_id": 2130771968,
         "exported_input_type": 16385,
         "text_bounds_requests": 1,
-        "filtered_cursor_requests": 1,
+        "filtered_cursor_requests": 3,
         "legacy_cursor_requests": 0,
         "target_pane": "right",
         "focused": true,
@@ -582,8 +614,8 @@
             2340,
             1014
           ],
-          "session_id": "ime|9c09af2d16335a62c59c0805",
-          "session_generation": 10,
+          "session_id": "ime|2c5c3d811b3a93570013ba28",
+          "session_generation": 9,
           "geometry_source": "editor_bounds+insertion_marker",
           "filtered_accepted": true,
           "legacy_accepted": null,
@@ -677,6 +709,37 @@
             }
           ]
         }
+      },
+      "ui_find_pane": {
+        "focused_identity_source": "a11y",
+        "focused_input_id": "18||android.widget.EditText|dev.magina.wechatparity|1001,253,2316,352",
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "matches_count": 1
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "a11y",
+        "focused_input_id": "18||android.widget.EditText|dev.magina.wechatparity|1001,253,2316,352",
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
       },
       "fixture_receipt": {
         "case": "disjoint_right_valid_node",
@@ -931,8 +994,8 @@
             2340,
             1014
           ],
-          "session_id": "ime|1a2463a06dd693d073abd9f4",
-          "session_generation": 14,
+          "session_id": "ime|a73d6ba6417ed76d7faa60bb",
+          "session_generation": 13,
           "geometry_source": "editor_bounds+insertion_marker",
           "filtered_accepted": false,
           "legacy_accepted": true,
@@ -1017,6 +1080,37 @@
           ]
         }
       },
+      "ui_find_pane": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": 21,
+        "focused_input_pane": "right",
+        "matches_count": 3
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          1001,
+          253,
+          2316,
+          352
+        ],
+        "focused_input_window_id": 21,
+        "focused_input_pane": "right",
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
+      },
       "fixture_receipt": {
         "case": "disjoint_right_legacy_1arg",
         "uid": 10217,
@@ -1039,8 +1133,8 @@
         "exported_field_id": 2130771968,
         "exported_input_type": 16385,
         "text_bounds_requests": 0,
-        "filtered_cursor_requests": 1,
-        "legacy_cursor_requests": 1,
+        "filtered_cursor_requests": 3,
+        "legacy_cursor_requests": 3,
         "target_pane": "right",
         "focused": true,
         "window_focused": true,
@@ -1271,7 +1365,7 @@
             966
           ],
           "session_id": "ime|f579f647010fd5bc5670ca37",
-          "session_generation": 18,
+          "session_generation": 19,
           "geometry_source": "editor_bounds+insertion_marker",
           "filtered_accepted": true,
           "legacy_accepted": null,
@@ -1356,6 +1450,37 @@
           ]
         }
       },
+      "ui_find_pane": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          160,
+          205,
+          905,
+          304
+        ],
+        "focused_input_window_id": 23,
+        "focused_input_pane": "left",
+        "matches_count": 1
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "ime_cursor_anchor",
+        "focused_input_id": null,
+        "focused_input_bounds": [
+          160,
+          205,
+          905,
+          304
+        ],
+        "focused_input_window_id": 23,
+        "focused_input_pane": "left",
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
+      },
       "fixture_receipt": {
         "case": "disjoint_left_dead_end",
         "uid": 10217,
@@ -1378,7 +1503,7 @@
         "exported_field_id": 2130771969,
         "exported_input_type": 16385,
         "text_bounds_requests": 0,
-        "filtered_cursor_requests": 1,
+        "filtered_cursor_requests": 3,
         "legacy_cursor_requests": 0,
         "target_pane": "left",
         "focused": true,
@@ -1693,6 +1818,27 @@
           ]
         }
       },
+      "ui_find_pane": {
+        "focused_identity_source": "ime_only",
+        "focused_input_id": null,
+        "focused_input_bounds": null,
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "matches_count": 1
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "ime_only",
+        "focused_input_id": null,
+        "focused_input_bounds": null,
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
+      },
       "fixture_receipt": {
         "case": "overlap_right",
         "uid": 10217,
@@ -1715,7 +1861,7 @@
         "exported_field_id": 2130771968,
         "exported_input_type": 16385,
         "text_bounds_requests": 0,
-        "filtered_cursor_requests": 1,
+        "filtered_cursor_requests": 3,
         "legacy_cursor_requests": 0,
         "target_pane": "right",
         "focused": true,
@@ -1744,9 +1890,9 @@
     "type_null_decor": {
       "foreground_app": {
         "package": "dev.magina.wechatparity",
-        "activity": "dev.magina.wechatparity.WeChatParityActivity",
-        "foreground_known": true,
-        "foreground_reason": "none",
+        "activity": "",
+        "foreground_known": false,
+        "foreground_reason": "window_id_mismatch",
         "window_topology": "same_app_multi",
         "windows": [
           {
@@ -1826,6 +1972,27 @@
           "supported_handwriting_gestures": false
         }
       },
+      "ui_find_pane": {
+        "focused_identity_source": "ime_only",
+        "focused_input_id": null,
+        "focused_input_bounds": null,
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "matches_count": 3
+      },
+      "ui_snapshot": {
+        "focused_identity_source": "ime_only",
+        "focused_input_id": null,
+        "focused_input_bounds": null,
+        "focused_input_window_id": null,
+        "focused_input_pane": null,
+        "input_elements_count": 0
+      },
+      "ui_find_input": {
+        "ok": false,
+        "error_code": "E_NOT_FOUND",
+        "matches_count": 0
+      },
       "fixture_receipt": {
         "case": "type_null_decor",
         "uid": 10217,
@@ -1859,7 +2026,7 @@
   "teardown": {
     "saved_settings": {
       "secure:default_input_method": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
-      "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
+      "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME;1594443099:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
       "secure:enabled_accessibility_services": "null",
       "secure:accessibility_enabled": "0",
       "system:accelerometer_rotation": "1",
@@ -1867,7 +2034,7 @@
     },
     "restored_settings": {
       "secure:default_input_method": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
-      "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
+      "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME;1594443099:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
       "secure:enabled_accessibility_services": "null",
       "secure:accessibility_enabled": "0",
       "system:accelerometer_rotation": "1",
@@ -1881,6 +2048,6 @@
     "avd_deleted": true,
     "cleanup_errors": []
   },
-  "elapsed_seconds": 147.23,
+  "elapsed_seconds": 151.28,
   "run_error": null
 }

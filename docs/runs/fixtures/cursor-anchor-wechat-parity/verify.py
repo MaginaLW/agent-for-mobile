@@ -247,6 +247,12 @@ def verify_receipts(receipts: dict[str, Any], require_production_ui: bool = Fals
                     f"{name}: ui_find(role=input) must throw E_NOT_FOUND with 0 fabricated refs, got {ui_find_input}",
                     errors,
                 )
+                if "input_elements_count" in ui_snap:
+                    _require(
+                        ui_snap.get("input_elements_count") == 0,
+                        f"{name}: ui_snapshot must not fabricate input elements, got {ui_snap}",
+                        errors,
+                    )
                 if name in ("disjoint_right_dead_end", "disjoint_right_legacy_1arg", "disjoint_left_dead_end"):
                     expected_pane = "left" if name == "disjoint_left_dead_end" else "right"
                     target_rect = oracle.get("target_rect", [])

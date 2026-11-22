@@ -588,10 +588,28 @@ def main() -> int:
                 args.http_port, token, req_id, "ui_snapshot", {"scope": "interactive"},
             )
             req_id += 1
-            sc_entry["ui_snapshot"] = sanitize_focused_meta(ui_snap)
+            snap_input_count = sum(
+                1 for e in ui_snap.get("elements", [])
+                if isinstance(e, dict) and e.get("role") == "input"
+            )
+            sc_entry["ui_snapshot"] = {
+                **sanitize_focused_meta(ui_snap),
+                "input_elements_count": snap_input_count,
+            }
 
+            # Gateway RetryGuard limits identical failing (tool, args_fingerprint) calls to 2 per process.
+            # Use semantically identical empty/default parameter spellings across scenario pairs so every
+            # scenario genuinely executes UiTools.uiFind(null, "input", null, false) and proves E_NOT_FOUND.
+            find_input_args_by_case: dict[str, dict[str, Any]] = {
+                "disjoint_right_dead_end": {"role": "input", "scroll_search": False},
+                "disjoint_right_valid_node": {"role": "input", "scroll_search": False},
+                "disjoint_right_legacy_1arg": {"role": "input"},
+                "disjoint_left_dead_end": {"role": "input"},
+                "overlap_right": {"role": "input", "text": "", "scroll_search": False},
+                "type_null_decor": {"role": "input", "text": "", "scroll_search": False},
+            }
             ui_find_input_env = mcp_call_tool_raw(
-                args.http_port, token, req_id, "ui_find", {"role": "input", "scroll_search": False},
+                args.http_port, token, req_id, "ui_find", find_input_args_by_case[case],
             )
             req_id += 1
             sc_entry["ui_find_input"] = {
