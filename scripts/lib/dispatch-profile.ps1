@@ -117,6 +117,7 @@ function Set-GatewayConfigTokenFile {
 function Read-GatewayDeviceTokenViaRunAs {
     param([Parameter(Mandatory)][string]$AdbCommand)
 
+    $global:LASTEXITCODE = 0
     $raw = @(& $AdbCommand exec-out run-as dev.magina.gateway cat shared_prefs/gateway.xml 2>$null)
     if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) { return $null }
     $text = $raw -join "`n"
@@ -133,6 +134,7 @@ function Read-GatewayDeviceTokenViaRunAs {
 function Get-GatewayForegroundServiceState {
     param([Parameter(Mandatory)][string]$AdbCommand)
 
+    $global:LASTEXITCODE = 0
     $out = @(& $AdbCommand shell dumpsys activity services dev.magina.gateway/.GatewayService 2>&1)
     if ($LASTEXITCODE -ne 0) { return 'unknown' }
     $text = $out -join "`n"
@@ -234,7 +236,7 @@ function Invoke-GatewayDeviceInfoCall {
 }
 
 function ConvertFrom-AccessibilityServiceList {
-    param([AllowNull()][string]$Raw)
+    param([AllowNull()]$Raw = $null)
 
     if ($null -eq $Raw) {
         return [pscustomobject]@{
@@ -244,7 +246,7 @@ function ConvertFrom-AccessibilityServiceList {
             Members = @()
         }
     }
-    $trimmed = $Raw.Trim()
+    $trimmed = ([string]$Raw).Trim()
     if ($trimmed -ceq 'null' -or [string]::IsNullOrEmpty($trimmed)) {
         return [pscustomobject]@{
             Raw = ''
@@ -281,7 +283,7 @@ function ConvertFrom-AccessibilityServiceList {
 
 function Merge-AccessibilityServiceList {
     param(
-        [AllowNull()][string]$BaselineRaw,
+        [AllowNull()]$BaselineRaw = $null,
         [AllowEmptyCollection()][string[]]$ObservedNonGateway = @(),
         [switch]$IncludeGateway,
         [string]$GatewayFullComponent = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService',
@@ -343,6 +345,7 @@ function Invoke-GatewaySettingsCommand {
     foreach ($arg in $SettingsArgs) {
         $cmdArgs.Add($arg)
     }
+    $global:LASTEXITCODE = 0
     $rawOut = @(& $AdbCommand @cmdArgs 2>&1 | ForEach-Object { "$_" })
     $exitCode = $LASTEXITCODE
     return [pscustomobject]@{
@@ -354,8 +357,8 @@ function Invoke-GatewaySettingsCommand {
 function Restore-AccessibilityServicesBaseline {
     param(
         [Parameter(Mandatory)][string]$AdbCommand,
-        [AllowNull()][string]$TargetServicesRaw = $null,
-        [AllowNull()][string]$TargetEnabled = $null,
+        [AllowNull()]$TargetServicesRaw = $null,
+        [AllowNull()]$TargetEnabled = $null,
         [switch]$UserZero,
         [int]$SettleDelayMs = 500,
         [int]$MaxAttempts = 3
@@ -364,9 +367,10 @@ function Restore-AccessibilityServicesBaseline {
     if ($null -eq $TargetServicesRaw) {
         return [pscustomobject]@{ Restored = $false; Verified = $true; Reason = 'no-baseline' }
     }
-    $targetNorm = $TargetServicesRaw.Trim()
+    $targetNorm = ([string]$TargetServicesRaw).Trim()
     $targetIsCleared = ($targetNorm -ceq 'null' -or [string]::IsNullOrEmpty($targetNorm))
-    $validTargetEnabled = ($null -ne $TargetEnabled -and $TargetEnabled -in @('0', '1'))
+    $targetEnabledStr = if ($null -eq $TargetEnabled) { $null } else { ([string]$TargetEnabled).Trim() }
+    $validTargetEnabled = ($null -ne $targetEnabledStr -and $targetEnabledStr -cin @('0', '1'))
 
     if ($MaxAttempts -lt 1) { $MaxAttempts = 1 }
     $didWrite = $false
@@ -375,8 +379,8 @@ function Restore-AccessibilityServicesBaseline {
         $readSvc = Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand -UserZero:$UserZero `
             -SettingsArgs @('get', 'secure', 'enabled_accessibility_services')
         if ($readSvc.ExitCode -ne 0) {
-            if ($attempt -lt $MaxAttempts -and $SettleDelayMs -gt 0) {
-                Start-Sleep -Milliseconds $SettleDelayMs
+            if ($attempt -lt $MaxAttempts) {
+                if ($SettleDelayMs -gt 0) { Start-Sleep -Milliseconds $SettleDelayMs }
                 continue
             }
             return [pscustomobject]@{ Restored = $didWrite; Verified = $false; Reason = 'read-services-failed' }
@@ -390,12 +394,7 @@ function Restore-AccessibilityServicesBaseline {
         if ($validTargetEnabled) {
             $readEnabled = Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand -UserZero:$UserZero `
                 -SettingsArgs @('get', 'secure', 'accessibility_enabled')
-            if ($readEnabled.ExitCode -eq 0 -and $readEnabled.Stdout -in @('0', '1')) {
-                $enabledMatch = ($readEnabled.Stdout -ceq $TargetEnabled)
-            }
-            elseif ($readEnabled.ExitCode -ne 0) {
-                $enabledMatch = $false
-            }
+            $enabledMatch = ($readEnabled.ExitCode -eq 0 -and $readEnabled.Stdout -ceq $targetEnabledStr)
         }
 
         if ($servicesMatch -and $enabledMatch) {
@@ -416,8 +415,8 @@ function Restore-AccessibilityServicesBaseline {
                     -SettingsArgs @('put', 'secure', 'enabled_accessibility_services', $targetNorm)
             }
             if ($writeSvc.ExitCode -ne 0) {
-                if ($attempt -lt $MaxAttempts -and $SettleDelayMs -gt 0) {
-                    Start-Sleep -Milliseconds $SettleDelayMs
+                if ($attempt -lt $MaxAttempts) {
+                    if ($SettleDelayMs -gt 0) { Start-Sleep -Milliseconds $SettleDelayMs }
                     continue
                 }
                 return [pscustomobject]@{ Restored = $didWrite; Verified = $false; Reason = 'write-services-failed' }
@@ -427,10 +426,10 @@ function Restore-AccessibilityServicesBaseline {
 
         if ($validTargetEnabled -and -not $enabledMatch) {
             $writeEnabled = Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand -UserZero:$UserZero `
-                -SettingsArgs @('put', 'secure', 'accessibility_enabled', $TargetEnabled)
+                -SettingsArgs @('put', 'secure', 'accessibility_enabled', $targetEnabledStr)
             if ($writeEnabled.ExitCode -ne 0) {
-                if ($attempt -lt $MaxAttempts -and $SettleDelayMs -gt 0) {
-                    Start-Sleep -Milliseconds $SettleDelayMs
+                if ($attempt -lt $MaxAttempts) {
+                    if ($SettleDelayMs -gt 0) { Start-Sleep -Milliseconds $SettleDelayMs }
                     continue
                 }
                 return [pscustomobject]@{ Restored = $didWrite; Verified = $false; Reason = 'write-enabled-failed' }
@@ -453,9 +452,7 @@ function Restore-AccessibilityServicesBaseline {
         if ($validTargetEnabled) {
             $finalReadEn = Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand -UserZero:$UserZero `
                 -SettingsArgs @('get', 'secure', 'accessibility_enabled')
-            if ($finalReadEn.ExitCode -ne 0 -or ($finalReadEn.Stdout -in @('0', '1') -and $finalReadEn.Stdout -cne $TargetEnabled)) {
-                $finalEnabledMatch = $false
-            }
+            $finalEnabledMatch = ($finalReadEn.ExitCode -eq 0 -and $finalReadEn.Stdout -ceq $targetEnabledStr)
         }
         if ($finalSvcMatch -and $finalEnabledMatch) {
             return [pscustomobject]@{ Restored = $didWrite; Verified = $true; Reason = 'restored' }
@@ -471,6 +468,7 @@ function Invoke-GatewayBoundedAccessibilityRebind {
         [int]$RebindPauseMs = 300
     )
 
+    $global:LASTEXITCODE = 0
     $actOut = @(& $AdbCommand shell dumpsys activity activities 2>&1)
     $actExit = $LASTEXITCODE
     $actText = $actOut -join "`n"
@@ -534,6 +532,14 @@ function Invoke-GatewayBoundedAccessibilityRebind {
     $enableRes = Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand `
         -SettingsArgs @('put', 'secure', 'accessibility_enabled', '1')
     if ($enableRes.ExitCode -ne 0) {
+        if ([string]::IsNullOrEmpty($preParsed.Raw)) {
+            [void](Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand `
+                -SettingsArgs @('delete', 'secure', 'enabled_accessibility_services'))
+        }
+        else {
+            [void](Invoke-GatewaySettingsCommand -AdbCommand $AdbCommand `
+                -SettingsArgs @('put', 'secure', 'enabled_accessibility_services', $preParsed.Raw))
+        }
         return 'gateway_a11y_not_ready：启用 accessibility_enabled 失败。'
     }
     return $null
@@ -550,6 +556,7 @@ function Stop-GatewayPreflightOwnedResources {
 
     if ($null -eq $State) { return }
     if ($State.StartedService) {
+        $global:LASTEXITCODE = 0
         $stopOut = @(& $AdbCommand shell am stopservice -n dev.magina.gateway/.GatewayService 2>&1)
         $stopExit = $LASTEXITCODE
         $stopText = $stopOut -join "`n"
@@ -558,6 +565,7 @@ function Stop-GatewayPreflightOwnedResources {
             $service = Get-GatewayForegroundServiceState -AdbCommand $AdbCommand
             if ($service -eq 'foreground') {
                 # PA2553 上 shell 无法停止非导出服务。租约仍在，只撤销预检自己的启动。
+                $global:LASTEXITCODE = 0
                 $stopOut = @(& $AdbCommand shell run-as dev.magina.gateway am stopservice --user 0 -n dev.magina.gateway/.GatewayService 2>&1)
                 if ($LASTEXITCODE -ne 0 -and ($stopOut -join "`n") -notmatch '(?i)Service stopped') {
                     Write-Warning '所属应用身份停止本轮 GatewayService 失败。'
@@ -568,6 +576,7 @@ function Stop-GatewayPreflightOwnedResources {
         $State.StartedService = $false
     }
     if ($State.PortForwarded) {
+        $global:LASTEXITCODE = 0
         & $AdbCommand forward --remove "tcp:$($State.Port)" *> $null
         $State.PortForwarded = $false
     }
@@ -632,6 +641,7 @@ function Ensure-GatewayPreflightReady {
         $state.Problem = 'adb 不在 PATH'
         return $state
     }
+    $global:LASTEXITCODE = 0
     $stateOutput = @(& $AdbCommand get-state 2>&1)
     $stateExitCode = $LASTEXITCODE
     $deviceState = "$($stateOutput | Select-Object -Last 1)".Trim()
@@ -639,6 +649,7 @@ function Ensure-GatewayPreflightReady {
         $state.Problem = "无已授权设备（adb get-state → $deviceState）"
         return $state
     }
+    $global:LASTEXITCODE = 0
     & $AdbCommand shell input keyevent KEYCODE_WAKEUP *> $null
     if ($LASTEXITCODE -ne 0) {
         $state.Problem = '设备唤醒失败（adb shell input keyevent）。'
@@ -667,9 +678,11 @@ function Ensure-GatewayPreflightReady {
         return $state
     }
     if ($serviceState -eq 'absent') {
+        $global:LASTEXITCODE = 0
         & $AdbCommand shell am start-foreground-service -n dev.magina.gateway/.GatewayService *> $null
         $startExit = $LASTEXITCODE
         if ($startExit -ne 0) {
+            $global:LASTEXITCODE = 0
             & $AdbCommand shell run-as dev.magina.gateway am start-foreground-service --user 0 -n dev.magina.gateway/.GatewayService *> $null
             $startExit = $LASTEXITCODE
         }
@@ -693,14 +706,17 @@ function Ensure-GatewayPreflightReady {
     }
 
     $endpoint = "tcp:$Port"
+    $global:LASTEXITCODE = 0
     & $AdbCommand forward --no-rebind $endpoint $endpoint *> $null
     if ($LASTEXITCODE -eq 0) {
         $state.PortForwarded = $true
     }
     else {
         # ADB 的转发列表跨设备；只有当前设备的同一映射可以借用。
+        $global:LASTEXITCODE = 0
         $serial = [string](& $AdbCommand get-serialno 2>$null)
         $hasSerial = $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($serial) -and $serial -cne 'unknown'
+        $global:LASTEXITCODE = 0
         $forwards = @(& $AdbCommand forward --list 2>$null)
         $listed = @($forwards | ForEach-Object { $_.Trim() -replace '\s+', ' ' })
         if (-not $hasSerial -or $LASTEXITCODE -ne 0 -or

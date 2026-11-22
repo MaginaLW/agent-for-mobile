@@ -2768,6 +2768,138 @@ Start-Sleep -Milliseconds 1800
         finally { $env:P0_FAKE_STATE = $prevState2 }
     }
 
+    Test-Case 'R3.1 回归：Stop-P0DeviceProvision 非 0/1 开关恢复、0ms 重试与 Invoke-P0AccessibilityRebind 短组件剥离' {
+        . $SourceProvisioner
+
+        $p0Reg = [ordered]@{
+            Svc = 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService'
+            En = 'null'
+            StickyEn = $false
+            FailFirstSvcGet = $false
+            Writes = [Collections.Generic.List[string]]::new()
+            ConcurrentOnDeleteOrPut = ''
+        }
+        function Invoke-P0DeviceCommand {
+            param($Session, $Arguments, $Operation, [switch]$AllowFailure, [int]$TimeoutSec = 30)
+            $cmd = ($Arguments | ForEach-Object { "$_" }) -join ' '
+            switch -Regex ($cmd) {
+                '^shell settings get secure enabled_accessibility_services$' {
+                    if ($p0Reg.FailFirstSvcGet) {
+                        $p0Reg.FailFirstSvcGet = $false
+                        if ($AllowFailure) { return [pscustomobject]@{ ExitCode = 1; Stdout = '' } }
+                        throw "$Operation 失败。"
+                    }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = $p0Reg.Svc }
+                }
+                '^shell settings get secure accessibility_enabled$' {
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = $p0Reg.En }
+                }
+                '^shell settings delete secure enabled_accessibility_services$' {
+                    [void]$p0Reg.Writes.Add('delete')
+                    $p0Reg.Svc = if ($p0Reg.ConcurrentOnDeleteOrPut) { $p0Reg.ConcurrentOnDeleteOrPut } else { 'null' }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                '^shell settings put secure enabled_accessibility_services (.+)$' {
+                    $val = $Matches[1]
+                    [void]$p0Reg.Writes.Add("put:$val")
+                    $p0Reg.Svc = if ($p0Reg.ConcurrentOnDeleteOrPut -and $val -notmatch 'GatewayA11yService') {
+                        $p0Reg.ConcurrentOnDeleteOrPut
+                    } else { $val }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                '^shell settings put secure accessibility_enabled (.+)$' {
+                    $val = $Matches[1]
+                    [void]$p0Reg.Writes.Add("en:$val")
+                    if (-not $p0Reg.StickyEn) { $p0Reg.En = $val }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                default {
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+            }
+        }
+        function Clear-P0DebugArtifacts { param($Session, [switch]$BestEffort) return @() }
+        function Clear-P0RemoteControlStaging { param($Session, [switch]$BestEffort) return @() }
+        function Clear-P0PrivateTemporaryFiles { param($Session, [switch]$BestEffort) return @() }
+        function Restore-P0Config { param($Session) }
+
+        # 1) Stop-P0DeviceProvision 面对 accessibility_enabled='null'/'2' 必须写回基线并清待办标记；粘滞时报错并保留待办标记
+        foreach ($badEn in @('null', '2')) {
+            foreach ($targetEn in @('0', '1')) {
+                $p0Reg.Svc = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                $p0Reg.En = $badEn
+                $p0Reg.StickyEn = $false
+                $p0Reg.FailFirstSvcGet = $false
+                $p0Reg.Writes.Clear()
+                $sess = [pscustomobject]@{
+                    OriginalIme = ''
+                    OriginalAccessibilityServices = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                    OriginalAccessibilityEnabled = $targetEn
+                    AccessibilityRestorePending = $true
+                    PortForwarded = $false
+                    CleanupIssues = @()
+                }
+                $errs = @(Stop-P0DeviceProvision -Session $sess -A11yRestoreSettleMs 0 -A11yRestoreAttempts 2)
+                Assert-True ($errs.Count -eq 0) "accessibility_enabled=$badEn 相对 $targetEn 应自动恢复：$($errs -join ',')"
+                Assert-True (-not $sess.AccessibilityRestorePending) '恢复后 AccessibilityRestorePending 应清零。'
+                Assert-True ($p0Reg.En -ceq $targetEn) "device accessibility_enabled 应恢复为 $targetEn，实际 $($p0Reg.En)"
+            }
+        }
+        $p0Reg.Svc = ':com.a/s1'
+        $p0Reg.En = 'null'
+        $p0Reg.StickyEn = $true
+        $sessStickyEn = [pscustomobject]@{
+            OriginalIme = ''
+            OriginalAccessibilityServices = ':com.a/s1'
+            OriginalAccessibilityEnabled = '0'
+            AccessibilityRestorePending = $true
+            PortForwarded = $false
+            CleanupIssues = @()
+        }
+        $stickyEnErrs = @(Stop-P0DeviceProvision -Session $sessStickyEn -A11yRestoreSettleMs 0 -A11yRestoreAttempts 2)
+        Assert-True ('restore_accessibility_services' -in $stickyEnErrs) 'accessibility_enabled 持久 null 时必须报告 restore_accessibility_services。'
+        Assert-True ($sessStickyEn.AccessibilityRestorePending) '未恢复成功时不得清零 AccessibilityRestorePending。'
+        $p0Reg.StickyEn = $false
+
+        # 2) Stop-P0DeviceProvision -A11yRestoreSettleMs 0 -A11yRestoreAttempts 3 在首次 get 失败后继续重试并恢复
+        $p0Reg.Svc = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+        $p0Reg.En = '1'
+        $p0Reg.FailFirstSvcGet = $true
+        $p0Reg.Writes.Clear()
+        $sessRetry = [pscustomobject]@{
+            OriginalIme = ''
+            OriginalAccessibilityServices = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+            OriginalAccessibilityEnabled = '1'
+            AccessibilityRestorePending = $true
+            PortForwarded = $false
+            CleanupIssues = @()
+        }
+        $retryErrs = @(Stop-P0DeviceProvision -Session $sessRetry -A11yRestoreSettleMs 0 -A11yRestoreAttempts 3)
+        Assert-True ($retryErrs.Count -eq 0 -and -not $sessRetry.AccessibilityRestorePending) `
+            "A11yRestoreSettleMs=0 在首次 get 失败后未重试恢复：$($retryErrs -join ',')"
+        Assert-True ($p0Reg.Svc -ceq ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "重试恢复后服务列表不符：$($p0Reg.Svc)"
+
+        # 3) Invoke-P0AccessibilityRebind 必须剥离短组件形式 dev.magina.gateway/.a11y.GatewayA11yService
+        $p0Reg.Svc = 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService'
+        $p0Reg.En = '0'
+        $p0Reg.ConcurrentOnDeleteOrPut = ''
+        $p0Reg.Writes.Clear()
+        Invoke-P0AccessibilityRebind -Session ([pscustomobject]@{}) -RebindPauseMs 0
+        Assert-True ($p0Reg.Writes[0] -ceq 'put:com.a/s1') "重置阶段未剥离短网关组件：$($p0Reg.Writes -join ' | ')"
+        Assert-True ($p0Reg.Svc -ceq 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService') `
+            "无并发变动时应保形原短网关组件且不重复追加：$($p0Reg.Svc)"
+
+        # 仅短网关组件 + 暂停窗口有并发服务写入时：重置应 delete，合并应只含并发服务+完整网关组件，不残留短网关组件
+        $p0Reg.Svc = 'dev.magina.gateway/.a11y.GatewayA11yService'
+        $p0Reg.ConcurrentOnDeleteOrPut = 'com.extra/.Svc'
+        $p0Reg.Writes.Clear()
+        Invoke-P0AccessibilityRebind -Session ([pscustomobject]@{}) -RebindPauseMs 0
+        Assert-True ($p0Reg.Writes[0] -ceq 'delete') "仅有短网关组件时重置应走 delete：$($p0Reg.Writes -join ' | ')"
+        Assert-True ($p0Reg.Svc -ceq 'com.extra/.Svc:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "合并结果不应残留短网关组件：$($p0Reg.Svc)"
+    }
+
     Test-Case '中转文件与新建私密配置删除失败均聚合 cleanup 且继续恢复' {
         foreach ($scenario in @('remote_cleanup_failure','config_delete_failure')) {
             $fixture = New-Fixture $scenario

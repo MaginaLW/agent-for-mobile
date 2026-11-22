@@ -105,6 +105,7 @@ function Get-GatewayTransportHealthSnapshot {
         error = $null
     }
     try {
+        $global:LASTEXITCODE = 0
         $fwdOut = @(& $AdbCommand forward --list 2>&1 | ForEach-Object { "$_" })
         $fwdExit = $LASTEXITCODE
         $adbForward.exit_code = $fwdExit
@@ -204,6 +205,7 @@ function Get-GatewayTransportHealthSnapshot {
         dumpsys_error = $null
     }
     try {
+        $global:LASTEXITCODE = 0
         $enabledOut = @(& $AdbCommand shell settings get secure enabled_accessibility_services 2>&1 | ForEach-Object { "$_" })
         $enabledExit = $LASTEXITCODE
         $accessibility.enabled_exit_code = $enabledExit
@@ -227,6 +229,7 @@ function Get-GatewayTransportHealthSnapshot {
     }
 
     try {
+        $global:LASTEXITCODE = 0
         $dumpsysOut = @(& $AdbCommand shell dumpsys accessibility 2>&1 | ForEach-Object { "$_" })
         $dumpsysExit = $LASTEXITCODE
         $accessibility.dumpsys_exit_code = $dumpsysExit

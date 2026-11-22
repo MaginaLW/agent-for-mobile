@@ -6,6 +6,7 @@ Set-StrictMode -Version 3.0
 
 $script:P0PackageName = 'dev.magina.gateway'
 $script:P0AccessibilityComponent = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+$script:P0AccessibilityShortComponent = 'dev.magina.gateway/.a11y.GatewayA11yService'
 # vivo 的 dumpsys accessibility 绑定区段只显示 Service[label=...]，不含组件名；label 与 manifest application label 同源。
 $script:P0AccessibilityLabel = '执行网关'
 $script:P0ImeComponent = 'dev.magina.gateway/.ime.GatewayIme'
@@ -425,7 +426,9 @@ function Start-P0DeviceProvision {
             -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
             -Operation '复核 gateway 无障碍' -AllowFailure
         $enabledAfter = @($a11yProbe.Stdout.Trim() -split ':' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($a11yProbe.ExitCode -ne 0 -or $script:P0AccessibilityComponent -notin $enabledAfter) {
+        if ($a11yProbe.ExitCode -ne 0 -or
+            ($script:P0AccessibilityComponent -cnotin $enabledAfter -and
+                $script:P0AccessibilityShortComponent -cnotin $enabledAfter)) {
             throw 'setup-fail：gateway 无障碍未就绪。'
         }
         if (-not (Wait-P0AccessibilityBound -Session $session -TimeoutSec $A11yBindTimeoutSec)) {
@@ -500,7 +503,9 @@ function Invoke-P0AccessibilityRebind {
             $preMembers.Add($item)
         }
     }
-    $preNonGateway = @($preMembers | Where-Object { $_ -cne $script:P0AccessibilityComponent })
+    $preNonGateway = @($preMembers | Where-Object {
+        $_ -cne $script:P0AccessibilityComponent -and $_ -cne $script:P0AccessibilityShortComponent
+    })
     if ($preNonGateway.Count -gt 0) {
         $withoutValue = if ($leadingColon) { ':' + ($preNonGateway -join ':') } else { $preNonGateway -join ':' }
         $null = Invoke-P0DeviceCommand -Session $Session `
@@ -523,7 +528,9 @@ function Invoke-P0AccessibilityRebind {
             if ($postRaw -ceq 'null') { $postRaw = '' }
             foreach ($part in @($postRaw -split ':')) {
                 $item = $part.Trim()
-                if (-not [string]::IsNullOrWhiteSpace($item) -and $item -cne $script:P0AccessibilityComponent) {
+                if (-not [string]::IsNullOrWhiteSpace($item) -and
+                    $item -cne $script:P0AccessibilityComponent -and
+                    $item -cne $script:P0AccessibilityShortComponent) {
                     $observedNonGateway.Add($item)
                 }
             }
@@ -540,7 +547,8 @@ function Invoke-P0AccessibilityRebind {
         if ($mergedSeen.Add($item)) { $mergedNonGateway.Add($item) }
     }
 
-    $preHasGateway = ($script:P0AccessibilityComponent -cin $preMembers)
+    $preHasGateway = ($script:P0AccessibilityComponent -cin $preMembers) -or
+        ($script:P0AccessibilityShortComponent -cin $preMembers)
     $targetValue = ''
     if ($preHasGateway -and $mergedNonGateway.Count -eq $preNonGateway.Count) {
         $allMatch = $true
@@ -1362,8 +1370,8 @@ function Stop-P0DeviceProvision {
                     -Arguments @('shell','settings','get','secure','enabled_accessibility_services') `
                     -Operation '核对无障碍服务列表' -AllowFailure
                 if ($svcProbe.ExitCode -ne 0) {
-                    if ($attempt -lt $maxAttempts -and $A11yRestoreSettleMs -gt 0) {
-                        Start-Sleep -Milliseconds $A11yRestoreSettleMs
+                    if ($attempt -lt $maxAttempts) {
+                        if ($A11yRestoreSettleMs -gt 0) { Start-Sleep -Milliseconds $A11yRestoreSettleMs }
                         continue
                     }
                     break
@@ -1377,10 +1385,7 @@ function Stop-P0DeviceProvision {
                     $enProbe = Invoke-P0DeviceCommand -Session $Session `
                         -Arguments @('shell','settings','get','secure','accessibility_enabled') `
                         -Operation '核对无障碍总开关' -AllowFailure
-                    if ($enProbe.ExitCode -ne 0) { $enMatches = $false }
-                    elseif ($enProbe.Stdout.Trim() -in @('0', '1')) {
-                        $enMatches = ($enProbe.Stdout.Trim() -ceq $targetEn)
-                    }
+                    $enMatches = ($enProbe.ExitCode -eq 0 -and $enProbe.Stdout.Trim() -ceq $targetEn)
                 }
 
                 if ($svcMatches -and $enMatches) {
@@ -1424,10 +1429,7 @@ function Stop-P0DeviceProvision {
                         $finalEnProbe = Invoke-P0DeviceCommand -Session $Session `
                             -Arguments @('shell','settings','get','secure','accessibility_enabled') `
                             -Operation '复核无障碍总开关基线' -AllowFailure
-                        if ($finalEnProbe.ExitCode -ne 0 -or
-                            ($finalEnProbe.Stdout.Trim() -in @('0', '1') -and $finalEnProbe.Stdout.Trim() -cne $targetEn)) {
-                            $finalEnMatch = $false
-                        }
+                        $finalEnMatch = ($finalEnProbe.ExitCode -eq 0 -and $finalEnProbe.Stdout.Trim() -ceq $targetEn)
                     }
                     if ($finalSvcMatch -and $finalEnMatch) { $a11yRestored = $true }
                 }

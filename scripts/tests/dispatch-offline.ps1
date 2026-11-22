@@ -3584,6 +3584,211 @@ Set-StrictMode -Version 3.0
             Remove-Item -LiteralPath $gatewayConfig, $dumpsysA11yFixture -Force -ErrorAction SilentlyContinue
         }
     }
+
+    Test-Case 'R3.1/R3.2 回归：null 基线不误删、非 0/1 开关恢复、0ms 重试、enable 回滚与纯函数 LASTEXITCODE 隔离' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-forensics.ps1')
+
+        # 1) ConvertFrom-AccessibilityServiceList -Raw $null 与 Merge-AccessibilityServiceList -BaselineRaw $null 不得强转为 ""
+        $nullParsed = ConvertFrom-AccessibilityServiceList -Raw $null
+        Assert-True ($null -eq $nullParsed.Raw) 'ConvertFrom-AccessibilityServiceList -Raw $null 必须保留 Raw = $null。'
+        Assert-True ($nullParsed.Normalized -ceq '' -and -not $nullParsed.LeadingColon -and $nullParsed.Members.Count -eq 0) `
+            'ConvertFrom-AccessibilityServiceList -Raw $null 其余字段异常。'
+        Assert-True ((Merge-AccessibilityServiceList -BaselineRaw $null) -ceq '') 'Merge-AccessibilityServiceList -BaselineRaw $null 不应产出非空。'
+        Assert-True ((Merge-AccessibilityServiceList -BaselineRaw $null -IncludeGateway) -ceq 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            'Merge-AccessibilityServiceList -BaselineRaw $null -IncludeGateway 应只含完整网关组件。'
+
+        # 2) Restore-AccessibilityServicesBaseline -TargetServicesRaw $null 必须返回 no-baseline 且零 settings delete/put 调用
+        $regDir = Join-Path $TestRoot 'r31-r32-regressions'
+        New-Item -ItemType Directory -Path $regDir -Force | Out-Null
+        $regState = [ordered]@{
+            Svc = 'com.other/.Svc'
+            En = '1'
+            StickyEn = $false
+            FailNextSvcPut = $false
+            FailEnablePut = $false
+            Log = [Collections.Generic.List[string]]::new()
+        }
+        function Invoke-RegMockAdb {
+            $cmd = ($args | ForEach-Object { "$_" }) -join ' '
+            [void]$regState.Log.Add($cmd)
+            $clean = $cmd -replace '^-s\s+\S+\s+', ''
+            switch -Regex ($clean) {
+                '^get-state$' { Write-Output 'device'; $global:LASTEXITCODE = 0; return }
+                '^forward --list$' { Write-Output "REG-DEV tcp:$($gatewayStub.Port) tcp:$($gatewayStub.Port)"; $global:LASTEXITCODE = 0; return }
+                '^shell dumpsys activity activities$' {
+                    Write-Output 'topResumedActivity=ActivityRecord{abc u0 com.xingin.xhs/.MainActivity t9}'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell dumpsys activity services dev\.magina\.gateway/\.GatewayService$' {
+                    Write-Output 'ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}'; Write-Output 'isForeground=true'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell dumpsys accessibility$' {
+                    Write-Output 'Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?get secure enabled_accessibility_services$' {
+                    Write-Output $regState.Svc; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?get secure accessibility_enabled$' {
+                    Write-Output $regState.En; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?delete secure enabled_accessibility_services$' {
+                    $regState.Svc = 'null'; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?put secure enabled_accessibility_services (.+)$' {
+                    if ($regState.FailNextSvcPut) {
+                        $regState.FailNextSvcPut = $false
+                        $global:LASTEXITCODE = 1
+                        return
+                    }
+                    $regState.Svc = $Matches[1]; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?put secure accessibility_enabled (.+)$' {
+                    if ($regState.FailEnablePut) {
+                        $global:LASTEXITCODE = 1
+                        return
+                    }
+                    if (-not $regState.StickyEn) { $regState.En = $Matches[1] }
+                    $global:LASTEXITCODE = 0; return
+                }
+                default { $global:LASTEXITCODE = 0; return }
+            }
+        }
+
+        $noBase = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' -TargetServicesRaw $null
+        Assert-True (-not $noBase.Restored -and $noBase.Verified -and $noBase.Reason -ceq 'no-baseline') `
+            "TargetServicesRaw=\$null 应返回 no-baseline，实际：$($noBase | ConvertTo-Json -Compress)"
+        Assert-True ($regState.Log.Count -eq 0 -and $regState.Svc -ceq 'com.other/.Svc') `
+            'TargetServicesRaw=$null 时不得执行任何 settings 命令或清空设备服务。'
+
+        # 3) Restore-AccessibilityServicesBaseline 对非 0/1 开关值（null / 2 / garbage）必须判定失配并写回
+        foreach ($badEn in @('null', '2', 'garbage')) {
+            foreach ($targetEn in @('0', '1')) {
+                $regState.Log.Clear()
+                $regState.Svc = 'com.other/.Svc'
+                $regState.En = $badEn
+                $regState.StickyEn = $false
+                $resEn = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+                    -TargetServicesRaw 'com.other/.Svc' -TargetEnabled $targetEn -SettleDelayMs 0 -MaxAttempts 2
+                Assert-True ($resEn.Restored -and $resEn.Verified -and $resEn.Reason -ceq 'restored') `
+                    "accessibility_enabled=$badEn 相对基线 $targetEn 未被还原：$($resEn | ConvertTo-Json -Compress)"
+                Assert-True ($regState.En -ceq $targetEn) "device accessibility_enabled 未写回 $targetEn，实际 $($regState.En)"
+            }
+        }
+        $regState.Log.Clear()
+        $regState.Svc = 'com.other/.Svc'
+        $regState.En = 'null'
+        $regState.StickyEn = $true
+        $stickyRes = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+            -TargetServicesRaw 'com.other/.Svc' -TargetEnabled '0' -SettleDelayMs 0 -MaxAttempts 2
+        Assert-True (-not $stickyRes.Verified -and $stickyRes.Reason -ceq 'drift-persisted') `
+            "accessibility_enabled 持久返回 null 时不得假阳性 Verified：$($stickyRes | ConvertTo-Json -Compress)"
+        $regState.StickyEn = $false
+
+        # 4) Complete-LandscapePreparation 在 accessibility_enabled='null'/'2' 时自动写回 '0' 并收敛
+        $landRegCmd = Join-Path $regDir 'fake-adb-land-reg.cmd'
+        $landSvcFile = Join-Path $regDir 'land-svc.txt'
+        $landEnFile = Join-Path $regDir 'land-en.txt'
+        @'
+@echo off
+if "%1"=="-s" (
+  shift
+  shift
+)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure enabled_accessibility_services" (type "%LAND_REG_SVC%"& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure accessibility_enabled" (type "%LAND_REG_EN%"& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure default_input_method" (echo com.ime/.Default& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure enabled_input_methods" (echo com.ime/.Default& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 put secure accessibility_enabled" (>"%LAND_REG_EN%" echo(%8& exit /b 0)
+if "%1 %2 %3 %4 %5"=="shell dumpsys activity services dev.magina.gateway/.GatewayService" (echo   ^(nothing^)& exit /b 0)
+if "%1 %2"=="forward --list" exit /b 0
+exit /b 91
+'@ | Set-Content -LiteralPath $landRegCmd -Encoding ascii
+        $oldLandSvcEnv = $env:LAND_REG_SVC
+        $oldLandEnEnv = $env:LAND_REG_EN
+        try {
+            $env:LAND_REG_SVC = $landSvcFile
+            $env:LAND_REG_EN = $landEnFile
+            foreach ($badLandEn in @('null', '2')) {
+                [IO.File]::WriteAllText($landSvcFile, "com.other/.Svc`n", [Text.UTF8Encoding]::new($false))
+                [IO.File]::WriteAllText($landEnFile, "$badLandEn`n", [Text.UTF8Encoding]::new($false))
+                $baseline = [ordered]@{
+                    default_input_method = 'com.ime/.Default'
+                    enabled_input_methods = 'com.ime/.Default'
+                    enabled_accessibility_services = 'com.other/.Svc'
+                    accessibility_enabled = '0'
+                    Service = 'absent'
+                    Forward = ''
+                }
+                $landDevice = [pscustomobject]@{ AdbPath = $landRegCmd; Serial = 'REG-LAND' }
+                $landProblems = Complete-LandscapePreparation -Device $landDevice -AdbCommand $landRegCmd `
+                    -Baseline $baseline -PreflightState $null -A11yRestoreSettleMs 0 -A11yRestoreMaxAttempts 2
+                Assert-True ([string]::IsNullOrEmpty($landProblems)) `
+                    "Complete-LandscapePreparation 面对 accessibility_enabled=$badLandEn 应自动恢复：$landProblems"
+                Assert-True ((Get-Content -LiteralPath $landEnFile -Raw).Trim() -ceq '0') `
+                    "Complete-LandscapePreparation 未将 accessibility_enabled 从 $badLandEn 恢复为 0。"
+            }
+        }
+        finally {
+            $env:LAND_REG_SVC = $oldLandSvcEnv
+            $env:LAND_REG_EN = $oldLandEnEnv
+        }
+
+        # 5) -SettleDelayMs 0 -MaxAttempts 3 在第 1 次写失败后必须继续重试并成功
+        $regState.Log.Clear()
+        $regState.Svc = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+        $regState.En = '1'
+        $regState.FailNextSvcPut = $true
+        $retryRes = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+            -TargetServicesRaw ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService' `
+            -TargetEnabled '1' -SettleDelayMs 0 -MaxAttempts 3
+        Assert-True ($retryRes.Restored -and $retryRes.Verified -and $retryRes.Reason -ceq 'restored') `
+            "-SettleDelayMs 0 -MaxAttempts 3 未从首次写失败恢复：$($retryRes | ConvertTo-Json -Compress)"
+
+        # 6) Invoke-GatewayBoundedAccessibilityRebind 在 put accessibility_enabled 1 失败时必须回滚 enabled_accessibility_services
+        foreach ($preVal in @(':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService', 'null')) {
+            $regState.Log.Clear()
+            $regState.Svc = $preVal
+            $regState.En = '0'
+            $regState.FailEnablePut = $true
+            $rbErr2 = Invoke-GatewayBoundedAccessibilityRebind -AdbCommand 'Invoke-RegMockAdb' -RebindPauseMs 0
+            Assert-Contains ([string]$rbErr2) 'accessibility_enabled 失败'
+            $expectedAfterRb = if ($preVal -ceq 'null') { 'null' } else { $preVal }
+            Assert-True ($regState.Svc -ceq $expectedAfterRb) `
+                "enable=1 失败后未回滚 enabled_accessibility_services（期望=$expectedAfterRb，实际=$($regState.Svc)）。"
+        }
+        $regState.FailEnablePut = $false
+
+        # 7) Get-GatewayTransportHealthSnapshot 在陈旧 $LASTEXITCODE=97 + 纯 PowerShell $AdbCommand 函数下仍须成功
+        function Invoke-RegPurePsAdb {
+            $clean = ($args | ForEach-Object { "$_" }) -join ' '
+            switch -Regex ($clean) {
+                '^forward --list$' { Write-Output "REG-DEV tcp:$($gatewayStub.Port) tcp:$($gatewayStub.Port)" }
+                '^shell dumpsys activity services dev\.magina\.gateway/\.GatewayService$' {
+                    Write-Output 'ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}'
+                    Write-Output 'isForeground=true'
+                }
+                '^shell settings get secure enabled_accessibility_services$' {
+                    Write-Output ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                }
+                '^shell dumpsys accessibility$' {
+                    Write-Output 'Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}'
+                }
+            }
+            # 刻意不修改 $global:LASTEXITCODE，模拟纯 PowerShell 函数替身
+        }
+        & $env:ComSpec /c 'exit 97'
+        Assert-True ($LASTEXITCODE -eq 97) '前置设置陈旧 LASTEXITCODE=97 失败。'
+        $staleSnap = Get-GatewayTransportHealthSnapshot -AdbCommand 'Invoke-RegPurePsAdb' -Port $gatewayStub.Port -HealthTimeoutSec 2 -Slug 'stale-exit'
+        Assert-True ($staleSnap.adb_forward.probe_ok -and $staleSnap.adb_forward.exit_code -eq 0) `
+            "陈旧 LASTEXITCODE=97 污染了 adb_forward：$($staleSnap.adb_forward | ConvertTo-Json -Compress)"
+        Assert-True ($staleSnap.gateway_service.probe_ok -and $staleSnap.gateway_service.state -ceq 'foreground') `
+            "陈旧 LASTEXITCODE 污染了 gateway_service：$($staleSnap.gateway_service | ConvertTo-Json -Compress)"
+        Assert-True ($staleSnap.accessibility.enabled_query_ok -and $staleSnap.accessibility.dumpsys_ok) `
+            "陈旧 LASTEXITCODE 污染了 accessibility：$($staleSnap.accessibility | ConvertTo-Json -Compress)"
+    }
     Write-Host "dispatch offline: $($script:Passed) passed, $($script:Failed) failed"
     if ($script:Failed -gt 0) { exit 1 }
     exit 0
