@@ -10,11 +10,12 @@
 - **M1-T 微信横屏全链闭环**：PA2553 横屏三起点（已聚焦右窗 `36s`、桌面启动 `48s`、左窗导航切入冷 `ChattingUI` + 底栏「可按住转文字」自动聚焦 `47s`）与获授权备稿 + 设备端 `ConfirmOverlay` 发送投递全链已随 [PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)、[PR #79](https://github.com/MaginaLW/agent-for-mobile/pull/79)–[#83](https://github.com/MaginaLW/agent-for-mobile/pull/83) 全部真机验通；第二轮隔离 API 36 补充实验（[PR #75](https://github.com/MaginaLW/agent-for-mobile/pull/75)）已结案（`request-matrix` 收口为窄 AOSP 边界不进真机，`ime-menu` / `assistant-structure` 作为离线已验备选保留）。明细见 [起点 3 与确认卡投递](knowledge/apps/wechat.md#pa2553-起点-3-桌面就位确认卡发送投递与起点-2-根因定位) · [起点 2 与冷启聚焦闭环](knowledge/apps/wechat.md#pa2553-起点-2-左窗导航与冷-chattingui-自动聚焦实测闭环) · [补充实验收口](knowledge/apps/wechat.md#三项离线补充实验实测收口与第四路线cursoranchorinfo--4b-遥测)。
 - **可选补验与暂缓项**：两段左窗/冷启能力已分别闭环，单笔派单连跑「左窗 → 冷 `ChattingUI` → 聚焦右窗」为可选补验；标准竖屏 P0（`Allow`/`Stale`/`Deny`）独立暂缓，恢复时按原规程核对竖屏空草稿、回车发送设置与当轮真人确认（[标准入口](runbooks/P0-safety-hard-gate-smoke.md#2-标准入口)）。
 
-### 阶段 3：M1 稳定性与日常只读任务可用性加固（下一实施批）
+### 阶段 3：M1 稳定性与日常只读任务可用性加固（已完成离线实施，随 [PR #86](https://github.com/MaginaLW/agent-for-mobile/pull/86) 合入 `main`）
 
-1. **根治收尾时 vivo `AutoSendImageService` 无障碍服务偶发脱落**：排查 `scripts/dispatch.ps1` / `scripts/lib/dispatch-profile.ps1` 读改写 `enabled_accessibility_services` 的窗口竞态与切 IME 时 OriginOS 行为，修复收尾自动精确基线还原，并补齐离线回归单测。
-2. **补强 `mcp-transport-failure` 失败现场只读取证**：在派单收尾识别到传输失败时，自动追加一次只读健康快照（`adb forward --list`、`/health`、`GatewayService` 与 `a11y` 绑定摘要，不含凭据）写入本地 trace/evidence，保持既有 `note: mcp-transport-failure` 契约兼容并补齐离线测试覆盖。
-3. **提升非微信日常只读任务首次无干预成功率（1/3 → 3/3）**：梳理小红书、淘宝/京东、系统设置的深链与前置守卫，同步 [实测深链库](knowledge/apps/deeplinks.md) 与 `app/gateway/src/main/assets/skillpack/`（未实测候选不伪造实测日期，保持 `safety.json` 红线不变），沉淀稳定日常只读任务包并补齐离线校验。
+1. **无障碍基线精确还原（已离线加固）**：定位原 vivo 输入法切回时异步移除 `.AutoSendImageService` 并叠加前导 `:` 丢失与 300ms RMW 竞态（[vivo 知识](knowledge/android/vivo-originos.md)），已在 `scripts/dispatch.ps1` / `scripts/lib/dispatch-profile.ps1` / `scripts/lib/dispatch-landscape.ps1` / `scripts/lib/p0-device-provision.ps1` 补齐精确还原与抗抖动重读并过离线回归。
+2. **`mcp-transport-failure` 失败现场只读取证（已离线加固）**：新增 `scripts/lib/dispatch-forensics.ps1`，在 `scripts/dispatch.ps1` 拆除转发与服务前将无凭据只读健康快照写入本地 `docs/runs/traces/<base>.transport-health.json`，保持原有 `.jsonl` 与台账 `note: mcp-transport-failure` 契约并过离线回归（[harness 知识](knowledge/brain/harness.md)）。
+3. **非微信日常只读任务包与守卫对齐（已离线加固）**：同步 [实测深链库](knowledge/apps/deeplinks.md)、[jd.md](knowledge/apps/jd.md)、[taobao.md](knowledge/apps/taobao.md) 与 `app/gateway/src/main/assets/skillpack/`（未实测候选维持 `verified: ""`，保持 `safety.json` 红线不变），升级 `SkillPack.kt` / `IntentTools.kt` / `SystemTools.kt` 并新增只读 `skillpack_lookup`，补齐 JVM 单测与 `scripts/tests/skillpack-sync-offline.ps1`。
+- **剩余真机回归项（按需排测）**：① 免重装 APK（在机脚本路径可验）：PA2553 派单收尾 `AutoSendImageService` 留存核实、传输失败现场快照自然复现采集，以及非微信三项日常只读任务（蓝牙、小红书、淘宝/京东）首跑稳定性复核；② 需先按授权构建并安装对应 APK：网关侧 `skillpack_lookup`、`IntentTools`/`SystemTools` 设置回退与 `actual_package` 输出真机校验。
 
 ### 阶段 4 倾向方向 A：启动 M3（宏系统「教一遍」与 App 技能包，本轮不实施）
 
