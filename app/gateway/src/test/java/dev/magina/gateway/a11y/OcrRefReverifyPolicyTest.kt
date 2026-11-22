@@ -353,4 +353,71 @@ class OcrRefReverifyPolicyTest {
             )
         }
     }
+
+    @Test
+    fun `traditional to simplified folding handles PA2553 flicker in exact_nav and blocks traditional protected keywords`() {
+        val policy = SafetyPolicy()
+        val expected = OcrCropBox(216, 282, 498, 326) // PA2553 左窗实测 282x44
+        val cropLeft = 47
+        val cropTop = 194
+        val localExact = OcrCropBox(169, 88, 451, 132)
+
+        // 1) 预期简体「文件传输助手」，实时帧 ML Kit 抖出繁体「文件传輸助手」(conf=0.51) → 精确命中
+        val tradHit = selectExactNavMatch(
+            lines = listOf(
+                OcrCandidateLine("文件传輸助手", 0.51f, localExact),
+                OcrCandidateLine("PA2553橫屏确认卡验收-20261122", 0.75f, OcrCropBox(169, 156, 620, 189)),
+            ),
+            expectedLabel = "文件传输助手",
+            expectedScreenBox = expected,
+            cropLeft = cropLeft,
+            cropTop = cropTop,
+            hasProtectedKeyword = policy::containsProtectedActionKeyword,
+        )
+        assertNotNull(tradHit)
+        assertEquals("文件传輸助手", tradHit!!.text)
+
+        // 2) 快照期出繁体「文件传輸助手」，复核帧出简体「文件传输助手」→ 同样精确命中
+        val simpHit = selectExactNavMatch(
+            lines = listOf(OcrCandidateLine("文件传输助手", 0.54f, localExact)),
+            expectedLabel = "文件传輸助手",
+            expectedScreenBox = expected,
+            cropLeft = cropLeft,
+            cropTop = cropTop,
+            hasProtectedKeyword = policy::containsProtectedActionKeyword,
+        )
+        assertNotNull(simpHit)
+        assertEquals("文件传输助手", simpHit!!.text)
+
+        // 3) 繁体受保护关键词既不能作为 exact_nav 目标，也不能在 4px 重叠邻域内被绕过
+        for (tradProtected in listOf("確認發送", "立即購買", "刪除聊天", "轉賬給張三", "提交訂單")) {
+            assertTrue("containsProtectedActionKeyword 必须拦下繁体「$tradProtected」", policy.containsProtectedActionKeyword(tradProtected))
+            assertNull(
+                selectExactNavMatch(
+                    lines = listOf(OcrCandidateLine(tradProtected, 0.58f, localExact)),
+                    expectedLabel = tradProtected,
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
+        }
+        for (tradOverlap in listOf("發送", "刪除", "確認", "發 送")) {
+            assertNull(
+                "重叠繁体保护词「$tradOverlap」必须阻止 exact_nav",
+                selectExactNavMatch(
+                    lines = listOf(
+                        OcrCandidateLine("文件传輸助手", 0.54f, localExact),
+                        OcrCandidateLine(tradOverlap, 0.70f, OcrCropBox(200, 134, 320, 170)),
+                    ),
+                    expectedLabel = "文件传输助手",
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
+        }
+    }
 }

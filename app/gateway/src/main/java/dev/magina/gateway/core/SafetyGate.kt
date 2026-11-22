@@ -164,8 +164,14 @@ class SafetyPolicy(
             toolName == "ui_action" && args.optString("action") in setOf("click", "long_click") -> {
                 val label = listOf(context.target?.text, context.target?.description)
                     .filterNotNull().joinToString(" ").trim()
-                val sensitiveHit = sensitiveTargets
-                    .firstOrNull { it.isNotBlank() && label.contains(it, ignoreCase = true) }
+                val foldedLabel = TextNorm.foldTraditionalToSimplified(label)
+                fun matchesLabel(word: String): Boolean {
+                    if (word.isBlank()) return false
+                    if (label.contains(word, ignoreCase = true)) return true
+                    val foldedWord = TextNorm.foldTraditionalToSimplified(word)
+                    return foldedLabel.contains(foldedWord, ignoreCase = true)
+                }
+                val sensitiveHit = sensitiveTargets.firstOrNull(::matchesLabel)
                 if (sensitiveHit != null) {
                     return SafetyDecision.Blocked(
                         ErrorCode.E_BLOCKED,
@@ -174,7 +180,7 @@ class SafetyPolicy(
                 }
                 // 匹配顺序：I 级危险词 → II 级发送词 → 泛化动作确认词（I 级），保持「命中“X”」主顺序不变。
                 val hit = (irreversibleWords + retractableWords + actionConfirmWords)
-                    .firstOrNull { it.isNotBlank() && label.contains(it, ignoreCase = true) }
+                    .firstOrNull(::matchesLabel)
                 when {
                     hit != null -> {
                         tier = tierOfWord(hit)

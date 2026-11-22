@@ -20,6 +20,7 @@ import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.vision.TileOcrLine
 import dev.magina.gateway.vision.TileRect
+import dev.magina.gateway.vision.appWindowElementCap
 import dev.magina.gateway.vision.buildOcrCacheSignature
 import dev.magina.gateway.vision.offsetAndFilterTileLines
 import dev.magina.gateway.vision.planOcrTiles
@@ -444,66 +445,88 @@ class GatewayA11yService : AccessibilityService() {
         // interactive 与 full 的差异在文本截断长度：interactive 面向操作（短），full 面向阅读（长）
         val cap = if (scope == "full") 500 else 80
         // 前台归属按「活动应用窗口」判定；同应用平行视界下逐窗统计 fgCountByWin，任一应用窗稀疏即触发分窗 OCR。
+        val perAppWinCap = appWindowElementCap(topology, appSlices.size, maxElements)
         val fgWinId = applicationWindow(currentWindows)?.id ?: -1
         var fgCount = 0
         val fgCountByWin = HashMap<Int, Int>()
         var count = 0
         var truncated = false
 
-        fun visit(node: AccessibilityNodeInfo, depth: Int, inFgWin: Boolean, windowId: Int, pane: String) {
-            if (depth > 60 || truncated) return
-            val text = node.text?.toString().orEmpty()
-            val desc = node.contentDescription?.toString().orEmpty()
-            val interactive = node.isClickable || node.isLongClickable || node.isEditable ||
-                node.isScrollable || node.isCheckable
-            val hasSignal = text.isNotEmpty() || desc.isNotEmpty()
-            val include = when (scope) {
-                "full" -> interactive || hasSignal
-                else -> interactive || hasSignal
-            }
-            if (include && node.isVisibleToUser) {
-                if (count >= maxElements) { truncated = true; return }
-                count += 1
-                val b = Rect().also { node.getBoundsInScreen(it) }
-                val ref = refs.bind(
-                    refBatch,
-                    UiRefSource.A11Y,
-                    count,
-                    RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y", windowId, pane),
-                )
-                if (inFgWin) {
-                    fgCount += 1
-                    fgCountByWin[windowId] = (fgCountByWin[windowId] ?: 0) + 1
+        fun visitWindow(
+            root: AccessibilityNodeInfo,
+            inFgWin: Boolean,
+            windowId: Int,
+            pane: String,
+            winCap: Int,
+        ) {
+            if (count >= maxElements && truncated) return
+            var winCount = 0
+            var winTruncated = false
+            fun visit(node: AccessibilityNodeInfo, depth: Int) {
+                if (depth > 60 || winTruncated) return
+                val text = node.text?.toString().orEmpty()
+                val desc = node.contentDescription?.toString().orEmpty()
+                val interactive = node.isClickable || node.isLongClickable || node.isEditable ||
+                    node.isScrollable || node.isCheckable
+                val hasSignal = text.isNotEmpty() || desc.isNotEmpty()
+                val include = when (scope) {
+                    "full" -> interactive || hasSignal
+                    else -> interactive || hasSignal
                 }
-                val json = JSONObject()
-                    .put("ref", ref)
-                    .put("role", roleOf(node))
-                    .put("text", text.take(cap))
-                    .put("desc", desc.take(cap))
-                    .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
-                    .put("flags", flagsOf(node))
-                    .put("source", "a11y")
-                    .put("window_id", windowId)
-                    .put("pane", pane)
-                jsonByRef[ref] = json
-                elements.put(json)
+                if (include && node.isVisibleToUser) {
+                    if (winCount >= winCap || count >= maxElements) {
+                        winTruncated = true
+                        truncated = true
+                        return
+                    }
+                    count += 1
+                    winCount += 1
+                    val b = Rect().also { node.getBoundsInScreen(it) }
+                    val ref = refs.bind(
+                        refBatch,
+                        UiRefSource.A11Y,
+                        count,
+                        RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y", windowId, pane),
+                    )
+                    if (inFgWin) {
+                        fgCount += 1
+                        fgCountByWin[windowId] = (fgCountByWin[windowId] ?: 0) + 1
+                    }
+                    val json = JSONObject()
+                        .put("ref", ref)
+                        .put("role", roleOf(node))
+                        .put("text", text.take(cap))
+                        .put("desc", desc.take(cap))
+                        .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
+                        .put("flags", flagsOf(node))
+                        .put("source", "a11y")
+                        .put("window_id", windowId)
+                        .put("pane", pane)
+                    jsonByRef[ref] = json
+                    elements.put(json)
+                }
+                for (i in 0 until node.childCount) {
+                    if (winTruncated) return
+                    node.getChild(i)?.let { visit(it, depth + 1) }
+                }
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, depth + 1, inFgWin, windowId, pane) }
+            visit(root, 0)
         }
 
         // 遍历全部交互窗口（含弹窗/对话框/同应用平行视界），跳过 IME 窗口
         val ws = exposedWindows(currentWindows)
         for (w in ws) {
             val winId = w.id
-            val inFgWin = winId == fgWinId ||
-                (topology == WindowTopology.SAME_APP_MULTI && w.type == AccessibilityWindowInfo.TYPE_APPLICATION)
+            val isAppWin = w.type == AccessibilityWindowInfo.TYPE_APPLICATION
+            val inFgWin = winId == fgWinId || (topology == WindowTopology.SAME_APP_MULTI && isAppWin)
             val pane = paneByWinId[winId] ?: "full"
-            w.root?.let { visit(it, 0, inFgWin, winId, pane) }
+            val winCap = if (isAppWin) perAppWinCap else maxElements
+            w.root?.let { visitWindow(it, inFgWin, winId, pane, winCap) }
         }
         if (count == 0) {
             rootInActiveWindow?.takeUnless(::isGatewayOverlayRoot)?.let { root ->
                 val winId = root.windowId
-                visit(root, 0, true, winId, paneByWinId[winId] ?: "full")
+                visitWindow(root, true, winId, paneByWinId[winId] ?: "full", maxElements)
             }
         }
 
@@ -525,14 +548,13 @@ class GatewayA11yService : AccessibilityService() {
         } else {
             fgCount < FUSE_FG_THRESHOLD
         }
-        if (needOcr && !ConfirmOverlay.isAwaitingDecision) {
+        if (needOcr && count < maxElements && !ConfirmOverlay.isAwaitingDecision) {
             try {
                 val shot = ocrScreen(topology, sparseSlices)
                 usedVisionGeneration = shot.generation
                 usedCaptureRevision = shot.revision
                 var ocrIdx = 0
                 for (line in shot.lines) {
-                    if (truncated) break
                     // 每行都重新取候选：上一行可能刚把某个宿主变成 fused，它就不该再参与了。
                     val hosts = refs.currentEntries()
                         .filter { it.second.node != null }

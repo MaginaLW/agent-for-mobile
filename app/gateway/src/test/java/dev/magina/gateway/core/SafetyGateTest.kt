@@ -1070,6 +1070,47 @@ class SafetyGateTest {
         }
     }
 
+    @Test
+    fun `traditional OCR click on send delete confirm requires confirmation and sensitive target blocks before confirmation`() {
+        for (tradText in listOf("發送", "刪除", "確認")) {
+            val clickArgs = JSONObject().put("ref", "o1").put("action", "click")
+            val ctx = initialContext.copy(
+                target = SafetyTarget(ref = "o1", text = tradText, bounds = "[10,20][90,60]", source = "ocr"),
+            )
+            var confirmerCalls = 0
+            var executorCalls = 0
+            val gate = SafetyGate(
+                policy = SafetyPolicy(),
+                confirmer = { confirmerCalls++; false },
+                contextProvider = { ctx },
+                onExecutionFailure = { fail("门前拒绝不得记录执行失败") },
+            )
+            expectGatewayError(ErrorCode.E_BLOCKED) {
+                gate.execute("ui_action", Level.W, clickArgs) { _, _ -> executorCalls++ }
+            }
+            assertEquals("繁体「$tradText」必须弹确认卡", 1, confirmerCalls)
+            assertEquals("繁体「$tradText」未确认不得执行", 0, executorCalls)
+        }
+
+        val sensitiveClick = JSONObject().put("ref", "o2").put("action", "click")
+        val sensitiveCtx = initialContext.copy(
+            target = SafetyTarget(ref = "o2", text = "保密聯繫人", bounds = "[10,20][90,60]", source = "ocr"),
+        )
+        var sensitiveConfirmers = 0
+        var sensitiveExecutors = 0
+        val sensitiveGate = SafetyGate(
+            policy = SafetyPolicy(sensitiveTargets = listOf("保密联系人")),
+            confirmer = { sensitiveConfirmers++; true },
+            contextProvider = { sensitiveCtx },
+            onExecutionFailure = { fail("门前阻断不得记录执行失败") },
+        )
+        expectGatewayError(ErrorCode.E_BLOCKED) {
+            sensitiveGate.execute("ui_action", Level.W, sensitiveClick) { _, _ -> sensitiveExecutors++ }
+        }
+        assertEquals(0, sensitiveConfirmers)
+        assertEquals(0, sensitiveExecutors)
+    }
+
     private fun expectGatewayError(code: ErrorCode, block: () -> Unit): GatewayError {
         try {
             block()

@@ -46,6 +46,23 @@ internal data class TileOcrLine(
 )
 
 /**
+ * 为同应用多窗口（`SAME_APP_MULTI`）计算单个 `TYPE_APPLICATION` 窗口的 a11y 元素预算上限：
+ * - 非 `SAME_APP_MULTI` 或有效应用窗数量 `<= 1` 时返回 `maxElements`（单窗手机 100% 行为不变）；
+ * - `SAME_APP_MULTI`（`appWindowCount >= 2`）按 `((maxElements * 3) / 4 / appWindowCount).coerceAtLeast(1)`
+ *   分配预算（如 `maxElements=400, 2 窗 -> 150`/窗，为稀疏窗 OCR 稳定预留 `>=100` 槽位；
+ *   `maxElements=200, 2 窗 -> 75`/窗，预留 `>=50` 槽位），避免稠密窗格（如 Flutter/WebView）耗尽总预算饿死稀疏窗。
+ */
+internal fun appWindowElementCap(
+    topology: WindowTopology,
+    appWindowCount: Int,
+    maxElements: Int,
+): Int {
+    if (maxElements <= 0) return 0
+    if (topology != WindowTopology.SAME_APP_MULTI || appWindowCount <= 1) return maxElements
+    return (maxElements.toLong() * 3L / 4L / appWindowCount.toLong()).toInt().coerceAtLeast(1)
+}
+
+/**
  * 逐窗判定稀疏性：在 `SAME_APP_MULTI` 下返回前景可读节点数 `< threshold` 的应用窗口 ID 集合，
  * 避免右窗（如 Flutter 页面 ≥5 节点）把左侧稀疏 `LauncherUI` 窗格的 OCR 融合抑制掉。
  */
