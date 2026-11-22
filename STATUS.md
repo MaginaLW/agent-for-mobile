@@ -28,7 +28,7 @@
 
 ## 卡在哪
 
-PA2553 微信横屏能核实右窗会话，仍无法定位当前输入连接对应的编辑框。11 月 22 日记录的候选 `2289925` 在第五次读取时无法解析字段 ID，止于四边采样之前。九组离线样本中，只按四边匹配会在一个左框持焦的场景选中右框。API 36 隔离诊断已收尾。合成靶中，左框的空响应结束会话，右框接手时客户端忽略了已登记字段的进入事件。[真机与离线对照](docs/knowledge/apps/wechat.md#横屏编辑框的四边能否单独确定输入目标) · [隔离诊断及收尾](docs/runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
+PA2553 微信横屏的编辑框几何归属**已于 11 月 22 日通过零新增权限的 Pathway 4A（`CursorAnchorInfo` API 21 单参数降级 + 不相交双窗严格归属）在真机只读诊断中打通**（`345f897` 草稿 PR #47）；目前尚待将这套 `CursorAnchorInfo` 归属接入生产输入目标/焦点解析（待用户审阅合入 #47），再完成桌面/左窗自动就位与获授权的设备端 ConfirmOverlay 发送实测。[PA2553 实测突破](docs/knowledge/apps/wechat.md#pa2553-真机只读实测pathway-4a-打通右窗编辑框归属4b-封口无障碍节点路线) · [草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
 
 11 月 17 日派单的前三次网关调用成功；随后的 `ui_action` 和 `app_launch` 均报告 HTTP 请求发送失败，两次都没有收到网关结果。同期 stderr 的六条超时来自模型管理器。现有记录无法区分端口转发、网关服务或连接本身在哪一段中断。[派单错误的判读方法](docs/knowledge/brain/harness.md)
 
@@ -110,17 +110,14 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 ## 下一步
 
-**C 真机只读诊断暂缓。** 11 月 22 日在 API 36 合成右框持焦、目标应用显式请求为零时，保留原自动填充会话再切输入法，同一会话仍只有原请求 896，新连接的结构写入、系统请求和服务回调均为 0。正控新 Activity 自然聚焦后取得了请求 898。原版候选 `2289925` 在两个有资源名的同包实例中分别报出正确窗号 13、15 和相同四边；在两个匿名实例中均于四边采样前返回 `missing_id`。普通权限对照能读出不同的无障碍窗号，但所测输入法字段和连接绑定标记仍不能独立区分两窗。结论限于本次合成靶，本轮未操作 PA2553。[A2 保留会话实测](docs/runs/fixtures/editor-autofill/retained-session/README.md) · [B 原版候选与普通权限对照](docs/runs/fixtures/editor-autofill/window-replay/candidate-permissions/README.md)
+**PA2553 微信横屏只读诊断（C）已于 2026-11-22 经用户授权完成单次 4 工具只读实测并取得关键突破（在机 `345f897` Debug APK，SHA-256 `483994bb...b9ceda`，零新增权限、零系统角色接管、零可见 IME UI，派单 45.61 秒、退出码 `0`，零点击/零输入/零发送）：**
 
-本轮离线攻关已完成第二轮隔离 API 36 全量实测收口（零真机接触，每轮设置/角色/双包/端口均独立读回还原）：
+- **Pathway 4B 彻底封口无障碍节点路线**：实测证实 `service_focus` 与两个 `fieldId`（`2131365757`）命中节点均为 100% 空壳剥离桩（`bounds=[0,0,0,0]`、`input_type=0`、`focused=false`、`visible=false`、`editable=false`、`view_id_state=missing`、`class_name=null`），同时 `ime_editor_contract_diag` 核实真实输入契约（`input_type=147457`、`field_id_class=id`、`autofill_id_present=true/virtual=false`、`supported_handwriting_gestures=true`）。
+- **Pathway 4A（`probe_cursor_anchor`）在微信真机直接打通**：微信拒绝了 2 参 `requestCursorUpdates(mode, filter)`（`filtered_accepted=false`），网关自动降级至 API 21 单参数 `requestCursorUpdates(CURSOR_UPDATE_IMMEDIATE)`（`legacy_accepted=true`，`request_mode=legacy_1arg`），首次从真实微信取回完整右窗输入栏精确屏幕四边 **`[1048, 1834, 2578, 1946]`**（`1530×112` px）、`matrix_origin=(1048,1834)` 与可见闪烁插入光标 `(1067, 1864..1929)`，在不相交双窗门控下严格唯一归属至右窗 `id=364`（`[927,0,2800,1968]`，`pane="right"`，对比左窗 `358` `[0,0,923,1968]`）。
+- **收尾双重独立读回全绿**：间隔 2 秒两次读回确认 4 项基线设置逐字还原相等（含前导 `:` 与 vivo `AutoSendImageService`）、`dumpsys accessibility` 中 `GatewayA11yService` 与 vivo `AutoSendImageService` 双绑定、`GatewayService` 已停止、`adb forward --list` 为空。[PA2553 实测详情](docs/knowledge/apps/wechat.md#pa2553-真机只读实测pathway-4a-打通右窗编辑框归属4b-封口无障碍节点路线) · [草稿 PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)
+- **下一步顺序**：(1) 在草稿 [PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47) 中将 `CursorAnchorInfo`（`legacy_1arg` + 不相交双窗 fail-closed 归属）接入生产输入目标与焦点解析，经完整离线门后提交用户审阅与合入批准；(2) 随后依次实测 PA2553 桌面/左窗自动就位与单次获授权的设备端 ConfirmOverlay 发送验收（竖屏 P0 继续独立暂缓）。
 
-- **三项既有夹具全部补齐 API 36 实测**：`request-matrix`（`2772db0`）在显式正像素原生框通过活体双窗双向与同原点缩放区分，但 `match_parent`（`[-1,-2]`）、`CODE_UNSUPPORTED` 与 `opaque`（`hidden_editors=1`）三项微信等价对抗全部 fail-closed，收口为窄 AOSP 边界；`ime-menu`（`a11ee7e`）证实零 UI IME 调用 `performContextMenuAction(android.R.id.autofill)` 可在异签名、未配合的匿名标准 `EditText` 取得新鲜 `FLAG_MANUAL_REQUEST` 结构并精确匹配原生 `AutofillId`（`optout-no` 与 `swallow-ic` fail-closed）；`assistant-structure`（`340dddc`）7 场全过（含 `android.app.role.ASSISTANT` 读回还原），穿透微信式无障碍剥离并区分双窗/双 Activity，同时证实普通助理树匿名 `ViewNode.getAutofillId() == null`。
-- **新发现零新增权限第四路线（Pathway 4A+4B，草稿源码分支 `codex/swarm-p4-cursor-diag` `345f897`，基于 #47 `ae93377`）**：在不改 `AndroidManifest.xml`、不接管系统角色、不显示可见 IME UI 下，将 `requestCursorUpdates()`（`CursorAnchorInfo` 2 参/1 参 + 不相交双窗严格归属）与失败的无障碍前置门解耦，并补齐 4B 非短路双节点遥测与 `TYPE_NULL` 前置分类；Debug 547 / Release 450 单测与 Lint/构建通过，隔离 API 36 微信等价 6 场景 6/6 通过（0 像素误差，重叠与 `TYPE_NULL` 严格 fail-closed）。
-- **C 真机只读诊断继续等待用户明确授权**：获准后最优先验证零新增权限的 Pathway 4A+4B（`codex/swarm-p4-cursor-diag` `345f897`），`ime-menu` 与 `assistant-structure` 作为离线已验备选，`request-matrix` 关闭不再上机。[四路线汇总与排序](docs/backlog.md#补充实验收尾2026-11-22-第二轮隔离-api-36-实测) · [微信知识与第四路线](docs/knowledge/apps/wechat.md#三项离线补充实验实测收口与第四路线cursoranchorinfo--4b-遥测)
-
-API 36 隔离模拟器中，靶应用手动请求结构时，已核实同一对无名编辑框的左→右连接交接，四边重合与焦点冲突均停止。自然触发时左框可被独立识别。左场空响应结束会话并登记了两个字段，右框接手连接时，客户端因该字段已登记而忽略进入事件。系统没有发起新结构请求，右框四边留空。[手动请求四场](docs/runs/fixtures/editor-autofill/README.md#隔离模拟器实测) · [空响应后的会话与右框请求](docs/runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
-
-微信横屏自动就位仍缺右窗实际提供可匹配编辑框结构的证据。隔离实验后的 PA2553 免安装只读复核中，在机 `2289925` 再次于字段 ID 解析处停止，未取得编辑框四边。该版本没有实验自动填充服务。桌面和微信左窗两个起点及现场发送均待验。#45 的两组合成实验已独立合入主线，#47 保留草稿，竖屏 P0 单独暂缓。[待办与合入记录](docs/backlog.md#1-下一轮任务安排) · [最新真机阻塞与几何反例](docs/knowledge/apps/wechat.md#横屏编辑框的四边能否单独确定输入目标)
+此前完成的第二轮隔离 API 36 离线攻关（[PR #75](https://github.com/MaginaLW/agent-for-mobile/pull/75)）已将三项既有夹具全部收口：`request-matrix`（`2772db0`）在三项微信等价对抗上全部 fail-closed，收口为窄 AOSP 边界；`ime-menu`（`a11ee7e`）与 `assistant-structure`（`340dddc`）作为离线已验备选保留。[四路线汇总与排序](docs/backlog.md#补充实验收尾2026-11-22-第二轮隔离-api-36-实测)
 
 ## 2026-11-15 精简
 
