@@ -48,7 +48,8 @@ public final class TargetActivity extends Activity {
         super.onCreate(state);
         stageStartUptime = SystemClock.uptimeMillis();
         scenario = getIntent().getStringExtra("scenario");
-        observeAutomatic = "automatic".equals(scenario) || "optout".equals(scenario);
+        boolean rightFirst = "automatic-right".equals(scenario) || "automatic-right-switch".equals(scenario);
+        observeAutomatic = "automatic".equals(scenario) || "optout".equals(scenario) || rightFirst;
         if (!observeAutomatic && !"left".equals(scenario) && !"right".equals(scenario)
                 && !"overlap".equals(scenario) && !"conflict".equals(scenario)) {
             throw new IllegalArgumentException("unknown scenario");
@@ -60,11 +61,11 @@ public final class TargetActivity extends Activity {
         }
         left = addEditor(Gravity.LEFT);
         right = addEditor("overlap".equals(scenario) ? Gravity.LEFT : Gravity.RIGHT);
-        desired = "right".equals(scenario) ? right : left;
+        desired = rightFirst || "right".equals(scenario) ? right : left;
         root.requestFocus();
         setContentView(root);
         getWindow().getInsetsController().hide(WindowInsets.Type.systemBars());
-        root.postDelayed(timeout, 15000);
+        root.postDelayed(timeout, "automatic-right-switch".equals(scenario) ? 45000 : 15000);
     }
 
     private void beginRightTouch() {
@@ -153,6 +154,8 @@ public final class TargetActivity extends Activity {
             if (input == null) return null;
             connection = this;
             connections++;
+            if ("automatic-right-switch".equals(scenario) && this == right && connections == 1)
+                root.post(TargetActivity.this::recordRightReady);
             int connectionStage = stageIndex;
             return new InputConnectionWrapper(input, false) {
                 @Override public void requestTextBoundsInfo(RectF area, Executor executor,
@@ -245,6 +248,26 @@ public final class TargetActivity extends Activity {
         view.getLocationOnScreen(location);
         return new JSONArray().put(location[0]).put(location[1])
                 .put(location[0] + view.getWidth()).put(location[1] + view.getHeight());
+    }
+
+    private void recordRightReady() {
+        if (!hasWindowFocus() || getCurrentFocus() != right || connection != right || left.connections != 0
+                || !getSystemService(InputMethodManager.class).isActive(right)) return;
+        try {
+            JSONObject ready = new JSONObject().put("instance", instance)
+                .put("rightViewInstance", System.identityHashCode(right)).put("rightBounds", bounds(right))
+                .put("uptime_ms", SystemClock.uptimeMillis()).put("focusSide", side(getCurrentFocus()))
+                .put("connectionSide", side(connection)).put("rightConnections", right.connections)
+                .put("rightProbeCount", right.probes).put("manual_request_count", autofillRequests);
+            File temporary = new File(getFilesDir(), "right-ready.tmp");
+            try (FileOutputStream output = new FileOutputStream(temporary)) {
+                output.write(ready.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            if (!temporary.renameTo(new File(getFilesDir(), "right-ready.json")))
+                throw new IOException("right-ready rename failed");
+        } catch (IOException | JSONException failure) {
+            throw new IllegalStateException("synthetic focus receipt", failure);
+        }
     }
 
     private void finishOracle(String status) {

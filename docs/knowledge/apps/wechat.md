@@ -343,6 +343,10 @@ API 36 隔离实验随后验证了一种独立对应方式。实验输入法读�
 
 在合成靶上判读换框后的结构时，要同时核对连接开始、结构采集和回调送达的先后顺序。把左场回执延迟到右场处理，旧采集时间仍会被识别。若右侧没有回调，可先用系统请求历史把空响应与会话号对上，再按靶应用进程和右框字段标识核对进入事件。本次 API 36 实测见到会话已结束，且客户端明确忽略了已登记右框的进入事件。微信右窗本身仍缺少与当前连接匹配的结构。[旧样本回放](../../runs/fixtures/editor-autofill/README.md#系统自动请求) · [模拟器框架回执](../../runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
 
+#### 同包窗口出现相同的自动填充字段号
+
+11 月 22 日在宿主回放中，两个同包、同类的 Activity 实例产生相同的右框字段号及屏幕四边。只有活动窗口的右框接到输入探针，但分别把两份结构送入现行实验观察器后，完整终结回执相同，都选中了右框。把另一窗口的字段号改成不同值后，观察器才返回 `NO_ID_MATCH`。Android 16 按 Activity 分配原生字段号。解释右框回执时应同时保留结构来源窗的独立依据，来源未知时，最终侧别和四边留空。这是宿主构造的窗口对照，微信真机的字段值仍未知。[九场回放与判定表](../../runs/fixtures/editor-autofill/window-replay/README.md) · [Android 16 字段号分配](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/app/Activity.java)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
