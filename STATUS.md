@@ -110,7 +110,7 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 ## 下一步
 
-**C 真机只读诊断暂缓。** 11 月 22 日在 API 36 合成靶上，右框持焦切换输入法后收到了输入探针，但靶进程在 27.218 秒的方法轨迹中没有产生新的自动填充焦点进入通知，系统也没有请求新结构。同进程新 Activity 的自然聚焦正控走通了请求和回调。另一组实验由合成靶显式请求结构，宿主通过活跃请求所属 Activity 和窗口管理记录，分别核实了同包同类的无障碍窗号 11、14。两个右框四边相同，交叉指定对方窗号均被拒绝。持焦切换仍缺属于新连接的结构，普通网关取得来源窗号的路径也待证。本轮未操作 PA2553。[A2 客户端方法轨迹](docs/runs/fixtures/editor-autofill/README.md#持焦切换时的客户端方法轨迹) · [B 窗口归属对照](docs/runs/fixtures/editor-autofill/window-replay/system-source/README.md)
+**C 真机只读诊断暂缓。** 11 月 22 日在 API 36 合成右框持焦、目标应用显式请求为零时，保留原自动填充会话再切输入法，同一会话仍只有原请求 896，新连接的结构写入、系统请求和服务回调均为 0。正控新 Activity 自然聚焦后取得了请求 898。原版候选 `2289925` 在两个有资源名的同包实例中分别报出正确窗号 13、15 和相同四边；在两个匿名实例中均于四边采样前返回 `missing_id`。普通权限对照能读出不同的无障碍窗号，但所测输入法字段和连接绑定标记仍不能独立区分两窗。结论限于本次合成靶，本轮未操作 PA2553。[A2 保留会话实测](docs/runs/fixtures/editor-autofill/retained-session/README.md) · [B 原版候选与普通权限对照](docs/runs/fixtures/editor-autofill/window-replay/candidate-permissions/README.md)
 
 API 36 隔离模拟器中，靶应用手动请求结构时，已核实同一对无名编辑框的左→右连接交接，四边重合与焦点冲突均停止。自然触发时左框可被独立识别。左场空响应结束会话并登记了两个字段，右框接手连接时，客户端因该字段已登记而忽略进入事件。系统没有发起新结构请求，右框四边留空。[手动请求四场](docs/runs/fixtures/editor-autofill/README.md#隔离模拟器实测) · [空响应后的会话与右框请求](docs/runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
 

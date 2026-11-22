@@ -1,0 +1,453 @@
+{
+  "environment": {
+    "api": "36",
+    "hardware": "1",
+    "initially_empty": true,
+    "disable_usb": true,
+    "disable_mdns": true,
+    "apk": {
+      "observer": "52dd65057ec9799dfe9fcbf45e736b3f8f2e84e6feb871a7a02a3157959e209f",
+      "gateway": "0af7d9880f12992e8846ef32c3691cb97fc22bd3b35d1083f61008eb38f51dfc",
+      "target": "d93f33a213bb32bb0955659c088468c484897c6fdb7948a81139b7ba1249aba1"
+    },
+    "uids": {
+      "observer": "10217",
+      "gateway": "10218",
+      "target": "10216"
+    },
+    "restored": {
+      "default_input_method": true,
+      "enabled_input_methods": true,
+      "enabled_accessibility_services": true,
+      "accessibility_enabled": true,
+      "autofill_service": true,
+      "immersive_mode_confirmations": true,
+      "airplane_mode_on": true,
+      "wifi_on": true,
+      "accelerometer_rotation": true,
+      "user_rotation": true
+    },
+    "cleanup": {
+      "isolated_server_stopped": true,
+      "emulator_stopped": true,
+      "ports_released": true
+    },
+    "elapsed_seconds": 269
+  },
+  "candidate": {
+    "named1": {
+      "before": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S1",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "diagnostic": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_bounds": {
+          "window_id": 13,
+          "session_id": "S1",
+          "editable": true,
+          "left": 2100,
+          "top": 32,
+          "right": 2300,
+          "bottom": 102
+        }
+      },
+      "foreground": [
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture"
+      ],
+      "after": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S1",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "oracle_before": {
+        "task": 9,
+        "window": 13,
+        "right_focused": true,
+        "field": 2130771968,
+        "requests": 0,
+        "connections": 2,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "oracle_after": {
+        "task": 9,
+        "window": 13,
+        "right_focused": true,
+        "field": 2130771968,
+        "requests": 1,
+        "connections": 2,
+        "last_request": 121796,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      }
+    },
+    "named2": {
+      "before": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S2",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "diagnostic": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_bounds": {
+          "window_id": 15,
+          "session_id": "S2",
+          "editable": true,
+          "left": 2100,
+          "top": 32,
+          "right": 2300,
+          "bottom": 102
+        }
+      },
+      "foreground": [
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture"
+      ],
+      "after": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S2",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "oracle_before": {
+        "task": 10,
+        "window": 15,
+        "right_focused": true,
+        "field": 2130771968,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "oracle_after": {
+        "task": 10,
+        "window": 15,
+        "right_focused": true,
+        "field": 2130771968,
+        "requests": 1,
+        "connections": 1,
+        "last_request": 134243,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      }
+    },
+    "anon1": {
+      "before": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S3",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "diagnostic": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_bounds": null,
+        "ime_editor_bounds_reason": "missing_id",
+        "ime_editor_missing_id_phase": "before_sample",
+        "ime_editor_missing_id_source": "service_node_unnamed"
+      },
+      "foreground": [
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture"
+      ],
+      "after": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S3",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "oracle_before": {
+        "task": 11,
+        "window": 17,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "oracle_after": {
+        "task": 11,
+        "window": 17,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      }
+    },
+    "anon2": {
+      "before": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S4",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "diagnostic": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_bounds": null,
+        "ime_editor_bounds_reason": "missing_id",
+        "ime_editor_missing_id_phase": "before_sample",
+        "ime_editor_missing_id_source": "service_node_unnamed"
+      },
+      "foreground": [
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture",
+        "dev.magina.crossappfixture"
+      ],
+      "after": {
+        "visible": false,
+        "height": 0,
+        "ime_editor_origin": {
+          "session_id": "S4",
+          "x": 2100,
+          "y": 32
+        }
+      },
+      "oracle_before": {
+        "task": 12,
+        "window": 19,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "oracle_after": {
+        "task": 12,
+        "window": 19,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      }
+    }
+  },
+  "public_api": {
+    "public1": {
+      "oracle": {
+        "task": 13,
+        "window": 22,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 2,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "public": {
+        "generation": 7,
+        "started": 172183,
+        "uid": 10216,
+        "pid": 4060,
+        "binding_label": 1,
+        "field": -1,
+        "native_id": 1073741825,
+        "fill_session": 0,
+        "a11y": {
+          "window": 22,
+          "display": 0,
+          "root_window": 22,
+          "node_window": 22,
+          "unique_id_present": false,
+          "root_unique_id_present": false,
+          "resource_name_present": false,
+          "anchor_present": false,
+          "bounds": [
+            2100,
+            32,
+            2300,
+            102
+          ]
+        },
+        "sampled": 173095,
+        "after": 173302
+      }
+    },
+    "public2": {
+      "oracle": {
+        "task": 14,
+        "window": 24,
+        "right_focused": true,
+        "field": -1,
+        "requests": 0,
+        "connections": 1,
+        "last_request": 0,
+        "bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "node_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ]
+      },
+      "public": {
+        "generation": 11,
+        "started": 184198,
+        "uid": 10216,
+        "pid": 4060,
+        "binding_label": 1,
+        "field": -1,
+        "native_id": 1073741825,
+        "fill_session": 0,
+        "a11y": {
+          "window": 24,
+          "display": 0,
+          "root_window": 24,
+          "node_window": 24,
+          "unique_id_present": false,
+          "root_unique_id_present": false,
+          "resource_name_present": false,
+          "anchor_present": false,
+          "bounds": [
+            2100,
+            32,
+            2300,
+            102
+          ]
+        },
+        "sampled": 185106,
+        "after": 185313
+      }
+    }
+  }
+}
