@@ -42,6 +42,7 @@ Android 16 合成实验补验了焦点事件。四次目标聚焦均收到来源
 | [#40](https://github.com/MaginaLW/agent-for-mobile/pull/40) `908a454` | 已关闭，原点诊断由 #47 承接。 | `e994c71`、`cf4b6a9` 均在 #47 的历史中，原点诊断测试逐字一致。 |
 | [#45](https://github.com/MaginaLW/agent-for-mobile/pull/45) `83f9653` | 六个实验文件已单独合入 `main`（`d26e291`）。 | 全新 API 36 模拟器上，延后样本与系统焦点两组均为 4/4。第四行四边一致且返回 `missing_id` 时通过；独立反例仅将无障碍右边界偏移 1 像素，仍返回 `missing_id`，该行失败。[复现说明](runs/fixtures/editor-origin/README.md#用当前输入焦点核对身份和四边) |
 | [#47](https://github.com/MaginaLW/agent-for-mobile/pull/47) `ae93377` | 继续保留草稿。 | 最近一次真机候选为 `2289925`，在采样前停止；独立核实唯一编辑框的条件仍未满足。 |
+| [#73](https://github.com/MaginaLW/agent-for-mobile/pull/73) | 横屏双框归属的隔离实验已收尾，交付靶应用、观察器和复现记录。 | 手动请求下左右框均选对，四边重合与焦点冲突均停止。自然换框时右连接接手，系统新结构请求为零，客户端日志已定位忽略进入事件的原因。[实测记录](runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求) |
 
 ## 2. 按需再做（有具体任务需要时才排）
 
