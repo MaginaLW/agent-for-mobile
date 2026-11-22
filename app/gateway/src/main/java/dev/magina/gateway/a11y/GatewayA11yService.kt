@@ -996,11 +996,42 @@ class GatewayA11yService : AccessibilityService() {
         val source: String = "a11y",
         val windowId: Int = -1,
         val pane: String = "full",
+        val usedExactNavFallback: Boolean = false,
     )
+
+    internal data class CachedRefSummary(
+        val isOcrOnly: Boolean,
+        val label: String,
+        val desc: String,
+        val bounds: Rect,
+        val source: String,
+        val pane: String,
+    )
+
+    /** 只读窥视当前 snapshot 内的缓存 ref 摘要（零 OCR/零副作用），供安全门预判方案 A 兜底资格。 */
+    @Synchronized
+    internal fun peekCachedRef(ref: String): CachedRefSummary? {
+        val lookup = refs.lookup(ref)
+        if (lookup.state != UiRefLookupState.CURRENT) return null
+        val e = lookup.value ?: return null
+        if (e.snapRev != lastSnapshotRev) return null
+        return CachedRefSummary(
+            isOcrOnly = e.node == null && e.source == "ocr",
+            label = e.label,
+            desc = e.desc,
+            bounds = Rect(e.bounds),
+            source = e.source,
+            pane = e.pane,
+        )
+    }
 
     /** ref → 目标；节点刷新失败/指纹不符 → E_STALE_REF（点击前二次校验，M0 误触对策）。 */
     @Synchronized
-    fun resolve(ref: String): Target {
+    fun resolve(
+        ref: String,
+        allowExactNavFallback: Boolean = false,
+        hasProtectedKeyword: (String) -> Boolean = { true },
+    ): Target {
         rejectWhileConfirming()
         val lookup = refs.lookup(ref)
         val e = when (lookup.state) {
@@ -1023,7 +1054,7 @@ class GatewayA11yService : AccessibilityService() {
             channel = "a11y", retryable = true,
             fallback = "先 ui_snapshot 再按新 ref 操作",
         )
-        if (e.node == null) return resolveOcr(ref, e)
+        if (e.node == null) return resolveOcr(ref, e, allowExactNavFallback, hasProtectedKeyword)
         if (!e.node.refresh()) throw GatewayError(
             ErrorCode.E_STALE_REF, "ref $ref 的节点已失效（页面已变化）",
             channel = "a11y", fallback = "先 ui_snapshot 再按新 ref 操作",
@@ -1044,7 +1075,12 @@ class GatewayA11yService : AccessibilityService() {
      * 微信类 app 内容变化不发事件，revision 不可作过期依据 → 每次操作前对目标邻域重截重识，
      * 文本仍在才返回目标，bbox 随最新命中微调（容忍轻微滚动/重排）。
      */
-    private fun resolveOcr(ref: String, e: RefEntry): Target {
+    private fun resolveOcr(
+        ref: String,
+        e: RefEntry,
+        allowExactNavFallback: Boolean = false,
+        hasProtectedKeyword: (String) -> Boolean = { true },
+    ): Target {
         val m = e.bounds.height().coerceAtLeast(24)
         val full = captureBitmapRetry()
         // 裁剪区给足上下文（最小 620×220）：过小的图 ML Kit 识别质量塌方（实锤：372×147 零行）
@@ -1063,12 +1099,25 @@ class GatewayA11yService : AccessibilityService() {
             fallback = "ui_snapshot 重新定位",
         )
         val piece = Bitmap.createBitmap(full, crop.left, crop.top, crop.width(), crop.height())
+        val exactNavConfig = if (allowExactNavFallback && e.source == "ocr" && isExactNavLabelEligible(e.label)) {
+            ExactNavFallbackConfig(
+                expectedLabel = e.label,
+                expectedScreenBox = OcrCropBox(e.bounds.left, e.bounds.top, e.bounds.right, e.bounds.bottom),
+                cropLeft = crop.left,
+                cropTop = crop.top,
+                minConf = OcrEngine.MIN_CONF,
+                hasProtectedKeyword = hasProtectedKeyword,
+            )
+        } else {
+            null
+        }
         val outcome = try {
             val want = OcrEngine.norm(e.label)
             val cx0 = e.bounds.centerX() - crop.left
             val cy0 = e.bounds.centerY() - crop.top
-            // 动作前二次识别不得接收低置信结果（保持 MIN_ACTION_OCR_CONFIDENCE=0.65f 不变）；
-            // 仅当 1x 零命中且初始行高 <60px 时，对固定裁区做 2x 上采样兜底并确定性映射回 1x 坐标。
+            // 动作前二次识别保持 MIN_ACTION_OCR_CONFIDENCE=0.65f 不变（先 1x，小字号 <60px 再 2x）；
+            // 仅当调用方已证实普通具名导航 click（SafetyDecision.Allowed, len>=4）且 0.65f 零命中时，
+            // 才走方案 A 精确全字相等 + IoU>=0.75 + 裁区唯一 + 零危险词重叠兜底。
             resolveOcrWithSmallTextUpsample(
                 wantNorm = want,
                 expectedCenterXInPiece = cx0,
@@ -1099,6 +1148,18 @@ class GatewayA11yService : AccessibilityService() {
                         if (scaled !== piece && !scaled.isRecycled) scaled.recycle()
                     }
                 },
+                exactNavConfig = exactNavConfig,
+                recognize1xExactNav = exactNavConfig?.let {
+                    {
+                        OcrEngine.recognize(piece, OcrEngine.MIN_CONF).map { l ->
+                            OcrCandidateLine(
+                                l.text,
+                                l.conf,
+                                OcrCropBox(l.bounds.left, l.bounds.top, l.bounds.right, l.bounds.bottom),
+                            )
+                        }
+                    }
+                },
             )
         } finally {
             if (!piece.isRecycled) piece.recycle()
@@ -1118,7 +1179,16 @@ class GatewayA11yService : AccessibilityService() {
             ErrorCode.E_STALE_REF, "OCR ref $ref 已被新 snapshot 取代",
             channel = "vision", fallback = "ui_snapshot 重新定位",
         )
-        return Target(null, e.label, e.desc, b, "ocr", e.windowId, e.pane)
+        return Target(
+            node = null,
+            text = e.label,
+            desc = e.desc,
+            bounds = b,
+            source = "ocr",
+            windowId = e.windowId,
+            pane = e.pane,
+            usedExactNavFallback = outcome.usedExactNavFallback,
+        )
     }
 
     fun perform(target: Target, action: String, params: JSONObject): JSONObject {

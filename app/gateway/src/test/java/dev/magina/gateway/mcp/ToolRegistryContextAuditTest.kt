@@ -209,6 +209,101 @@ class ToolRegistryContextAuditTest {
         return actual
     }
 
+    @Test
+    fun `exact nav fallback eligibility requires Allowed ordinary 4-plus char OCR click and rejects all protected or non-click actions`() {
+        val policy = SafetyPolicy(sensitiveTargets = listOf("秘密会话"))
+        val baseContext = SafetyContext(
+            packageName = "com.tencent.mm",
+            activityName = ".ui.LauncherUI",
+            revision = 12,
+            sameAppMultiWindow = true,
+        )
+        val clickArgs = JSONObject().put("ref", "o:abc:1:7").put("action", "click")
+
+        // 正向：普通 >=4 字具名 OCR click 且 SafetyDecision.Allowed → 放行
+        assertTrue(
+            ToolRegistry.isExactNavFallbackEligible(
+                policy = policy,
+                action = "click",
+                isOcrOnly = true,
+                label = "文件传输助手",
+                desc = "",
+                bounds = "[216,282][498,326]",
+                source = "ocr",
+                windowPane = "left",
+                baseContext = baseContext,
+                args = clickArgs,
+            ),
+        )
+
+        // 非 click（long_click / scroll / set_text）一律拒绝
+        for (otherAction in listOf("long_click", "scroll", "set_text", "focus")) {
+            val otherArgs = JSONObject().put("ref", "o:abc:1:7").put("action", otherAction)
+            assertFalse(
+                "action=$otherAction 不得启用 exact_nav",
+                ToolRegistry.isExactNavFallbackEligible(
+                    policy, otherAction, true, "文件传输助手", "", "[216,282][498,326]", "ocr", "left", baseContext, otherArgs,
+                ),
+            )
+        }
+
+        // 非纯 OCR ref（a11y/fused）一律拒绝
+        assertFalse(
+            ToolRegistry.isExactNavFallbackEligible(
+                policy, "click", false, "文件传输助手", "", "[216,282][498,326]", "a11y", "left", baseContext, clickArgs,
+            ),
+        )
+
+        // 短标签（<4 字）、纯图标（空标签）、危险/确认/发送/敏感目标一律拒绝
+        for (blockedLabel in listOf("", "返回", "123", "发送", "删除", "支付", "确认", "确认发送", "立即支付", "删除聊天", "秘密会话")) {
+            assertFalse(
+                "label=「$blockedLabel」不得启用 exact_nav",
+                ToolRegistry.isExactNavFallbackEligible(
+                    policy, "click", true, blockedLabel, "", "[216,282][498,326]", "ocr", "left", baseContext, clickArgs,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `post-resolve exact_nav recheck blocks any non-Allowed target and audit note appends idempotently`() {
+        val policy = SafetyPolicy(sensitiveTargets = listOf("秘密会话"))
+        val baseContext = SafetyContext(
+            packageName = "com.tencent.mm",
+            activityName = ".ui.LauncherUI",
+            revision = 12,
+            sameAppMultiWindow = true,
+        )
+        val clickArgs = JSONObject().put("ref", "o:abc:1:7").put("action", "click")
+
+        // 复核后仍为普通具名点击 → 通过
+        ToolRegistry.requireExactNavStillAllowed(
+            policy,
+            clickArgs,
+            baseContext.copy(target = SafetyTarget(ref = "o:abc:1:7", text = "文件传输助手", bounds = "[216,282][498,326]", source = "ocr", windowPane = "left")),
+        )
+
+        // 复核后落成确认/危险/敏感/空白目标 → fail-closed 抛 E_BLOCKED
+        for (badText in listOf("确认发送", "删除聊天", "秘密会话", "")) {
+            val err = expectError<GatewayError> {
+                ToolRegistry.requireExactNavStillAllowed(
+                    policy,
+                    clickArgs,
+                    baseContext.copy(target = SafetyTarget(ref = "o:abc:1:7", text = badText, bounds = "[216,282][498,326]", source = "ocr", windowPane = "left")),
+                )
+            }
+            assertEquals(ErrorCode.E_BLOCKED, err.code)
+            assertEquals("safety", err.channel)
+        }
+
+        // 审计 note 标记幂等且格式干净
+        val call = scope()
+        call.appendSafetyNote(ToolRegistry.OCR_REVERIFY_EXACT_NAV_NOTE)
+        assertEquals("ocr_reverify=exact_nav", call.safetyNote)
+        call.appendSafetyNote(ToolRegistry.OCR_REVERIFY_EXACT_NAV_NOTE)
+        assertEquals("ocr_reverify=exact_nav", call.safetyNote)
+    }
+
     private inline fun <reified T : Throwable> expectError(block: () -> Unit): T {
         try {
             block()

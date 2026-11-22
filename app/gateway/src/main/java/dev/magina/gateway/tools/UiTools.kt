@@ -143,10 +143,23 @@ object UiTools {
         )
     }
 
-    fun uiAction(ref: String, action: String, params: JSONObject, expected: SafetyTarget): JSONObject {
+    fun uiAction(
+        ref: String,
+        action: String,
+        params: JSONObject,
+        expected: SafetyTarget,
+        allowExactNavFallback: Boolean = false,
+        hasProtectedKeyword: (String) -> Boolean = { true },
+        onExactNavUsed: (GatewayA11yService.Target) -> Unit = {},
+    ): JSONObject {
         if (action == "set_text") Gateway.inputCommitEvidence.clear()
         val a11y = GatewayA11yService.require()
-        val target = a11y.resolve(ref)
+        val target = a11y.resolve(
+            ref = ref,
+            allowExactNavFallback = allowExactNavFallback,
+            hasProtectedKeyword = hasProtectedKeyword,
+        )
+        if (target.usedExactNavFallback) onExactNavUsed(target)
         val bounds = "[${target.bounds.left},${target.bounds.top}][${target.bounds.right},${target.bounds.bottom}]"
         if (
             expected.ref != ref || expected.text != target.text || expected.description != target.desc ||

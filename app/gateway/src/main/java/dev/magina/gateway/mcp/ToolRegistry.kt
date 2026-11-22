@@ -6,6 +6,7 @@ import android.os.Process
 import dev.magina.gateway.BuildConfig
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.a11y.isExactNavLabelEligible
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
@@ -355,6 +356,12 @@ object ToolRegistry {
             }
         }
 
+        fun appendSafetyNote(token: String) {
+            if (token.isBlank()) return
+            if (safetyNote.split(';').any { it == token }) return
+            safetyNote = if (safetyNote.isEmpty()) token else "$safetyNote;$token"
+        }
+
         fun captureApprovalScope(context: SafetyContext, riskTier: RiskTier?) {
             if (staleKey.isNotEmpty()) return
             targetLabel = context.target?.preparedTargetEvidence?.label.orEmpty()
@@ -376,17 +383,61 @@ object ToolRegistry {
         else -> decision.toolName
     }
 
+    private fun currentSafetyPolicy(): SafetyPolicy = SafetyPolicy(
+        // 技能包资产的 danger_words 即 I 级、send_words 即 II 级、action_confirm_words 为泛化确认词（I 级）。
+        irreversibleWords = Gateway.skills.dangerWords,
+        retractableWords = Gateway.skills.sendWords,
+        sensitiveTargets = Gateway.skills.sensitiveTargets,
+        actionConfirmWords = Gateway.skills.actionConfirmWords,
+    )
+
+    internal fun isExactNavFallbackEligible(
+        policy: SafetyPolicy,
+        action: String,
+        isOcrOnly: Boolean,
+        label: String,
+        desc: String,
+        bounds: String,
+        source: String,
+        windowPane: String?,
+        baseContext: SafetyContext,
+        args: JSONObject,
+    ): Boolean {
+        if (action != "click" || !isOcrOnly) return false
+        if (!isExactNavLabelEligible(label)) return false
+        val probeContext = baseContext.copy(
+            target = SafetyTarget(
+                ref = args.optString("ref"),
+                text = label,
+                description = desc,
+                bounds = bounds,
+                source = source,
+                windowPane = windowPane,
+            ),
+        )
+        return policy.assess("ui_action", Level.W, args, probeContext) == SafetyDecision.Allowed
+    }
+
+    internal fun requireExactNavStillAllowed(
+        policy: SafetyPolicy,
+        args: JSONObject,
+        resolvedContext: SafetyContext,
+    ) {
+        val recheck = policy.assess("ui_action", Level.W, args, resolvedContext)
+        if (recheck != SafetyDecision.Allowed) {
+            throw GatewayError(
+                ErrorCode.E_BLOCKED,
+                "OCR 精确导航兜底复核目标未通过免确认普通点击复验，已 fail-closed 拒绝",
+                channel = "safety",
+            )
+        }
+    }
+
     /**
      * 装配这一次调用的安全门，回调之间通过 [CallScope] 共享状态。
      */
-    private fun newSafetyGate(call: CallScope): SafetyGate = SafetyGate(
-        policy = SafetyPolicy(
-            // 技能包资产的 danger_words 即 I 级、send_words 即 II 级、action_confirm_words 为泛化确认词（I 级）。
-            irreversibleWords = Gateway.skills.dangerWords,
-            retractableWords = Gateway.skills.sendWords,
-            sensitiveTargets = Gateway.skills.sensitiveTargets,
-            actionConfirmWords = Gateway.skills.actionConfirmWords,
-        ),
+    private fun newSafetyGate(call: CallScope, policy: SafetyPolicy): SafetyGate = SafetyGate(
+        policy = policy,
         confirmer = { decision ->
             // 纵深防御，**当前站规下走不到**：站规 §4「安全失败就是终态」要求大脑在第一次
             // stale 就停下报告失败、不得重试同一危险动作，所以计数器连 1 都到不了
@@ -453,7 +504,7 @@ object ToolRegistry {
             }
         },
         contextProvider = { frozenArgs ->
-            call.readContext { safetyContext(call.toolName, frozenArgs) }
+            call.readContext { safetyContext(call.toolName, frozenArgs, call, policy) }
         },
         onExecutionFailure = { error ->
             if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
@@ -576,10 +627,11 @@ object ToolRegistry {
                     fallback = "press_key(home) 离开后继续任务，并在报告中说明",
                 )
             }
-            val gate = newSafetyGate(call)
+            val policy = currentSafetyPolicy()
+            val gate = newSafetyGate(call, policy)
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
                 Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
-                val result = executeValidated(spec, frozenArgs, validatedContext, call.intentObservation)
+                val result = executeValidated(spec, frozenArgs, validatedContext, call, policy)
                 runCatching { Gateway.retryGuard.recordSuccess(name, call.argsFingerprint) }
                     .onFailure { error ->
                         call.safetyNote += ";retry_success_record=error:${error.javaClass.simpleName}"
@@ -673,7 +725,12 @@ object ToolRegistry {
         return TestConfirmationCapture(png = png, cardVisible = visible, attempts = attempts)
     }
 
-    private fun safetyContext(name: String, args: JSONObject): SafetyContext {
+    private fun safetyContext(
+        name: String,
+        args: JSONObject,
+        call: CallScope,
+        policy: SafetyPolicy,
+    ): SafetyContext {
         val a11y = GatewayA11yService.instance
             ?: return SafetyContext("", "", -1, foregroundKnown = false)
         val ctx = a11y.ctx(Gateway.caps())
@@ -691,18 +748,49 @@ object ToolRegistry {
             sameAppMultiWindow = sameAppMulti,
             target = null,
         )
+        val baseContext = SafetyContext(
+            packageName = packageName,
+            activityName = activityName,
+            revision = revision,
+            foregroundKnown = true,
+            identityBootstrapped = identityBootstrapped,
+            sameAppMultiWindow = sameAppMulti,
+        )
         val target = when {
             name == "ui_action" -> {
                 val ref = args.getString("ref")
-                val resolved = a11y.resolve(ref)
-                SafetyTarget(
+                val action = args.optString("action")
+                val cached = a11y.peekCachedRef(ref)
+                val allowExactNav = cached != null && isExactNavFallbackEligible(
+                    policy = policy,
+                    action = action,
+                    isOcrOnly = cached.isOcrOnly,
+                    label = cached.label,
+                    desc = cached.desc,
+                    bounds = boundsString(cached.bounds),
+                    source = cached.source,
+                    windowPane = cached.pane.takeIf { sameAppMulti },
+                    baseContext = baseContext,
+                    args = args,
+                )
+                val resolved = a11y.resolve(
+                    ref = ref,
+                    allowExactNavFallback = allowExactNav,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                )
+                val resolvedTarget = SafetyTarget(
                     ref = ref,
                     text = resolved.text,
                     description = resolved.desc,
-                    bounds = "[${resolved.bounds.left},${resolved.bounds.top}][${resolved.bounds.right},${resolved.bounds.bottom}]",
+                    bounds = boundsString(resolved.bounds),
                     source = resolved.source,
                     windowPane = resolved.pane.takeIf { sameAppMulti },
                 )
+                if (resolved.usedExactNavFallback) {
+                    requireExactNavStillAllowed(policy, args, baseContext.copy(target = resolvedTarget))
+                    call.appendSafetyNote(OCR_REVERIFY_EXACT_NAV_NOTE)
+                }
+                resolvedTarget
             }
             name == "press_key" && args.optString("key").equals("enter", ignoreCase = true) ->
                 UiTools.focusedInputSnapshot(a11y).let { focused ->
@@ -724,36 +812,62 @@ object ToolRegistry {
                 }
             else -> null
         }
-        return SafetyContext(
-            packageName = packageName,
-            activityName = activityName,
-            revision = revision,
-            foregroundKnown = true,
-            identityBootstrapped = identityBootstrapped,
-            sameAppMultiWindow = sameAppMulti,
-            target = target,
-        )
+        return baseContext.copy(target = target)
     }
 
     private fun executeValidated(
         spec: ToolSpec,
         args: JSONObject,
         validatedContext: SafetyContext,
-        intentObservation: IntentSendObservation?,
+        call: CallScope,
+        policy: SafetyPolicy,
     ): JSONObject = when (spec.name) {
         "intent_send" -> IntentTools.intentSend(
             args.getString("action"), args.optString("uri").ifEmpty { null },
             args.optJSONObject("extras"), args.optString("package").ifEmpty { null },
-            args.optString("component").ifEmpty { null }, intentObservation,
+            args.optString("component").ifEmpty { null }, call.intentObservation,
         )
         "ui_action" -> {
+            val ref = args.getString("ref")
+            val action = args.getString("action")
             val params = JSONObject()
                 .put("text", args.optString("text"))
                 .put("direction", args.optString("direction", "forward"))
             val expected = validatedContext.target ?: throw GatewayError(
                 ErrorCode.E_STALE_REF, "安全门未提供已复核的 UI 目标", channel = "safety",
             )
-            UiTools.uiAction(args.getString("ref"), args.getString("action"), params, expected)
+            val allowExactNav = isExactNavFallbackEligible(
+                policy = policy,
+                action = action,
+                isOcrOnly = expected.source == "ocr",
+                label = expected.text,
+                desc = expected.description,
+                bounds = expected.bounds,
+                source = expected.source,
+                windowPane = expected.windowPane,
+                baseContext = validatedContext,
+                args = args,
+            )
+            UiTools.uiAction(
+                ref = ref,
+                action = action,
+                params = params,
+                expected = expected,
+                allowExactNavFallback = allowExactNav,
+                hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                onExactNavUsed = { resolved ->
+                    val resolvedTarget = SafetyTarget(
+                        ref = ref,
+                        text = resolved.text,
+                        description = resolved.desc,
+                        bounds = boundsString(resolved.bounds),
+                        source = resolved.source,
+                        windowPane = resolved.pane.takeIf { validatedContext.sameAppMultiWindow },
+                    )
+                    requireExactNavStillAllowed(policy, args, validatedContext.copy(target = resolvedTarget))
+                    call.appendSafetyNote(OCR_REVERIFY_EXACT_NAV_NOTE)
+                },
+            )
         }
         "press_key" -> UiTools.pressKey(
             args.getString("key"),
@@ -873,6 +987,8 @@ object ToolRegistry {
 
     private fun boundsString(bounds: android.graphics.Rect): String =
         "[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]"
+
+    internal const val OCR_REVERIFY_EXACT_NAV_NOTE = "ocr_reverify=exact_nav"
 
     /** 合成落后一两个 vsync 是常态，多给几次机会；总延迟仍远小于人抬手看卡的时间。 */
     private const val CONFIRM_CARD_CAPTURE_ATTEMPTS = 4
