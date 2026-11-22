@@ -1,0 +1,43 @@
+    @Override public void onFillRequest(FillRequest request, CancellationSignal cancel, FillCallback callback) {
+        long received = SystemClock.uptimeMillis();
+        int flags = request.getFlags();
+        boolean manual = (flags & FillRequest.FLAG_MANUAL_REQUEST) != 0;
+        List<FillContext> contexts = request.getFillContexts();
+        if (contexts.isEmpty()) { callback.onSuccess(null); return; }
+        FillContext ctx = contexts.get(contexts.size() - 1);
+        AssistStructure tree = ctx.getStructure();
+        if (!TARGET.equals(tree.getActivityComponent())) { callback.onSuccess(null); return; }
+        ProbeIme.Focus sample = ProbeIme.active;
+        long acquired = tree.getAcquisitionStartTime(), complete = tree.getAcquisitionEndTime();
+        android.util.Log.i("MenuFill", "event=callback id=" + request.getId() + " manual=" + manual
+            + " flags=" + flags + " ms=" + received + " start=" + acquired + " end=" + complete);
+        if (!manual || sample == null || sample != MenuIme.used || !sample.current()
+                || !MenuIme.optedIn(sample.owner, sample.owner.getCurrentInputEditorInfo())) {
+            callback.onSuccess(null);
+            return;
+        }
+        Observation o = new Observation();
+        o.before = true;
+        try {
+            if (ctx.getRequestId() != request.getId() || acquired <= MenuIme.issuedAt)
+                o.reason = "STALE_FILL_CONTEXT";
+            else o.reason = o.evaluate(ctx, sample);
+        } catch (ReflectiveOperationException | RuntimeException failed) {
+            o.reason = "UNAVAILABLE";
+        }
+        main.postDelayed(() -> {
+            o.after = sample.current();
+            if (cancel.isCanceled() || !o.after) o.reason = "CONNECTION_CHANGED";
+            try {
+                JSONObject row = o.receipt().put("ime_generation", sample.generation)
+                    .put("request_id", request.getId()).put("issued_at", MenuIme.issuedAt)
+                    .put("manual", manual).put("settled_at", SystemClock.uptimeMillis());
+                android.util.Log.i("MenuFill", "result=" + row);
+            } catch (JSONException failed) { throw new IllegalStateException(failed); }
+            if (!cancel.isCanceled()) callback.onSuccess(null);
+        }, 100);
+    }
+    @Override public void onSaveRequest(SaveRequest request, SaveCallback callback) {
+        callback.onFailure("synthetic fixture has no save contract");
+    }
+}

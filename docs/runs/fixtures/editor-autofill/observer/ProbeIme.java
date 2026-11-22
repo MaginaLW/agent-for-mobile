@@ -56,6 +56,7 @@ public final class ProbeIme extends InputMethodService {
         } catch (ReflectiveOperationException | SecurityException unavailable) {
             active = new Focus(this, connection, null, "PUBLIC_API_UNAVAILABLE");
         }
+        android.util.Log.i("SyntheticProbeIme", "generation=" + active.generation + " started=" + active.started);
         try {
             // Independent delivery witness recorded only by the target. No text or callback data is read.
             connection.requestTextBoundsInfo(new RectF(-3f, -3f, -3f, -3f), getMainExecutor(), ignored -> {});
