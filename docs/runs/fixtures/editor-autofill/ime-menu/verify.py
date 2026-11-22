@@ -63,6 +63,12 @@ def verify_opted_in(log):
     started = int(request["started"])
     need(at(noop) - started >= 1000, "IME not stable")
 
+    starts = [r for r in group("MenuChoice", "start_input") if r.get("gen") == generation]
+    if starts:
+        start_row = only(starts, "start_input for active gen")
+        if "sig_match" in start_row:
+            need(start_row["sig_match"] == "true", "opted-in requires same signing cert")
+
     for row in (noop, expired, rejected, request, sent):
         if "ui_shown" in row:
             need(row["ui_shown"] == "true", "visible menu choice recorded ui_shown!=true")
@@ -163,6 +169,7 @@ def verify_plain_auto(log):
     start_row = only(starts, "start_input for active gen")
     need(start_row["mode"] == "zero-ui-uncooperative" and start_row["usable"] == "true"
          and start_row["ui_shown"] == "false", "zero-ui start_input mismatch")
+    need(start_row.get("sig_match") == "false", "distinct signing cert required")
     ready = only([r for r in group("MenuChoice", "zero_ui_ready") if r.get("gen") == generation], "zero_ui_ready")
     need(ready["ui_shown"] == "false", "zero_ui_ready reported ui_shown!=false")
 
@@ -239,6 +246,7 @@ def verify_optout_no(log):
     start_row = only([r for r in group("MenuChoice", "start_input") if r.get("gen") == generation],
                      "start_input for active gen")
     need(start_row["mode"] == "zero-ui-uncooperative" and start_row["ui_shown"] == "false", "mode mismatch")
+    need(start_row.get("sig_match") == "false", "distinct signing cert required")
 
     manual_cbs = [row for row in group("MenuFill", "callback") if row["manual"] == "true"]
     right_snaps = [r for r in group("MenuOracle", "snapshot") if r["side"] == "right"]
@@ -301,6 +309,7 @@ def verify_swallow_ic(log):
     start_row = only([r for r in group("MenuChoice", "start_input") if r.get("gen") == generation],
                      "start_input for active gen")
     need(start_row["mode"] == "zero-ui-uncooperative" and start_row["ui_shown"] == "false", "mode mismatch")
+    need(start_row.get("sig_match") == "false", "distinct signing cert required")
 
     probe = only(interval(group("MenuOracle", "probe"), started, at(request)), "right probe witness")
     swallowed = only(group("MenuOracle", "swallowed_menu"), "swallowed_menu witness")
@@ -410,6 +419,7 @@ def _self_test():
         "I/MenuOracle(11): event=connect ms=15010 side=right instance=99 connection=4 latest_created=4 focus=true win=true bounds=2100,32,2300,102",
         "I/MenuOracle(11): event=connect ms=15012 side=right instance=99 connection=5 latest_created=5 focus=true win=true bounds=2100,32,2300,102",
         "I/MenuOracle(11): event=probe ms=15020 side=right instance=99 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 closed=false",
+        "I/MenuChoice(10): event=start_input ms=15015 gen=1 restarting=false mode=visible-opted-in usable=true ui_shown=false sig_match=true",
         "I/MenuChoice(10): event=button name=noop gen=1 x=700 y=1010 w=180 h=96 why=window_shown_250",
         "I/MenuChoice(10): event=button name=expired gen=1 x=1050 y=1010 w=220 h=96 why=window_shown_250",
         "I/MenuChoice(10): event=button name=request gen=1 x=1500 y=1010 w=420 h=96 why=window_shown_250",
@@ -439,6 +449,7 @@ def _self_test():
     expect_fail(verify, opted_ok + "\nI/MenuOracle(11): event=focus ms=18000 side=right instance=99 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102",
                 "opted-in", match="field focus changed")
     expect_fail(verify, opted_ok.replace("[2100,32,2300,102]", "[2101,32,2300,102]"), "opted-in", match="bounds mismatch")
+    expect_fail(verify, opted_ok.replace("sig_match=true", "sig_match=false"), "opted-in", match="same signing cert")
 
     # 2. plain-auto PASS (zero opt-in, stock EditText, zero-UI IME, different signing key)
     plain_ok = "\n".join([
@@ -462,6 +473,8 @@ def _self_test():
                 "plain-auto", match="unexpected visible IME UI")
     expect_fail(verify, plain_ok + "\nI/MenuOracle(21): event=layout ms=16000 side=right instance=77 connection=0 latest_created=0 focus=true win=true bounds=2100,40,2300,110",
                 "plain-auto", match="shifted right editor layout")
+    expect_fail(verify, plain_ok.replace("sig_match=false", "sig_match=true"),
+                "plain-auto", match="distinct signing cert")
 
     # 3. optout-no PASS (observer refuses even if FLAG_MANUAL_REQUEST delivers excluded nodes)
     optout_ok = "\n".join([
@@ -479,6 +492,8 @@ def _self_test():
     expect_fail(verify, optout_ok.replace('"verdict":"UNKNOWN","reason":"TARGET_OPTED_OUT","editor_count":0',
                 '"verdict":"MATCHED","reason":"MATCH","editor_count":2').replace('"selected_side":null', '"selected_side":"RIGHT"'),
                 "optout-no", match="must fail closed")
+    expect_fail(verify, optout_ok.replace("sig_match=false", "sig_match=true"),
+                "optout-no", match="distinct signing cert")
 
     # 4. swallow-ic PASS (oneway IPC returns submitted=true, target swallows, 0 manual callbacks)
     swallow_ok = "\n".join([
@@ -497,11 +512,13 @@ def _self_test():
                 "swallow-ic", match="reached TextView")
     expect_fail(verify, swallow_ok + "\nI/MenuFill(40): event=callback id=2 manual=true flags=1 ms=16540 start=16518 end=16522",
                 "swallow-ic", match="produced manual callback")
+    expect_fail(verify, swallow_ok.replace("sig_match=false", "sig_match=true"),
+                "swallow-ic", match="distinct signing cert")
 
     return {
         "self_test": "PASSED",
         "positive_scenarios": 4,
-        "negative_assertions": 10,
+        "negative_assertions": 14,
         "samples": {
             "opted-in": res_opted["classification"],
             "plain-auto": res_plain["classification"],

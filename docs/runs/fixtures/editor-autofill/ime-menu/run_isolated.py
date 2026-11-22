@@ -250,11 +250,14 @@ class IsolatedRunner:
         if not re.fullmatch(r"[a-zA-Z0-9._-]+", rel):
             raise ValueError(f"unsafe file name: {rel}")
         if content is None:
-            self.shell(f"run-as {OBSERVER_PKG} rm -f files/{rel}", check=False)
+            self.shell(f"run-as {OBSERVER_PKG} rm -f files/{rel} files/{rel}.tmp", check=False)
         else:
+            if not re.fullmatch(r"[a-zA-Z0-9 _-]+", content):
+                raise ValueError(f"unsafe observer file content: {content!r}")
             self.shell(
-                f"run-as {OBSERVER_PKG} sh -c 'mkdir -p files && cat > files/{rel}'",
-                input_text=content,
+                f"run-as {OBSERVER_PKG} sh -c "
+                f"'mkdir -p files && printf \"%s\" \"{content}\" > files/{rel}.tmp "
+                f"&& mv files/{rel}.tmp files/{rel}'"
             )
 
     def request_target_snapshot(self):
@@ -567,12 +570,16 @@ class IsolatedRunner:
                     for ns, key in SETTINGS_KEYS:
                         orig = self.saved_settings[f"{ns}:{key}"]
                         self.write_setting(ns, key, orig)
-                    time.sleep(0.5)
-                    for ns, key in SETTINGS_KEYS:
-                        orig = self.saved_settings[f"{ns}:{key}"]
-                        actual = self.read_setting(ns, key)
-                        self.state["restored"][f"{ns}:{key}"] = (actual == orig)
-                    pkgs = self.shell("pm list packages", check=False).stdout
+                    settle_deadline = time.monotonic() + 5.0
+                    while True:
+                        for ns, key in SETTINGS_KEYS:
+                            orig = self.saved_settings[f"{ns}:{key}"]
+                            actual = self.read_setting(ns, key)
+                            self.state["restored"][f"{ns}:{key}"] = (actual == orig)
+                        if all(self.state["restored"].values()) or time.monotonic() >= settle_deadline:
+                            break
+                        time.sleep(0.5)
+                    pkgs = self.shell("pm list packages -u", check=False).stdout
                     self.state["cleanup"]["packages_uninstalled"] = (
                         TARGET_PKG not in pkgs and OBSERVER_PKG not in pkgs
                     )
@@ -637,6 +644,7 @@ class IsolatedRunner:
         self.save_state()
 
     def run_all(self):
+        scenarios_ok = False
         try:
             self.start_isolated_env()
             self.prepare_device()
@@ -645,7 +653,7 @@ class IsolatedRunner:
             self.run_plain_auto()
             self.run_optout_no()
             self.run_swallow_ic()
-            self.state["status"] = "passed"
+            scenarios_ok = True
         except Exception as err:
             self.state["status"] = "failed"
             self.state["error"] = f"{type(err).__name__}: {err}"
@@ -657,6 +665,26 @@ class IsolatedRunner:
             raise
         finally:
             self.cleanup()
+
+        restored_ok = (
+            len(self.state["restored"]) == len(SETTINGS_KEYS)
+            and all(self.state["restored"].values())
+        )
+        cleanup_ok = (
+            all(self.state["cleanup"].values())
+            and not self.state["cleanup_errors"]
+        )
+        if scenarios_ok and (not restored_ok or not cleanup_ok):
+            self.state["status"] = "cleanup_failed"
+            self.state["error"] = (
+                f"cleanup_or_restore_incomplete: restored={self.state['restored']} "
+                f"cleanup={self.state['cleanup']} errors={self.state['cleanup_errors']}"
+            )
+            self.save_state()
+            raise RuntimeError(self.state["error"])
+        if scenarios_ok:
+            self.state["status"] = "passed"
+            self.save_state()
 
 
 def main():
