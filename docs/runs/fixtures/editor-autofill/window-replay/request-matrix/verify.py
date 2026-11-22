@@ -21,12 +21,18 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def project(matrix, size):
     """本实验的正比例平移/缩放，尺寸必须为正的显式 LayoutParams 像素。"""
-    if size is None or len(size) != 2 or min(size) <= 0 or len(matrix) != 9:
+    if (size is None or len(size) != 2 or not all(is_number(v) for v in size)
+            or min(size) <= 0 or matrix is None or len(matrix) != 9
+            or not all(is_number(v) for v in matrix)):
         return None
     a, b, x, c, d, y, p, q, w = matrix
-    if not all(math.isfinite(v) for v in matrix) or (b, c, p, q, w) != (0, 0, 0, 0, 1) or min(a, d) <= 0:
+    if (b, c, p, q, w) != (0, 0, 0, 0, 1) or min(a, d) <= 0:
         return None
     return [x, y, x + a * size[0], y + d * size[1]]
 
@@ -35,9 +41,11 @@ def candidates(matrix, windows):
     matched, unknown = [], []
     for window in windows:
         number = window["window"]
-        if window["scope"] == "other":
+        scope = window.get("scope")
+        if scope == "other":
             continue
-        if window["scope"] == "unknown" or not window["editors"] or window["display"] != 0:
+        if (scope != "target" or not window.get("editors") or window.get("display") != 0
+                or window.get("hidden_editors", 0) > 0):
             unknown.append(number)
             continue
         for editor in window["editors"]:
@@ -63,9 +71,24 @@ def result(matrix, windows):
     return {**raw, "decision":decision, "compatible_window":matches[0] if decision == "unique_within_supplied_nodes" else None}
 
 
+def accept_ime_reply(reply):
+    """校验 IME requestTextBoundsInfo 回调：非 CODE_SUCCESS、非空区间或非可逆仿射矩阵一律拒绝。"""
+    if reply.get("result_code", 1) != 1:
+        return None
+    if reply.get("start_index", 0) != reply.get("end_index", 0):
+        return None
+    matrix = reply.get("matrix")
+    if matrix is None or len(matrix) != 9 or not all(is_number(v) for v in matrix):
+        return None
+    a, b, _, c, d, _, p, q, w = matrix
+    if (p, q, w) != (0, 0, 1) or (a * d - b * c) == 0:
+        return None
+    return matrix
+
+
 def model_check():
-    def window(number, size, bounds):
-        return {"scope": "target", "window": number, "display": 0,
+    def window(number, size, bounds, hidden_editors=0):
+        return {"scope": "target", "window": number, "display": 0, "hidden_editors": hidden_editors,
                 "editors": [{"layout_size": size, "screen_rect": bounds}]}
     identity = [1, 0, 1000, 0, 1, 40, 0, 0, 1]
     scale = [2, 0, 1000, 0, 1, 40, 0, 0, 1]
@@ -77,15 +100,41 @@ def model_check():
     distinct = [left, plain]
     require(result(left_matrix, distinct)["compatible_window"] == 4 and
             result(identity, distinct)["compatible_window"] == 1, "spatial control")
+    require(result(left_matrix, [plain])["decision"] == "different_geometry"
+            and result(left_matrix, [plain])["compatible_window"] is None
+            and result(identity, [left])["decision"] == "different_geometry"
+            and result(identity, [left])["compatible_window"] is None, "spatial single-wrong-window rejection")
     require(candidates(identity, [plain, small])["matching_nodes_in_windows"] == [1], "plain scale model")
     require(candidates(scale, [plain, small])["matching_nodes_in_windows"] == [2], "double scale model")
+    require(result(identity, [small])["decision"] == "different_geometry"
+            and result(scale, [plain])["decision"] == "different_geometry", "scale single-wrong-window rejection")
     require(candidates(identity, [plain, same])["matching_nodes_in_windows"] == [1, 3], "collision model")
     require(candidates(identity, [plain, window(4, [-2, 70], bounds), {"scope":"unknown","window":5}])
             == {"matching_nodes_in_windows":[1],"unresolved_windows":[4,5]}, "incomplete input model")
+    match_parent = result(identity, [plain, window(6, [-1, -2], bounds)])
+    weighted_zero = result(identity, [plain, window(7, [0, -2], bounds)])
+    opaque_empty = result(identity, [plain, {"scope": "target", "window": 8, "display": 0, "editors": []}])
+    hidden_peer = result(identity, [plain, window(9, [200, 70], [40, 40, 240, 110], hidden_editors=1)])
+    for label, check in (("match_parent", match_parent), ("weighted_zero", weighted_zero),
+                         ("opaque_empty", opaque_empty), ("hidden_peer", hidden_peer)):
+        require(check["decision"] == "incomplete" and check["compatible_window"] is None,
+                "adversarial control failed: " + label)
+    require(accept_ime_reply({"result_code": 0, "matrix": identity}) is None
+            and accept_ime_reply({"result_code": 2, "matrix": identity}) is None
+            and accept_ime_reply({"result_code": 1, "start_index": 0, "end_index": 1, "matrix": identity}) is None
+            and accept_ime_reply({"result_code": 1, "start_index": 0, "end_index": 0, "matrix": identity}) == identity,
+            "CODE_UNSUPPORTED adversarial control failed")
     return {"separate_positions":[result(m,distinct) for m in (left_matrix,identity)],
             "same_bounds_different_layout":[result(m,[plain,small]) for m in (identity,scale)],
             "identical_layout":[result(identity,[plain,same]), result(identity,[same,plain])],
-            "missing_size_or_unknown_root":result(identity,[plain,window(4,[-2,70],bounds),{"scope":"unknown","window":5}])}
+            "missing_size_or_unknown_root":result(identity,[plain,window(4,[-2,70],bounds),{"scope":"unknown","window":5}]),
+            "wechat_adversarial_controls":{
+                "match_parent_wrap_content": match_parent,
+                "weighted_zero_width": weighted_zero,
+                "opaque_root_empty_editors": opaque_empty,
+                "hidden_editable_peer": hidden_peer,
+                "code_unsupported_accepted_matrix": accept_ime_reply({"result_code": 0, "matrix": identity})
+            }}
 
 
 def closed_evidence():
@@ -188,11 +237,28 @@ def verify(bundle):
         windows = stages[name]["observer"]["after"]
         live[name] = {"windows": [(w["window"], len(w["editors"])) for w in windows if w["scope"] == "target"],
                       **result(matrices[name], windows)}
+        require(live[name]["decision"] == "unique_within_supplied_nodes"
+                and live[name]["compatible_window"] == active[name]["window"],
+                name + ": live snapshot did not uniquely resolve active window")
     require(len({active[n]["window"] for n in STAGES}) == len(STAGES), "window IDs reused")
+    live_pair_ids = {active["west"]["window"], active["east"]["window"]}
+    for name in ("west", "east"):
+        seen_ids = {w[0] for w in live[name]["windows"]}
+        require(seen_ids == live_pair_ids and len(live[name]["windows"]) == 2,
+                name + ": expected both west and east simultaneously visible in live snapshot")
     results = {}
+    wrong_only = {}
     for a, b in (("west","east"), ("east","scaled"), ("east","overlap")):
         refs = [active[a], active[b]]
         results[a + "_" + b] = {name: result(matrices[name], refs) for name in (a,b)}
+    for a, b in (("west","east"), ("east","scaled")):
+        wrong_only[a + "_on_" + b] = result(matrices[a], [active[b]])
+        wrong_only[b + "_on_" + a] = result(matrices[b], [active[a]])
+        require(wrong_only[a + "_on_" + b]["decision"] == "different_geometry"
+                and wrong_only[a + "_on_" + b]["compatible_window"] is None
+                and wrong_only[b + "_on_" + a]["decision"] == "different_geometry"
+                and wrong_only[b + "_on_" + a]["compatible_window"] is None,
+                a + "/" + b + ": bidirectional wrong-window rejection failed")
     sides = {name: stages[name]["oracle"] for name in STAGES}
     require(sides["west"]["bounds"] != sides["east"]["bounds"], "separation control failed")
     require(sides["east"]["bounds"] == sides["scaled"]["bounds"] == sides["overlap"]["bounds"],
@@ -214,11 +280,15 @@ def verify(bundle):
     for editor in incomplete[1]["editors"]:
         editor["layout_size"] = None
     absent = result(matrices["east"],incomplete)
+    hidden = copy.deepcopy([active["east"],active["west"]])
+    hidden[1]["hidden_editors"] = 1
+    hidden_res = result(matrices["east"], hidden)
     unknown = result(matrices["east"],[active["east"],{"scope":"unknown","window":-1}])
-    require(all(x["decision"] == "incomplete" and x["compatible_window"] is None for x in (absent,unknown)),
-            "unknown peer accepted")
+    require(all(x["decision"] == "incomplete" and x["compatible_window"] is None for x in (absent,hidden_res,unknown)),
+            "unknown/hidden peer accepted")
     return {"candidate_previous_origins":legacy_origins(), "same_snapshot":live,
-            "frozen_two_window_controls":results, "host_removed_layout_size":absent,"host_unknown_root":unknown}
+            "frozen_two_window_controls":results, "single_wrong_window_rejection":wrong_only,
+            "host_removed_layout_size":absent, "host_hidden_editor":hidden_res, "host_unknown_root":unknown}
 
 
 if __name__ == "__main__":
