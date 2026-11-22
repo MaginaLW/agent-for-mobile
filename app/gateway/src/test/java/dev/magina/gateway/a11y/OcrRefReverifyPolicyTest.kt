@@ -1,6 +1,8 @@
 package dev.magina.gateway.a11y
 
+import dev.magina.gateway.core.SafetyPolicy
 import dev.magina.gateway.core.TextNorm
+import dev.magina.gateway.ocr.OcrEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -148,6 +150,207 @@ class OcrRefReverifyPolicyTest {
             assertEquals("height=$height 不应触发 2x", 0, calls2x)
             assertFalse(outcome.usedUpsample2x)
             assertNull(outcome.hit)
+        }
+    }
+
+    @Test
+    fun `exact_nav fallback succeeds on PA2553 44px left-pane File Transfer Assistant after 0_65f miss while keeping thresholds unchanged`() {
+        assertEquals(0.65f, MIN_ACTION_OCR_CONFIDENCE, 0f)
+        assertEquals(0.50f, OcrEngine.MIN_CONF, 0f)
+
+        val policy = SafetyPolicy()
+        // PA2553 实测左窗「文件传输助手」[216,282,498,326] (44px)，裁区 crop=[47,194,667,414]，
+        // 局部坐标 [169,88,451,132]；下方预览「PA2553橫屏确认卡验收-202」[216,350,763,383]（含「确认」但间隔 24px >> 4px）
+        val expectedScreen = OcrCropBox(216, 282, 498, 326)
+        val cropLeft = 47
+        val cropTop = 194
+        val cfg = ExactNavFallbackConfig(
+            expectedLabel = "文件传输助手",
+            expectedScreenBox = expectedScreen,
+            cropLeft = cropLeft,
+            cropTop = cropTop,
+            minConf = OcrEngine.MIN_CONF,
+            hasProtectedKeyword = policy::containsProtectedActionKeyword,
+        )
+
+        var calls1x = 0
+        var calls2x = 0
+        var callsExactNav = 0
+        val outcome = resolveOcrWithSmallTextUpsample(
+            wantNorm = TextNorm.ocr("文件传输助手"),
+            expectedCenterXInPiece = expectedScreen.centerX - cropLeft,
+            expectedCenterYInPiece = expectedScreen.centerY - cropTop,
+            expectedHeightPx = 44,
+            pieceWidth = 620,
+            pieceHeight = 220,
+            recognize1x = {
+                calls1x++
+                listOf(OcrCandidateLine("PA2553橫屏确认卡验收-202", 0.82f, OcrCropBox(169, 156, 620, 189)))
+            },
+            recognize2x = {
+                calls2x++
+                listOf(OcrCandidateLine("PA2553橫屏确认卡验收-202", 0.85f, OcrCropBox(338, 312, 1240, 378)))
+            },
+            exactNavConfig = cfg,
+            recognize1xExactNav = {
+                callsExactNav++
+                listOf(
+                    OcrCandidateLine("文件传输助手", 0.54f, OcrCropBox(169, 88, 451, 132)),
+                    OcrCandidateLine("PA2553橫屏确认卡验收-202", 0.82f, OcrCropBox(169, 156, 620, 189)),
+                )
+            },
+        )
+        assertEquals(1, calls1x)
+        assertEquals(1, calls2x)
+        assertEquals(1, callsExactNav)
+        assertTrue(outcome.usedExactNavFallback)
+        assertFalse(outcome.usedUpsample2x)
+        assertNotNull(outcome.hit)
+        assertEquals("文件传输助手", outcome.hit!!.text)
+        assertEquals(OcrCropBox(169, 88, 451, 132), outcome.hit!!.box)
+
+        // 高置信 1x 或 2x 命中时绝不进入 exact_nav 分支
+        var skippedNavCalls = 0
+        val hitOn1x = resolveOcrWithSmallTextUpsample(
+            wantNorm = TextNorm.ocr("文件传输助手"),
+            expectedCenterXInPiece = expectedScreen.centerX - cropLeft,
+            expectedCenterYInPiece = expectedScreen.centerY - cropTop,
+            expectedHeightPx = 44,
+            pieceWidth = 620,
+            pieceHeight = 220,
+            recognize1x = { listOf(OcrCandidateLine("文件传输助手", 0.72f, OcrCropBox(169, 88, 451, 132))) },
+            recognize2x = { error("1x 命中不应跑 2x") },
+            exactNavConfig = cfg,
+            recognize1xExactNav = { skippedNavCalls++; emptyList() },
+        )
+        assertEquals(0, skippedNavCalls)
+        assertFalse(hitOn1x.usedExactNavFallback)
+        assertNotNull(hitOn1x.hit)
+    }
+
+    @Test
+    fun `exact_nav fallback fails closed on short labels, protected keywords, fuzzy text, low conf, low IoU, high drift, duplicates, and overlapping danger text`() {
+        val policy = SafetyPolicy(sensitiveTargets = listOf("银行卡号"))
+        val expected = OcrCropBox(216, 282, 498, 326) // 282x44
+        val cropLeft = 47
+        val cropTop = 194
+        val localExact = OcrCropBox(169, 88, 451, 132)
+
+        // 1) <4 字标签一律拒绝（含 1-3 字按钮与短普通词）
+        for (shortLabel in listOf("发送", "删除", "支付", "确认", "123", "文件助", "")) {
+            assertFalse(isExactNavLabelEligible(shortLabel))
+            assertNull(
+                "短标签「$shortLabel」不得进入 exact_nav",
+                selectExactNavMatch(
+                    lines = listOf(OcrCandidateLine(shortLabel, 0.58f, localExact)),
+                    expectedLabel = shortLabel,
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
+        }
+
+        // 2) >=4 字含危险/发送/确认/敏感词标签一律拒绝
+        for (protectedLabel in listOf("确认发送", "立即支付", "删除聊天", "转账给张三", "我的银行卡号")) {
+            assertTrue(policy.containsProtectedActionKeyword(protectedLabel))
+            assertNull(
+                "受保护标签「$protectedLabel」不得走 exact_nav",
+                selectExactNavMatch(
+                    lines = listOf(OcrCandidateLine(protectedLabel, 0.60f, localExact)),
+                    expectedLabel = protectedLabel,
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
+        }
+
+        // 3) 禁用 charBagSim 模糊匹配：少一字/多一字/形近字必须返回 null
+        for (fuzzy in listOf("文件传输助", "文件传输助于", "文件传输入助手")) {
+            assertNull(
+                "模糊文本「$fuzzy」必须被拒绝",
+                selectExactNavMatch(
+                    lines = listOf(OcrCandidateLine(fuzzy, 0.62f, localExact)),
+                    expectedLabel = "文件传输助手",
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
+        }
+
+        // 4) 置信度 < 0.50f 拒绝
+        assertNull(
+            selectExactNavMatch(
+                lines = listOf(OcrCandidateLine("文件传输助手", 0.49f, localExact)),
+                expectedLabel = "文件传输助手",
+                expectedScreenBox = expected,
+                cropLeft = cropLeft,
+                cropTop = cropTop,
+                hasProtectedKeyword = policy::containsProtectedActionKeyword,
+            ),
+        )
+
+        // 5) IoU < 0.75 拒绝（高度缩水导致 IoU=0.68 即使中心零漂移）
+        assertNull(
+            selectExactNavMatch(
+                lines = listOf(OcrCandidateLine("文件传输助手", 0.55f, OcrCropBox(169, 95, 451, 125))),
+                expectedLabel = "文件传输助手",
+                expectedScreenBox = expected,
+                cropLeft = cropLeft,
+                cropTop = cropTop,
+                hasProtectedKeyword = policy::containsProtectedActionKeyword,
+            ),
+        )
+
+        // 6) 中心漂移 > 0.35 * 44 (=15.4px) 拒绝（整体平移 16px）
+        assertNull(
+            selectExactNavMatch(
+                lines = listOf(OcrCandidateLine("文件传输助手", 0.55f, OcrCropBox(169, 104, 451, 148))),
+                expectedLabel = "文件传输助手",
+                expectedScreenBox = expected,
+                cropLeft = cropLeft,
+                cropTop = cropTop,
+                hasProtectedKeyword = policy::containsProtectedActionKeyword,
+            ),
+        )
+
+        // 7) 裁区内重复精确命中（2 条同名）拒绝
+        assertNull(
+            selectExactNavMatch(
+                lines = listOf(
+                    OcrCandidateLine("文件传输助手", 0.54f, localExact),
+                    OcrCandidateLine("文件传输助手", 0.56f, OcrCropBox(169, 150, 451, 194)),
+                ),
+                expectedLabel = "文件传输助手",
+                expectedScreenBox = expected,
+                cropLeft = cropLeft,
+                cropTop = cropTop,
+                hasProtectedKeyword = policy::containsProtectedActionKeyword,
+            ),
+        )
+
+        // 8) 危险/发送/确认词与目标框相交（含 4px 安全边距，甚至带空格「发 送」）必须拒绝
+        for (overlapText in listOf("删除", "发 送", "确认")) {
+            assertNull(
+                "重叠保护词「$overlapText」必须阻止 exact_nav",
+                selectExactNavMatch(
+                    lines = listOf(
+                        OcrCandidateLine("文件传输助手", 0.54f, localExact),
+                        // 屏幕 y=328，距离目标下沿 326 仅 2px（< 4px 边距）
+                        OcrCandidateLine(overlapText, 0.70f, OcrCropBox(200, 134, 320, 170)),
+                    ),
+                    expectedLabel = "文件传输助手",
+                    expectedScreenBox = expected,
+                    cropLeft = cropLeft,
+                    cropTop = cropTop,
+                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                ),
+            )
         }
     }
 }

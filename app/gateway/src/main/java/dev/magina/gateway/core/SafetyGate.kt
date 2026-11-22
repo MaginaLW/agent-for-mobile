@@ -211,6 +211,23 @@ class SafetyPolicy(
     }
 
     /**
+     * 判定文本是否命中任一危险词、发送/撤回词、泛化确认词或敏感目标黑名单（含去空白 OCR 归一匹配）。
+     * 供普通具名 OCR 精确导航兜底直接复用，绝不另抄一份弱词表。
+     */
+    internal fun containsProtectedActionKeyword(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        val normText = TextNorm.ocr(trimmed)
+        return (sensitiveTargets + irreversibleWords + retractableWords + actionConfirmWords)
+            .any { word ->
+                if (word.isBlank()) return@any false
+                if (trimmed.contains(word, ignoreCase = true)) return@any true
+                val normWord = TextNorm.ocr(word)
+                normWord.isNotEmpty() && normText.contains(normWord)
+            }
+    }
+
+    /**
      * 命中词的档位。敏感目标（`sensitive_targets`，联系人/会话/文件关键词）没有撤销语义可言，
      * 按 fail-safe 归 I 级。
      */
