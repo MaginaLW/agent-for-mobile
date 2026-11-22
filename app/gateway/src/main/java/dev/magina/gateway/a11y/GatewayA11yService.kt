@@ -18,6 +18,12 @@ import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.ocr.OcrEngine
 import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.ime.ImeBridge
+import dev.magina.gateway.vision.TileOcrLine
+import dev.magina.gateway.vision.TileRect
+import dev.magina.gateway.vision.buildOcrCacheSignature
+import dev.magina.gateway.vision.offsetAndFilterTileLines
+import dev.magina.gateway.vision.planOcrTiles
+import dev.magina.gateway.vision.sparseWindowIds
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -437,9 +443,10 @@ class GatewayA11yService : AccessibilityService() {
         val jsonByRef = HashMap<String, JSONObject>()
         // interactive 与 full 的差异在文本截断长度：interactive 面向操作（短），full 面向阅读（长）
         val cap = if (scope == "full") 500 else 80
-        // 前台归属按「活动应用窗口」判定；同应用平行视界下同一包名全部应用窗口计入 fgCount。
+        // 前台归属按「活动应用窗口」判定；同应用平行视界下逐窗统计 fgCountByWin，任一应用窗稀疏即触发分窗 OCR。
         val fgWinId = applicationWindow(currentWindows)?.id ?: -1
         var fgCount = 0
+        val fgCountByWin = HashMap<Int, Int>()
         var count = 0
         var truncated = false
 
@@ -464,7 +471,10 @@ class GatewayA11yService : AccessibilityService() {
                     count,
                     RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y", windowId, pane),
                 )
-                if (inFgWin) fgCount += 1
+                if (inFgWin) {
+                    fgCount += 1
+                    fgCountByWin[windowId] = (fgCountByWin[windowId] ?: 0) + 1
+                }
                 val json = JSONObject()
                     .put("ref", ref)
                     .put("role", roleOf(node))
@@ -504,9 +514,20 @@ class GatewayA11yService : AccessibilityService() {
         var fusionNote: String? = null
         var usedVisionGeneration = freshVisionSession.current()?.generation ?: 0L
         var usedCaptureRevision = freshVisionSession.current()?.revision ?: lastSnapshotRev
-        if (fgCount < FUSE_FG_THRESHOLD && !ConfirmOverlay.isAwaitingDecision) {
+        val sparseSlices = if (topology == WindowTopology.SAME_APP_MULTI) {
+            val sparseIds = sparseWindowIds(appSlices, fgCountByWin, FUSE_FG_THRESHOLD)
+            appSlices.filter { it.windowId in sparseIds }
+        } else {
+            emptyList()
+        }
+        val needOcr = if (topology == WindowTopology.SAME_APP_MULTI) {
+            sparseSlices.isNotEmpty()
+        } else {
+            fgCount < FUSE_FG_THRESHOLD
+        }
+        if (needOcr && !ConfirmOverlay.isAwaitingDecision) {
             try {
-                val shot = ocrScreen()
+                val shot = ocrScreen(topology, sparseSlices)
                 usedVisionGeneration = shot.generation
                 usedCaptureRevision = shot.revision
                 var ocrIdx = 0
@@ -891,7 +912,13 @@ class GatewayA11yService : AccessibilityService() {
         if (withOcr && !ConfirmOverlay.isAwaitingDecision) {
             // 失败必须留痕。微信屏蔽 a11y 树时 OCR 是屏上文字的**唯一**来源，静默吞掉它会让
             // wait_for 只报"超时"，把排查引向"文字没出现"，而真相是"我们根本看不见"。
-            runCatching { ocrScreen() }
+            val (topology, sparseSlices) = sparseSlicesForCurrentWindows()
+            val targetSlices = if (topology == WindowTopology.SAME_APP_MULTI && sparseSlices.isEmpty()) {
+                appWindowSlices()
+            } else {
+                sparseSlices
+            }
+            runCatching { ocrScreen(topology, targetSlices) }
                 .onSuccess { shot ->
                     lastVisionSenseError = null
                     shot.lines.forEach { out.add(it.text) }
@@ -909,33 +936,54 @@ class GatewayA11yService : AccessibilityService() {
     /** 活动应用窗口 id（type=APPLICATION 且 active/focused；vivo 灵动岛等悬浮窗不算前台归属）。 */
     private fun appWindowId(): Int = applicationWindow()?.id ?: -1
 
-    /** 活动应用窗口（同应用多窗时合并全部应用窗口）的可读节点是否稀疏。 */
-    private fun fgSparse(): Boolean {
-        val currentWindows = windows
-        val topology = classifyWindowTopology(appWindowSlices(currentWindows))
-        val winId = applicationWindow(currentWindows)?.id ?: -1
-        val roots = if (topology == WindowTopology.SAME_APP_MULTI) {
-            currentWindows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }.mapNotNull { it.root }
-        } else {
-            listOfNotNull(currentWindows.firstOrNull { it.id == winId }?.root ?: rootInActiveWindow)
-        }
-        if (roots.isEmpty()) return true
+    private fun countSignalNodes(root: AccessibilityNodeInfo, limit: Int): Int {
         var n = 0
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > 60 || n >= FUSE_FG_THRESHOLD) return
+            if (depth > 60 || n >= limit) return
             val signal = node.isClickable || node.isEditable || node.isScrollable ||
                 !node.text.isNullOrEmpty() || !node.contentDescription.isNullOrEmpty()
             if (signal && node.isVisibleToUser) n += 1
             for (i in 0 until node.childCount) {
-                if (n >= FUSE_FG_THRESHOLD) return
+                if (n >= limit) return
                 node.getChild(i)?.let { visit(it, depth + 1) }
             }
         }
-        for (root in roots) {
-            if (n >= FUSE_FG_THRESHOLD) break
-            visit(root, 0)
+        visit(root, 0)
+        return n
+    }
+
+    private fun sparseSlicesForCurrentWindows(): Pair<WindowTopology, List<AppWindowSlice>> {
+        val currentWindows = windows
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
+        if (topology != WindowTopology.SAME_APP_MULTI) return topology to emptyList()
+        val fgCountByWin = HashMap<Int, Int>()
+        for (w in currentWindows) {
+            if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            val root = w.root ?: continue
+            fgCountByWin[w.id] = countSignalNodes(root, FUSE_FG_THRESHOLD)
         }
-        return n < FUSE_FG_THRESHOLD
+        val sparseIds = sparseWindowIds(appSlices, fgCountByWin, FUSE_FG_THRESHOLD)
+        return topology to appSlices.filter { it.windowId in sparseIds }
+    }
+
+    /** 活动应用窗口（同应用多窗时逐窗判定，任一应用窗稀疏即为 true）的可读节点是否稀疏。 */
+    private fun fgSparse(): Boolean {
+        val currentWindows = windows
+        val appSlices = appWindowSlices(currentWindows)
+        val topology = classifyWindowTopology(appSlices)
+        if (topology == WindowTopology.SAME_APP_MULTI) {
+            val fgCountByWin = HashMap<Int, Int>()
+            for (w in currentWindows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = w.root ?: continue
+                fgCountByWin[w.id] = countSignalNodes(root, FUSE_FG_THRESHOLD)
+            }
+            return sparseWindowIds(appSlices, fgCountByWin, FUSE_FG_THRESHOLD).isNotEmpty()
+        }
+        val winId = applicationWindow(currentWindows)?.id ?: -1
+        val root = currentWindows.firstOrNull { it.id == winId }?.root ?: rootInActiveWindow ?: return true
+        return countSignalNodes(root, FUSE_FG_THRESHOLD) < FUSE_FG_THRESHOLD
     }
 
     // ---------- ref 解析与动作 ----------
@@ -1399,26 +1447,36 @@ class GatewayA11yService : AccessibilityService() {
         val revision: Long,
         val at: Long,
         val generation: Long,
+        val signature: String,
         val lines: List<OcrEngine.OcrLine>,
     )
 
     private val ocrCache = FreshVisionCache<OcrShot>()
 
     /**
-     * 整屏 OCR，按 revision 缓存 + 2s TTL（spec §9：页面不变不重跑）。
-     * TTL 的必要性：微信类 app 不发内容事件、revision 长期不动，纯 revision 缓存会把
-     * 单次漏识（深色模式灰字临界抖动实锤）永久钉死；短 TTL 给抖动翻盘机会。
+     * 整屏/分窗切片 OCR，按 revision + 窗格/键盘签名缓存 + 2s TTL（spec §9：页面不变不重跑）。
+     * - 大屏 `SAME_APP_MULTI`（如 PA2553 2800×1968）按稀疏窗格与 1400px 垂向切片识别，
+     *   绕开 ML Kit 内部大幅降采样对 43px 窄栏文字的置信度塌方，保持 0px 坐标偏移且零跨缝重复；
+     * - 单窗手机或 ≤1600px 小屏保持原整屏识别路径不变。
      */
     @Synchronized
-    private fun ocrScreen(): OcrShot {
+    private fun ocrScreen(
+        topology: WindowTopology = WindowTopology.SINGLE,
+        sparseSlices: List<AppWindowSlice> = emptyList(),
+    ): OcrShot {
         val r = revision
+        // 键盘弹出时只识键盘上方：按键/候选词不是页面内容，顺带省识别时间
+        val imeTop = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            ?.let { w -> Rect().also { w.getBoundsInScreen(it) }.top } ?: Int.MAX_VALUE
+        val cacheSignature = buildOcrCacheSignature(topology, sparseSlices, imeTop)
         return ocrCache.getOrLoad(
             forceFresh = forceFreshOcrOnce,
-            reusable = { it.revision == r && SystemClock.elapsedRealtime() - it.at < 2_000 },
+            reusable = {
+                it.revision == r &&
+                    it.signature == cacheSignature &&
+                    SystemClock.elapsedRealtime() - it.at < 2_000
+            },
             loader = {
-                // 键盘弹出时只识键盘上方：按键/候选词不是页面内容，顺带省识别时间
-                val imeTop = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-                    ?.let { w -> Rect().also { w.getBoundsInScreen(it) }.top } ?: Int.MAX_VALUE
                 val capture = freshVisionSession.captureForOcr()
                 if (capture.revision != r) throw GatewayError(
                     ErrorCode.E_STALE_REF,
@@ -1427,10 +1485,43 @@ class GatewayA11yService : AccessibilityService() {
                     retryable = true,
                 )
                 val full = capture.payload
-                val page = if (imeTop in 1 until full.height)
-                    Bitmap.createBitmap(full, 0, 0, full.width, imeTop) else full
-                val lines = OcrEngine.recognize(page)
-                OcrShot(capture.revision, SystemClock.elapsedRealtime(), capture.generation, lines)
+                val tiles = planOcrTiles(topology, sparseSlices, full.width, full.height, imeTop)
+                val lines = if (tiles.isNotEmpty()) {
+                    val combined = ArrayList<OcrEngine.OcrLine>()
+                    for (tile in tiles) {
+                        val tileBmp = Bitmap.createBitmap(
+                            full, tile.crop.left, tile.crop.top, tile.crop.width, tile.crop.height,
+                        )
+                        val rawLines = try {
+                            OcrEngine.recognize(tileBmp, OcrEngine.MIN_CONF).map { l ->
+                                TileOcrLine(
+                                    l.text,
+                                    l.conf,
+                                    TileRect(l.bounds.left, l.bounds.top, l.bounds.right, l.bounds.bottom),
+                                )
+                            }
+                        } finally {
+                            if (tileBmp !== full && !tileBmp.isRecycled) tileBmp.recycle()
+                        }
+                        offsetAndFilterTileLines(tile, rawLines).forEach { mapped ->
+                            combined += OcrEngine.OcrLine(
+                                mapped.text,
+                                mapped.conf,
+                                Rect(mapped.bounds.left, mapped.bounds.top, mapped.bounds.right, mapped.bounds.bottom),
+                            )
+                        }
+                    }
+                    combined
+                } else {
+                    val page = if (imeTop in 1 until full.height)
+                        Bitmap.createBitmap(full, 0, 0, full.width, imeTop) else full
+                    try {
+                        OcrEngine.recognize(page, OcrEngine.MIN_CONF)
+                    } finally {
+                        if (page !== full && !page.isRecycled) page.recycle()
+                    }
+                }
+                OcrShot(capture.revision, SystemClock.elapsedRealtime(), capture.generation, cacheSignature, lines)
             },
         )
     }
