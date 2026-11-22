@@ -112,7 +112,11 @@ Android 16 合成靶在四次原点查询均返回空值时，四次从独立的
 
 **C 真机只读诊断暂缓。** 11 月 22 日在 API 36 合成右框持焦、目标应用显式请求为零时，保留原自动填充会话再切输入法，同一会话仍只有原请求 896，新连接的结构写入、系统请求和服务回调均为 0。正控新 Activity 自然聚焦后取得了请求 898。原版候选 `2289925` 在两个有资源名的同包实例中分别报出正确窗号 13、15 和相同四边；在两个匿名实例中均于四边采样前返回 `missing_id`。普通权限对照能读出不同的无障碍窗号，但所测输入法字段和连接绑定标记仍不能独立区分两窗。结论限于本次合成靶，本轮未操作 PA2553。[A2 保留会话实测](docs/runs/fixtures/editor-autofill/retained-session/README.md) · [B 原版候选与普通权限对照](docs/runs/fixtures/editor-autofill/window-replay/candidate-permissions/README.md)
 
-本轮离线攻关已收尾。三项补充实验均未取得可用于恢复 C 的新样本。输入法菜单未提交请求，系统助理停在角色选择，逐请求矩阵未采到有效请求对。专用模拟器和 ADB 均已退出。助理角色持有者缺少终场独立读回，保留为未知。[三项收尾记录](docs/backlog.md#补充实验收尾)
+本轮离线攻关已完成第二轮隔离 API 36 全量实测收口（零真机接触，每轮设置/角色/双包/端口均独立读回还原）：
+
+- **三项既有夹具全部补齐 API 36 实测**：`request-matrix`（`2772db0`）在显式正像素原生框通过活体双窗双向与同原点缩放区分，但 `match_parent`（`[-1,-2]`）、`CODE_UNSUPPORTED` 与 `opaque`（`hidden_editors=1`）三项微信等价对抗全部 fail-closed，收口为窄 AOSP 边界；`ime-menu`（`a11ee7e`）证实零 UI IME 调用 `performContextMenuAction(android.R.id.autofill)` 可在异签名、未配合的匿名标准 `EditText` 取得新鲜 `FLAG_MANUAL_REQUEST` 结构并精确匹配原生 `AutofillId`（`optout-no` 与 `swallow-ic` fail-closed）；`assistant-structure`（`340dddc`）7 场全过（含 `android.app.role.ASSISTANT` 读回还原），穿透微信式无障碍剥离并区分双窗/双 Activity，同时证实普通助理树匿名 `ViewNode.getAutofillId() == null`。
+- **新发现零新增权限第四路线（Pathway 4A+4B，草稿源码分支 `codex/swarm-p4-cursor-diag` `345f897`，基于 #47 `ae93377`）**：在不改 `AndroidManifest.xml`、不接管系统角色、不显示可见 IME UI 下，将 `requestCursorUpdates()`（`CursorAnchorInfo` 2 参/1 参 + 不相交双窗严格归属）与失败的无障碍前置门解耦，并补齐 4B 非短路双节点遥测与 `TYPE_NULL` 前置分类；Debug 547 / Release 450 单测与 Lint/构建通过，隔离 API 36 微信等价 6 场景 6/6 通过（0 像素误差，重叠与 `TYPE_NULL` 严格 fail-closed）。
+- **C 真机只读诊断继续等待用户明确授权**：获准后最优先验证零新增权限的 Pathway 4A+4B（`codex/swarm-p4-cursor-diag` `345f897`），`ime-menu` 与 `assistant-structure` 作为离线已验备选，`request-matrix` 关闭不再上机。[四路线汇总与排序](docs/backlog.md#补充实验收尾2026-11-22-第二轮隔离-api-36-实测) · [微信知识与第四路线](docs/knowledge/apps/wechat.md#三项离线补充实验实测收口与第四路线cursoranchorinfo--4b-遥测)
 
 API 36 隔离模拟器中，靶应用手动请求结构时，已核实同一对无名编辑框的左→右连接交接，四边重合与焦点冲突均停止。自然触发时左框可被独立识别。左场空响应结束会话并登记了两个字段，右框接手连接时，客户端因该字段已登记而忽略进入事件。系统没有发起新结构请求，右框四边留空。[手动请求四场](docs/runs/fixtures/editor-autofill/README.md#隔离模拟器实测) · [空响应后的会话与右框请求](docs/runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
 

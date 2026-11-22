@@ -113,4 +113,7 @@ A2 以原输入法启动 `scenario=automatic-right-switch`。靶应用在 147676
 
 另一次隔离实验把原会话保持在 `ACTIVE` 后再切换输入法，并分别核对旧请求、新连接及靶应用写入结构的次数。右框持续持焦期间仍未取得新结构。[保留会话的对照](retained-session/README.md)
 
-系统助理渠道的首轮在角色选择时停止。普通助理树的采集、与新连接的关联及四边均待验证。夹具记录了首轮可核对的恢复结果和两种请求标志的验收方法。[系统助理实验](assistant-structure/README.md)
+随后两条 A2 补充路线均在全新隔离 API 36 模拟器完成实测收尾并逐项读回还原：
+
+- **输入法触发手动自动填充（`ime-menu`）**：修复 IME 显式展示与切 IME 时的 `#3/#4/#5` 连接创建守卫后，4 场景全部收口（118.38 秒，8/8 设置读回）。其中 `plain-auto` 在**零 UI 输入法**（`ui_shown=false`，零布局偏移）、异签名、未修改标准匿名 `EditText`（`AUTO`）上经 `InputConnection.performContextMenuAction(android.R.id.autofill)` 取得新鲜 `FLAG_MANUAL_REQUEST` 结构并与当前连接按原生 `AutofillId.getViewId()` 精确匹配 `[2100, 32, 2300, 102]`（零焦点变化、零 ActionMode）；`optout-no`（`IMPORTANT_FOR_AUTOFILL_NO`）与 `swallow-ic`（自定义连接吞掉菜单）均按预期 fail-closed。[输入法菜单与零 UI 实测](ime-menu/README.md)
+- **系统助理结构（`assistant-structure`）**：修复角色变量覆写、无效权限与多窗限制后，7 场全部收口（511 秒，13/13 设置及 `android.app.role.ASSISTANT` 持有者均读回还原为 `com.google.android.googlequicksearchbox`）。`VoiceInteractionSession`（`SHOW_WITH_ASSIST`，零 UI、零截图）在右框持续持焦切 IME 后按需采得新鲜 `AssistStructure`（零焦点/连接打断），并在 `obfuscated` 对照中穿透微信式 `AccessibilityDelegate` 剥离、在 `multiwin`/`multiwin2` 中区分双窗/双 Activity 左右窗格、在 `FLAG_SECURE` 下 fail-closed；同时实证实普通助理树中 `ViewNode.getAutofillId()` 恒为 `null`，匿名框无跨通道共同字段标识。[系统助理 7 场实测](assistant-structure/README.md)

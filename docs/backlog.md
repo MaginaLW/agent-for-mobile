@@ -17,15 +17,16 @@
 
 `2289925` 与本地草稿 `ae93377` 的网关源码相同。候选声明无障碍服务和自有输入法，未声明自动填充服务。A2 所用的实验自动填充服务可以收取结构；B 用原版候选执行只读四边查询。[A2 实验服务](runs/fixtures/editor-autofill/retained-session/README.md) · [B 候选权限](runs/fixtures/editor-autofill/window-replay/candidate-permissions/README.md)
 
-#### 补充实验收尾
+#### 补充实验收尾（2026-11-22 第二轮隔离 API 36 实测）
 
-| 路线 | 实际停止点 | 可复核的结果 |
+| 路线 | 实测结论（API 36 隔离模拟器） | 对 PA2553 微信的可用性与收尾 |
 |---|---|---|
-| [输入法可见菜单](runs/fixtures/editor-autofill/ime-menu/README.md) | 原输入法的自然回调、切换后右框的连接探针均已取得，随后 25 秒内未读到请求按钮的位置。 | 菜单提交次数为 0，未验证显式选择后能否得到新结构。八项设置已读回。 |
-| [系统助理结构](runs/fixtures/editor-autofill/assistant-structure/README.md) | 宿主安装循环覆盖了角色名，选择助理的命令失败，尚未启动取样场景。 | 13 项设置已读回，两包已卸载。恢复角色的命令也使用了错误名称，最终角色持有者仍未知。 |
-| [逐请求矩阵与布局尺寸](runs/fixtures/editor-autofill/window-replay/request-matrix/README.md) | 首轮缺少西窗回执；第二轮西窗已就位，矩阵请求为 0，观察器因参数不可写抛出异常，东窗未取得回执。 | 两轮有效请求对均为 0，十项设置均已读回。修正版只完成构建，宿主对照单列。 |
+| **第四路线 · Pathway 4A+4B**（草稿源码分支 `codex/swarm-p4-cursor-diag` `345f897`，基于 #47 `ae93377`） | **6/6 PASS**（147.23 秒，Debug 547 / Release 450 单测 + Lint/构建全过，零新增权限、`AndroidManifest.xml` 未改动）。`probe_cursor_anchor` 解耦失败的无障碍前置门，在双窗反无障碍剥离 + `requestTextBoundsInfo -> CODE_UNSUPPORTED` 下以 0 像素误差归属右/左窗格（含 API 21 1 参降级），同步产出 4B 非短路双节点遥测与 `TYPE_NULL` 前置分类；窗口重叠与 `TYPE_NULL` 严格 fail-closed。 | **下一轮真机只读诊断首选**：零新增权限、零系统角色接管、零可见 IME UI；6/6 设置与双包清场完成。待用户明确授权后在 PA2553 实测微信 `MMEditText` 对标准 `requestCursorUpdates()` 的响应及两节点真实遥测。 |
+| [输入法可见/零 UI 菜单 `ime-menu`](runs/fixtures/editor-autofill/ime-menu/README.md)（`a11ee7e`） | **4/4 PASS**（118.38 秒，8/8 设置读回）。`plain-auto` 证实零 UI IME 调用 `performContextMenuAction(android.R.id.autofill)` 可在异签名、未配合的匿名标准 `EditText` 上产出新鲜 `FLAG_MANUAL_REQUEST` 结构并精确匹配原生 `AutofillId.getViewId()`；`optout-no` 与 `swallow-ic` 均 fail-closed。 | **已验离线备选 1**：无需焦点变化或可见键盘，但仍需接管/恢复系统 `autofill_service`，若微信吞菜单或设为 `IMPORTANT_FOR_AUTOFILL_NO` 会失效，且不单独解决同包多窗归属。 |
+| [系统助理结构 `assistant-structure`](runs/fixtures/editor-autofill/assistant-structure/README.md)（`340dddc`） | **7/7 PASS**（511 秒，13/13 设置及 `android.app.role.ASSISTANT` 持有者均读回还原为原助理）。零 UI/零截图按需取得新鲜 `AssistStructure`，穿透微信式 `AccessibilityDelegate` 剥离并区分双窗/双 Activity 窗格，`FLAG_SECURE` 严格 fail-closed；实证 `ViewNode.getAutofillId() == null`。 | **已验离线备选 2**：可穿透无障碍剥离，但匿名框缺少跨通道 `AutofillId`，且需高侵入接管系统唯一 `ROLE_ASSISTANT` 角色。 |
+| [逐请求矩阵与布局尺寸 `request-matrix`](runs/fixtures/editor-autofill/window-replay/request-matrix/README.md)（`2772db0`） | **4 核心 + 3 微信对抗全部实测收口**（145 秒，10/10 设置与双包读回还原）。显式正像素原生框通过活体双窗双向与同原点缩放区分，重合场 `ambiguous`；但 `match_parent`（`getLayoutSize()=[-1,-2]`）、`CODE_UNSUPPORTED` 与 `opaque`（`hidden_editors=1`）全部 fail-closed。 | **已收口为窄 AOSP 结论（不进真机）**：三项前提在真实微信上均已证伪，不再投入真机或模拟器槽位。 |
 
-后续离线研究应以新证据为起点。A2 需要找到持续持焦时实际触发新结构采集的受支持途径。B 需要候选权限下能从当前输入连接独立核对来源窗的依据，并让匿名正确窗通过、同包错窗双向拒绝。仅延长观察、保留会话或比较活动窗号不足以恢复 C。#47 保留草稿。C 通过后，分别从桌面和微信左窗验自动就位。每次导航后重新读取前台、标题、输入焦点及编辑框，按起点记录首次结果和现场协助次数。两起点均通过后才排一次获授权的发送，核对设备确认卡决定、确认后目标、实际点击和消息区中的测试串。拒绝、超时或失效即结束。竖屏 P0 继续独立暂缓。[导航与发送规程](runbooks/P0-safety-hard-gate-smoke.md#横屏会话导航预演)
+**C 真机只读诊断仍需用户明确授权后方可启动。** 上述 4 项离线实验已明确排序：优先以零新增权限的 Pathway 4A+4B（`codex/swarm-p4-cursor-diag` `345f897`，源码 PR 保持草稿）开展单次只读诊断，以 `ime-menu` 与 `assistant-structure` 作为离线已验备选，`request-matrix` 保持关闭。#47 保留草稿。C 通过后，再分别从桌面和微信左窗验自动就位。每次导航后重新读取前台、标题、输入焦点及编辑框，按起点记录首次结果和现场协助次数。两起点均通过后才排一次获授权的发送，核对设备确认卡决定、确认后目标、实际点击和消息区中的测试串。拒绝、超时或失效即结束。竖屏 P0 继续独立暂缓。[导航与发送规程](runbooks/P0-safety-hard-gate-smoke.md#横屏会话导航预演)
 
 **派单传输与无障碍稳定性另行观察。** 11 月 17 日两次 HTTP 失败都缺网关结果。先复用派单离线用例核对「设备发现失败」「请求无返回」「网关返回失败」能否区分。下次已授权任务若重现，只核对同一时段的端口转发、网关健康与服务绑定，停在能证实的最后一层。小红书空白页也仅在自然复现时记下页面与是否有系统遮罩。[派单判读](knowledge/brain/harness.md) · [小红书记录](knowledge/apps/xiaohongshu.md)
 
