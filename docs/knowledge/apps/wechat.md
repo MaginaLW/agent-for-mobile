@@ -337,6 +337,12 @@ PA2553 的原输入法在位时，窗口焦点与输入法目标相同能确认�
 
 能否沿用 vivo 输入法，从无障碍服务直接取得这份几何？核对项目编译所用 API 35 的公开方法和 Android 16 框架源码，无障碍输入法可取得当前 `EditorInfo` 并接收选区变化。它拿到的 `AccessibilityInputConnection` 缺少普通 `InputConnection` 上的 `requestTextBoundsInfo` 和 `requestCursorUpdates`。因此，只启用无障碍输入法标志，仍无法沿用网关现有的原点与四边查询。这次接口核对没有切换设备输入法。[Android 无障碍输入连接](https://developer.android.com/reference/android/accessibilityservice/InputMethod.AccessibilityInputConnection) · [Android 16 框架实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/accessibilityservice/InputMethod.java)
 
+API 36 隔离实验随后验证了一种独立对应方式。实验输入法读取当前连接的原生自动填充标识，自动填充服务从同一窗口的结构找到候选，靶应用另行记录哪一侧真正收到了连接请求。同一对无名原生控件左右交接均选对，四边重合与焦点冲突均停止。微信是否暴露可供这种比对的结构仍待验证。[四场实测及适用范围](../../runs/fixtures/editor-autofill/README.md#隔离模拟器实测)
+
+隔离实验后，在 PA2553 已安装的 `2289925` 上进行了单次免安装只读复核。入场时系统焦点与输入法目标已在同一微信会话。派单耗时 26 秒，前四次读取在切换输入法前后均核实了同一右窗和「文件传输助手」标题。第五次读取返回 `missing_id / before_sample / field_id_unresolved`，未发起四边采样，也未得到与连接匹配的编辑框结构。该版本未实现合成实验的自动填充服务，此次未取微信的自动填充结构。导航点击、输入和发送均为零。收尾回选原输入法，补回一项入场时已启用的 vivo 服务，独立确认系统绑定、四项设置、网关服务与端口转发均恢复。最终系统焦点和输入法目标仍指向同一微信会话。
+
+在合成靶上判读换框后的结构时，要同时核对连接开始、结构采集和回调送达的先后顺序。把左场回执延迟到右场处理，旧采集时间仍会被识别。若右侧没有回调，可先用系统请求历史把空响应与会话号对上，再按靶应用进程和右框字段标识核对进入事件。本次 API 36 实测见到会话已结束，且客户端明确忽略了已登记右框的进入事件。微信右窗本身仍缺少与当前连接匹配的结构。[旧样本回放](../../runs/fixtures/editor-autofill/README.md#系统自动请求) · [模拟器框架回执](../../runs/fixtures/editor-autofill/README.md#空响应后的会话与右框请求)
+
 ### 历史手机实测
 
 - ✅ **2026-07-31 打通（真人确认消息已发出）**：`enter_channel=editor_action:send`，即 IME `performEditorAction(IME_ACTION_SEND)`。输入框契约（`ime_editor_info` 实测）：`imeOptions=0x00000004`（`IME_ACTION_SEND`）、`inputType=0x00004001`（单行）、`no_enter_action=false`——本就宣告"回车即发送"。
