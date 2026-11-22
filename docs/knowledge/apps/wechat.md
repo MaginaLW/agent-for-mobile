@@ -387,7 +387,18 @@ API 36 隔离实验随后验证了一种独立对应方式。实验输入法读�
      - 严格不相交双窗归属：**`window_id=364`、`pane="right"`、`window_bounds=[927, 0, 2800, 1968]`**（`same_package_window_count=2, total_app_window_count=2, geometry_source="editor_bounds+insertion_marker", session_generation=1`），`a11y_cross_check` 三项均为 `0`（与 4B 空壳桩一致）。
 5. **无条件收尾与双重独立读回**：回选原 vivo 输入法并恢复逐字基线后，间隔 2 秒两次独立读回均核实全部 4 项基线设置逐字相等（含前导 `:` 与 vivo `AutoSendImageService`）、`dumpsys accessibility` 中 `GatewayA11yService` 与 vivo `AutoSendImageService` 双绑定、`GatewayService` 停止且 `adb forward --list` 为空。
 
-后续路径清晰：(1) 在草稿 [PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47) 中将 `CursorAnchorInfo`（`legacy_1arg` + 不相交双窗 fail-closed 归属）接入生产输入目标与焦点解析，经完整离线门后提交用户审阅合入；(2) 再推进 PA2553 桌面/左窗自动就位与获授权的设备端 ConfirmOverlay 发送实测。
+#### PA2553 起点 1（已聚焦右窗）生产横屏就位实测通过
+
+2026-11-22，生产接线与横屏宿主回执分支 2 随 [PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47) 合入 `main`（合并提交 `30dd179`，候选 `3d700cc`，完整 `scripts/check.ps1` 9/9 通过：Debug 554 / Release 457 / 派单 59 / runner 157，API 36 隔离 `schema_version=2` 六场景 6/6 通过，零新增权限）。经用户明确授权，在 PA2553 上同签保数据安装 `3d700cc` Debug APK（在机 SHA-256 `73b778b0467a5d7c1562128abd329087788ea9631ed4037af67779bef505a16a`，安装后自动回到已聚焦的右窗 `ChattingUI`，`inputType=0x24001`、`fieldId=2131365757`，`GatewayA11yService` 与 vivo `AutoSendImageService` 双绑定）。外层在 `dispatch.ps1` 入场前临时启用并切换至 `GatewayIme` 并静置等待 OriginOS 无障碍列表副作用稳定（2.5 秒后复读确认不再变动），随后在同步至 `30dd179` 的宿主上执行单次官方生产命令 `scripts/dispatch.ps1 -TaskFile scripts/tasks/wechat-landscape-prepare.md -TimeoutMin 3`：
+
+- **派单与宿主门禁结果**：**首次派单即通过**（派单耗时 `36s`，含外层切换/收尾 `44.86s`，退出码 `0`，`verdict=success`，`note: 宿主已核实同一微信会话窗口的输入目标及收尾基线`，台账 `wechat-landscape-prepare`）；用户为导航或调试动手 0 次，启动、点击、输入、发送、确认卡与工具错误均为 0。
+- **6 次只读调用与生产焦点交叉核验（全链同一 `rev=3`，`window_topology="same_app_multi"`，`a-000002..a-000007`）**：
+  - `[1]`/`[4]` `foreground_app({})`：确认 2 个互不相交微信应用窗——左窗 `id=358`（`[0,0,923,1968]`，`active=false, focused=false`）、右窗 `id=364`（`[927,0,2800,1968]`，`active=true, focused=true`，`selected_window_id=364`）。
+  - `[2]`/`[5]` `ui_find({"text":"文件传输助手","scroll_search":false})`：屏幕 `2800×1968`，右窗顶部标题命中 `win=364, src=ocr, [1717,140,1999,184]`（左窗列表行 `win=358, [217,282,498,325]`）；生产焦点元数据首次在真实微信上直接返回 **`focused_identity_source="ime_cursor_anchor"`、`focused_input_id=null`、`focused_input_window_id=364`、`focused_input_pane="right"`、`focused_input_bounds=[1048,1834,2578,1946]`**。
+  - `[3]`/`[6]` `keyboard_state({"probe_cursor_anchor":true})`：`visible=false, height=0`，`ime_editor_contract_diag={contract_present:true, input_type_is_null:false, input_type:147457}`，`ime_cursor_anchor` 经 `legacy_1arg`（`filtered_accepted=false, legacy_accepted=true, matrix_is_identity=false`）返回 `window_id=364, pane="right", window_bounds=[927,0,2800,1968], same_package_window_count=2, total_app_window_count=2, session_generation=5, geometry_source="editor_bounds+insertion_marker"`，`editor_bounds={left:1048, top:1834, right:2578, bottom:1946}` 与可见插入光标 `top=(1067,1864), baseline=(1067,1915), bottom=(1067,1929)`，无 `ime_cursor_anchor_reason`。执行器按任务卡第 4/5 步在确认 `ime_cursor_anchor` 后直接跳过 `ui_find(role="input")`，宿主 `Test-LandscapeEditorReceipt`（分支 2）与 `Complete-LandscapePreparation`（`mCurrentFocus == imeInputTarget == ChattingUI` 且派单期间零基线漂移）同步放行。
+- **无条件收尾与双重独立读回**：外层 `finally` 回选原 vivo 输入法并恢复 4 项基线设置后，+2s 与 +4s 两次独立读回均逐字匹配（`match=True`），`GatewayService` 停止、`adb forward --list` 为空、`dumpsys accessibility` 中 `GatewayA11yService` 与 vivo `AutoSendImageService` 双绑定（`Crashed:{}`）。
+
+剩余待推进两项：(1) **起点 2 & 3（左窗与桌面自动就位）**——实测已知从左窗切入冷 `ChattingUI` 时系统先挂 `inputType=0x0` 且微信无障碍节点全为空壳桩，冷态自动聚焦底部编辑栏需要可核验的非盲点锚点或热聚焦契约；(2) **获授权的草稿备稿 + 单次设备端 ConfirmOverlay 发送与消息区投递验收**。
 
 ### 历史手机实测
 
