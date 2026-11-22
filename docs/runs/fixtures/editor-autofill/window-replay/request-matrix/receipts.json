@@ -1,0 +1,1216 @@
+{
+  "environment": {
+    "api": "36",
+    "hardware": "1",
+    "initially_empty": true,
+    "disable_usb": true,
+    "disable_mdns": true,
+    "apk": {
+      "target": "f5d392cd3de821825bbd6bf5dbd4fbb7b3905aecee458898484005b0d6b5ddc5",
+      "observer": "f651190de38f29b1fe6bf433b17107c20ef32326425c45a81389ba54ec129ec0"
+    },
+    "uids": {
+      "target": 10216,
+      "observer": 10217
+    },
+    "restored": {
+      "default_input_method": true,
+      "enabled_input_methods": true,
+      "enabled_accessibility_services": true,
+      "accessibility_enabled": true,
+      "autofill_service": true,
+      "immersive_mode_confirmations": true,
+      "airplane_mode_on": true,
+      "wifi_on": true,
+      "accelerometer_rotation": true,
+      "user_rotation": true
+    },
+    "cleanup": {
+      "emulator_stopped": true,
+      "isolated_server_stopped": true,
+      "ports_released": true,
+      "avd_removed": true
+    },
+    "elapsed_seconds": 145,
+    "uninstalled": {
+      "dev.magina.crossappfixture": true,
+      "dev.magina.publicwindow": true
+    }
+  },
+  "compiled_java_sha256": {
+    "target/TargetActivity.java": "9c420abe493b05502669376793429781df5b5c40237f6c28ccd2ab92188dfa7d",
+    "observer/ImeProbe.java": "3123735b18abc40988f4f02ffb61b9b3d853ce19d24cce3b07baf14d84f8d594",
+    "observer/LandscapeHost.java": "c394f68aa4912bce784d895bc63450806b2df9b502feab481a4575edb5090b5d",
+    "observer/WindowProbe.java": "490f6c5aa79963f78290ce3adafc8555bf7d365af53601937b0bd69053ecf933"
+  },
+  "stages": {
+    "west": {
+      "matched": true,
+      "observer": {
+        "generation": 24,
+        "replies": [
+          {
+            "sequence": 7,
+            "query": -7,
+            "issued": 97340,
+            "answered": 97354,
+            "matrix": [
+              1,
+              0,
+              652,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 8,
+            "query": -11,
+            "issued": 97508,
+            "answered": 97517,
+            "matrix": [
+              1,
+              0,
+              652,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 13,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              176,
+              112,
+              936,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  652,
+                  188,
+                  852,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "target",
+            "window": 12,
+            "display": 0,
+            "active": false,
+            "focused": false,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 13,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              176,
+              112,
+              936,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  652,
+                  188,
+                  852,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "target",
+            "window": 12,
+            "display": 0,
+            "active": false,
+            "focused": false,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 97711
+      },
+      "oracle": {
+        "task": 12,
+        "window": 13,
+        "connections": 1,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 97340,
+            "replied": 97341
+          },
+          {
+            "request": 2,
+            "received": 97508,
+            "replied": 97508
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          652,
+          188,
+          852,
+          258
+        ],
+        "local_size": [
+          200,
+          70
+        ],
+        "matrix": [
+          1,
+          0,
+          652,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "east": {
+      "matched": true,
+      "observer": {
+        "generation": 12,
+        "replies": [
+          {
+            "sequence": 3,
+            "query": -7,
+            "issued": 90937,
+            "answered": 90991,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 4,
+            "query": -11,
+            "issued": 91146,
+            "answered": 91152,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 11,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "target",
+            "window": 10,
+            "display": 0,
+            "active": false,
+            "focused": false,
+            "frame": [
+              176,
+              112,
+              936,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  652,
+                  188,
+                  852,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 11,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "target",
+            "window": 10,
+            "display": 0,
+            "active": false,
+            "focused": false,
+            "frame": [
+              176,
+              112,
+              936,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  652,
+                  188,
+                  852,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 91320
+      },
+      "oracle": {
+        "task": 10,
+        "window": 11,
+        "connections": 1,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 90938,
+            "replied": 90938
+          },
+          {
+            "request": 2,
+            "received": 91147,
+            "replied": 91147
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          2056,
+          188,
+          2256,
+          258
+        ],
+        "local_size": [
+          200,
+          70
+        ],
+        "matrix": [
+          1,
+          0,
+          2056,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "scaled": {
+      "matched": true,
+      "observer": {
+        "generation": 32,
+        "replies": [
+          {
+            "sequence": 9,
+            "query": -7,
+            "issued": 101191,
+            "answered": 101203,
+            "matrix": [
+              2,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 10,
+            "query": -11,
+            "issued": 101361,
+            "answered": 101368,
+            "matrix": [
+              2,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 14,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  100,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 14,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  100,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 101534
+      },
+      "oracle": {
+        "task": 13,
+        "window": 14,
+        "connections": 2,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 101192,
+            "replied": 101194
+          },
+          {
+            "request": 2,
+            "received": 101361,
+            "replied": 101362
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          2056,
+          188,
+          2256,
+          258
+        ],
+        "local_size": [
+          100,
+          70
+        ],
+        "matrix": [
+          2,
+          0,
+          2056,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "overlap": {
+      "matched": true,
+      "observer": {
+        "generation": 40,
+        "replies": [
+          {
+            "sequence": 11,
+            "query": -7,
+            "issued": 105029,
+            "answered": 105040,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 12,
+            "query": -11,
+            "issued": 105204,
+            "answered": 105235,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 15,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 15,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  476,
+                  76,
+                  676,
+                  146
+                ],
+                "screen_rect": [
+                  2056,
+                  188,
+                  2256,
+                  258
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  200,
+                  70
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 105417
+      },
+      "oracle": {
+        "task": 14,
+        "window": 15,
+        "connections": 2,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 105030,
+            "replied": 105031
+          },
+          {
+            "request": 2,
+            "received": 105209,
+            "replied": 105209
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          2056,
+          188,
+          2256,
+          258
+        ],
+        "local_size": [
+          200,
+          70
+        ],
+        "matrix": [
+          1,
+          0,
+          2056,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  },
+  "adversarial": {
+    "match_parent": {
+      "observer": {
+        "generation": 48,
+        "replies": [
+          {
+            "sequence": 13,
+            "query": -7,
+            "issued": 108941,
+            "answered": 108953,
+            "matrix": [
+              1,
+              0,
+              1648,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 14,
+            "query": -11,
+            "issued": 109113,
+            "answered": 109132,
+            "matrix": [
+              1,
+              0,
+              1648,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 16,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  68,
+                  76,
+                  676,
+                  200
+                ],
+                "screen_rect": [
+                  1648,
+                  188,
+                  2256,
+                  312
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  -1,
+                  -2
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 16,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 0,
+            "editors": [
+              {
+                "window_rect": [
+                  68,
+                  76,
+                  676,
+                  200
+                ],
+                "screen_rect": [
+                  1648,
+                  188,
+                  2256,
+                  312
+                ],
+                "focused": true,
+                "named": false,
+                "layout_size": [
+                  -1,
+                  -2
+                ]
+              }
+            ]
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 109314
+      },
+      "oracle": {
+        "task": 15,
+        "window": 16,
+        "connections": 2,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 108941,
+            "replied": 108942
+          },
+          {
+            "request": 2,
+            "received": 109120,
+            "replied": 109120
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          1648,
+          188,
+          2256,
+          312
+        ],
+        "local_size": [
+          608,
+          124
+        ],
+        "matrix": [
+          1,
+          0,
+          1648,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "unsupported": {
+      "probe_state": {
+        "generation": 56,
+        "step": "result_code_0"
+      },
+      "matrix_json_present": false,
+      "oracle": {
+        "task": 16,
+        "window": 17,
+        "connections": 2,
+        "requests": 1,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 112952,
+            "replied": 112952,
+            "result_code": 0
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          2056,
+          188,
+          2256,
+          258
+        ],
+        "local_size": [
+          200,
+          70
+        ],
+        "matrix": [
+          1,
+          0,
+          2056,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    "opaque": {
+      "observer": {
+        "generation": 64,
+        "replies": [
+          {
+            "sequence": 16,
+            "query": -7,
+            "issued": 117829,
+            "answered": 117848,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "sequence": 17,
+            "query": -11,
+            "issued": 118007,
+            "answered": 118016,
+            "matrix": [
+              1,
+              0,
+              2056,
+              0,
+              1,
+              188,
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "before": [
+          {
+            "scope": "target",
+            "window": 18,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 1,
+            "editors": []
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "after": [
+          {
+            "scope": "target",
+            "window": 18,
+            "display": 0,
+            "active": true,
+            "focused": true,
+            "frame": [
+              1580,
+              112,
+              2340,
+              392
+            ],
+            "hidden_editors": 1,
+            "editors": []
+          },
+          {
+            "scope": "other",
+            "window": 2
+          }
+        ],
+        "closed": 118193
+      },
+      "oracle": {
+        "task": 17,
+        "window": 18,
+        "connections": 2,
+        "requests": 2,
+        "callbacks": [
+          {
+            "request": 1,
+            "received": 117830,
+            "replied": 117834
+          },
+          {
+            "request": 2,
+            "received": 118007,
+            "replied": 118008
+          }
+        ],
+        "display_size": [
+          2340,
+          1080
+        ],
+        "bounds": [
+          2056,
+          188,
+          2256,
+          258
+        ],
+        "local_size": [
+          200,
+          70
+        ],
+        "matrix": [
+          1,
+          0,
+          2056,
+          0,
+          1,
+          188,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  }
+}

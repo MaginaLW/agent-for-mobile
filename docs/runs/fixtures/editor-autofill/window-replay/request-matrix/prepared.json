@@ -3,19 +3,19 @@
   "runtime_target_api": 36,
   "javac_release": 8,
   "apk_sha256": {
-    "observer": "4a11aa7fea96823d005a4c0c115accef68d1a47c3c0732bd8c5a17dfdeb9fa49",
-    "target": "c6e22d778b4fb63bba243bfd3692071a3172e67f50bba9f64713b290868cae8f"
+    "observer": "f651190de38f29b1fe6bf433b17107c20ef32326425c45a81389ba54ec129ec0",
+    "target": "f5d392cd3de821825bbd6bf5dbd4fbb7b3905aecee458898484005b0d6b5ddc5"
   },
   "input_sha256": {
-    "observer/AndroidManifest.xml": "ca0cfa57812455965865864ec794b13e5fd9773fc8c1350ea0556baae1a01653",
-    "observer/ImeProbe.java": "9702802826d41b8c4d8abeeae17026344c4cf6397ca347cba93b9b835abb1ff4",
+    "observer/AndroidManifest.xml": "c56a611cc7b06a5699ef818386459e2ac7bfcd40eb565cd442165af27a3bbd61",
+    "observer/ImeProbe.java": "3123735b18abc40988f4f02ffb61b9b3d853ce19d24cce3b07baf14d84f8d594",
     "observer/LandscapeHost.java": "c394f68aa4912bce784d895bc63450806b2df9b502feab481a4575edb5090b5d",
-    "observer/WindowProbe.java": "68a85791db565d47ab6abddabc7685dc6830cedfc8116eeed5bcda276fb2cad1",
+    "observer/WindowProbe.java": "490f6c5aa79963f78290ce3adafc8555bf7d365af53601937b0bd69053ecf933",
     "observer/res/xml/method.xml": "f052324af4e903a04e8d1f8bcac1023d92db27b46789bf4bb612ffd5afe32891",
     "observer/res/xml/window.xml": "f7cb8273cfc6eb2a7603d06f269d10198729edac49fd5952f927b154f60f9b96",
-    "target/AndroidManifest.xml": "9f74453f7dc7e2cc95714ecd83243307285b5ca8a270d2baff96ab49b191bf41",
-    "target/TargetActivity.java": "2f57e1d9d501379ad65b5109a86687fc068c1d5609caff9301ec44d8c82aecd4"
+    "target/AndroidManifest.xml": "77c9fdad7a889880fa339a76a31a8759d2115cd249bf05f892c6cad98c6cf535",
+    "target/TargetActivity.java": "9c420abe493b05502669376793429781df5b5c40237f6c28ccd2ab92188dfa7d"
   },
-  "installed_in_this_attempt": false,
-  "sampled_in_this_attempt": false
+  "installed_in_this_attempt": true,
+  "sampled_in_this_attempt": true
 }

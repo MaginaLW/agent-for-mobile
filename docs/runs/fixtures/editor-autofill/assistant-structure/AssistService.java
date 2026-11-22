@@ -12,9 +12,14 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class AssistService extends VoiceInteractionService {
     static final String TAG = "SyntheticAssist";
+    private static final Set<String> STAGES = new HashSet<>(Arrays.asList(
+            "assist", "noflag", "secure", "ccoptout", "obfuscated", "multiwin", "multiwin2"));
     static ProbeIme.Focus anchor;
     static String stage;
     static long requested;
@@ -50,7 +55,7 @@ public final class AssistService extends VoiceInteractionService {
 
     private void begin(String command) {
         String[] parts = command.split(" ");
-        if (parts.length != 3 || !("noflag".equals(parts[0]) || "assist".equals(parts[0]))) return;
+        if (parts.length != 3 || !STAGES.contains(parts[0])) return;
         ProbeIme.Focus current = ProbeIme.active;
         if (current == null || !current.current() || !String.valueOf(current.generation).equals(parts[1])
                 || !String.valueOf(current.started).equals(parts[2]) || stage != null) {
@@ -62,7 +67,7 @@ public final class AssistService extends VoiceInteractionService {
         Bundle args = new Bundle();
         args.putString("stage", stage);
         args.putLong("requested", requested);
-        int flags = "assist".equals(stage) ? VoiceInteractionSession.SHOW_WITH_ASSIST : 0;
+        int flags = "noflag".equals(stage) ? 0 : VoiceInteractionSession.SHOW_WITH_ASSIST;
         Log.i(TAG, "request " + stage + " tick=" + requested + " generation=" + anchor.generation);
         showSession(args, flags);
     }
@@ -77,5 +82,12 @@ public final class AssistService extends VoiceInteractionService {
     @Override public void onShutdown() { stopChecks(); super.onShutdown(); }
     @Override public void onDestroy() { stopChecks(); super.onDestroy(); }
     private void stopChecks() { ready = false; handler.removeCallbacks(check); }
-    @Override public void onShowSessionFailed(Bundle args) { Log.w(TAG, "session_show_failed"); }
+    @Override public void onShowSessionFailed(Bundle args) {
+        String failedStage = args == null ? String.valueOf(stage) : args.getString("stage", String.valueOf(stage));
+        if (stage != null && stage.equals(failedStage)) {
+            stage = null;
+            anchor = null;
+        }
+        Log.w(TAG, "session_show_failed " + failedStage);
+    }
 }

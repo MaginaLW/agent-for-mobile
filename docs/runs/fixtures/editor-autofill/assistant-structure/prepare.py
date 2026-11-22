@@ -28,13 +28,62 @@ def prepare(out):
         </service>
         <service android:name=".AssistSessionService" android:exported="true"
             android:permission="android.permission.BIND_VOICE_INTERACTION" />
-        <service android:name=".SilentRecognition" android:exported="true"
-            android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE">
-            <intent-filter><action android:name="android.speech.RecognitionService"/></intent-filter>
+        <service android:name=".SilentRecognition" android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </service>
 """
     change(observer / "AndroidManifest.xml", "    </application>", services + "    </application>")
-    target = out / "target/TargetActivity.java"
+
+    target_dir = out / "target"
+    extra_dir = here / "target-extra"
+    if extra_dir.is_dir():
+        for java in extra_dir.glob("*.java"):
+            shutil.copyfile(java, target_dir / java.name)
+    extra_activities = """
+        <activity android:name=".SplitWindowActivity" android:exported="true"
+                  android:screenOrientation="landscape" android:windowSoftInputMode="adjustNothing"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity android:name=".LeftPaneActivity" android:exported="true"
+                  android:screenOrientation="landscape" android:windowSoftInputMode="adjustNothing" />
+        <activity android:name=".RightPaneActivity" android:exported="true"
+                  android:windowSoftInputMode="adjustNothing"
+                  android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+"""
+    change(target_dir / "AndroidManifest.xml", "    </application>", extra_activities + "    </application>")
+
+    target = target_dir / "TargetActivity.java"
+    change(target, "private boolean started, finished, settled, observeAutomatic;",
+           "private boolean started, finished, settled, observeAutomatic, windowSecure, ccOptOut, a11yObfuscated;")
+    change(target, "        root = new FrameLayout(this);",
+           """        windowSecure = getIntent().getBooleanExtra("secure", false);
+        ccOptOut = getIntent().getBooleanExtra("cc_optout", false);
+        a11yObfuscated = getIntent().getBooleanExtra("a11y_obfuscate", false);
+        if (windowSecure) {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        }
+        root = new FrameLayout(this);
+        if (ccOptOut) {
+            root.setImportantForContentCapture(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS);
+        }""")
+    change(target, "            setSaveEnabled(false);",
+           """            setSaveEnabled(false);
+            if (ccOptOut) {
+                setImportantForContentCapture(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS);
+            }
+            if (a11yObfuscated) {
+                setAccessibilityDelegate(new View.AccessibilityDelegate() {
+                    @Override public void onInitializeAccessibilityNodeInfo(
+                            View host, android.view.accessibility.AccessibilityNodeInfo info) {
+                        super.onInitializeAccessibilityNodeInfo(host, info);
+                        info.setFocused(false);
+                        info.setVisibleToUser(false);
+                        info.setViewIdResourceName(null);
+                    }
+                });
+            }""")
     change(target, "int connectionStage = stageIndex;",
            "int connectionStage = stageIndex;\n            final int wire = connections;")
     marker = "                    if (area.left == -3 && area.top == -3 && area.right == -3 && area.bottom == -3) {"
@@ -60,6 +109,12 @@ def prepare(out):
         }
 
 """ + marker)
+    change(target, '.put("autofillRequests", autofillRequests);',
+           """.put("autofillRequests", autofillRequests)
+                    .put("windowSecure", windowSecure)
+                    .put("ccOptOut", ccOptOut)
+                    .put("rootContentCaptureImportance", root.getImportantForContentCapture())
+                    .put("a11yObfuscated", a11yObfuscated);""")
 
 
 if __name__ == "__main__":

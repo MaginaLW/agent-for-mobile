@@ -1,0 +1,168 @@
+{
+  "date": "2026-11-22",
+  "phase": "closed",
+  "status": "passed",
+  "avd_name": "ime-menu-1be134c2121c",
+  "ports": {
+    "adb": 5045,
+    "console": 5592,
+    "transport": 5593
+  },
+  "initially_empty": true,
+  "api": "36",
+  "hardware": "1",
+  "uids": {
+    "observer": 10216,
+    "target": 10217,
+    "target_diffsig": 10218
+  },
+  "installed_sha256": {
+    "observer.apk": "a126f1750953431178f91a07695c4bcea0181868df7c57038ac035c67968585a",
+    "target.apk": "c21ec9ff0eaafa15b02ce58a5905e521b3d6f9a5177169f1cecf4a025b1992ac",
+    "target-diffsig.apk": "dc66c4575550900d8ad0387c73a863d28419aaa5dfb16e6d9ee22ca7977b3b5d"
+  },
+  "cert_sha256": {
+    "primary_pair": "23ad23fdbcd0698245ed868072cf932753d2699b0e3d33dba126d238fd381e18",
+    "target_diffsig": "47565142fc9b9cb9b4a0432fcf84e2d7bb9715b9f3aef1d8294c74d739da5c78"
+  },
+  "saved_settings": {
+    "secure:default_input_method": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+    "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME;1594443099:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
+    "secure:autofill_service": "com.google.android.gms/.autofill.service.AutofillService",
+    "secure:immersive_mode_confirmations": "",
+    "global:airplane_mode_on": "0",
+    "global:wifi_on": "1",
+    "system:accelerometer_rotation": "1",
+    "system:user_rotation": "0"
+  },
+  "restored": {
+    "secure:default_input_method": true,
+    "secure:enabled_input_methods": true,
+    "secure:autofill_service": true,
+    "secure:immersive_mode_confirmations": true,
+    "global:airplane_mode_on": true,
+    "global:wifi_on": true,
+    "system:accelerometer_rotation": true,
+    "system:user_rotation": true
+  },
+  "restored_actual": {
+    "secure:default_input_method": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+    "secure:enabled_input_methods": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME;1594443099:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
+    "secure:autofill_service": "com.google.android.gms/.autofill.service.AutofillService",
+    "secure:immersive_mode_confirmations": "",
+    "global:airplane_mode_on": "0",
+    "global:wifi_on": "1",
+    "system:accelerometer_rotation": "1",
+    "system:user_rotation": "0"
+  },
+  "cleanup": {
+    "packages_uninstalled": true,
+    "emulator_stopped": true,
+    "isolated_server_stopped": true,
+    "avd_deleted": true,
+    "ports_released": true
+  },
+  "cleanup_errors": [],
+  "elapsed_seconds": 118.38,
+  "scenarios": {
+    "opted-in": {
+      "scenario": "opted-in",
+      "classification": "EXPLICIT_IME_MENU",
+      "selected": "RIGHT",
+      "bounds": [
+        2100,
+        32,
+        2300,
+        102
+      ],
+      "gen": 1,
+      "live_connection": 4,
+      "latest_created_connection": 5,
+      "discarded_creations_tolerated": 1,
+      "visible_buttons_logged": 3,
+      "manual_flags": 129,
+      "issued_ms": 80281,
+      "ime_start_ms": 74512,
+      "connection_forward_ms": 80283,
+      "view_forward_ms": 80283,
+      "sampled_ms": [
+        80305,
+        80305
+      ],
+      "callback_ms": 80925,
+      "stable_after_ms": 81028,
+      "controls_ms": [
+        76891,
+        78531,
+        78884
+      ],
+      "target_menu_or_action_mode_entries": 0,
+      "new_target_structure_writes": 2,
+      "original_ime_natural_callbacks": 1
+    },
+    "plain-auto": {
+      "scenario": "plain-auto",
+      "classification": "ZERO_UI_UNCOOPERATIVE_EDITTEXT",
+      "selected": "RIGHT",
+      "bounds": [
+        2100,
+        32,
+        2300,
+        102
+      ],
+      "gen": 1,
+      "ui_shown": false,
+      "sig_match": false,
+      "right_important_for_autofill": 1,
+      "layout_shifts_during_zero_ui": 0,
+      "manual_flags": 1,
+      "issued_ms": 92607,
+      "ime_start_ms": 87707,
+      "sampled_ms": [
+        92624,
+        92624
+      ],
+      "callback_ms": 92681,
+      "stable_after_ms": 92787,
+      "controls_ms": [
+        89255,
+        90677,
+        91028
+      ],
+      "target_action_mode_entries": 0,
+      "original_ime_natural_callbacks": 1
+    },
+    "optout-no": {
+      "scenario": "optout-no",
+      "classification": "OPTOUT_NO_OBSERVER_REFUSED",
+      "selected": null,
+      "bounds": null,
+      "gen": 1,
+      "ui_shown": false,
+      "sig_match": false,
+      "manual_callbacks": 1,
+      "excluded_text_nodes": 2,
+      "target_action_mode_entries": 0
+    },
+    "swallow-ic": {
+      "scenario": "swallow-ic",
+      "classification": "SWALLOWED_MENU_FAIL_CLOSED",
+      "selected": null,
+      "bounds": null,
+      "gen": 1,
+      "live_connection": 4,
+      "latest_created_connection": 5,
+      "ipc_submitted_true_despite_swallow": true,
+      "swallowed_menu_ms": 105966,
+      "manual_callbacks": 0,
+      "view_menu_entries": 0,
+      "original_ime_natural_callbacks": 1
+    }
+  },
+  "logs": {
+    "opted-in": "--------- beginning of main\nI/MenuOracle( 2623): event=scenario ms=70298 name=opted-in left_imp=1 right_imp=1 left_view_id=-1 right_view_id=-1 left_class=TrackedEditor right_class=TrackedEditor\nI/MenuOracle( 2623): event=focus ms=71134 side=right instance=25762698 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=connect ms=71167 side=right instance=25762698 connection=1 latest_created=1 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=structure ms=71174 side=left instance=75560443 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102\nI/MenuOracle( 2623): event=structure ms=71175 side=right instance=25762698 connection=1 latest_created=1 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=connect ms=71187 side=right instance=25762698 connection=2 latest_created=2 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=snapshot ms=71188 side=right instance=25762698 connection=2 latest_created=2 focus=true win=true bounds=2100,32,2300,102 tag=initial imp=1\nI/MenuOracle( 2623): event=snapshot ms=71188 side=left instance=75560443 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=initial imp=1\nI/MenuFill( 2867): event=callback id=850 manual=false flags=0 ms=73703 start=71173 end=71175\nI/MenuOracle( 2623): event=connect ms=74051 side=right instance=25762698 connection=3 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=close ms=74052 side=right instance=25762698 connection=1 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=close ms=74055 side=right instance=25762698 connection=3 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=connect ms=74101 side=right instance=25762698 connection=4 latest_created=4 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=connect ms=74506 side=right instance=25762698 connection=5 latest_created=5 focus=true win=true bounds=2100,32,2300,102\nI/SyntheticProbeIme( 2867): generation=1 started=74512\nI/MenuChoice( 2867): event=start_input ms=74514 gen=1 restarting=false mode=visible-opted-in usable=true ui_shown=false sig_match=true\nI/MenuOracle( 2623): event=probe ms=74519 side=right instance=25762698 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 closed=false\nI/MenuChoice( 2867): event=request_show ms=74570 gen=1 attempt=0\nI/MenuChoice( 2867): event=show_requested ms=74585 gen=1 flags=1 allow=true\nI/MenuChoice( 2867): event=create_input_view ms=74599 gen=1\nI/MenuChoice( 2867): event=start_input_view ms=74608 gen=1 restarting=false ui_shown=true\nI/MenuChoice( 2867): event=window_shown ms=74609 gen=1 ui_shown=true\nI/MenuChoice( 2867): event=button name=noop gen=1 x=845 y=990 w=242 h=132 why=start_input_view_0\nI/MenuChoice( 2867): event=button name=expired gen=1 x=1111 y=990 w=242 h=132 why=start_input_view_0\nI/MenuChoice( 2867): event=button name=request gen=1 x=1503 y=990 w=495 h=132 why=start_input_view_0\nI/MenuChoice( 2867): event=noop ms=76891 gen=1 started=74512 ui_shown=true\nI/MenuChoice( 2867): event=expired ms=78531 gen=1 started=74512 ui_shown=true\nI/MenuChoice( 2867): event=rejected ms=78884 gen=1 expired=true ui_shown=true\nI/MenuChoice( 2867): event=request ms=80280 gen=1 started=74512 ui_shown=true\nI/MenuChoice( 2867): event=dispatched ms=80281 gen=1 submitted=true ui_shown=true\nI/MenuOracle( 2623): event=connection_menu ms=80283 side=right instance=25762698 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 closed=false\nI/MenuOracle( 2623): event=view_menu ms=80283 side=right instance=25762698 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 2623): event=structure ms=80305 side=left instance=75560443 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102\nI/MenuOracle( 2623): event=structure ms=80305 side=right instance=25762698 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102\nI/MenuFill( 2867): event=callback id=852 manual=true flags=129 ms=80925 start=80305 end=80305\nI/MenuFill( 2867): result={\"schema\":1,\"uid\":10216,\"verdict\":\"MATCHED\",\"reason\":\"MATCH\",\"editor_count\":2,\"focus_count\":1,\"raw_equals_count\":0,\"raw_fill_equals_count\":1,\"match_count\":1,\"view_id_match_count\":1,\"fill_focus_match_count\":1,\"before_current\":true,\"after_current\":true,\"chosen_is_focused\":true,\"ime_match_side\":\"RIGHT\",\"fill_focus_side\":\"RIGHT\",\"selected_side\":\"RIGHT\",\"selected_bounds\":[2100,32,2300,102],\"candidates\":[{\"bounds\":[40,32,240,102],\"focused\":false,\"native_matches_ime\":false,\"native_matches_fill\":false,\"raw_equals_ime\":false,\"raw_equals_fill\":false,\"id_in_session\":true},{\"bounds\":[2100,32,2300,102],\"focused\":true,\"native_matches_ime\":true,\"native_matches_fill\":true,\"raw_equals_ime\":false,\"raw_equals_fill\":true,\"id_in_session\":true}],\"ime_generation\":1,\"request_id\":852,\"issued_at\":80281,\"manual\":true,\"settled_at\":81028,\"excluded_text_nodes\":0,\"mode\":\"visible-opted-in\",\"ui_shown\":true}\n",
+    "plain-auto": "--------- beginning of main\nI/MenuOracle( 3746): event=scenario ms=85867 name=plain-auto left_imp=1 right_imp=1 left_view_id=-1 right_view_id=-1 left_class=EditText right_class=EditText\nI/MenuOracle( 3746): event=layout ms=86026 side=left instance=180005506 connection=0 latest_created=0 focus=false win=false bounds=40,32,240,102\nI/MenuOracle( 3746): event=layout ms=86027 side=right instance=66741651 connection=0 latest_created=0 focus=false win=false bounds=2100,32,2300,102\nI/MenuOracle( 3746): event=focus ms=86286 side=right instance=66741651 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 3746): event=snapshot ms=86348 side=right instance=66741651 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102 tag=initial imp=1\nI/MenuOracle( 3746): event=snapshot ms=86348 side=left instance=180005506 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=initial imp=1\nI/MenuFill( 3785): event=callback id=854 manual=false flags=0 ms=86891 start=86329 end=86335\nI/SyntheticProbeIme( 3785): generation=1 started=87707\nI/MenuChoice( 3785): event=start_input ms=87713 gen=1 restarting=false mode=zero-ui-uncooperative usable=true ui_shown=false sig_match=false\nI/MenuChoice( 3785): event=zero_ui_ready ms=87714 gen=1 started=87707 ui_shown=false sig_match=false\nI/MenuChoice( 3785): event=noop ms=89255 gen=1 started=87707 ui_shown=false\nI/MenuChoice( 3785): event=expired ms=90677 gen=1 started=87707 ui_shown=false\nI/MenuChoice( 3785): event=rejected ms=91028 gen=1 expired=true ui_shown=false\nI/MenuChoice( 3785): event=request ms=92607 gen=1 started=87707 ui_shown=false\nI/MenuChoice( 3785): event=dispatched ms=92607 gen=1 submitted=true ui_shown=false\nI/MenuFill( 3785): event=callback id=856 manual=true flags=1 ms=92681 start=92624 end=92624\nI/MenuFill( 3785): result={\"schema\":1,\"uid\":10216,\"verdict\":\"MATCHED\",\"reason\":\"MATCH\",\"editor_count\":2,\"focus_count\":1,\"raw_equals_count\":0,\"raw_fill_equals_count\":1,\"match_count\":1,\"view_id_match_count\":1,\"fill_focus_match_count\":1,\"before_current\":true,\"after_current\":true,\"chosen_is_focused\":true,\"ime_match_side\":\"RIGHT\",\"fill_focus_side\":\"RIGHT\",\"selected_side\":\"RIGHT\",\"selected_bounds\":[2100,32,2300,102],\"candidates\":[{\"bounds\":[40,32,240,102],\"focused\":false,\"native_matches_ime\":false,\"native_matches_fill\":false,\"raw_equals_ime\":false,\"raw_equals_fill\":false,\"id_in_session\":true},{\"bounds\":[2100,32,2300,102],\"focused\":true,\"native_matches_ime\":true,\"native_matches_fill\":true,\"raw_equals_ime\":false,\"raw_equals_fill\":true,\"id_in_session\":true}],\"ime_generation\":1,\"request_id\":856,\"issued_at\":92607,\"manual\":true,\"settled_at\":92787,\"excluded_text_nodes\":0,\"mode\":\"zero-ui-uncooperative\",\"ui_shown\":false}\nI/MenuOracle( 3746): event=snapshot ms=93259 side=right instance=66741651 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102 tag=requested imp=1\nI/MenuOracle( 3746): event=snapshot ms=93260 side=left instance=180005506 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=requested imp=1\n",
+    "optout-no": "--------- beginning of main\nI/MenuOracle( 4263): event=scenario ms=95336 name=optout-no left_imp=2 right_imp=2 left_view_id=-1 right_view_id=-1 left_class=EditText right_class=EditText\nI/MenuOracle( 4263): event=layout ms=95399 side=left instance=66741651 connection=0 latest_created=0 focus=false win=false bounds=40,32,240,102\nI/MenuOracle( 4263): event=layout ms=95400 side=right instance=255998416 connection=0 latest_created=0 focus=false win=false bounds=-240,32,-40,102\nI/MenuOracle( 4263): event=layout ms=95444 side=right instance=255998416 connection=0 latest_created=0 focus=false win=false bounds=2100,32,2300,102\nI/MenuOracle( 4263): event=focus ms=95589 side=right instance=255998416 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4263): event=snapshot ms=95632 side=right instance=255998416 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102 tag=initial imp=2\nI/MenuOracle( 4263): event=snapshot ms=95632 side=left instance=66741651 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=initial imp=2\nI/MenuFill( 4293): event=callback id=858 manual=false flags=0 ms=95883 start=95626 end=95626\nI/SyntheticProbeIme( 4293): generation=1 started=97473\nI/MenuChoice( 4293): event=start_input ms=97474 gen=1 restarting=false mode=zero-ui-uncooperative usable=true ui_shown=false sig_match=false\nI/MenuChoice( 4293): event=zero_ui_ready ms=97474 gen=1 started=97473 ui_shown=false sig_match=false\nI/MenuChoice( 4293): event=request ms=99093 gen=1 started=97473 ui_shown=false\nI/MenuChoice( 4293): event=dispatched ms=99093 gen=1 submitted=true ui_shown=false\nI/MenuFill( 4293): event=callback id=860 manual=true flags=1 ms=99099 start=99096 end=99096\nI/MenuFill( 4293): result={\"schema\":1,\"uid\":10216,\"verdict\":\"UNKNOWN\",\"reason\":\"TARGET_OPTED_OUT\",\"editor_count\":0,\"focus_count\":0,\"raw_equals_count\":0,\"raw_fill_equals_count\":0,\"match_count\":0,\"view_id_match_count\":0,\"fill_focus_match_count\":0,\"before_current\":true,\"after_current\":true,\"chosen_is_focused\":null,\"ime_match_side\":null,\"fill_focus_side\":null,\"selected_side\":null,\"selected_bounds\":null,\"candidates\":[],\"ime_generation\":1,\"request_id\":860,\"issued_at\":99093,\"manual\":true,\"settled_at\":99201,\"excluded_text_nodes\":2,\"mode\":\"zero-ui-uncooperative\",\"ui_shown\":false}\nI/MenuOracle( 4263): event=snapshot ms=101838 side=right instance=255998416 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102 tag=requested imp=2\nI/MenuOracle( 4263): event=snapshot ms=101838 side=left instance=66741651 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=requested imp=2\n",
+    "swallow-ic": "--------- beginning of main\nI/MenuOracle( 4417): event=scenario ms=103460 name=swallow-ic left_imp=1 right_imp=1 left_view_id=-1 right_view_id=-1 left_class=TrackedEditor right_class=TrackedEditor\nI/MenuOracle( 4417): event=focus ms=103713 side=right instance=39069054 connection=0 latest_created=0 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=connect ms=103742 side=right instance=39069054 connection=1 latest_created=1 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=structure ms=103754 side=left instance=246713055 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102\nI/MenuOracle( 4417): event=structure ms=103755 side=right instance=39069054 connection=1 latest_created=1 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=snapshot ms=103761 side=right instance=39069054 connection=1 latest_created=1 focus=true win=true bounds=2100,32,2300,102 tag=initial imp=1\nI/MenuOracle( 4417): event=snapshot ms=103763 side=left instance=246713055 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=initial imp=1\nI/MenuOracle( 4417): event=connect ms=103856 side=right instance=39069054 connection=2 latest_created=2 focus=true win=true bounds=2100,32,2300,102\nI/MenuFill( 4449): event=callback id=862 manual=false flags=0 ms=104029 start=103754 end=103755\nI/MenuOracle( 4417): event=connect ms=104104 side=right instance=39069054 connection=3 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=close ms=104107 side=right instance=39069054 connection=1 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=close ms=104126 side=right instance=39069054 connection=3 latest_created=3 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=connect ms=104140 side=right instance=39069054 connection=4 latest_created=4 focus=true win=true bounds=2100,32,2300,102\nI/MenuOracle( 4417): event=connect ms=104321 side=right instance=39069054 connection=5 latest_created=5 focus=true win=true bounds=2100,32,2300,102\nI/SyntheticProbeIme( 4449): generation=1 started=104342\nI/MenuChoice( 4449): event=start_input ms=104343 gen=1 restarting=false mode=zero-ui-uncooperative usable=true ui_shown=false sig_match=false\nI/MenuChoice( 4449): event=zero_ui_ready ms=104343 gen=1 started=104342 ui_shown=false sig_match=false\nI/MenuOracle( 4417): event=probe ms=104343 side=right instance=39069054 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 closed=false\nI/MenuChoice( 4449): event=request ms=105965 gen=1 started=104342 ui_shown=false\nI/MenuChoice( 4449): event=dispatched ms=105965 gen=1 submitted=true ui_shown=false\nI/MenuOracle( 4417): event=swallowed_menu ms=105966 side=right instance=39069054 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 closed=false\nI/MenuOracle( 4417): event=snapshot ms=108297 side=right instance=39069054 connection=4 latest_created=5 focus=true win=true bounds=2100,32,2300,102 tag=requested imp=1\nI/MenuOracle( 4417): event=snapshot ms=108298 side=left instance=246713055 connection=0 latest_created=0 focus=false win=true bounds=40,32,240,102 tag=requested imp=1\n"
+  }
+}
