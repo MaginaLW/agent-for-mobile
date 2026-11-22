@@ -206,6 +206,10 @@ function Test-LandscapeEditorReceipt {
                     if ($call.Outcome -cne 'success') { return $false }
                     $reads.title = $call.ResultEnvelope
                 }
+                elseif ($inputText -ceq '可按住转文字' -and -not $inputRole -and -not $inputDesc) {
+                    if ($call.Outcome -cne 'success') { return $false }
+                    $reads.hint = $call.ResultEnvelope
+                }
                 elseif ($inputRole -ceq 'input' -and -not $inputText -and -not $inputDesc) {
                     if ($call.Outcome -ceq 'success') {
                         $reads.editor = $call.ResultEnvelope

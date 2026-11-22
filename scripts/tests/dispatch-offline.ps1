@@ -3018,6 +3018,176 @@ class Adb {
             Remove-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
         }
     }
+
+    Test-Case '横屏就位冷启未聚焦允许白名单点击「可按住转文字」并强制点后重读核验' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        function New-ColdFocusHintFlow {
+            param(
+                [switch]$HintScrollSearch,
+                [string]$HintText = '可按住转文字',
+                [string]$HintRole = '',
+                [string]$HintDesc = '',
+                [switch]$HintNotFound,
+                [switch]$OmitPostClickReads,
+                [switch]$PostClickStillNull
+            )
+            $screenW = 2800
+            $screenH = 1968
+            $editorBox = @(1048, 1834, 2578, 1946)
+            $windows = @(
+                @{id=399; type='application'; root_package='com.tencent.mm'; active=$false; focused=$false; bounds=@(0,0,923,$screenH)},
+                @{id=418; type='application'; root_package='com.tencent.mm'; active=$true; focused=$true; bounds=@(927,0,$screenW,$screenH)}
+            )
+            $ctxBefore = @{revision=16; app='com.tencent.mm'; foreground_known=$true; window_topology='same_app_multi'; keyboard=@{visible=$false; height=0}}
+            $ctxAfter  = @{revision=19; app='com.tencent.mm'; foreground_known=$true; window_topology='same_app_multi'; keyboard=@{visible=$false; height=0}}
+
+            $hintArgs = @{text=$HintText; scroll_search=[bool]$HintScrollSearch}
+            if ($HintRole) { $hintArgs.role = $HintRole }
+            if ($HintDesc) { $hintArgs.desc = $HintDesc }
+
+            $calls = [Collections.Generic.List[object]]::new()
+            $calls.Add(@{
+                tool='foreground_app'; args=@{}; outcome='success'; ok=$true; ctx=$ctxBefore; audit_id='cf-1'
+                data=@{package='com.tencent.mm'; foreground_known=$true; revision=16; window_topology='same_app_multi'; selected_window_id=418; windows=$windows}
+            })
+            $calls.Add(@{
+                tool='ui_find'; args=@{text='文件传输助手'; scroll_search=$false}; outcome='success'; ok=$true; ctx=$ctxBefore; audit_id='cf-2'
+                data=@{
+                    screen_width=$screenW; screen_height=$screenH; focused_identity_source='ime_only'; focused_input_id=$null
+                    focused_input_window_id=$null; focused_input_pane=$null; focused_input_bounds=$null
+                    matches=@(
+                        @{pane='left'; window_id=399; text='文件传输助手'; bounds=@(217,282,498,325)},
+                        @{pane='right'; window_id=418; text='文件传输助手'; bounds=@(1717,140,1999,184)}
+                    )
+                }
+            })
+            $calls.Add(@{
+                tool='keyboard_state'; args=@{probe_cursor_anchor=$true}; outcome='success'; ok=$true; ctx=$ctxBefore; audit_id='cf-3'
+                data=@{
+                    visible=$false; height=0; ime_cursor_anchor=$null; ime_cursor_anchor_reason='input_type_null'
+                    ime_editor_contract_diag=@{contract_present=$true; input_type_is_null=$true; input_type=0}
+                }
+            })
+            if ($HintNotFound) {
+                $calls.Add(@{
+                    tool='ui_find'; args=$hintArgs; outcome='gateway-tool-failure'; ok=$false; ctx=$ctxBefore; audit_id='cf-4'
+                    error=@{code='E_NOT_FOUND'; message='not found'; channel='a11y'; retryable=$false; fallback=''}
+                })
+            }
+            else {
+                $calls.Add(@{
+                    tool='ui_find'; args=$hintArgs; outcome='success'; ok=$true; ctx=$ctxBefore; audit_id='cf-4'
+                    data=@{
+                        screen_width=$screenW; screen_height=$screenH
+                        matches=@(@{ref='o:cold:4:21'; role='text'; source='ocr'; pane='right'; window_id=418; text=$HintText; bounds=@(1692,1874,1933,1909); confidence=0.58})
+                    }
+                })
+            }
+            $calls.Add(@{
+                tool='ui_action'; args=@{action='click'; ref='o:cold:4:21'}; outcome='success'; ok=$true; ctx=$ctxAfter; audit_id='cf-5'
+                data=@{done=$true; revision_after=19}
+            })
+            if (-not $OmitPostClickReads) {
+                $calls.Add(@{
+                    tool='foreground_app'; args=@{}; outcome='success'; ok=$true; ctx=$ctxAfter; audit_id='cf-6'
+                    data=@{package='com.tencent.mm'; foreground_known=$true; revision=19; window_topology='same_app_multi'; selected_window_id=418; windows=$windows}
+                })
+                $calls.Add(@{
+                    tool='ui_find'; args=@{text='文件传输助手'; scroll_search=$false}; outcome='success'; ok=$true; ctx=$ctxAfter; audit_id='cf-7'
+                    data=@{
+                        screen_width=$screenW; screen_height=$screenH
+                        focused_identity_source=$(if ($PostClickStillNull) { 'ime_only' } else { 'ime_cursor_anchor' })
+                        focused_input_id=$null
+                        focused_input_window_id=$(if ($PostClickStillNull) { $null } else { 418 })
+                        focused_input_pane=$(if ($PostClickStillNull) { $null } else { 'right' })
+                        focused_input_bounds=$(if ($PostClickStillNull) { $null } else { $editorBox })
+                        matches=@(
+                            @{pane='left'; window_id=399; text='文件传输助手'; bounds=@(217,282,498,325)},
+                            @{pane='right'; window_id=418; text='文件传输助手'; bounds=@(1717,140,1999,184)}
+                        )
+                    }
+                })
+                $postKbData = if ($PostClickStillNull) {
+                    @{
+                        visible=$false; height=0; ime_cursor_anchor=$null; ime_cursor_anchor_reason='input_type_null'
+                        ime_editor_contract_diag=@{contract_present=$true; input_type_is_null=$true; input_type=0}
+                    }
+                } else {
+                    @{
+                        visible=$false; height=0
+                        ime_editor_contract_diag=@{contract_present=$true; input_type_is_null=$false; input_type=0x24001}
+                        ime_cursor_anchor=@{
+                            request_mode='legacy_1arg'; matrix_is_identity=$false
+                            window_id=418; pane='right'; window_bounds=@(927,0,$screenW,$screenH)
+                            same_package_window_count=2; total_app_window_count=2
+                            session_id='ime-pa2553-cold-1'; session_generation=4
+                            editor_bounds=@{left=1048.0; top=1834.0; right=2578.0; bottom=1946.0}
+                            insertion_marker=@{top_x=1067.0; top_y=1864.0; baseline_x=1067.0; baseline_y=1918.0; bottom_x=1067.0; bottom_y=1929.0; flags=1; visibility='visible'}
+                        }
+                    }
+                }
+                $calls.Add(@{
+                    tool='keyboard_state'; args=@{probe_cursor_anchor=$true}; outcome='success'; ok=$true; ctx=$ctxAfter; audit_id='cf-8'
+                    data=$postKbData
+                })
+            }
+            return $calls.ToArray()
+        }
+        function Test-ColdFocusFlow($Observed) {
+            $calls = foreach ($o in $Observed) {
+                $env = @{ok=$o.ok; ctx=$o.ctx; audit_id=$o.audit_id}
+                if ($o.ContainsKey('data')) { $env.data = $o.data }
+                if ($o.ContainsKey('error')) { $env.error = $o.error }
+                [pscustomobject]@{Server='gateway'; Outcome=$o.outcome; Name=$o.tool; Input=$o.args; ResultEnvelope=$env}
+            }
+            return Test-LandscapeEditorReceipt -Calls $calls
+        }
+
+        Assert-True (Test-ColdFocusFlow (New-ColdFocusHintFlow)) '冷启 ChattingUI 经「可按住转文字」点击后重读 CursorAnchor 应通过。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -PostClickStillNull))) '误接纳：点击「可按住转文字」后仍为 input_type_null。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -OmitPostClickReads))) '误接纳：点击「可按住转文字」后缺少新鲜 3 调用重读。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintScrollSearch))) '误接纳：ui_find("可按住转文字", scroll_search=true)。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintText '按住说话'))) '误接纳：非白名单 ui_find 文本「按住说话」。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintText '发送'))) '误接纳：非白名单 ui_find 文本「发送」。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintRole 'text'))) '误接纳：ui_find("可按住转文字") 携带额外 role 参数。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintDesc 'hint'))) '误接纳：ui_find("可按住转文字") 携带额外 desc 参数。'
+        Assert-True (-not (Test-ColdFocusFlow (New-ColdFocusHintFlow -HintNotFound))) '误接纳：ui_find("可按住转文字") 返回 E_NOT_FOUND。'
+
+        # 端到端 JSONL 回放验证：冷启 → 白名单点击「可按住转文字」→ 点后新鲜 3 调用回执通过。
+        $card = "<!-- dispatch: PA2553-landscape-prepare -->`n离线冷启占位提示就位"
+        $boundArgs = @('-Task', $card, '-Slug', 'offline-landscape-cold', '-ExpectedDeviceSerial','TABLET-TEST','-ExpectedGatewaySha256',('a' * 64))
+        $receiptFile = Join-Path $SentinelDir 'landscape-receipts.jsonl'
+        $oldMode = $env:DISPATCH_TEST_LANDSCAPE
+        function ConvertTo-ColdReceiptLines($Observed) {
+            for ($i = 0; $i -lt $Observed.Count; $i++) {
+                $observation = $Observed[$i]
+                $item = @{id="cold-receipt-$i"; type='mcp_tool_call'; server='gateway'; tool=$observation.tool; arguments=$observation.args}
+                @{type='item.started'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+                $payload = @{ok=$observation.ok; data=$observation.data; ctx=$observation.ctx; audit_id=$observation.audit_id} | ConvertTo-Json -Depth 12 -Compress
+                $item.result = @{content=@(@{type='text'; text=$payload})}
+                $item.status = 'completed'
+                @{type='item.completed'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+            }
+        }
+        try {
+            $env:DISPATCH_TEST_LANDSCAPE = 'success'
+            Set-Content -LiteralPath $receiptFile -Value (ConvertTo-ColdReceiptLines (New-ColdFocusHintFlow)) -Encoding utf8
+            Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started') -Force -ErrorAction SilentlyContinue
+            $okCold = Invoke-Dispatch -Arguments $boundArgs
+            Assert-ExitCode $okCold 0
+            Assert-Contains $okCold.Text '宿主已核实同一微信会话窗口'
+
+            Set-Content -LiteralPath $receiptFile -Value (ConvertTo-ColdReceiptLines (New-ColdFocusHintFlow -PostClickStillNull)) -Encoding utf8
+            Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started') -Force -ErrorAction SilentlyContinue
+            $failCold = Invoke-Dispatch -Arguments $boundArgs
+            Assert-ExitCode $failCold 1
+            Assert-Contains $failCold.Text '派单回执未证实'
+        }
+        finally {
+            $env:DISPATCH_TEST_LANDSCAPE = $oldMode
+            Remove-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
+        }
+    }
     Write-Host "dispatch offline: $($script:Passed) passed, $($script:Failed) failed"
     if ($script:Failed -gt 0) { exit 1 }
     exit 0
