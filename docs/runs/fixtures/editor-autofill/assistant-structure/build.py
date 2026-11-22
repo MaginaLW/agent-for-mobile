@@ -46,14 +46,13 @@ def build(dest, sdk, jdk):
     def run(*args, cwd=dest):
         subprocess.run([str(a) for a in args], cwd=cwd, env=env, check=True, timeout=90)
 
-    key = home / "disposable.p12"
-    run(jdk / "bin/keytool.exe", "-genkeypair", "-alias", "fixture", "-keyalg", "RSA",
-        "-validity", "3", "-dname", "CN=Synthetic Assist Fixture",
-        "-keystore", key, "-storetype", "PKCS12",
-        "-storepass:env", password_var, "-keypass:env", password_var, "-noprompt")
-
     hashes = {}
     for pkg in ("observer", "target"):
+        key = home / f"{pkg}.p12"
+        run(jdk / "bin/keytool.exe", "-genkeypair", "-alias", pkg, "-keyalg", "RSA",
+            "-validity", "3", "-dname", f"CN=Synthetic Assist {pkg}",
+            "-keystore", key, "-storetype", "PKCS12",
+            "-storepass:env", password_var, "-keypass:env", password_var, "-noprompt")
         src = fixture / pkg
         out = dest / (pkg + "-build")
         out.mkdir()

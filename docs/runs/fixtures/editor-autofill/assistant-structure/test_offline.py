@@ -155,22 +155,36 @@ def test_inspect_and_controls():
                           "editors": [{"focused": False, "bounds": [40, 32, 240, 102]}]}]},
         ],
     )
-    res = rr.evaluate_multiwin(mw_good, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142])
+    res = rr.evaluate_multiwin(mw_good, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142], ime=ime)
     assert res["decision"] == "MULTIWIN_RIGHT_DISTINGUISHED"
     assert res["target_activities"] == 2 and res["distinct_activity_ids"] == 2
-    assert res["window_bounds_disjoint"] is True and res["strict_shared_id"] is False
+    assert res["window_bounds_disjoint"] is True and res["editor_bounds_disjoint"] is True and res["strict_shared_id"] is False
+
+    # Overlapping fullscreen left window + floating right window: windows overlap, editors disjoint
+    mw_overlap_win = dict(mw_good, activities=[
+        mw_good["activities"][0],
+        dict(mw_good["activities"][1], windows=[{"window_index": 0, "display": 0, "window": [0, 0, 2340, 1080],
+                                                 "editors": [{"focused": False, "bounds": [40, 32, 240, 102]}]}]),
+    ])
+    res_ov = rr.evaluate_multiwin(mw_overlap_win, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142], ime=ime)
+    assert res_ov["decision"] == "MULTIWIN_RIGHT_DISTINGUISHED"
+    assert res_ov["window_bounds_disjoint"] is False and res_ov["editor_bounds_disjoint"] is True
+
+    # Fail closed on IME generation mismatch
+    assert rr.evaluate_multiwin(mw_good, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142],
+                                ime={"generation": 9, "ime_started_ms": 10000})["decision"] == "DIFFERENT_GENERATION"
 
     # Fail closed if 2 windows claim focus
     mw_dup = dict(mw_good, focused_windows=mw_good["focused_windows"] * 2)
-    assert rr.evaluate_multiwin(mw_dup, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142])["decision"] == "AMBIGUOUS_FOCUSED_WINDOWS"
+    assert rr.evaluate_multiwin(mw_dup, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142], ime=ime)["decision"] == "AMBIGUOUS_FOCUSED_WINDOWS"
 
     # Fail closed if focused_activity_count != 1
     mw_bad_act = dict(mw_good, focused_activity_count=2)
-    assert rr.evaluate_multiwin(mw_bad_act, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142])["decision"] == "AMBIGUOUS_ACTIVITY_FOCUS"
+    assert rr.evaluate_multiwin(mw_bad_act, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142], ime=ime)["decision"] == "AMBIGUOUS_ACTIVITY_FOCUS"
 
     # Fail closed if only 1 window visible
     mw_single = dict(mw_good, activities=mw_good["activities"][:1])
-    assert rr.evaluate_multiwin(mw_single, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142])["decision"] == "SINGLE_WINDOW_ONLY"
+    assert rr.evaluate_multiwin(mw_single, "multiwin2", [40, 32, 240, 102], [2060, 72, 2260, 142], ime=ime)["decision"] == "SINGLE_WINDOW_ONLY"
 
 
 def test_full_summarize_and_role_readback_gate():
@@ -242,10 +256,11 @@ def test_full_summarize_and_role_readback_gate():
         }
         (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
-        # Add secure control
+        # Add secure control (assist_blocked branch + real ime.txt anchor)
         sec = root / "controls/secure"
         sec.mkdir(parents=True)
         (sec / "oracle.json").write_text(json.dumps(dict(oracle, windowSecure=True)), encoding="utf-8")
+        (sec / "ime.txt").write_text("11-22 12:00:00.000  4000  4000 I SyntheticProbeIme: generation=1 started=10000\n", encoding="utf-8")
         (sec / "assist-secure.json").write_text(json.dumps(
             base_sample(stage="secure", assist_blocked=True, rejected="assist_blocked",
                         geometry_valid=False, editors=[], focus_count=0)), encoding="utf-8")
@@ -257,6 +272,26 @@ def test_full_summarize_and_role_readback_gate():
         assert summary["focused_bounds"] == [2100, 32, 2300, 102]
         assert summary["assistant_holder_before"] == summary["assistant_holder_after"]
         assert summary["controls"]["secure"]["decision"] == "ASSIST_BLOCKED"
+        assert summary["controls"]["secure"]["mechanism"] == "assist_blocked"
+
+        # Verify FLAG_SECURE structure_null branch also passes fail-closed
+        (sec / "assist-secure.json").write_text(json.dumps(
+            base_sample(stage="secure", target_trees_examined=0, assist_callbacks=1, assist_blocked=False,
+                        acquired=None, completed=None, received=None, editors=[], focus_count=0,
+                        activities=[{"index": 0, "count": 1, "state_focused": True, "structure_null": True}])),
+            encoding="utf-8")
+        summary_null = rr.summarize(root)
+        assert summary_null["controls"]["secure"]["decision"] == "NO_STRUCTURE"
+        assert summary_null["controls"]["secure"]["mechanism"] == "structure_null"
+
+        # Verify mismatched ime.txt anchor in control fails closed!
+        (sec / "ime.txt").write_text("11-22 12:00:00.000  4000  4000 I SyntheticProbeIme: generation=99 started=99999\n", encoding="utf-8")
+        try:
+            rr.summarize(root)
+            raise AssertionError("summarize must reject control ime.txt anchor mismatch")
+        except ValueError as err:
+            assert "DIFFERENT_GENERATION" in str(err)
+        (sec / "ime.txt").write_text("11-22 12:00:00.000  4000  4000 I SyntheticProbeIme: generation=1 started=10000\n", encoding="utf-8")
 
         # Missing final role holder readback MUST fail closed!
         bad_state = dict(state, assistant_holder_after=None)

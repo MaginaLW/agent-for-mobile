@@ -45,9 +45,21 @@ def _rect_contains(outer, inner):
     return outer[0] <= inner[0] and outer[1] <= inner[1] and outer[2] >= inner[2] and outer[3] >= inner[3]
 
 
-def evaluate_multiwin(sample, expected_stage, left_bounds, right_bounds):
+def _latest_ime_anchor(directory):
+    path = directory / "ime.txt"
+    require(path.is_file(), f"missing control ime.txt in {directory.name}")
+    text = path.read_text(encoding="utf-8-sig")
+    matches = re.findall(r"SyntheticProbeIme\s*:\s+generation=(\d+)\s+started=(\d+)", text)
+    require(bool(matches), f"no SyntheticProbeIme anchor in {directory.name}/ime.txt")
+    gen, started = matches[-1]
+    return {"generation": int(gen), "ime_started_ms": int(started)}
+
+
+def evaluate_multiwin(sample, expected_stage, left_bounds, right_bounds, ime=None):
     if not sample["shown"] or not sample["args_match"] or not sample["current_at_close"]:
         return {"decision": "REQUEST_OR_CONNECTION_CHANGED"}
+    if ime is not None and (sample["ime_start"], sample["generation"]) != (ime["ime_started_ms"], ime["generation"]):
+        return {"decision": "DIFFERENT_GENERATION"}
     if sample["show_flags"] & 2:
         return {"decision": "SCREENSHOT_REQUESTED"}
     if not (sample["show_flags"] & 1) or sample["stage"] != expected_stage or not sample["current_on_receive"]:
@@ -85,7 +97,8 @@ def evaluate_multiwin(sample, expected_stage, left_bounds, right_bounds):
                      if not (act["index"] == fw["activity_index"] and w["window_index"] == fw["window_index"])]
     left_found = any(any(e["bounds"] == left_bounds and not e["focused"] for e in w["editors"]) for w in other_windows)
     right_matches = fw["editor_bounds"] == right_bounds and _rect_contains(fw["window"], right_bounds)
-    disjoint = all(_rects_disjoint(fw["window"], w["window"]) for w in other_windows)
+    win_disjoint = all(_rects_disjoint(fw["window"], w["window"]) for w in other_windows)
+    ed_disjoint = _rects_disjoint(fw["editor_bounds"], left_bounds)
     act_slots = {a.get("activity_id_slot") for a in target_acts if a.get("activity_id_slot", -1) >= 0}
     shared_id = bool(fw.get("id_matches_ime") or fw.get("resource_matches_ime"))
     decision = "MULTIWIN_RIGHT_DISTINGUISHED" if (right_matches and left_found) else "MULTIWIN_MISMATCH"
@@ -99,7 +112,8 @@ def evaluate_multiwin(sample, expected_stage, left_bounds, right_bounds):
         "focused_state_flag": fw.get("state_focused"),
         "focused_window_bounds": fw["window"],
         "focused_editor_bounds": fw["editor_bounds"],
-        "window_bounds_disjoint": disjoint,
+        "window_bounds_disjoint": win_disjoint,
+        "editor_bounds_disjoint": ed_disjoint,
         "unfocused_left_seen": left_found,
         "common_native_id": bool(fw.get("id_matches_ime")),
         "common_resource_id": bool(fw.get("resource_matches_ime")),
@@ -159,16 +173,25 @@ def summarize_controls(controls_dir):
             continue
         sample = read(sub, f"assist-{stage}.json")
         oracle = read(sub, "oracle.json")
-        ime_stub = {"ime_started_ms": sample["ime_start"], "generation": sample["generation"]}
-        decision = inspect_sample(sample, ime_stub, expected_stage=stage)
+        ime_anchor = _latest_ime_anchor(sub)
+        decision = inspect_sample(sample, ime_anchor, expected_stage=stage)
         if stage == "secure":
             require(oracle.get("windowSecure") is True, "secure oracle missing FLAG_SECURE")
-            require(decision == "ASSIST_BLOCKED" and sample.get("assist_blocked") is True
-                    and sample["editors"] == [] and sample["focus_count"] == 0,
+            blocked_node = decision == "ASSIST_BLOCKED" and sample.get("assist_blocked") is True
+            null_struct = (decision == "NO_STRUCTURE"
+                           and any(a.get("structure_null") is True for a in sample.get("activities", [])))
+            require((blocked_node or null_struct) and sample["editors"] == [] and sample["focus_count"] == 0,
                     f"FLAG_SECURE opt-out did not fail closed: {decision}")
-            summary[stage] = {"decision": decision, "assist_blocked": True, "editors": 0, "focus_count": 0}
+            summary[stage] = {
+                "decision": decision,
+                "mechanism": "assist_blocked" if blocked_node else "structure_null",
+                "assist_blocked": bool(sample.get("assist_blocked")),
+                "editors": 0,
+                "focus_count": 0,
+            }
         elif stage == "ccoptout":
             require(oracle.get("ccOptOut") is True, "ccoptout oracle missing flag")
+            require(decision != "DIFFERENT_GENERATION", "ccoptout IME anchor mismatch")
             focused = [e for e in sample["editors"] if e["focused"]]
             summary[stage] = {
                 "decision": decision,
@@ -195,8 +218,9 @@ def summarize_controls(controls_dir):
     if (mw1 / "assist-multiwin.json").is_file() and (mw1 / "multiwin-dialog.json").is_file():
         sample = read(mw1, "assist-multiwin.json")
         oracle = read(mw1, "multiwin-dialog.json")
+        ime_anchor = _latest_ime_anchor(mw1)
         summary["multiwin_dialog"] = evaluate_multiwin(
-            sample, "multiwin", oracle["leftBounds"], oracle["rightBounds"])
+            sample, "multiwin", oracle["leftBounds"], oracle["rightBounds"], ime=ime_anchor)
 
     mw2 = controls_dir / "multiwin2"
     if ((mw2 / "assist-multiwin2.json").is_file()
@@ -204,8 +228,9 @@ def summarize_controls(controls_dir):
         sample = read(mw2, "assist-multiwin2.json")
         left_o = read(mw2, "pane-left.json")
         right_o = read(mw2, "pane-right.json")
+        ime_anchor = _latest_ime_anchor(mw2)
         summary["multiwin_tasks"] = evaluate_multiwin(
-            sample, "multiwin2", left_o["editorBounds"], right_o["editorBounds"])
+            sample, "multiwin2", left_o["editorBounds"], right_o["editorBounds"], ime=ime_anchor)
 
     return summary
 
