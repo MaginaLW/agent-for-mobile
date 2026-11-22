@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 [CmdletBinding()]
 param(
     [string]$Filter = '*',
@@ -162,6 +162,7 @@ function New-Fixture {
         'audit_secret', 'ledger_secret', 'manifest_secret', 'existing_config_stdout_secret',
         'pre_enter_write', 'extra_read', 'extra_write', 'duplicate_call', 'macro_failure', 'wrong_order',
         'empty_audit', 'port_not_listening', 'cleanup_failure', 'cleanup_once', 'remote_cleanup_failure',
+        'a11y_drop_after_ime', 'a11y_restore_sticky',
         'config_delete_failure', 'token_temp_cleanup_failure', 'restore_temp_cleanup_failure',
         'enabled_but_not_bound', 'probe_region_dirty', 'probe_region_unavailable',
         'card_not_captured', 'card_missing', 'card_string_true', 'card_first_false', 'card_deny_sent_detected', 'send_unverified', 'send_unknown_state', 'legacy_no_send_field',
@@ -362,6 +363,7 @@ function Remove-P0PrivateTemporaryFile {
     }
     # 任务模板不用假货：fixture 跑的必须是真机上会派发的同一份正文。
     Copy-Item -LiteralPath $SourceTaskTemplateHelper -Destination (Join-Path $repo 'scripts\lib\p0-task-template.ps1')
+    Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-forensics.ps1') -Destination (Join-Path $repo 'scripts\lib\dispatch-forensics.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-brain.ps1') -Destination (Join-Path $repo 'scripts\lib\dispatch-brain.ps1')
     Copy-Item -LiteralPath (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-ledger.ps1') `
         -Destination (Join-Path $repo 'scripts\lib\dispatch-ledger.ps1')
@@ -411,11 +413,14 @@ function Get-DispatchGlobalLockPath {
     }
     $initialA11y = if ($Scenario -eq 'existing_config_stdout_secret') {
         'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+    } elseif ($Scenario -in @('a11y_drop_after_ime', 'a11y_restore_sticky')) {
+        ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
     } else {
         'com.other/.Service'
     }
     Set-Content -LiteralPath (Join-Path $state 'current-ime.txt') -Value $initialIme -Encoding ascii
     Set-Content -LiteralPath (Join-Path $state 'enabled-a11y.txt') -Value $initialA11y -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $state 'a11y-enabled.txt') -Value '1' -Encoding ascii
     '{"t":"old","id":"historical","tool":"foreground_app","args":{},"result":"OK","note":"old"}' |
         Set-Content -LiteralPath (Join-Path $state 'audit.jsonl') -Encoding utf8
     if ($Scenario -eq 'audit_cursor_missing') { Remove-Item -LiteralPath (Join-Path $state 'audit.jsonl') }
@@ -603,9 +608,31 @@ if "%1"=="shell" (
   )
   if "%2 %3 %4 %5"=="settings get secure default_input_method" (type "%P0_FAKE_STATE%\current-ime.txt"& exit /b 0)
   if "%2 %3 %4 %5"=="settings get secure enabled_accessibility_services" (type "%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
-  if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (echo %6>"%P0_FAKE_STATE%\enabled-a11y.txt"& exit /b 0)
+  if "%2 %3 %4 %5"=="settings get secure accessibility_enabled" (
+    if exist "%P0_FAKE_STATE%\a11y-enabled.txt" (type "%P0_FAKE_STATE%\a11y-enabled.txt"& exit /b 0)
+    echo 1& exit /b 0
+  )
+  if "%2 %3 %4 %5"=="settings put secure accessibility_enabled" (>"%P0_FAKE_STATE%\a11y-enabled.txt" echo(%6& exit /b 0)
+  if "%2 %3 %4 %5"=="settings delete secure enabled_accessibility_services" (>"%P0_FAKE_STATE%\enabled-a11y.txt" echo(null& exit /b 0)
+  if "%2 %3 %4 %5"=="settings put secure enabled_accessibility_services" (
+    if "%SCEN%"=="a11y_restore_sticky" if exist "%P0_FAKE_STATE%\ime-restored.flag" (
+      >"%P0_FAKE_STATE%\enabled-a11y.txt" echo(dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
+      exit /b 0
+    )
+    >"%P0_FAKE_STATE%\enabled-a11y.txt" echo(%6& exit /b 0
+  )
   if "%2 %3"=="ime set" (
     if "%4"=="com.original/.Ime" if exist "%P0_FAKE_STATE%\dispatch-finished.txt" if "%SCEN%"=="cleanup_failure" exit /b 7
+    if "%4"=="com.original/.Ime" (
+      if "%SCEN%"=="a11y_drop_after_ime" (
+        >"%P0_FAKE_STATE%\ime-restored.flag" echo 1
+        >"%P0_FAKE_STATE%\enabled-a11y.txt" echo(dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
+      )
+      if "%SCEN%"=="a11y_restore_sticky" (
+        >"%P0_FAKE_STATE%\ime-restored.flag" echo 1
+        >"%P0_FAKE_STATE%\enabled-a11y.txt" echo(dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
+      )
+    )
     echo %4>"%P0_FAKE_STATE%\current-ime.txt"& exit /b 0
   )
   if "%2 %3 %4"=="appops get dev.magina.gateway" (echo SYSTEM_ALERT_WINDOW: allow& exit /b 0)
@@ -2703,6 +2730,176 @@ Start-Sleep -Milliseconds 1800
         }
     }
 
+    Test-Case 'R3.1 P0 provisioner 切回原 IME 后无障碍基线精准还原、幂等性与持久漂移告警' {
+        . $SourceProvisioner
+        $expectedColonBaseline = ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+
+        $fixtureOk = New-Fixture a11y_drop_after_ime
+        $prevState = $env:P0_FAKE_STATE
+        try {
+            $env:P0_FAKE_STATE = $fixtureOk.State
+            $sessionOk = Start-P0DeviceProvision -RepoRoot $fixtureOk.Repo -AdbPath $fixtureOk.Adb -Provision `
+                -HealthProbePath $fixtureOk.HealthProbe
+            Assert-True ($sessionOk.OriginalAccessibilityServices -ceq $expectedColonBaseline) `
+                "P0 未保留含前导冒号的无障碍基线：$($sessionOk.OriginalAccessibilityServices)"
+            $firstErrs = @(Stop-P0DeviceProvision -Session $sessionOk -A11yRestoreSettleMs 0)
+            Assert-True ($firstErrs.Count -eq 0) "切回 IME 后自动写回基线不应报错：$($firstErrs -join ',')"
+            $restoredText = (Get-Content -LiteralPath (Join-Path $fixtureOk.State 'enabled-a11y.txt') -Raw).Trim()
+            Assert-True ($restoredText -ceq $expectedColonBaseline) "收尾未逐字还原含前导冒号基线：$restoredText"
+
+            $putCountBeforeSecond = ([regex]::Matches((Get-Content -LiteralPath (Join-Path $fixtureOk.State 'adb.log') -Raw), 'settings put secure enabled_accessibility_services')).Count
+            $secondErrs = @(Stop-P0DeviceProvision -Session $sessionOk -A11yRestoreSettleMs 0)
+            Assert-True ($secondErrs.Count -eq 0) '第二次 Stop-P0DeviceProvision 应幂等成功。'
+            $putCountAfterSecond = ([regex]::Matches((Get-Content -LiteralPath (Join-Path $fixtureOk.State 'adb.log') -Raw), 'settings put secure enabled_accessibility_services')).Count
+            Assert-True ($putCountAfterSecond -eq $putCountBeforeSecond) '已收敛后第二次 cleanup 不得重复写 enabled_accessibility_services。'
+        }
+        finally { $env:P0_FAKE_STATE = $prevState }
+
+        $fixtureSticky = New-Fixture a11y_restore_sticky
+        $prevState2 = $env:P0_FAKE_STATE
+        try {
+            $env:P0_FAKE_STATE = $fixtureSticky.State
+            $sessionSticky = Start-P0DeviceProvision -RepoRoot $fixtureSticky.Repo -AdbPath $fixtureSticky.Adb -Provision `
+                -HealthProbePath $fixtureSticky.HealthProbe
+            $stickyErrs = @(Stop-P0DeviceProvision -Session $sessionSticky -A11yRestoreSettleMs 0 -A11yRestoreAttempts 2)
+            Assert-True ('restore_accessibility_services' -in $stickyErrs) `
+                "持久漂移时应报告 restore_accessibility_services：$($stickyErrs -join ',')"
+        }
+        finally { $env:P0_FAKE_STATE = $prevState2 }
+    }
+
+    Test-Case 'R3.1 回归：Stop-P0DeviceProvision 非 0/1 开关恢复、0ms 重试与 Invoke-P0AccessibilityRebind 短组件剥离' {
+        . $SourceProvisioner
+
+        $p0Reg = [ordered]@{
+            Svc = 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService'
+            En = 'null'
+            StickyEn = $false
+            FailFirstSvcGet = $false
+            Writes = [Collections.Generic.List[string]]::new()
+            ConcurrentOnDeleteOrPut = ''
+        }
+        function Invoke-P0DeviceCommand {
+            param($Session, $Arguments, $Operation, [switch]$AllowFailure, [int]$TimeoutSec = 30)
+            $cmd = ($Arguments | ForEach-Object { "$_" }) -join ' '
+            switch -Regex ($cmd) {
+                '^shell settings get secure enabled_accessibility_services$' {
+                    if ($p0Reg.FailFirstSvcGet) {
+                        $p0Reg.FailFirstSvcGet = $false
+                        if ($AllowFailure) { return [pscustomobject]@{ ExitCode = 1; Stdout = '' } }
+                        throw "$Operation 失败。"
+                    }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = $p0Reg.Svc }
+                }
+                '^shell settings get secure accessibility_enabled$' {
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = $p0Reg.En }
+                }
+                '^shell settings delete secure enabled_accessibility_services$' {
+                    [void]$p0Reg.Writes.Add('delete')
+                    $p0Reg.Svc = if ($p0Reg.ConcurrentOnDeleteOrPut) { $p0Reg.ConcurrentOnDeleteOrPut } else { 'null' }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                '^shell settings put secure enabled_accessibility_services (.+)$' {
+                    $val = $Matches[1]
+                    [void]$p0Reg.Writes.Add("put:$val")
+                    $p0Reg.Svc = if ($p0Reg.ConcurrentOnDeleteOrPut -and $val -notmatch 'GatewayA11yService') {
+                        $p0Reg.ConcurrentOnDeleteOrPut
+                    } else { $val }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                '^shell settings put secure accessibility_enabled (.+)$' {
+                    $val = $Matches[1]
+                    [void]$p0Reg.Writes.Add("en:$val")
+                    if (-not $p0Reg.StickyEn) { $p0Reg.En = $val }
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+                default {
+                    return [pscustomobject]@{ ExitCode = 0; Stdout = '' }
+                }
+            }
+        }
+        function Clear-P0DebugArtifacts { param($Session, [switch]$BestEffort) return @() }
+        function Clear-P0RemoteControlStaging { param($Session, [switch]$BestEffort) return @() }
+        function Clear-P0PrivateTemporaryFiles { param($Session, [switch]$BestEffort) return @() }
+        function Restore-P0Config { param($Session) }
+
+        # 1) Stop-P0DeviceProvision 面对 accessibility_enabled='null'/'2' 必须写回基线并清待办标记；粘滞时报错并保留待办标记
+        foreach ($badEn in @('null', '2')) {
+            foreach ($targetEn in @('0', '1')) {
+                $p0Reg.Svc = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                $p0Reg.En = $badEn
+                $p0Reg.StickyEn = $false
+                $p0Reg.FailFirstSvcGet = $false
+                $p0Reg.Writes.Clear()
+                $sess = [pscustomobject]@{
+                    OriginalIme = ''
+                    OriginalAccessibilityServices = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                    OriginalAccessibilityEnabled = $targetEn
+                    AccessibilityRestorePending = $true
+                    PortForwarded = $false
+                    CleanupIssues = @()
+                }
+                $errs = @(Stop-P0DeviceProvision -Session $sess -A11yRestoreSettleMs 0 -A11yRestoreAttempts 2)
+                Assert-True ($errs.Count -eq 0) "accessibility_enabled=$badEn 相对 $targetEn 应自动恢复：$($errs -join ',')"
+                Assert-True (-not $sess.AccessibilityRestorePending) '恢复后 AccessibilityRestorePending 应清零。'
+                Assert-True ($p0Reg.En -ceq $targetEn) "device accessibility_enabled 应恢复为 $targetEn，实际 $($p0Reg.En)"
+            }
+        }
+        $p0Reg.Svc = ':com.a/s1'
+        $p0Reg.En = 'null'
+        $p0Reg.StickyEn = $true
+        $sessStickyEn = [pscustomobject]@{
+            OriginalIme = ''
+            OriginalAccessibilityServices = ':com.a/s1'
+            OriginalAccessibilityEnabled = '0'
+            AccessibilityRestorePending = $true
+            PortForwarded = $false
+            CleanupIssues = @()
+        }
+        $stickyEnErrs = @(Stop-P0DeviceProvision -Session $sessStickyEn -A11yRestoreSettleMs 0 -A11yRestoreAttempts 2)
+        Assert-True ('restore_accessibility_services' -in $stickyEnErrs) 'accessibility_enabled 持久 null 时必须报告 restore_accessibility_services。'
+        Assert-True ($sessStickyEn.AccessibilityRestorePending) '未恢复成功时不得清零 AccessibilityRestorePending。'
+        $p0Reg.StickyEn = $false
+
+        # 2) Stop-P0DeviceProvision -A11yRestoreSettleMs 0 -A11yRestoreAttempts 3 在首次 get 失败后继续重试并恢复
+        $p0Reg.Svc = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+        $p0Reg.En = '1'
+        $p0Reg.FailFirstSvcGet = $true
+        $p0Reg.Writes.Clear()
+        $sessRetry = [pscustomobject]@{
+            OriginalIme = ''
+            OriginalAccessibilityServices = ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+            OriginalAccessibilityEnabled = '1'
+            AccessibilityRestorePending = $true
+            PortForwarded = $false
+            CleanupIssues = @()
+        }
+        $retryErrs = @(Stop-P0DeviceProvision -Session $sessRetry -A11yRestoreSettleMs 0 -A11yRestoreAttempts 3)
+        Assert-True ($retryErrs.Count -eq 0 -and -not $sessRetry.AccessibilityRestorePending) `
+            "A11yRestoreSettleMs=0 在首次 get 失败后未重试恢复：$($retryErrs -join ',')"
+        Assert-True ($p0Reg.Svc -ceq ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "重试恢复后服务列表不符：$($p0Reg.Svc)"
+
+        # 3) Invoke-P0AccessibilityRebind 必须剥离短组件形式 dev.magina.gateway/.a11y.GatewayA11yService
+        $p0Reg.Svc = 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService'
+        $p0Reg.En = '0'
+        $p0Reg.ConcurrentOnDeleteOrPut = ''
+        $p0Reg.Writes.Clear()
+        Invoke-P0AccessibilityRebind -Session ([pscustomobject]@{}) -RebindPauseMs 0
+        Assert-True ($p0Reg.Writes[0] -ceq 'put:com.a/s1') "重置阶段未剥离短网关组件：$($p0Reg.Writes -join ' | ')"
+        Assert-True ($p0Reg.Svc -ceq 'com.a/s1:dev.magina.gateway/.a11y.GatewayA11yService') `
+            "无并发变动时应保形原短网关组件且不重复追加：$($p0Reg.Svc)"
+
+        # 仅短网关组件 + 暂停窗口有并发服务写入时：重置应 delete，合并应只含并发服务+完整网关组件，不残留短网关组件
+        $p0Reg.Svc = 'dev.magina.gateway/.a11y.GatewayA11yService'
+        $p0Reg.ConcurrentOnDeleteOrPut = 'com.extra/.Svc'
+        $p0Reg.Writes.Clear()
+        Invoke-P0AccessibilityRebind -Session ([pscustomobject]@{}) -RebindPauseMs 0
+        Assert-True ($p0Reg.Writes[0] -ceq 'delete') "仅有短网关组件时重置应走 delete：$($p0Reg.Writes -join ' | ')"
+        Assert-True ($p0Reg.Svc -ceq 'com.extra/.Svc:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "合并结果不应残留短网关组件：$($p0Reg.Svc)"
+    }
+
     Test-Case '中转文件与新建私密配置删除失败均聚合 cleanup 且继续恢复' {
         foreach ($scenario in @('remote_cleanup_failure','config_delete_failure')) {
             $fixture = New-Fixture $scenario
@@ -3562,6 +3759,7 @@ if (`$errors.Count -gt 0) { `$errors[0].Message } else { 'OK' }
         foreach ($path in @(
             $SourceRunner, $SourceProvisioner, $SourceHealthProbe, $SourceTaskTemplateHelper,
             (Join-Path $SourceRepoRoot 'scripts\lib\dev-env.ps1'),
+            (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-forensics.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\dispatch-pause.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-foreground-bootstrap.ps1'),
             (Join-Path $SourceRepoRoot 'scripts\lib\p0-oob-verify.ps1'),

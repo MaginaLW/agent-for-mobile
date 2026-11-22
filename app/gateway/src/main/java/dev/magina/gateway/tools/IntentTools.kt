@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import dev.magina.gateway.Gateway
+import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.ensureTargetPackageAllowed
@@ -43,12 +44,10 @@ object IntentTools {
         var verified: Boolean? = null
         if (hit != null && hit.expectPackage.isNotEmpty()) {
             verified = SystemTools.waitForeground(hit.expectPackage, 3000)
-            if (!verified) throw GatewayError(
-                ErrorCode.E_VERIFY_FAIL,
-                "深链已发出但 3s 内前台不是 ${hit.expectPackage}（OriginOS 深链假成功模式）",
-                channel = "intent", retryable = false,
-                fallback = "app_launch(${hit.expectPackage}) 后按技能包页面地图走 UI 导航",
-            )
+            if (!verified) {
+                val actual = GatewayA11yService.instance?.let { runCatching { it.foregroundPackage() }.getOrNull() }
+                throw openUriVerifyFailError(hit.expectPackage, actual)
+            }
         }
         return JSONObject()
             .put("opened", true)
@@ -116,7 +115,16 @@ object IntentTools {
                     SystemTools.waitForegroundLanding(target, acceptableActivities, VERIFY_TIMEOUT_MS, observation)
                 }
                 if (targetPackage == null) observation?.noTarget()
-                finishIntentSend(targetPackage, verified, acceptableActivities)
+                val actual = if (verified == true || targetPackage == null) null
+                    else GatewayA11yService.instance?.let { runCatching { it.foregroundPackage() }.getOrNull() }
+                val settingsHint = Gateway.skills.findUnreliableSettingsAction(action)?.fallback
+                finishIntentSend(
+                    targetPackage,
+                    verified,
+                    acceptableActivities,
+                    actualPackage = actual,
+                    extraFallbackHint = settingsHint,
+                )
             },
         )
     }
@@ -351,21 +359,63 @@ internal fun expectedIntentLandingActivities(
     else -> emptyList()
 }
 
+internal fun openUriVerifyFailError(
+    expectPackage: String,
+    actualPackage: String?,
+): GatewayError {
+    val normalizedActual = actualPackage?.trim()?.takeIf { it.isNotEmpty() }
+    val message = if (normalizedActual != null) {
+        "深链已发出但 3s 内前台不是 $expectPackage，当前前台为 $normalizedActual（OriginOS 深链假成功模式）"
+    } else {
+        "深链已发出但 3s 内前台不是 $expectPackage，当前前台未知（OriginOS 深链假成功模式）"
+    }
+    val fallback = if (normalizedActual == "com.vivo.appfilter") {
+        "前台停在系统拦截弹窗（com.vivo.appfilter），立即停下交现场用户处理弹窗；或改用 app_launch($expectPackage) 后按技能包守卫走 UI 导航"
+    } else {
+        "app_launch($expectPackage) 后按技能包页面地图走 UI 导航"
+    }
+    return GatewayError(
+        ErrorCode.E_VERIFY_FAIL,
+        message,
+        channel = "intent",
+        retryable = false,
+        fallback = fallback,
+        extra = JSONObject()
+            .put("expect_package", expectPackage)
+            .put("actual_package", normalizedActual ?: JSONObject.NULL),
+    )
+}
+
 /** 已分派不等于已落地；仅有正向前台证据时才允许报告已验证。 */
 internal fun finishIntentSend(
     targetPackage: String?,
     foregroundVerified: Boolean?,
     acceptableActivities: List<String> = emptyList(),
+    actualPackage: String? = null,
+    extraFallbackHint: String? = null,
 ): JSONObject {
     val outcome = resolveIntentSendOutcome(targetPackage, foregroundVerified)
     val expected = if (acceptableActivities.isEmpty()) outcome.targetPackage
         else "${outcome.targetPackage}/${acceptableActivities.joinToString("|")}"
-    if (outcome.verifyFailed) throw GatewayError(
-        ErrorCode.E_VERIFY_FAIL,
-        "Intent 已分派但未能确认前台落在 $expected",
-        channel = "intent", retryable = false,
-        fallback = "只读核对当前前台与目标页面；未确认前不要重发同一 Intent",
-    )
+    if (outcome.verifyFailed) {
+        val normalizedActual = actualPackage?.trim()?.takeIf { it.isNotEmpty() }
+        val actualSuffix = if (normalizedActual != null) "，当前前台为 $normalizedActual" else ""
+        val baseFallback = "只读核对当前前台与目标页面；未确认前不要重发同一 Intent"
+        val fallback = listOfNotNull(
+            baseFallback,
+            extraFallbackHint?.trim()?.takeIf { it.isNotEmpty() },
+        ).joinToString("；")
+        throw GatewayError(
+            ErrorCode.E_VERIFY_FAIL,
+            "Intent 已分派但未能确认前台落在 $expected$actualSuffix",
+            channel = "intent",
+            retryable = false,
+            fallback = fallback,
+            extra = JSONObject()
+                .put("expect_package", outcome.targetPackage ?: JSONObject.NULL)
+                .put("actual_package", normalizedActual ?: JSONObject.NULL),
+        )
+    }
     return JSONObject()
         .put("sent", true)
         .put("target_package", outcome.targetPackage ?: JSONObject.NULL)

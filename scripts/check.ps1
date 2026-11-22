@@ -1,4 +1,4 @@
-#Requires -Version 7.5
+﻿#Requires -Version 7.5
 <#
 提交前一键校验。
 
@@ -200,6 +200,13 @@ Invoke-Check '派单台账离线测试' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\dispatch-ledger-offline.ps1')
     ) | Out-Null
     Get-LastMeaningfulLine (Join-Path $LogDir 'dispatch-ledger-offline.log')
+}
+
+Invoke-Check '技能包与守卫同步离线测试' {
+    Invoke-Logged -LogName 'skillpack-sync-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\skillpack-sync-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'skillpack-sync-offline.log')
 }
 
 if ($SkipGradle) {

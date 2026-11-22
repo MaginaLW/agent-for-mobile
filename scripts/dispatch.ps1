@@ -45,6 +45,8 @@ $TracesDir    = Join-Path $RepoRoot 'docs\runs\traces'
 $LedgerPath   = Join-Path $RepoRoot 'docs\runs\ledger.csv'
 $ProfileHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-profile.ps1'
 . $ProfileHelperPath
+$ForensicsHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-forensics.ps1'
+. $ForensicsHelperPath
 $LockHelperPath = Join-Path $PSScriptRoot 'lib\dispatch-lock.ps1'
 . $LockHelperPath
 $LockFile = ''
@@ -914,7 +916,7 @@ try {
             $landscapeBaseline = $null
             if ($problem) { $pf += " | $problem" }
         }
-        else { Stop-GatewayPreflightOwnedResources -State $preflightState }
+        else { Stop-GatewayPreflightOwnedResources -State $preflightState -AdbCommand $preflightAdb }
         Write-Host "预检失败：$pf" -ForegroundColor Red
         Add-LedgerRow 0 0 0 0 0 0 'preflight-fail' '' '' $pf 'preflight'
         exit 4
@@ -1147,6 +1149,22 @@ try {
         $note += ' | ' + ($policyProblems -join '+')
     }
 
+    $transportHealthSnapshotPath = ''
+    if ('mcp-transport-failure' -in $policyProblems) {
+        try {
+            $snapshot = Get-GatewayTransportHealthSnapshot -AdbCommand $preflightAdb `
+                -PreflightState $preflightState -Slug $Slug -Leg $Leg -Executor $Executor `
+                -Brain $Brain -TraceFile "$base.jsonl" -LandscapePrepare:$landscapePrepare
+            $candidateSnapshotPath = Join-Path $TracesDir "$base.transport-health.json"
+            $snapshotJson = $snapshot | ConvertTo-Json -Depth 6
+            [IO.File]::WriteAllText($candidateSnapshotPath, $snapshotJson + "`n", [Text.UTF8Encoding]::new($false))
+            $transportHealthSnapshotPath = $candidateSnapshotPath
+        }
+        catch {
+            Write-Warning "传输失败只读健康快照采集失败：$($_.Exception.Message)"
+        }
+    }
+
     if ($landscapePrepare) {
         $problem = Complete-LandscapePreparation -Device $landscapeDevice -AdbCommand $preflightAdb -Baseline $landscapeBaseline `
             -PreflightState $preflightState -RequireChatFocus:($verdict -eq 'success')
@@ -1171,9 +1189,20 @@ try {
     # ── 台账 + 摘要 ───────────────────────────────────────────────────────
     # 泛洪文件可能恰好是一条没有换行的 16 MiB 长行；Get-FailReason 的 Tail/regex
     # 不应在已经有机械归因时再次扫描它，否则“快速失败”会退化成昂贵的文本分析。
+    $lastTranscriptCall = if ($null -ne $transcript -and $transcript.Calls.Count -gt 0) {
+        $transcript.Calls[$transcript.Calls.Count - 1]
+    } else { $null }
     $failReason = if ($outputLimitReached) { 'brain-output-limit' }
         elseif (-not [string]::IsNullOrWhiteSpace($outputPumpFailure)) { 'brain-output-pump-failure' }
-        else { Get-FailReason -Verdict $verdict -Subtype $terminalSubtype -TraceFile $TraceFile }
+        elseif ($verdict -eq 'timeout') { Get-FailReason -Verdict $verdict -Subtype $terminalSubtype -TraceFile $TraceFile }
+        elseif ($null -ne $lastTranscriptCall -and $lastTranscriptCall.Outcome -notin @('success', 'gateway-tool-failure')) { 'mcp-transport-failure' }
+        else {
+            $computedReason = Get-FailReason -Verdict $verdict -Subtype $terminalSubtype -TraceFile $TraceFile
+            if ('mcp-transport-failure' -in $policyProblems -and $verdict -eq 'fail' -and
+                ($computedReason -ceq 'reported-fail' -or $computedReason -like 'executor-*')) {
+                'mcp-transport-failure'
+            } else { $computedReason }
+        }
     Add-LedgerRow $turns $inTok $outTok $cacheRead $cacheWrite $durS $verdict $sid "$base.jsonl" $note $failReason
     Write-Host ''
     $usageTurns = if ($null -eq $turns) { '?' } else { $turns }
@@ -1187,6 +1216,7 @@ try {
         Write-Host ">>>   scripts/dispatch.ps1 -Confirm `"$PauseFile`"" -ForegroundColor Yellow
     }
     Write-Host "trace: $TraceFile"
+    if ($transportHealthSnapshotPath) { Write-Host "health_snapshot: $transportHealthSnapshotPath" }
     if ($verdict -in @('success', 'paused')) { exit 0 } else { exit 1 }
 }
 finally {

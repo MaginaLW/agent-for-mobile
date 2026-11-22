@@ -151,6 +151,15 @@ object ToolRegistry {
                 "limit" to prop("integer", "条数，默认 5"),
             ),
         ) { SystemTools.mediaQuery(it.getString("type"), it.optString("album").ifEmpty { null }, it.optInt("limit", 5)) },
+        ToolSpec(
+            "skillpack_lookup",
+            "查询网关内置技能包（app 别名、已实测/未实测深链前缀、系统设置不可靠 action 提示与只读前置守卫）。执行非微信日常只读或系统设置操作前按需调用。",
+            Level.R,
+            schema(
+                emptyList(),
+                "app" to prop("string", "可选：app 别名（小红书/京东/淘宝/设置…）、包名或 URI 前缀；留空返回总览"),
+            ),
+        ) { Gateway.skills.lookupForBrain(it.optString("app").ifEmpty { null }) },
 
         // ---------- L2 意图层 ----------
         ToolSpec(
@@ -287,9 +296,9 @@ object ToolRegistry {
 
     private val byName = tools.associateBy { it.name }
 
-    /** 敏感 app 前台时仍放行的工具（撤离与纯感知）；press_key 另限安全撤离键。 */
-    private val BLOCKED_APP_ALLOWED = setOf(
-        "device_info", "foreground_app", "keyboard_state", "press_key", "app_launch", "wait_for",
+    /** 敏感 app 前台时仍放行的工具（撤离、纯感知与静态技能包查询）；press_key 另限安全撤离键。 */
+    internal val BLOCKED_APP_ALLOWED = setOf(
+        "device_info", "foreground_app", "keyboard_state", "press_key", "app_launch", "wait_for", "skillpack_lookup",
     )
 
     fun listToolsJson(): JSONArray {
@@ -656,9 +665,11 @@ object ToolRegistry {
         }
     }
 
-    private fun channelOf(name: String): String = when {
+    internal fun channelOf(name: String): String = when {
         name.startsWith("ui_") || name in setOf("type_text", "press_key", "wait_for") -> "a11y"
-        name.startsWith("system_") || name in setOf("device_info", "clipboard", "media_query", "foreground_app", "keyboard_state") -> "api"
+        name.startsWith("system_") || name in setOf(
+            "device_info", "clipboard", "media_query", "foreground_app", "keyboard_state", "skillpack_lookup",
+        ) -> "api"
         name in setOf("open_uri", "intent_send", "share_text", "share_file", "app_launch") -> "intent"
         name == "screen_capture" -> "vision"
         // 受控宏走 a11y + IME 复合通道；此前落到空串，写出的审计行 channel 为空，

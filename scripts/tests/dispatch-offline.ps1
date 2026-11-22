@@ -603,7 +603,25 @@ if /I "%1"=="get-serialno" (
   echo FAKE-DISPATCH-DEVICE
   exit /b 0
 )
+if /I "%1"=="forward" if /I "%2"=="--list" (
+  if defined DISPATCH_TEST_ADB_FORWARD_LINE echo %DISPATCH_TEST_ADB_FORWARD_LINE%
+  exit /b 0
+)
 if /I "%1"=="forward" exit /b 0
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="get" if /I "%4"=="secure" if /I "%5"=="enabled_accessibility_services" (
+  if defined DISPATCH_TEST_ADB_A11Y_SERVICES (
+    echo %DISPATCH_TEST_ADB_A11Y_SERVICES%
+    exit /b 0
+  )
+  exit /b 97
+)
+if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="accessibility" (
+  if defined DISPATCH_TEST_ADB_DUMPSYS_A11Y_FILE (
+    type "%DISPATCH_TEST_ADB_DUMPSYS_A11Y_FILE%"
+    exit /b 0
+  )
+  exit /b 97
+)
 if /I "%1"=="exec-out" exit /b 1
 exit /b 97
 '@
@@ -689,11 +707,15 @@ public static class Program {
         if (scenario == "malformed") { Console.WriteLine("{not-json"); return 0; }
         Console.WriteLine("{\"type\":\"thread.started\",\"thread_id\":\"offline-codex-thread\"}");
         Console.WriteLine("{\"type\":\"turn.started\"}");
+        if (scenario == "stale-error-then-transport-failure") {
+            Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-0\",\"type\":\"mcp_tool_call\",\"server\":\"gateway\",\"tool\":\"ui_find\",\"arguments\":{}}}");
+            Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-0\",\"type\":\"mcp_tool_call\",\"server\":\"gateway\",\"tool\":\"ui_find\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"error\\\":{\\\"code\\\":\\\"E_NOT_FOUND\\\"}}\"}]},\"error\":null,\"status\":\"failed\"}}");
+        }
         string server = scenario == "wrong-server" ? "evil" : "gateway";
         Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
         if (scenario == "exit-partial") return 23;
         string ok = scenario == "gateway-ok-false" ? "false" : "true";
-        string outcome = scenario == "transport-failure"
+        string outcome = (scenario == "transport-failure" || scenario == "stale-error-then-transport-failure")
             ? "\"result\":null,\"error\":{\"message\":\"fixture connection closed\"},\"status\":\"failed\""
             : "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":" + ok + "}\"}]},\"error\":null,\"status\":\"" + (ok == "false" ? "failed" : "completed") + "\"";
         Console.WriteLine("{\"type\":\"item.completed\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}," + outcome + "}}");
@@ -1325,6 +1347,27 @@ public static class Program {
                 Assert-ExitCode $result $case.Exit
                 Assert-Matches $result.Text $case.Pattern
                 Assert-NotMatches $result.Text 'fixture-bearer-value-must-never-leak|must-not-reach-fake-codex'
+                $snapFiles = @(Get-ChildItem -LiteralPath $TracesDir -Filter "*-$slug-gateway-codex-leg1.transport-health.json" -ErrorAction SilentlyContinue)
+                if ($case.Scenario -in @('transport-failure', 'exit-partial')) {
+                    Assert-True ($snapFiles.Count -eq 1) "$($case.Scenario) 应生成唯一 transport-health.json。"
+                    Assert-Contains $result.Text 'health_snapshot:'
+                    $snapRaw = Get-Content -LiteralPath $snapFiles[0].FullName -Raw -Encoding utf8
+                    Assert-NotMatches $snapRaw 'fixture-bearer-value-must-never-leak|Bearer\s|Authorization'
+                    $snapJson = $snapRaw | ConvertFrom-Json
+                    Assert-True ($snapJson.schema -ceq 'dispatch-transport-health-snapshot/v1') '快照 schema 不匹配。'
+                    Assert-True ($snapJson.adb_forward.probe_ok -eq $true) 'adb_forward 探针失败。'
+                    Assert-True ($snapJson.health.reachable -eq $true -and $snapJson.health.body_ok -eq $true) '健康快照 /health 应可达。'
+                    Assert-True ($snapJson.gateway_service.state -ceq 'foreground') '健康快照服务状态应为 foreground。'
+                    Assert-True ($snapJson.accessibility.enabled_query_ok -eq $false -and $snapJson.accessibility.dumpsys_ok -eq $false) `
+                        'legacy fake-adb 返回 97 时无障碍探针应降级为 ok=false。'
+                    $caseRow = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq $slug } | Select-Object -Last 1)
+                    Assert-True ($caseRow.Count -eq 1 -and $caseRow[0].fail_reason -ceq 'mcp-transport-failure') `
+                        "$($case.Scenario) 台账 fail_reason 应为 mcp-transport-failure，实际：$($caseRow[0].fail_reason)"
+                    Assert-Matches ([string]$caseRow[0].trace_file) '^\d{8}-\d{6}-offline-codex-.*-gateway-codex-leg1\.jsonl$'
+                }
+                else {
+                    Assert-True ($snapFiles.Count -eq 0) "$($case.Scenario) 不应生成 transport-health.json。"
+                }
             }
             Assert-Contains (Get-Content -LiteralPath (Join-Path $SentinelDir 'codex-prompt.txt') -Raw) `
                 'offline fake codex contract'
@@ -2262,16 +2305,58 @@ if /I "%1"=="shell" if /I "%2"=="dumpsys" if /I "%3"=="activity" if /I "%4"=="ac
   )
   exit /b 0
 )
-if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="get" if /I "%4"=="secure" (
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="get" if /I "%4"=="secure" if /I "%5"=="enabled_accessibility_services" (
+  if defined PF_A11Y_STATE_FILE if exist "%PF_A11Y_STATE_FILE%" (
+    type "%PF_A11Y_STATE_FILE%"
+    exit /b 0
+  )
   echo com.other/.Service:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
   exit /b 0
 )
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="get" if /I "%4"=="secure" if /I "%5"=="accessibility_enabled" (
+  if defined PF_A11Y_ENABLED_FILE if exist "%PF_A11Y_ENABLED_FILE%" (
+    type "%PF_A11Y_ENABLED_FILE%"
+    exit /b 0
+  )
+  echo 1
+  exit /b 0
+)
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="put" if /I "%4"=="secure" if /I "%5"=="enabled_accessibility_services" goto pf_put_a11y
+if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="delete" if /I "%4"=="secure" if /I "%5"=="enabled_accessibility_services" (
+  if defined PF_A11Y_STATE_FILE (
+    >"%PF_A11Y_STATE_FILE%" echo(null
+  )
+  exit /b 0
+)
 if /I "%1"=="shell" if /I "%2"=="settings" if /I "%3"=="put" if /I "%4"=="secure" if /I "%5"=="accessibility_enabled" (
+  if defined PF_A11Y_ENABLED_FILE >"%PF_A11Y_ENABLED_FILE%" echo(%6
   if not "%PF_REBOUND_FLAG%"=="" echo rebound>"%PF_REBOUND_FLAG%"
   exit /b 0
 )
 if /I "%1"=="shell" if /I "%2"=="settings" exit /b 0
 exit /b 98
+
+:pf_put_a11y
+set "PF_ARG=%~6"
+if defined PF_A11Y_FAIL_PUT_FLAG if exist "%PF_A11Y_FAIL_PUT_FLAG%" (
+  if not "%PF_ARG:GatewayA11yService=%"=="%PF_ARG%" (
+    del /q "%PF_A11Y_FAIL_PUT_FLAG%" >nul 2>nul
+    exit /b 1
+  )
+)
+if defined PF_A11Y_STATE_FILE (
+  >"%PF_A11Y_STATE_FILE%" echo(%6
+  if defined PF_A11Y_CONCURRENT_INJECT (
+    if "%PF_ARG:GatewayA11yService=%"=="%PF_ARG%" (
+      >"%PF_A11Y_STATE_FILE%" echo(:com.extra/.Svc
+    )
+  )
+  if defined PF_A11Y_FLAP_FLAG if exist "%PF_A11Y_FLAP_FLAG%" (
+    del /q "%PF_A11Y_FLAP_FLAG%" >nul 2>nul
+    >"%PF_A11Y_STATE_FILE%" echo(dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService
+  )
+)
+exit /b 0
 '@ | Set-Content -LiteralPath $pfAdbCmd -Encoding ascii
 
         $savedEnv = @{
@@ -2602,6 +2687,8 @@ class Adb {
         command = command.Substring("-s TABLET-TEST ".Length);
         string state = Path.Combine(dir, "landscape-started");
         string ownedService = Path.Combine(dir, "landscape-owned-service");
+        string a11yStateFile = Path.Combine(dir, "landscape-a11y.txt");
+        string forensics = Environment.GetEnvironmentVariable("DISPATCH_TEST_LANDSCAPE_FORENSICS");
         string output;
         switch (command) {
             case "get-state": output = "device"; break;
@@ -2631,10 +2718,55 @@ class Adb {
             case "shell run-as dev.magina.gateway am stopservice --user 0 -n dev.magina.gateway/.GatewayService":
                 File.WriteAllText(ownedService, "stopping"); Console.Error.WriteLine("Service stopped"); return 255;
             case "shell input keyevent KEYCODE_WAKEUP": File.WriteAllText(state, ""); return 0;
-            case "forward --list": return 0;
+            case "forward --list":
+                if (forensics == "1") {
+                    string fwd = Environment.GetEnvironmentVariable("DISPATCH_TEST_ADB_FORWARD_LINE");
+                    if (!String.IsNullOrEmpty(fwd)) Console.WriteLine(fwd);
+                }
+                return 0;
+            case "shell settings get secure enabled_accessibility_services":
+                if (forensics == "1") {
+                    Console.WriteLine(":com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService");
+                    return 0;
+                }
+                return 90;
+            case "shell dumpsys accessibility":
+                if (forensics == "1") {
+                    Console.WriteLine("Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}");
+                    return 0;
+                }
+                return 90;
             default:
                 if (command.StartsWith("forward --no-rebind ") || command.StartsWith("forward --remove ")) return 0;
+                if (command.StartsWith("shell settings --user 0 put secure enabled_accessibility_services ")) {
+                    if (mode != "a11y-drop-recoverable" && mode != "a11y-drop-sticky") return 90;
+                    string val = command.Substring("shell settings --user 0 put secure enabled_accessibility_services ".Length);
+                    File.WriteAllText(a11yStateFile, mode == "a11y-drop-sticky"
+                        ? "dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService"
+                        : val);
+                    return 0;
+                }
+                if (command.StartsWith("shell settings --user 0 delete secure enabled_accessibility_services")) {
+                    if (mode != "a11y-drop-recoverable" && mode != "a11y-drop-sticky") return 90;
+                    File.WriteAllText(a11yStateFile, mode == "a11y-drop-sticky"
+                        ? "dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService"
+                        : "null");
+                    return 0;
+                }
                 if (!command.StartsWith("shell settings --user 0 get secure ")) return 90;
+                if (mode == "a11y-drop-recoverable" || mode == "a11y-drop-sticky") {
+                    if (command.EndsWith("enabled_accessibility_services")) {
+                        if (!File.Exists(state)) {
+                            output = ":com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService";
+                        } else if (File.Exists(a11yStateFile)) {
+                            output = File.ReadAllText(a11yStateFile).Trim();
+                        } else {
+                            output = "dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService";
+                        }
+                        break;
+                    }
+                    if (command.EndsWith("accessibility_enabled")) { output = "1"; break; }
+                }
                 output = (mode == "drift" && File.Exists(state) && command.EndsWith("default_input_method")) ? "other" : "baseline"; break;
         }
         Console.WriteLine(output);
@@ -2756,6 +2888,22 @@ class Adb {
                     Assert-True ([regex]::Matches($calls, 'run-as dev\.magina\.gateway am stopservice').Count -eq 1) `
                         '应仅用所属应用身份停止一次本轮服务。'
                 }
+            }
+
+            # R3.1 横屏收尾 a11y 脱落自动精确写回 vs 持久漂移 fail-closed（在 9 模式循环之后独立验证）
+            foreach ($a11yCase in @(
+                @{ Mode='a11y-drop-recoverable'; Code=0; Match='宿主已核实同一微信会话窗口' },
+                @{ Mode='a11y-drop-sticky'; Code=1; Match='基线变化 enabled_accessibility_services' }
+            )) {
+                $env:DISPATCH_TEST_LANDSCAPE = $a11yCase.Mode
+                Set-Content -LiteralPath $receiptFile -Value $receiptLines -Encoding utf8
+                $gatewayStub.DefaultCapsJson = $caps
+                Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started'), (Join-Path $SentinelDir 'landscape-a11y.txt') -Force -ErrorAction SilentlyContinue
+                $result = Invoke-Dispatch -Arguments $boundArgs
+                Assert-ExitCode $result $a11yCase.Code
+                Assert-Contains $result.Text $a11yCase.Match
+                $calls = $result.ToolCalls -join "`n"
+                Assert-Contains $calls 'settings --user 0 put secure enabled_accessibility_services :com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
             }
         }
         finally {
@@ -3187,6 +3335,459 @@ class Adb {
             $env:DISPATCH_TEST_LANDSCAPE = $oldMode
             Remove-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
         }
+    }
+
+    Test-Case 'R3.1 预检无障碍重绑 RMW 合并、前导冒号保形、写失败回滚与收尾抗抖动还原' {
+        $preflightDir = Join-Path $TestRoot 'preflight-r31'
+        New-Item -ItemType Directory -Path $preflightDir -Force | Out-Null
+        $pfAdbCmd = Join-Path $TestRoot 'preflight-unit\fake-adb-pf.cmd'
+        $pfAdbLog = Join-Path $preflightDir 'adb-r31.log'
+        $pfStateFile = Join-Path $preflightDir 'a11y-state.txt'
+        $pfEnabledFile = Join-Path $preflightDir 'a11y-enabled.txt'
+        $pfReboundFlag = Join-Path $preflightDir 'rebound.flag'
+        $pfFailPutFlag = Join-Path $preflightDir 'fail-put.flag'
+        $pfFlapFlag = Join-Path $preflightDir 'flap.flag'
+        $pfConfig = Join-Path $preflightDir 'gateway-mcp.json'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination $pfConfig -Force
+
+        # 1) 纯函数断言：前导冒号保形、null 归一化、去重合并
+        $parsedLeading = ConvertFrom-AccessibilityServiceList -Raw ' :com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService '
+        Assert-True ($parsedLeading.LeadingColon -and $parsedLeading.Members.Count -eq 2) '前导冒号解析失败。'
+        $mergedExact = Merge-AccessibilityServiceList -BaselineRaw $parsedLeading.Raw `
+            -ObservedNonGateway @('com.baidu.input_vivo/.AutoSendImageService') -IncludeGateway
+        Assert-True ($mergedExact -ceq ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "相同成员未保形原字面量：$mergedExact"
+        $mergedConcurrent = Merge-AccessibilityServiceList -BaselineRaw $parsedLeading.Raw `
+            -ObservedNonGateway @('com.extra/.Svc') -IncludeGateway
+        Assert-True ($mergedConcurrent -ceq ':com.baidu.input_vivo/.AutoSendImageService:com.extra/.Svc:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            "并发合并丢失前导冒号或成员：$mergedConcurrent"
+
+        $savedR31Env = @{
+            PF_LOG = $env:PF_LOG
+            PF_SVC_RUNNING = $env:PF_SVC_RUNNING
+            PF_FG_SETTINGS = $env:PF_FG_SETTINGS
+            PF_REBOUND_FLAG = $env:PF_REBOUND_FLAG
+            PF_A11Y_STATE_FILE = $env:PF_A11Y_STATE_FILE
+            PF_A11Y_ENABLED_FILE = $env:PF_A11Y_ENABLED_FILE
+            PF_A11Y_CONCURRENT_INJECT = $env:PF_A11Y_CONCURRENT_INJECT
+            PF_A11Y_FAIL_PUT_FLAG = $env:PF_A11Y_FAIL_PUT_FLAG
+            PF_A11Y_FLAP_FLAG = $env:PF_A11Y_FLAP_FLAG
+        }
+        $savedExpToken = $gatewayStub.ExpectedToken
+        $savedDefCaps = $gatewayStub.DefaultCapsJson
+        $savedRebFile = $gatewayStub.ReboundCapsFile
+        try {
+            $env:PF_LOG = $pfAdbLog
+            $env:PF_SVC_RUNNING = '1'
+            $env:PF_FG_SETTINGS = '0'
+            $env:PF_REBOUND_FLAG = $pfReboundFlag
+            $env:PF_A11Y_STATE_FILE = $pfStateFile
+            $env:PF_A11Y_ENABLED_FILE = $pfEnabledFile
+            $env:PF_A11Y_FAIL_PUT_FLAG = $pfFailPutFlag
+            $env:PF_A11Y_FLAP_FLAG = $pfFlapFlag
+            $gatewayStub.ExpectedToken = $testBearer
+
+            # Case A: 重绑 300ms 窗口内发生 AutoSendImageService 丢失 + com.extra/.Svc 并发写入 -> 合并保形；
+            #         之后运行期模拟 AutoSendImageService 被移除且收尾第 1 次写回又遭 vivo 异步覆盖 -> 抗抖动复读写回原基线
+            $origWithColon = ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+            [IO.File]::WriteAllText($pfStateFile, $origWithColon + "`n", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($pfEnabledFile, "1`n", [Text.UTF8Encoding]::new($false))
+            $env:PF_A11Y_CONCURRENT_INJECT = '1'
+            Remove-Item -LiteralPath $pfReboundFlag, $pfFailPutFlag, $pfFlapFlag, $pfAdbLog -Force -ErrorAction SilentlyContinue
+            $gatewayStub.DefaultCapsJson = '["ime","ocr"]'
+            $gatewayStub.ReboundCapsFile = $pfReboundFlag
+
+            $sRmw = Ensure-GatewayPreflightReady -ConfigPath $pfConfig -AdbCommand $pfAdbCmd -Port $gatewayStub.Port `
+                -A11yRebindTimeoutSec 2 -A11yRestoreSettleMs 0 -A11yRestoreMaxAttempts 3
+            Assert-True ($null -eq $sRmw.Problem) "RMW 合并重绑失败：$($sRmw.Problem)"
+            Assert-True ($sRmw.OriginalAccessibilityServices -ceq $origWithColon) '预检未保存含前导冒号的原始基线。'
+            $afterRebind = (Get-Content -LiteralPath $pfStateFile -Raw).Trim()
+            Assert-True ($afterRebind -ceq ':com.baidu.input_vivo/.AutoSendImageService:com.extra/.Svc:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+                "重绑后 RMW 合并结果错误：$afterRebind"
+
+            $env:PF_A11Y_CONCURRENT_INJECT = ''
+            [IO.File]::WriteAllText($pfStateFile, "dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService`n", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($pfFlapFlag, "1", [Text.UTF8Encoding]::new($false))
+            $rmwWarnings = $null
+            Stop-GatewayPreflightOwnedResources -State $sRmw -AdbCommand $pfAdbCmd -WarningVariable rmwWarnings
+            Assert-True (@($rmwWarnings).Count -eq 0) "抗抖动收敛不应产生告警：$($rmwWarnings -join '; ')"
+            $afterRestore = (Get-Content -LiteralPath $pfStateFile -Raw).Trim()
+            Assert-True ($afterRestore -ceq $origWithColon) "收尾未逐字还原含前导冒号基线：$afterRestore"
+
+            # Case B: 重绑第 2 次 put 失败时必须立即回滚到重绑前状态
+            [IO.File]::WriteAllText($pfStateFile, $origWithColon + "`n", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($pfFailPutFlag, "1", [Text.UTF8Encoding]::new($false))
+            $rbErr = Invoke-GatewayBoundedAccessibilityRebind -AdbCommand $pfAdbCmd -RebindPauseMs 0
+            Assert-Matches ([string]$rbErr) 'gateway_a11y_not_ready'
+            $afterRollback = (Get-Content -LiteralPath $pfStateFile -Raw).Trim()
+            Assert-True ($afterRollback -ceq $origWithColon) "重绑写失败后未回滚到原状态：$afterRollback"
+        }
+        finally {
+            $gatewayStub.ExpectedToken = $savedExpToken
+            $gatewayStub.DefaultCapsJson = $savedDefCaps
+            $gatewayStub.ReboundCapsFile = $savedRebFile
+            foreach ($k in $savedR31Env.Keys) {
+                [Environment]::SetEnvironmentVariable($k, $savedR31Env[$k], 'Process')
+            }
+        }
+    }
+
+    Test-Case 'R3.2 dispatch-forensics 纯函数、StrictMode 隔离与全量传输健康快照' {
+        $forensicsPath = Join-Path $RepoRoot 'scripts\lib\dispatch-forensics.ps1'
+        Assert-True (Test-Path -LiteralPath $forensicsPath -PathType Leaf) '缺少 dispatch-forensics.ps1。'
+
+        # 1) StrictMode 隔离验证：单独 dot-source 不得把 StrictMode 传染给调用方；但在 StrictMode 3.0 作用域内纯函数须全通
+        $probePs = (Get-Process -Id $PID).Path
+        $isoOut = & $probePs -NoProfile -Command @"
+. '$forensicsPath'
+try { `$x = `$neverInitializedVar; 'NO_STRICT_MODE' } catch { 'LEAKED_STRICT_MODE' }
+"@
+        Assert-True (($isoOut -join '') -match 'NO_STRICT_MODE') "dot-source dispatch-forensics.ps1 意外开启了调用方 StrictMode：$isoOut"
+
+        $strictOut = & $probePs -NoProfile -Command @"
+Set-StrictMode -Version 3.0
+. '$forensicsPath'
+`$comp = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+`$short = 'dev.magina.gateway/.a11y.GatewayA11yService'
+`$r1 = Test-GatewayAccessibilityComponentBound -DumpsysText "Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC]]}" -Component `$comp -Label '执行网关'
+`$r2 = Test-GatewayAccessibilityComponentBound -DumpsysText "mBoundServices=[ComponentInfo{`$short}]" -Component `$comp
+`$r3 = Test-GatewayAccessibilityComponentBound -DumpsysText "Bound services:{}" -Component `$comp -Label '执行网关'
+`$r4 = Test-GatewayAccessibilityComponentBound -DumpsysText "Bound services:{Service[label=其他服务]}" -Component `$comp -Label '执行网关'
+"`$r1|`$r2|`$r3|`$r4"
+"@
+        Assert-True (($strictOut -join '').Trim() -ceq 'True|True|False|False') "StrictMode 3.0 下 a11y 绑定解析异常：$strictOut"
+
+        # 2) 端到端：stale-error-then-transport-failure + 全量探针 + 时序（清理前采样）+ 零凭据/UI文本
+        $gatewayConfig = Join-Path $RepoRoot 'configs\gateway-mcp.json'
+        Copy-Item -LiteralPath $validGatewayConfig -Destination $gatewayConfig -Force
+        $ledgerExistedR32 = Test-Path -LiteralPath $LedgerPath -PathType Leaf
+        $ledgerBytesR32 = if ($ledgerExistedR32) { [IO.File]::ReadAllBytes($LedgerPath) } else { $null }
+        $dumpsysA11yFixture = Join-Path $SentinelDir 'dumpsys-a11y-fixture.txt'
+        @(
+            'Accessibility Manager State:'
+            '  User State[0]:'
+            '    Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}'
+            '  Window Node Text Should Never Leak: SECRET_WINDOW_TEXT_MUST_NOT_APPEAR'
+        ) | Set-Content -LiteralPath $dumpsysA11yFixture -Encoding utf8
+
+        $oldScen = $env:DISPATCH_TEST_CODEX_SCENARIO
+        $oldFwdLine = $env:DISPATCH_TEST_ADB_FORWARD_LINE
+        $oldA11ySvc = $env:DISPATCH_TEST_ADB_A11Y_SERVICES
+        $oldDumpFile = $env:DISPATCH_TEST_ADB_DUMPSYS_A11Y_FILE
+        $oldDeviceLease = $env:AGENT_MOBILE_DEVICE_LOCK_LEASE
+        $oldLandMode = $env:DISPATCH_TEST_LANDSCAPE
+        $oldLandForensics = $env:DISPATCH_TEST_LANDSCAPE_FORENSICS
+        $fakeAdbExe = Join-Path $FakeBin 'adb.exe'
+        $fakeAdbExeBak = Join-Path $FakeBin 'adb.exe.bak'
+        $parentLease2 = Open-DispatchLock -Path $LockPath -Owner 'offline-r32-parent' -LeaseToken ''
+        try {
+            if (Test-Path -LiteralPath $fakeAdbExe) {
+                Move-Item -LiteralPath $fakeAdbExe -Destination $fakeAdbExeBak -Force
+            }
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE = $parentLease2.LeaseToken
+            $env:DISPATCH_TEST_CODEX_SCENARIO = 'stale-error-then-transport-failure'
+            $env:DISPATCH_TEST_ADB_FORWARD_LINE = "FAKE-DISPATCH-DEVICE tcp:$($gatewayStub.Port) tcp:$($gatewayStub.Port)"
+            $env:DISPATCH_TEST_ADB_A11Y_SERVICES = ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+            $env:DISPATCH_TEST_ADB_DUMPSYS_A11Y_FILE = $dumpsysA11yFixture
+
+            $adbLogPath = Join-Path $SentinelDir 'adb-called.txt'
+            Remove-Item -LiteralPath $adbLogPath -Force -ErrorAction SilentlyContinue
+            $r32Res = Invoke-Dispatch @(
+                '-Task','offline r32 forensics','-Slug','offline-codex-r32-full',
+                '-Brain','codex','-Executor','gateway'
+            )
+            Assert-ExitCode $r32Res 1
+            Assert-Matches $r32Res.Text '(?m)^note: gateway-tool-failure\+mcp-transport-failure\r?$'
+            Assert-Matches $r32Res.Text '(?m)^fail_reason: mcp-transport-failure\r?$'
+            Assert-Contains $r32Res.Text 'health_snapshot:'
+
+            $rowR32 = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq 'offline-codex-r32-full' } | Select-Object -Last 1)
+            Assert-True ($rowR32.Count -eq 1 -and $rowR32[0].fail_reason -ceq 'mcp-transport-failure') `
+                "陈旧 E_NOT_FOUND 不得掩盖末尾传输失败：$($rowR32[0].fail_reason)"
+
+            $snapFile = Get-ChildItem -LiteralPath $TracesDir -Filter '*-offline-codex-r32-full-gateway-codex-leg1.transport-health.json' | Select-Object -Last 1
+            Assert-True ($null -ne $snapFile) '未生成 full forensics transport-health.json。'
+            $snapText = Get-Content -LiteralPath $snapFile.FullName -Raw -Encoding utf8
+            Assert-NotMatches $snapText 'fixture-bearer-value-must-never-leak|Bearer\s|Authorization|SECRET_WINDOW_TEXT_MUST_NOT_APPEAR'
+            $snapObj = $snapText | ConvertFrom-Json
+            Assert-True ($snapObj.adb_forward.port_mapped -eq $true -and $snapObj.adb_forward.port_mappings.Count -eq 1) 'adb_forward 映射应命中。'
+            Assert-True ($snapObj.health.reachable -eq $true -and $snapObj.health.http_status -eq 200 -and $snapObj.health.body_ok -eq $true) 'health 应为 200 ok。'
+            Assert-True ($snapObj.gateway_service.state -ceq 'foreground') 'gateway_service 应为 foreground。'
+            Assert-True ($snapObj.accessibility.enabled_query_ok -eq $true -and $snapObj.accessibility.gateway_enabled -eq $true) 'gateway_enabled 应为 true。'
+            Assert-True ($snapObj.accessibility.dumpsys_ok -eq $true -and $snapObj.accessibility.gateway_bound -eq $true) 'gateway_bound 应为 true。'
+
+            # 时序断言：快照探针必须在 forward --remove 之前运行
+            $adbCalls = @(Get-Content -LiteralPath $adbLogPath)
+            $idxRemove = [Array]::FindIndex($adbCalls, [Predicate[string]]{ param($l) $l -match 'forward --remove' })
+            $idxList = [Array]::FindLastIndex($adbCalls, [Predicate[string]]{ param($l) $l -match 'forward --list' })
+            $idxSettings = if ($idxList -ge 0) {
+                [Array]::FindIndex($adbCalls, $idxList, [Predicate[string]]{ param($l) $l -match 'settings get secure enabled_accessibility_services' })
+            } else { -1 }
+            $idxDumpsys = [Array]::FindLastIndex($adbCalls, [Predicate[string]]{ param($l) $l -match 'dumpsys accessibility' })
+            Assert-True ($idxList -ge 0 -and $idxSettings -gt $idxList -and $idxDumpsys -gt $idxSettings -and $idxRemove -gt $idxDumpsys) `
+                "健康快照必须在资源拆除前采集（list=$idxList, settings=$idxSettings, dumpsys=$idxDumpsys, remove=$idxRemove）。"
+
+            # 3) /health 不可达对照：关闭临时端口仍照常完成其余 3 项探针
+            . $forensicsPath
+            $deadListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+            $deadListener.Start()
+            $deadPort = ([Net.IPEndPoint]$deadListener.LocalEndpoint).Port
+            $deadListener.Stop()
+            $downSnap = Get-GatewayTransportHealthSnapshot -AdbCommand (Join-Path $FakeBin 'adb.cmd') -Port $deadPort -HealthTimeoutSec 1 -Slug 'down-probe'
+            Assert-True ($downSnap.health.reachable -eq $false -and $null -eq $downSnap.health.http_status -and $downSnap.health.body_ok -eq $false -and -not [string]::IsNullOrWhiteSpace([string]$downSnap.health.error_type)) `
+                '/health 不可达时应降级记录 error_type。'
+            Assert-True ($downSnap.gateway_service.state -ceq 'foreground' -and $downSnap.accessibility.gateway_bound -eq $true) `
+                '/health 不可达不应阻断其余探针。'
+
+            # 4) 横屏模式下的 transport-failure 时序断言（必须在 Complete-LandscapePreparation stopservice/forward --remove 之前）
+            if (Test-Path -LiteralPath $fakeAdbExeBak) {
+                Move-Item -LiteralPath $fakeAdbExeBak -Destination $fakeAdbExe -Force
+            }
+            $env:DISPATCH_TEST_LANDSCAPE = 'owned-stop'
+            $env:DISPATCH_TEST_LANDSCAPE_FORENSICS = '1'
+            Remove-Item -LiteralPath $adbLogPath, (Join-Path $SentinelDir 'landscape-started'), (Join-Path $SentinelDir 'landscape-owned-service') -Force -ErrorAction SilentlyContinue
+            $cardR32 = "<!-- dispatch: PA2553-landscape-prepare -->`n离线横屏取证时序"
+            $landRes = Invoke-Dispatch -Arguments @('-Task', $cardR32, '-Slug', 'offline-codex-r32-landscape', '-ExpectedDeviceSerial', 'TABLET-TEST', '-ExpectedGatewaySha256', ('a' * 64))
+            Assert-ExitCode $landRes 1
+            Assert-Contains $landRes.Text 'health_snapshot:'
+            $landCalls = @(Get-Content -LiteralPath $adbLogPath)
+            $lIdxDumpsys = [Array]::FindLastIndex($landCalls, [Predicate[string]]{ param($l) $l -match 'dumpsys accessibility' })
+            $lIdxStop = [Array]::FindIndex($landCalls, [Predicate[string]]{ param($l) $l -match 'stopservice' })
+            $lIdxRem = [Array]::FindIndex($landCalls, [Predicate[string]]{ param($l) $l -match 'forward --remove' })
+            Assert-True ($lIdxDumpsys -ge 0 -and $lIdxStop -gt $lIdxDumpsys -and $lIdxRem -gt $lIdxDumpsys) `
+                "横屏模式健康快照必须在 Complete-LandscapePreparation 拆除前采集（dumpsys=$lIdxDumpsys, stop=$lIdxStop, remove=$lIdxRem）。"
+        }
+        finally {
+            if (Test-Path -LiteralPath $fakeAdbExeBak) {
+                Move-Item -LiteralPath $fakeAdbExeBak -Destination $fakeAdbExe -Force
+            }
+            $env:DISPATCH_TEST_CODEX_SCENARIO = $oldScen
+            $env:DISPATCH_TEST_ADB_FORWARD_LINE = $oldFwdLine
+            $env:DISPATCH_TEST_ADB_A11Y_SERVICES = $oldA11ySvc
+            $env:DISPATCH_TEST_ADB_DUMPSYS_A11Y_FILE = $oldDumpFile
+            $env:AGENT_MOBILE_DEVICE_LOCK_LEASE = $oldDeviceLease
+            $env:DISPATCH_TEST_LANDSCAPE = $oldLandMode
+            $env:DISPATCH_TEST_LANDSCAPE_FORENSICS = $oldLandForensics
+            if ($null -ne $parentLease2) { [void](Close-DispatchLockLease -Lease $parentLease2) }
+            Get-ChildItem -LiteralPath $TracesDir -File -ErrorAction SilentlyContinue |
+                Where-Object Name -like '*-offline-codex-*-gateway-codex-leg1.*' |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            if ((Test-Path -LiteralPath $TracesDir -PathType Container) -and
+                @(Get-ChildItem -LiteralPath $TracesDir -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $TracesDir -Force
+            }
+            if ($ledgerExistedR32) { [IO.File]::WriteAllBytes($LedgerPath, $ledgerBytesR32) }
+            else { Remove-Item -LiteralPath $LedgerPath -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ledgerBytesR32 -and $ledgerBytesR32.Length -gt 0) {
+                [Array]::Clear($ledgerBytesR32, 0, $ledgerBytesR32.Length)
+            }
+            Remove-Item -LiteralPath $gatewayConfig, $dumpsysA11yFixture -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case 'R3.1/R3.2 回归：null 基线不误删、非 0/1 开关恢复、0ms 重试、enable 回滚与纯函数 LASTEXITCODE 隔离' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-forensics.ps1')
+
+        # 1) ConvertFrom-AccessibilityServiceList -Raw $null 与 Merge-AccessibilityServiceList -BaselineRaw $null 不得强转为 ""
+        $nullParsed = ConvertFrom-AccessibilityServiceList -Raw $null
+        Assert-True ($null -eq $nullParsed.Raw) 'ConvertFrom-AccessibilityServiceList -Raw $null 必须保留 Raw = $null。'
+        Assert-True ($nullParsed.Normalized -ceq '' -and -not $nullParsed.LeadingColon -and $nullParsed.Members.Count -eq 0) `
+            'ConvertFrom-AccessibilityServiceList -Raw $null 其余字段异常。'
+        Assert-True ((Merge-AccessibilityServiceList -BaselineRaw $null) -ceq '') 'Merge-AccessibilityServiceList -BaselineRaw $null 不应产出非空。'
+        Assert-True ((Merge-AccessibilityServiceList -BaselineRaw $null -IncludeGateway) -ceq 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService') `
+            'Merge-AccessibilityServiceList -BaselineRaw $null -IncludeGateway 应只含完整网关组件。'
+
+        # 2) Restore-AccessibilityServicesBaseline -TargetServicesRaw $null 必须返回 no-baseline 且零 settings delete/put 调用
+        $regDir = Join-Path $TestRoot 'r31-r32-regressions'
+        New-Item -ItemType Directory -Path $regDir -Force | Out-Null
+        $regState = [ordered]@{
+            Svc = 'com.other/.Svc'
+            En = '1'
+            StickyEn = $false
+            FailNextSvcPut = $false
+            FailEnablePut = $false
+            Log = [Collections.Generic.List[string]]::new()
+        }
+        function Invoke-RegMockAdb {
+            $cmd = ($args | ForEach-Object { "$_" }) -join ' '
+            [void]$regState.Log.Add($cmd)
+            $clean = $cmd -replace '^-s\s+\S+\s+', ''
+            switch -Regex ($clean) {
+                '^get-state$' { Write-Output 'device'; $global:LASTEXITCODE = 0; return }
+                '^forward --list$' { Write-Output "REG-DEV tcp:$($gatewayStub.Port) tcp:$($gatewayStub.Port)"; $global:LASTEXITCODE = 0; return }
+                '^shell dumpsys activity activities$' {
+                    Write-Output 'topResumedActivity=ActivityRecord{abc u0 com.xingin.xhs/.MainActivity t9}'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell dumpsys activity services dev\.magina\.gateway/\.GatewayService$' {
+                    Write-Output 'ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}'; Write-Output 'isForeground=true'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell dumpsys accessibility$' {
+                    Write-Output 'Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}'
+                    $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?get secure enabled_accessibility_services$' {
+                    Write-Output $regState.Svc; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?get secure accessibility_enabled$' {
+                    Write-Output $regState.En; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?delete secure enabled_accessibility_services$' {
+                    $regState.Svc = 'null'; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?put secure enabled_accessibility_services (.+)$' {
+                    if ($regState.FailNextSvcPut) {
+                        $regState.FailNextSvcPut = $false
+                        $global:LASTEXITCODE = 1
+                        return
+                    }
+                    $regState.Svc = $Matches[1]; $global:LASTEXITCODE = 0; return
+                }
+                '^shell settings (?:--user 0 )?put secure accessibility_enabled (.+)$' {
+                    if ($regState.FailEnablePut) {
+                        $global:LASTEXITCODE = 1
+                        return
+                    }
+                    if (-not $regState.StickyEn) { $regState.En = $Matches[1] }
+                    $global:LASTEXITCODE = 0; return
+                }
+                default { $global:LASTEXITCODE = 0; return }
+            }
+        }
+
+        $noBase = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' -TargetServicesRaw $null
+        Assert-True (-not $noBase.Restored -and $noBase.Verified -and $noBase.Reason -ceq 'no-baseline') `
+            "TargetServicesRaw=\$null 应返回 no-baseline，实际：$($noBase | ConvertTo-Json -Compress)"
+        Assert-True ($regState.Log.Count -eq 0 -and $regState.Svc -ceq 'com.other/.Svc') `
+            'TargetServicesRaw=$null 时不得执行任何 settings 命令或清空设备服务。'
+
+        # 3) Restore-AccessibilityServicesBaseline 对非 0/1 开关值（null / 2 / garbage）必须判定失配并写回
+        foreach ($badEn in @('null', '2', 'garbage')) {
+            foreach ($targetEn in @('0', '1')) {
+                $regState.Log.Clear()
+                $regState.Svc = 'com.other/.Svc'
+                $regState.En = $badEn
+                $regState.StickyEn = $false
+                $resEn = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+                    -TargetServicesRaw 'com.other/.Svc' -TargetEnabled $targetEn -SettleDelayMs 0 -MaxAttempts 2
+                Assert-True ($resEn.Restored -and $resEn.Verified -and $resEn.Reason -ceq 'restored') `
+                    "accessibility_enabled=$badEn 相对基线 $targetEn 未被还原：$($resEn | ConvertTo-Json -Compress)"
+                Assert-True ($regState.En -ceq $targetEn) "device accessibility_enabled 未写回 $targetEn，实际 $($regState.En)"
+            }
+        }
+        $regState.Log.Clear()
+        $regState.Svc = 'com.other/.Svc'
+        $regState.En = 'null'
+        $regState.StickyEn = $true
+        $stickyRes = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+            -TargetServicesRaw 'com.other/.Svc' -TargetEnabled '0' -SettleDelayMs 0 -MaxAttempts 2
+        Assert-True (-not $stickyRes.Verified -and $stickyRes.Reason -ceq 'drift-persisted') `
+            "accessibility_enabled 持久返回 null 时不得假阳性 Verified：$($stickyRes | ConvertTo-Json -Compress)"
+        $regState.StickyEn = $false
+
+        # 4) Complete-LandscapePreparation 在 accessibility_enabled='null'/'2' 时自动写回 '0' 并收敛
+        $landRegCmd = Join-Path $regDir 'fake-adb-land-reg.cmd'
+        $landSvcFile = Join-Path $regDir 'land-svc.txt'
+        $landEnFile = Join-Path $regDir 'land-en.txt'
+        @'
+@echo off
+if "%1"=="-s" (
+  shift
+  shift
+)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure enabled_accessibility_services" (type "%LAND_REG_SVC%"& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure accessibility_enabled" (type "%LAND_REG_EN%"& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure default_input_method" (echo com.ime/.Default& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 get secure enabled_input_methods" (echo com.ime/.Default& exit /b 0)
+if "%1 %2 %3 %4 %5 %6 %7"=="shell settings --user 0 put secure accessibility_enabled" (>"%LAND_REG_EN%" echo(%8& exit /b 0)
+if "%1 %2 %3 %4 %5"=="shell dumpsys activity services dev.magina.gateway/.GatewayService" (echo   ^(nothing^)& exit /b 0)
+if "%1 %2"=="forward --list" exit /b 0
+exit /b 91
+'@ | Set-Content -LiteralPath $landRegCmd -Encoding ascii
+        $oldLandSvcEnv = $env:LAND_REG_SVC
+        $oldLandEnEnv = $env:LAND_REG_EN
+        try {
+            $env:LAND_REG_SVC = $landSvcFile
+            $env:LAND_REG_EN = $landEnFile
+            foreach ($badLandEn in @('null', '2')) {
+                [IO.File]::WriteAllText($landSvcFile, "com.other/.Svc`n", [Text.UTF8Encoding]::new($false))
+                [IO.File]::WriteAllText($landEnFile, "$badLandEn`n", [Text.UTF8Encoding]::new($false))
+                $baseline = [ordered]@{
+                    default_input_method = 'com.ime/.Default'
+                    enabled_input_methods = 'com.ime/.Default'
+                    enabled_accessibility_services = 'com.other/.Svc'
+                    accessibility_enabled = '0'
+                    Service = 'absent'
+                    Forward = ''
+                }
+                $landDevice = [pscustomobject]@{ AdbPath = $landRegCmd; Serial = 'REG-LAND' }
+                $landProblems = Complete-LandscapePreparation -Device $landDevice -AdbCommand $landRegCmd `
+                    -Baseline $baseline -PreflightState $null -A11yRestoreSettleMs 0 -A11yRestoreMaxAttempts 2
+                Assert-True ([string]::IsNullOrEmpty($landProblems)) `
+                    "Complete-LandscapePreparation 面对 accessibility_enabled=$badLandEn 应自动恢复：$landProblems"
+                Assert-True ((Get-Content -LiteralPath $landEnFile -Raw).Trim() -ceq '0') `
+                    "Complete-LandscapePreparation 未将 accessibility_enabled 从 $badLandEn 恢复为 0。"
+            }
+        }
+        finally {
+            $env:LAND_REG_SVC = $oldLandSvcEnv
+            $env:LAND_REG_EN = $oldLandEnEnv
+        }
+
+        # 5) -SettleDelayMs 0 -MaxAttempts 3 在第 1 次写失败后必须继续重试并成功
+        $regState.Log.Clear()
+        $regState.Svc = 'dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+        $regState.En = '1'
+        $regState.FailNextSvcPut = $true
+        $retryRes = Restore-AccessibilityServicesBaseline -AdbCommand 'Invoke-RegMockAdb' `
+            -TargetServicesRaw ':com.baidu.input_vivo/.AutoSendImageService:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService' `
+            -TargetEnabled '1' -SettleDelayMs 0 -MaxAttempts 3
+        Assert-True ($retryRes.Restored -and $retryRes.Verified -and $retryRes.Reason -ceq 'restored') `
+            "-SettleDelayMs 0 -MaxAttempts 3 未从首次写失败恢复：$($retryRes | ConvertTo-Json -Compress)"
+
+        # 6) Invoke-GatewayBoundedAccessibilityRebind 在 put accessibility_enabled 1 失败时必须回滚 enabled_accessibility_services
+        foreach ($preVal in @(':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService', 'null')) {
+            $regState.Log.Clear()
+            $regState.Svc = $preVal
+            $regState.En = '0'
+            $regState.FailEnablePut = $true
+            $rbErr2 = Invoke-GatewayBoundedAccessibilityRebind -AdbCommand 'Invoke-RegMockAdb' -RebindPauseMs 0
+            Assert-Contains ([string]$rbErr2) 'accessibility_enabled 失败'
+            $expectedAfterRb = if ($preVal -ceq 'null') { 'null' } else { $preVal }
+            Assert-True ($regState.Svc -ceq $expectedAfterRb) `
+                "enable=1 失败后未回滚 enabled_accessibility_services（期望=$expectedAfterRb，实际=$($regState.Svc)）。"
+        }
+        $regState.FailEnablePut = $false
+
+        # 7) Get-GatewayTransportHealthSnapshot 在陈旧 $LASTEXITCODE=97 + 纯 PowerShell $AdbCommand 函数下仍须成功
+        function Invoke-RegPurePsAdb {
+            $clean = ($args | ForEach-Object { "$_" }) -join ' '
+            switch -Regex ($clean) {
+                '^forward --list$' { Write-Output "REG-DEV tcp:$($gatewayStub.Port) tcp:$($gatewayStub.Port)" }
+                '^shell dumpsys activity services dev\.magina\.gateway/\.GatewayService$' {
+                    Write-Output 'ServiceRecord{202 u0 dev.magina.gateway/.GatewayService}'
+                    Write-Output 'isForeground=true'
+                }
+                '^shell settings get secure enabled_accessibility_services$' {
+                    Write-Output ':com.a/s1:dev.magina.gateway/dev.magina.gateway.a11y.GatewayA11yService'
+                }
+                '^shell dumpsys accessibility$' {
+                    Write-Output 'Bound services:{Service[label=执行网关, feedbackType[FEEDBACK_GENERIC], capabilities=161]}'
+                }
+            }
+            # 刻意不修改 $global:LASTEXITCODE，模拟纯 PowerShell 函数替身
+        }
+        & $env:ComSpec /c 'exit 97'
+        Assert-True ($LASTEXITCODE -eq 97) '前置设置陈旧 LASTEXITCODE=97 失败。'
+        $staleSnap = Get-GatewayTransportHealthSnapshot -AdbCommand 'Invoke-RegPurePsAdb' -Port $gatewayStub.Port -HealthTimeoutSec 2 -Slug 'stale-exit'
+        Assert-True ($staleSnap.adb_forward.probe_ok -and $staleSnap.adb_forward.exit_code -eq 0) `
+            "陈旧 LASTEXITCODE=97 污染了 adb_forward：$($staleSnap.adb_forward | ConvertTo-Json -Compress)"
+        Assert-True ($staleSnap.gateway_service.probe_ok -and $staleSnap.gateway_service.state -ceq 'foreground') `
+            "陈旧 LASTEXITCODE 污染了 gateway_service：$($staleSnap.gateway_service | ConvertTo-Json -Compress)"
+        Assert-True ($staleSnap.accessibility.enabled_query_ok -and $staleSnap.accessibility.dumpsys_ok) `
+            "陈旧 LASTEXITCODE 污染了 accessibility：$($staleSnap.accessibility | ConvertTo-Json -Compress)"
     }
     Write-Host "dispatch offline: $($script:Passed) passed, $($script:Failed) failed"
     if ($script:Failed -gt 0) { exit 1 }

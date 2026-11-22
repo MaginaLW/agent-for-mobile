@@ -14,5 +14,68 @@
     "com.tencent.mm": "com.tencent.mm.ui.tools.ShareImgUI"
   },
   "_share_landing_activities_comment": "包名 → 可接受的分享落地 activity 全类名白名单。配了就把 share 的前台判据从包级收紧到 activity 级；不配则回落包级（即历史行为）。存在的理由：M1 spike 实测微信冷启动 splash 闪回时，包级判据抓到 WeChatSplashActivity 就判 true，分享页根本没出现却报成功。注意启动组件与落地 activity 不是一回事——spike 观测到启动 ShareImgUI、落地 MsgRetransmitUI，所以白名单必须填落地那个，填成启动组件会把真实成功判失败。空数组一律拒绝（那等于永远失败），要么不配要么配全。入库规程同深链：先真机实测拿到全类名再进 assets，不得凭印象填。",
-  "share_landing_activities": {}
+  "share_landing_activities": {},
+  "unreliable_settings_actions": [
+    {
+      "action": "android.settings.BLUETOOTH_SETTINGS",
+      "device_scope": "vivo/OriginOS",
+      "fallback": "改用 app_launch(\"设置\") 或 intent_send(action=\"android.settings.SETTINGS\", package=\"com.android.settings\") 打开主设置后走 UI 导航",
+      "verified": "2026-07-16"
+    }
+  ],
+  "app_guides": {
+    "com.xingin.xhs": {
+      "app": "小红书",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "核对当前前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "若已在小红书且需重新搜索，走页面内搜索框并用 readback 核对后再提交"
+      ],
+      "post_launch_guards": [
+        "先核对搜索词与分类栏，若不在「全部」/「笔记」先切换再滚动，避免外层容器滑到「用户」tab",
+        "跳过「AI 综合攻略」与「广告」卡片，出现 blocking_overlay=true 或结果空白立即停止"
+      ],
+      "readonly_rules": [
+        "仅浏览公开笔记；不点赞、不评论、不关注、不收藏",
+        "详情图片区禁止双击（双击=点赞），一律单击"
+      ]
+    },
+    "com.jingdong.app.mall": {
+      "app": "京东",
+      "known_blockers": ["com.vivo.appfilter"],
+      "login_wall_keywords": ["登录", "手机号登录", "一键登录", "请先登录", "立即登录"],
+      "pre_guards": [
+        "启动后先核对前台包名，遇系统拦截弹窗立即停止",
+        "检测到登录墙关键词立即按前置条件停止（禁代登录/处理验证码）"
+      ],
+      "readonly_rules": [
+        "已验证物流路径：我的 → 全部订单 → 订单详情 → 更多 → 查看物流",
+        "「更多」菜单中「删除订单」与「查看物流」相邻，点击前必须确认落点",
+        "禁止下单、结算、支付或跳转支付宝"
+      ]
+    },
+    "com.taobao.taobao": {
+      "app": "淘宝",
+      "known_blockers": ["com.vivo.appfilter"],
+      "login_wall_keywords": ["登录", "手机号登录", "一键登录", "请先登录", "立即登录"],
+      "pre_guards": [
+        "启动后先核对前台包名，遇系统拦截弹窗或登录墙立即停止（禁代登录/处理验证码）"
+      ],
+      "readonly_rules": [
+        "优先走我的淘宝 → 我的订单/全部订单 → 查看物流",
+        "禁止下单、结算、支付或跳转支付宝"
+      ]
+    },
+    "com.android.settings": {
+      "app": "设置",
+      "prefer_api_first": ["bluetooth", "wifi", "airplane", "battery", "network", "screen", "volume", "brightness"],
+      "pre_guards": [
+        "只读查询系统状态优先调用 system_get_state，无需进入设置 UI",
+        "在系统设置前台时安全中心会监控并撤销第三方无障碍，遇权限失效/弹窗立即停止并如实报告"
+      ],
+      "readonly_rules": [
+        "禁止用 android.settings.BLUETOOTH_SETTINGS 直达蓝牙页（OriginOS 不可靠）；改用 app_launch(\"设置\") 或 android.settings.SETTINGS 后 UI 导航"
+      ]
+    }
+  }
 }
