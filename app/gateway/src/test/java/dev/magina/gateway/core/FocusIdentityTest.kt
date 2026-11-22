@@ -59,8 +59,14 @@ class FocusIdentityTest {
         listOf(
             { FocusIdentity(IdentitySource.A11Y, null, imeSessionId) },
             { FocusIdentity(IdentitySource.A11Y, "chat-input", imeSessionId) },
+            { FocusIdentity(IdentitySource.A11Y, nodeId, imeSessionId, cursorAnchorWindowId = 20) },
             { FocusIdentity(IdentitySource.IME_ONLY, nodeId, imeSessionId) },
             { FocusIdentity(IdentitySource.IME_ONLY, null, "not-an-ime-session") },
+            { FocusIdentity(IdentitySource.IME_ONLY, null, imeSessionId, cursorAnchorWindowId = 20) },
+            { FocusIdentity(IdentitySource.IME_CURSOR_ANCHOR, null, imeSessionId, cursorAnchorWindowId = null) },
+            { FocusIdentity(IdentitySource.IME_CURSOR_ANCHOR, null, imeSessionId, cursorAnchorWindowId = -1) },
+            { FocusIdentity(IdentitySource.IME_CURSOR_ANCHOR, nodeId, imeSessionId, cursorAnchorWindowId = 20) },
+            { FocusIdentity(IdentitySource.IME_CURSOR_ANCHOR, null, "not-an-ime-session", cursorAnchorWindowId = 20) },
         ).forEach { build ->
             try {
                 build()
@@ -71,12 +77,37 @@ class FocusIdentityTest {
         }
     }
 
+    @Test
+    fun `ofCursorAnchor produces degraded identity with non-negative windowId and rejects invalid args`() {
+        val anchor0 = FocusIdentity.ofCursorAnchor(0, imeSessionId)
+        assertEquals(IdentitySource.IME_CURSOR_ANCHOR, anchor0?.source)
+        assertNull(anchor0?.a11yInputId)
+        assertEquals(0, anchor0?.cursorAnchorWindowId)
+        assertTrue(anchor0!!.degraded)
+        assertTrue(anchor0.describe().contains(",win=0"))
+
+        val anchor20 = FocusIdentity.ofCursorAnchor(20, imeSessionId)
+        assertEquals(IdentitySource.IME_CURSOR_ANCHOR, anchor20?.source)
+        assertEquals(20, anchor20?.cursorAnchorWindowId)
+        assertTrue(anchor20!!.degraded)
+        assertTrue(anchor20.describe().contains("source=ime_cursor_anchor"))
+        assertTrue(anchor20.describe().contains(",win=20"))
+
+        assertNull(FocusIdentity.ofCursorAnchor(-1, imeSessionId))
+        assertNull(FocusIdentity.ofCursorAnchor(20, null))
+        assertNull(FocusIdentity.ofCursorAnchor(20, "ime|not-hex"))
+    }
+
     /** design §3.3：几何证据必须与来源一致地存在或一致地缺失。 */
     @Test
     fun `bounds must be consistently present or consistently absent`() {
         assertTrue(FocusIdentity.boundsConsistent(IdentitySource.A11Y, "[10,20][100,80]"))
         assertFalse(FocusIdentity.boundsConsistent(IdentitySource.A11Y, null))
         assertFalse(FocusIdentity.boundsConsistent(IdentitySource.A11Y, ""))
+        assertTrue(FocusIdentity.boundsConsistent(IdentitySource.IME_CURSOR_ANCHOR, "[1048,1834][2578,1946]"))
+        assertFalse(FocusIdentity.boundsConsistent(IdentitySource.IME_CURSOR_ANCHOR, null))
+        assertFalse(FocusIdentity.boundsConsistent(IdentitySource.IME_CURSOR_ANCHOR, ""))
+        assertFalse(FocusIdentity.boundsConsistent(IdentitySource.IME_CURSOR_ANCHOR, "   "))
         assertTrue(FocusIdentity.boundsConsistent(IdentitySource.IME_ONLY, null))
         assertFalse(FocusIdentity.boundsConsistent(IdentitySource.IME_ONLY, "[10,20][100,80]"))
         assertFalse("空串不是合法的一致缺失", FocusIdentity.boundsConsistent(IdentitySource.IME_ONLY, ""))

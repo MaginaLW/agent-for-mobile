@@ -14,8 +14,12 @@ import dev.magina.gateway.ime.transformCursorAnchor
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.GatewayError
 import java.util.concurrent.TimeoutException
 
 class CursorAnchorDiagnosticTest {
@@ -81,19 +85,28 @@ class CursorAnchorDiagnosticTest {
             CursorAnchorProbeResult.Declined(false, false)
         },
         var throwTimeoutOnRequest: Boolean = false,
+        var onMainThread: Boolean = false,
+        var packageBlocked: Boolean = false,
+        var focusedNodeSensitive: Boolean = false,
     ) : CursorAnchorEnvironment {
         var requestCalls = 0
+        var cancelCalls = 0
         val legacyFlags = mutableListOf<Boolean>()
 
         override fun session(): ImeSessionIdentity? = session
         override fun editorContract(): ImeEditorContract? = contract
         override fun foregroundPackage(): String = foregroundPackage
-        override fun ensurePackageAllowed(pkg: String) {}
-        override fun checkNotMainThread() {}
+        override fun ensurePackageAllowed(pkg: String) {
+            if (packageBlocked) throw GatewayError(ErrorCode.E_BLOCKED, "blocked: $pkg")
+        }
+        override fun checkNotMainThread() {
+            if (onMainThread) throw IllegalStateException("main thread")
+        }
         override fun isGatewayImeSelected(): Boolean = gatewayImeSelected
         override fun visibleAppWindows(): List<VisibleAppWindow> = windows
         override fun resourceName(pkg: String, resId: Int): ResourceNameResult =
             resourceResults[resId] ?: ResourceNameResult.Missing
+        override fun isFocusedNodeSensitive(): Boolean = focusedNodeSensitive
 
         override fun requestCursorAnchor(session: ImeSessionIdentity, preferLegacyOnly: Boolean): CursorAnchorRequest {
             requestCalls++
@@ -103,7 +116,9 @@ class CursorAnchorDiagnosticTest {
                     if (throwTimeoutOnRequest) throw TimeoutException("timeout")
                     return onRequest(this@FakeCursorEnv, preferLegacyOnly)
                 }
-                override fun cancel() {}
+                override fun cancel() {
+                    cancelCalls++
+                }
             }
         }
 
@@ -410,5 +425,186 @@ class CursorAnchorDiagnosticTest {
         assertFalse(sensReply.has("ime_cursor_anchor_diag"))
         assertFalse(sensReply.has("ime_editor_contract_diag"))
         assertFalse(sensReply.has("ime_editor_node_telemetry"))
+    }
+
+    @Test
+    fun `resolveCursorAnchorFocusBounds resolves PA2553 right pane, left pane, legacy fallback, and never caches`() {
+        // PA2553 微信横屏实测几何：[1048,1834,2578,1946] 落于右窗 [927,0,2800,1968]
+        val liveLeft = VisibleAppWindow(10, pkg, isActive = false, isFocused = false, bounds = IntBounds(0, 0, 923, 1968))
+        val liveRight = VisibleAppWindow(20, pkg, isActive = true, isFocused = true, bounds = IntBounds(927, 0, 2800, 1968))
+        val liveWindows = listOf(liveLeft, liveRight)
+
+        var height = 112f
+        val env = FakeCursorEnv(
+            windows = liveWindows,
+            onRequest = { _, _ ->
+                val geom = sampleGeometry(
+                    dx = 1048f,
+                    dy = 1834f,
+                    localBounds = FloatRect(0f, 0f, 1530f, height),
+                )
+                CursorAnchorProbeResult.Received(geom, CursorUpdateRequestMode.FILTERED_2ARG, true, null)
+            },
+        )
+        val first = resolveCursorAnchorFocusBounds(env)
+        assertNotNull(first)
+        assertEquals("ime|0123456789abcdef01234567", first!!.sessionId)
+        assertEquals(20, first.windowId)
+        assertEquals("right", first.pane)
+        assertEquals(IntBounds(1048, 1834, 2578, 1946), first.editorBounds)
+
+        // 零缓存：第二次调用必须重新发请求并反映最新几何（如输入多行增高）
+        height = 124f
+        val second = resolveCursorAnchorFocusBounds(env)
+        assertNotNull(second)
+        assertEquals(2, env.requestCalls)
+        assertEquals(IntBounds(1048, 1834, 2578, 1958), second!!.editorBounds)
+
+        // 左窗互不重叠归属
+        val leftEnv = FakeCursorEnv(
+            windows = liveWindows,
+            onRequest = { _, _ ->
+                val geom = sampleGeometry(dx = 40f, dy = 1800f, localBounds = FloatRect(0f, 0f, 800f, 100f))
+                CursorAnchorProbeResult.Received(geom, CursorUpdateRequestMode.FILTERED_2ARG, true, null)
+            },
+        )
+        val leftRes = resolveCursorAnchorFocusBounds(leftEnv)
+        assertEquals(10, leftRes?.windowId)
+        assertEquals("left", leftRes?.pane)
+        assertEquals(IntBounds(40, 1800, 840, 1900), leftRes?.editorBounds)
+
+        // 2 参返回空 editorBounds 时自动 1 参兜底成功
+        val fallbackEnv = FakeCursorEnv(
+            windows = liveWindows,
+            onRequest = { _, preferLegacy ->
+                if (!preferLegacy) {
+                    val markerOnly = sampleGeometry(dx = 1048f, dy = 1834f, localBounds = null)
+                    CursorAnchorProbeResult.Received(markerOnly, CursorUpdateRequestMode.FILTERED_2ARG, true, null)
+                } else {
+                    val full = sampleGeometry(dx = 1048f, dy = 1834f, localBounds = FloatRect(0f, 0f, 1530f, 112f))
+                    CursorAnchorProbeResult.Received(full, CursorUpdateRequestMode.LEGACY_1ARG, true, true)
+                }
+            },
+        )
+        val fallbackRes = resolveCursorAnchorFocusBounds(fallbackEnv)
+        assertNotNull(fallbackRes)
+        assertEquals(listOf(false, true), fallbackEnv.legacyFlags)
+        assertEquals(20, fallbackRes!!.windowId)
+        assertEquals("right", fallbackRes.pane)
+        assertEquals(IntBounds(1048, 1834, 2578, 1946), fallbackRes.editorBounds)
+    }
+
+    @Test
+    fun `resolveCursorAnchorFocusBounds fails closed on single-window, cross-app, main-thread, blocked, TYPE_NULL, password, sensitive, overlap, marker-only, drift, and timeout`() {
+        val validGeom = sampleGeometry(dx = 1048f, dy = 1834f, localBounds = FloatRect(0f, 0f, 1500f, 100f))
+        val validReply: (FakeCursorEnv, Boolean) -> CursorAnchorProbeResult = { _, _ ->
+            CursorAnchorProbeResult.Received(validGeom, CursorUpdateRequestMode.FILTERED_2ARG, true, null)
+        }
+
+        // 1) 单窗竖屏：零 IPC、立刻返回 null 保持 IME_ONLY
+        val singleEnv = FakeCursorEnv(windows = listOf(pa2553RightWindow), onRequest = validReply)
+        assertNull(resolveCursorAnchorFocusBounds(singleEnv))
+        assertEquals(0, singleEnv.requestCalls)
+
+        // 2) 跨包或未知包多窗：零 IPC、立刻返回 null
+        val crossEnv = FakeCursorEnv(
+            windows = listOf(
+                pa2553RightWindow,
+                VisibleAppWindow(99, "com.other.app", false, false, IntBounds(0, 0, 900, 1968)),
+            ),
+            onRequest = validReply,
+        )
+        assertNull(resolveCursorAnchorFocusBounds(crossEnv))
+        assertEquals(0, crossEnv.requestCalls)
+
+        // 3) 主线程 / 受阻包 / TYPE_NULL / 密码 / 敏感焦点节点：零 IPC、全部返回 null
+        val mainThreadEnv = FakeCursorEnv(windows = pa2553Windows, onMainThread = true, onRequest = validReply)
+        assertNull(resolveCursorAnchorFocusBounds(mainThreadEnv))
+        assertEquals(0, mainThreadEnv.requestCalls)
+
+        val blockedEnv = FakeCursorEnv(windows = pa2553Windows, packageBlocked = true, onRequest = validReply)
+        assertNull(resolveCursorAnchorFocusBounds(blockedEnv))
+        assertEquals(0, blockedEnv.requestCalls)
+
+        val typeNullEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            contract = ImeEditorContract(InputType.TYPE_NULL, 0, 0, null, fieldId = 0),
+            onRequest = validReply,
+        )
+        assertNull(resolveCursorAnchorFocusBounds(typeNullEnv))
+        assertEquals(0, typeNullEnv.requestCalls)
+
+        val pwdEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            contract = ImeEditorContract(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD, 0, 0, null, fieldId = fieldId),
+            onRequest = validReply,
+        )
+        assertNull(resolveCursorAnchorFocusBounds(pwdEnv))
+        assertEquals(0, pwdEnv.requestCalls)
+
+        val sensitiveBeforeEnv = FakeCursorEnv(windows = pa2553Windows, focusedNodeSensitive = true, onRequest = validReply)
+        assertNull(resolveCursorAnchorFocusBounds(sensitiveBeforeEnv))
+        assertEquals(0, sensitiveBeforeEnv.requestCalls)
+
+        val sensitiveAfterEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            onRequest = { env, _ ->
+                env.focusedNodeSensitive = true
+                validReply(env, false)
+            },
+        )
+        assertNull(resolveCursorAnchorFocusBounds(sensitiveAfterEnv))
+
+        // 4) 重叠双窗：fail-closed 返回 null
+        val overlapEnv = FakeCursorEnv(
+            windows = listOf(
+                VisibleAppWindow(10, pkg, false, false, IntBounds(0, 0, 1800, 1968)),
+                VisibleAppWindow(20, pkg, true, true, IntBounds(800, 0, 2800, 1968)),
+            ),
+            onRequest = validReply,
+        )
+        assertNull(resolveCursorAnchorFocusBounds(overlapEnv))
+
+        // 5) 仅有 insertionMarker / matrixOrigin 但 editorBounds == null：绝不提升为 IME_CURSOR_ANCHOR
+        val markerOnlyGeom = sampleGeometry(dx = 1048f, dy = 1834f, localBounds = null)
+        val markerOnlyEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            onRequest = { _, preferLegacy ->
+                CursorAnchorProbeResult.Received(
+                    markerOnlyGeom,
+                    if (preferLegacy) CursorUpdateRequestMode.LEGACY_1ARG else CursorUpdateRequestMode.FILTERED_2ARG,
+                    true,
+                    if (preferLegacy) true else null,
+                )
+            },
+        )
+        assertNull(resolveCursorAnchorFocusBounds(markerOnlyEnv))
+
+        // 6) 回调期间会话世代或窗口变化 -> fail-closed
+        val driftSessionEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            onRequest = { env, _ ->
+                env.session = env.session!!.copy(generation = env.session!!.generation + 1)
+                validReply(env, false)
+            },
+        )
+        assertNull(resolveCursorAnchorFocusBounds(driftSessionEnv))
+
+        val driftWindowEnv = FakeCursorEnv(
+            windows = pa2553Windows,
+            onRequest = { env, _ ->
+                env.windows = listOf(
+                    pa2553LeftWindow,
+                    pa2553RightWindow.copy(bounds = IntBounds(990, 0, 2800, 1968)),
+                )
+                validReply(env, false)
+            },
+        )
+        assertNull(resolveCursorAnchorFocusBounds(driftWindowEnv))
+
+        // 7) 超时取消请求并返回 null
+        val timeoutEnv = FakeCursorEnv(windows = pa2553Windows, throwTimeoutOnRequest = true)
+        assertNull(resolveCursorAnchorFocusBounds(timeoutEnv))
+        assertEquals(1, timeoutEnv.cancelCalls)
     }
 }

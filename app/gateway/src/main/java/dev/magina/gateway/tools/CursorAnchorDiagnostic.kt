@@ -12,7 +12,10 @@ import android.view.accessibility.AccessibilityWindowInfo
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.AppWindowSlice
 import dev.magina.gateway.a11y.GatewayA11yService
+import dev.magina.gateway.a11y.WindowTopology
 import dev.magina.gateway.a11y.assignWindowPanes
+import dev.magina.gateway.a11y.classifyWindowTopology
+import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.ensureTargetPackageAllowed
 import dev.magina.gateway.ime.CursorAnchorProbeResult
 import dev.magina.gateway.ime.CursorUpdateRequestMode
@@ -311,7 +314,22 @@ internal interface CursorAnchorEnvironment {
     fun resourceName(pkg: String, resId: Int): ResourceNameResult
     fun requestCursorAnchor(session: ImeSessionIdentity, preferLegacyOnly: Boolean = false): CursorAnchorRequest
     fun inspectA11yNodes(pkg: String, contract: ImeEditorContract?): A11yNodeDiagnosticResult
+    fun isFocusedNodeSensitive(): Boolean = false
 }
+
+internal data class CursorAnchorFocus(
+    val sessionId: String,
+    val windowId: Int,
+    val pane: String,
+    val editorBounds: Rect,
+)
+
+internal data class CursorAnchorFocusBounds(
+    val sessionId: String,
+    val windowId: Int,
+    val pane: String,
+    val editorBounds: IntBounds,
+)
 
 private fun FloatRect.toJson(): JSONObject = JSONObject()
     .put("left", left.toDouble())
@@ -580,6 +598,169 @@ internal fun readCursorAnchor(
     }
 }
 
+private fun List<VisibleAppWindow>.toAppWindowSlices(): List<AppWindowSlice> = map {
+    AppWindowSlice(it.id, it.packageName, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom)
+}
+
+/**
+ * 生产侧 `IME_CURSOR_ANCHOR` 实时归属入口：
+ * - 零跨安全边界缓存：每次调用均在独立有界超时内重新请求 `CursorAnchorInfo`；
+ * - 仅在 `SAME_APP_MULTI`（同应用多窗口）下启用，单窗竖屏立即返回 null 走既有 `IME_ONLY`；
+ * - 强制要求 `editorBounds` 非空且取整后具正面积、严格落入唯一互不重叠同包窗（`pane != "full"`）；
+ * - 任何主线程调用、受阻包、`TYPE_NULL`、密码/敏感字段、窗口重叠或前后状态变化均 fail-closed 返回 null。
+ */
+internal fun resolveCursorAnchorFocus(
+    service: GatewayA11yService,
+    timeoutMs: Long = 600L,
+): CursorAnchorFocus? = resolveCursorAnchorFocusBounds(
+    env = AndroidCursorAnchorEnvironment(service),
+    timeoutMs = timeoutMs,
+)?.let { resolved ->
+    CursorAnchorFocus(
+        sessionId = resolved.sessionId,
+        windowId = resolved.windowId,
+        pane = resolved.pane,
+        editorBounds = Rect(
+            resolved.editorBounds.left,
+            resolved.editorBounds.top,
+            resolved.editorBounds.right,
+            resolved.editorBounds.bottom,
+        ),
+    )
+}
+
+internal fun resolveCursorAnchorFocusBounds(
+    env: CursorAnchorEnvironment,
+    timeoutMs: Long = 600L,
+): CursorAnchorFocusBounds? {
+    if (timeoutMs <= 0L) return null
+    if (runCatching { env.checkNotMainThread() }.isFailure) return null
+    val session = env.session() ?: return null
+    if (!FocusIdentity.isImeSessionId(session.id)) return null
+    val pkg = env.foregroundPackage()
+    if (pkg.isBlank() || !session.belongsTo(pkg)) return null
+    if (runCatching { env.ensurePackageAllowed(pkg) }.isFailure) return null
+
+    return try {
+        if (!env.isGatewayImeSelected()) return null
+        val contractBefore = env.editorContract() ?: return null
+        if (contractBefore.inputType == InputType.TYPE_NULL || isPasswordInputType(contractBefore.inputType)) {
+            return null
+        }
+        if (env.isFocusedNodeSensitive()) return null
+
+        val windowsBefore = normalizeWindowsForStability(env.visibleAppWindows())
+        if (classifyWindowTopology(windowsBefore.toAppWindowSlices()) != WindowTopology.SAME_APP_MULTI) {
+            return null
+        }
+
+        fun executeRequest(preferLegacyOnly: Boolean): CursorAnchorProbeResult {
+            val request = env.requestCursorAnchor(session, preferLegacyOnly)
+            return try {
+                request.await(timeoutMs)
+            } catch (e: TimeoutException) {
+                request.cancel()
+                throw e
+            } catch (e: InterruptedException) {
+                request.cancel()
+                Thread.currentThread().interrupt()
+                throw e
+            }
+        }
+
+        var probeResult = try {
+            executeRequest(preferLegacyOnly = false)
+        } catch (_: TimeoutException) {
+            return null
+        } catch (_: InterruptedException) {
+            return null
+        }
+
+        if (probeResult is CursorAnchorProbeResult.Received &&
+            probeResult.requestMode == CursorUpdateRequestMode.FILTERED_2ARG &&
+            (probeResult.geometry == null || probeResult.geometry.editorBounds == null)
+        ) {
+            val midContract = env.editorContract() ?: return null
+            if (midContract.inputType == InputType.TYPE_NULL || isPasswordInputType(midContract.inputType)) {
+                return null
+            }
+            if (env.isFocusedNodeSensitive()) return null
+            if (env.session() == session && env.foregroundPackage() == pkg &&
+                env.isGatewayImeSelected() && midContract == contractBefore
+            ) {
+                val fallback = try {
+                    executeRequest(preferLegacyOnly = true)
+                } catch (_: TimeoutException) {
+                    null
+                } catch (_: InterruptedException) {
+                    return null
+                }
+                if (fallback is CursorAnchorProbeResult.Received && fallback.geometry?.editorBounds != null) {
+                    probeResult = fallback
+                }
+            }
+        }
+
+        val contractAfter = env.editorContract() ?: return null
+        if (contractAfter.inputType == InputType.TYPE_NULL || isPasswordInputType(contractAfter.inputType)) {
+            return null
+        }
+        if (env.isFocusedNodeSensitive()) return null
+        val windowsAfter = normalizeWindowsForStability(env.visibleAppWindows())
+        if (env.session() != session || env.foregroundPackage() != pkg ||
+            !env.isGatewayImeSelected() || contractAfter != contractBefore ||
+            windowsBefore != windowsAfter
+        ) {
+            return null
+        }
+        if (classifyWindowTopology(windowsAfter.toAppWindowSlices()) != WindowTopology.SAME_APP_MULTI) {
+            return null
+        }
+
+        val received = probeResult as? CursorAnchorProbeResult.Received ?: return null
+        val geometry = received.geometry ?: return null
+        val eb = geometry.editorBounds ?: return null
+        if (!eb.left.isFinite() || !eb.top.isFinite() || !eb.right.isFinite() || !eb.bottom.isFinite()) {
+            return null
+        }
+        val rounded = IntBounds(
+            left = Math.round(eb.left),
+            top = Math.round(eb.top),
+            right = Math.round(eb.right),
+            bottom = Math.round(eb.bottom),
+        )
+        if (rounded.isEmpty) return null
+
+        val attr = attributeCursorAnchorToDisjointWindow(geometry, pkg, windowsAfter)
+            as? WindowAttributionOutcome.Attributed ?: return null
+        if (attr.pane.isBlank() || attr.pane == "full") return null
+        if (rounded.left < attr.windowBounds.left || rounded.top < attr.windowBounds.top ||
+            rounded.right > attr.windowBounds.right || rounded.bottom > attr.windowBounds.bottom
+        ) {
+            return null
+        }
+        val overlapsOtherWindow = windowsAfter.any { w ->
+            w.id != attr.windowId &&
+                rounded.left < w.bounds.right && w.bounds.left < rounded.right &&
+                rounded.top < w.bounds.bottom && w.bounds.top < rounded.bottom
+        }
+        if (overlapsOtherWindow) return null
+
+        CursorAnchorFocusBounds(
+            sessionId = session.id,
+            windowId = attr.windowId,
+            pane = attr.pane,
+            editorBounds = rounded,
+        )
+    } catch (_: SecurityException) {
+        null
+    } catch (_: ExecutionException) {
+        null
+    } catch (_: IllegalStateException) {
+        null
+    }
+}
+
 private class AndroidCursorAnchorEnvironment(
     private val service: GatewayA11yService,
 ) : CursorAnchorEnvironment {
@@ -649,4 +830,19 @@ private class AndroidCursorAnchorEnvironment(
             pkg = pkg,
             contract = contract,
         )
+
+    override fun isFocusedNodeSensitive(): Boolean {
+        val node = try {
+            service.focusedEditable()
+        } catch (_: SecurityException) {
+            return true
+        } ?: return false
+        val beforeSensitive = node.isPassword || (Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive)
+        if (beforeSensitive) return true
+        return try {
+            node.refresh() && (node.isPassword || (Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive))
+        } catch (_: SecurityException) {
+            true
+        }
+    }
 }

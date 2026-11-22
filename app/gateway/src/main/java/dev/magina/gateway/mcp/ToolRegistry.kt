@@ -719,7 +719,7 @@ object ToolRegistry {
                             focused.identity,
                             bounds,
                         ),
-                        windowPane = a11y.paneForBounds(focused.bounds).takeIf { sameAppMulti },
+                        windowPane = (focused.windowPane ?: a11y.paneForBounds(focused.bounds)).takeIf { sameAppMulti },
                     )
                 }
             else -> null
@@ -845,6 +845,8 @@ object ToolRegistry {
                     add("IME 会话 ${expected.identity.imeSessionId} → ${identity.imeSessionId}")
                 identity.a11yInputId != expected.identity.a11yInputId ->
                     add("a11y 节点 ${expected.identity.a11yInputId} → ${identity.a11yInputId}")
+                identity.cursorAnchorWindowId != expected.identity.cursorAnchorWindowId ->
+                    add("光标锚点窗口 ${expected.identity.cursorAnchorWindowId} → ${identity.cursorAnchorWindowId}")
             }
             if (bounds != expected.bounds) add("焦点位置 ${expected.bounds} → $bounds")
         }.ifEmpty { listOf("身份逐项一致但短时目标已过期（TTL）") }.joinToString("；")

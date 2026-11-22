@@ -95,7 +95,7 @@ internal object P0PreparedTargetRecorderValidator {
                     state.focusedBounds == null && state.inputProofBounds == null &&
                     state.focused.degradedReadyAt(P0_WECHAT_PACKAGE) &&
                     result.imeOnlyIdentity
-            null -> false
+            IdentitySource.IME_CURSOR_ANCHOR, null -> false
         }
         val identityValid = result.ready &&
             result.packageName == P0_WECHAT_PACKAGE &&

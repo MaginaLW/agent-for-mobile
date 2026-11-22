@@ -143,7 +143,7 @@ def mcp_request(http_port: int, token: str, payload: dict[str, Any], timeout: fl
         return json.loads(resp.read().decode("utf-8"))
 
 
-def mcp_call_tool(http_port: int, token: str, req_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def mcp_call_tool_raw(http_port: int, token: str, req_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     rpc = mcp_request(
         http_port,
         token,
@@ -157,10 +157,24 @@ def mcp_call_tool(http_port: int, token: str, req_id: int, name: str, arguments:
     if "error" in rpc:
         raise RuntimeError(f"MCP RPC error for {name}: {rpc['error']}")
     content = rpc["result"]["content"]
-    envelope = json.loads(content[0]["text"])
+    return json.loads(content[0]["text"])
+
+
+def mcp_call_tool(http_port: int, token: str, req_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    envelope = mcp_call_tool_raw(http_port, token, req_id, name, arguments)
     if not envelope.get("ok"):
         raise RuntimeError(f"Gateway tool {name} returned ok=false: {envelope}")
     return envelope["data"]
+
+
+def sanitize_focused_meta(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "focused_identity_source": data.get("focused_identity_source"),
+        "focused_input_id": data.get("focused_input_id"),
+        "focused_input_bounds": data.get("focused_input_bounds"),
+        "focused_input_window_id": data.get("focused_input_window_id"),
+        "focused_input_pane": data.get("focused_input_pane"),
+    }
 
 
 def sanitize_foreground(fg: dict[str, Any]) -> dict[str, Any]:
@@ -262,6 +276,7 @@ def main() -> int:
             adb_dev(["shell", f"settings put {ns} {key} {shlex.quote(val)}"], timeout=10.0, check=False)
 
     receipts: dict[str, Any] = {
+        "schema_version": 2,
         "source_sha": args.source_sha,
         "environment": {
             "adb_port": args.adb_port,
@@ -558,6 +573,35 @@ def main() -> int:
             )
             req_id += 1
 
+            # Production ui_find / ui_snapshot metadata + non-fabricated ui_find(role="input") checks
+            pane_query = "LEFT PANE" if case in ("disjoint_left_dead_end", "type_null_decor") else "RIGHT PANE"
+            ui_find_pane = mcp_call_tool(
+                args.http_port, token, req_id, "ui_find", {"text": pane_query, "scroll_search": False},
+            )
+            req_id += 1
+            sc_entry["ui_find_pane"] = {
+                **sanitize_focused_meta(ui_find_pane),
+                "matches_count": len(ui_find_pane.get("matches", [])),
+            }
+
+            ui_snap = mcp_call_tool(
+                args.http_port, token, req_id, "ui_snapshot", {"scope": "interactive"},
+            )
+            req_id += 1
+            sc_entry["ui_snapshot"] = sanitize_focused_meta(ui_snap)
+
+            ui_find_input_env = mcp_call_tool_raw(
+                args.http_port, token, req_id, "ui_find", {"role": "input", "scroll_search": False},
+            )
+            req_id += 1
+            sc_entry["ui_find_input"] = {
+                "ok": bool(ui_find_input_env.get("ok")),
+                "error_code": (ui_find_input_env.get("error") or {}).get("code")
+                if not ui_find_input_env.get("ok") else None,
+                "matches_count": len((ui_find_input_env.get("data") or {}).get("matches", []))
+                if ui_find_input_env.get("ok") else 0,
+            }
+
             # Re-read fixture receipt AFTER probes to capture final IC call counters
             time.sleep(0.25)
             post_cat = adb_dev(["shell", "run-as", FIXTURE_PKG, "cat", f"files/{case}.json"], timeout=10.0)
@@ -567,7 +611,9 @@ def main() -> int:
                 f"[scenario {case}] topology={fg_data['window_topology']} "
                 f"bounds={sc_entry['probe_editor_bounds'].get('ime_editor_bounds_reason')} "
                 f"anchor_ok={sc_entry['probe_cursor_anchor'].get('ime_cursor_anchor') is not None} "
-                f"anchor_reason={sc_entry['probe_cursor_anchor'].get('ime_cursor_anchor_reason')}",
+                f"anchor_reason={sc_entry['probe_cursor_anchor'].get('ime_cursor_anchor_reason')} "
+                f"ui_source={sc_entry['ui_find_pane'].get('focused_identity_source')} "
+                f"ui_input_code={sc_entry['ui_find_input'].get('error_code')}",
                 flush=True,
             )
 
@@ -703,7 +749,7 @@ def main() -> int:
         args.receipts_out.parent.mkdir(parents=True, exist_ok=True)
         args.receipts_out.write_text(json.dumps(receipts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    verify_errors = verify_receipts(receipts)
+    verify_errors = verify_receipts(receipts, require_production_ui=True)
     if run_error or cleanup_errors or verify_errors:
         for e in verify_errors:
             print(f"VERIFY FAIL: {e}", file=sys.stderr)

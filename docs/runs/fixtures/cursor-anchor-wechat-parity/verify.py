@@ -64,8 +64,15 @@ def _marker_in_rect(marker: dict[str, Any], rect: list[int], tol: float = 2.0) -
     )
 
 
-def verify_receipts(receipts: dict[str, Any]) -> list[str]:
+def _rect_list_close(bounds_list: Any, target_rect: list[int], tol: int = 1) -> bool:
+    if not isinstance(bounds_list, list) or len(bounds_list) != 4 or len(target_rect) != 4:
+        return False
+    return all(isinstance(bounds_list[i], int) and abs(bounds_list[i] - target_rect[i]) <= tol for i in range(4))
+
+
+def verify_receipts(receipts: dict[str, Any], require_production_ui: bool = False) -> list[str]:
     errors: list[str] = []
+    check_prod_ui = require_production_ui or int(receipts.get("schema_version", 1)) >= 2
 
     raw_text = json.dumps(receipts, ensure_ascii=False)
     _require(HOST_PATH_RE.search(raw_text) is None, "host path leaked in receipts", errors)
@@ -223,6 +230,61 @@ def verify_receipts(receipts: dict[str, Any]) -> list[str]:
             _require(oracle.get("filtered_cursor_requests", 0) == 0 and oracle.get("legacy_cursor_requests", 0) == 0,
                      "type_null_decor: must issue zero requestCursorUpdates calls", errors)
 
+        if check_prod_ui:
+            ui_find_pane = sc.get("ui_find_pane")
+            ui_snap = sc.get("ui_snapshot")
+            ui_find_input = sc.get("ui_find_input")
+            _require(isinstance(ui_find_pane, dict), f"{name}: missing ui_find_pane receipt", errors)
+            _require(isinstance(ui_snap, dict), f"{name}: missing ui_snapshot receipt", errors)
+            _require(isinstance(ui_find_input, dict), f"{name}: missing ui_find_input receipt", errors)
+            if isinstance(ui_find_pane, dict) and isinstance(ui_snap, dict) and isinstance(ui_find_input, dict):
+                _require(ui_find_pane.get("matches_count", 0) >= 1,
+                         f"{name}: ui_find_pane must find pane title", errors)
+                _require(
+                    ui_find_input.get("ok") is False
+                    and ui_find_input.get("error_code") == "E_NOT_FOUND"
+                    and ui_find_input.get("matches_count", -1) == 0,
+                    f"{name}: ui_find(role=input) must throw E_NOT_FOUND with 0 fabricated refs, got {ui_find_input}",
+                    errors,
+                )
+                if name in ("disjoint_right_dead_end", "disjoint_right_legacy_1arg", "disjoint_left_dead_end"):
+                    expected_pane = "left" if name == "disjoint_left_dead_end" else "right"
+                    target_rect = oracle.get("target_rect", [])
+                    target_win = oracle.get("target_window_id")
+                    for tag, meta in (("ui_find_pane", ui_find_pane), ("ui_snapshot", ui_snap)):
+                        _require(meta.get("focused_identity_source") == "ime_cursor_anchor",
+                                 f"{name}/{tag}: expected focused_identity_source=ime_cursor_anchor, got {meta}", errors)
+                        _require(meta.get("focused_input_id") is None,
+                                 f"{name}/{tag}: IME_CURSOR_ANCHOR must keep focused_input_id=null, got {meta}", errors)
+                        _require(_rect_list_close(meta.get("focused_input_bounds"), target_rect),
+                                 f"{name}/{tag}: focused_input_bounds {meta.get('focused_input_bounds')} != {target_rect}", errors)
+                        _require(meta.get("focused_input_window_id") == target_win,
+                                 f"{name}/{tag}: focused_input_window_id {meta.get('focused_input_window_id')} != {target_win}", errors)
+                        _require(meta.get("focused_input_pane") == expected_pane,
+                                 f"{name}/{tag}: focused_input_pane {meta.get('focused_input_pane')} != {expected_pane}", errors)
+                elif name == "disjoint_right_valid_node":
+                    target_rect = oracle.get("target_rect", [])
+                    for tag, meta in (("ui_find_pane", ui_find_pane), ("ui_snapshot", ui_snap)):
+                        fid = meta.get("focused_input_id")
+                        _require(meta.get("focused_identity_source") == "a11y",
+                                 f"{name}/{tag}: valid editable a11y node must stay a11y, got {meta}", errors)
+                        _require(isinstance(fid, str) and fid.count("|") == 4,
+                                 f"{name}/{tag}: expected producer focused_input_id for a11y, got {fid!r}", errors)
+                        _require(_rect_list_close(meta.get("focused_input_bounds"), target_rect),
+                                 f"{name}/{tag}: a11y focused_input_bounds {meta.get('focused_input_bounds')} != {target_rect}", errors)
+                        _require(meta.get("focused_input_window_id") is None and meta.get("focused_input_pane") is None,
+                                 f"{name}/{tag}: a11y path must leave anchor window/pane null, got {meta}", errors)
+                elif name in ("overlap_right", "type_null_decor"):
+                    for tag, meta in (("ui_find_pane", ui_find_pane), ("ui_snapshot", ui_snap)):
+                        _require(meta.get("focused_identity_source") == "ime_only",
+                                 f"{name}/{tag}: must fall back to ime_only, got {meta}", errors)
+                        _require(meta.get("focused_input_id") is None,
+                                 f"{name}/{tag}: must keep focused_input_id=null, got {meta}", errors)
+                        _require(meta.get("focused_input_bounds") is None,
+                                 f"{name}/{tag}: must keep focused_input_bounds=null, got {meta}", errors)
+                        _require(meta.get("focused_input_window_id") is None and meta.get("focused_input_pane") is None,
+                                 f"{name}/{tag}: must keep anchor window/pane null, got {meta}", errors)
+
     teardown = receipts.get("teardown", {})
     saved = teardown.get("saved_settings", {})
     restored = teardown.get("restored_settings", {})
@@ -302,7 +364,7 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
                     "legacy_accepted": True if legacy else None,
                     "same_package_window_count": 2,
                     "total_app_window_count": 2,
-                    "editor_bounds": None if legacy else {"left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]},
+                    "editor_bounds": {"left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]},
                     "insertion_marker": {"top_x": rect[0] + 16, "top_y": rect[1] + 12, "bottom_x": rect[0] + 16, "bottom_y": rect[3] - 12},
                     "a11y_cross_check": {
                         "exact_editor_bounds_matches": 1 if valid_node else 0,
@@ -310,6 +372,43 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
                     },
                 },
             },
+            "ui_find_pane": (
+                {
+                    "matches_count": 1,
+                    "focused_identity_source": "a11y",
+                    "focused_input_id": f"{win_id}||android.widget.EditText|dev.magina.wechatparity|{rect[0]},{rect[1]},{rect[2]},{rect[3]}",
+                    "focused_input_bounds": list(rect),
+                    "focused_input_window_id": None,
+                    "focused_input_pane": None,
+                }
+                if valid_node
+                else {
+                    "matches_count": 1,
+                    "focused_identity_source": "ime_cursor_anchor",
+                    "focused_input_id": None,
+                    "focused_input_bounds": list(rect),
+                    "focused_input_window_id": win_id,
+                    "focused_input_pane": pane,
+                }
+            ),
+            "ui_snapshot": (
+                {
+                    "focused_identity_source": "a11y",
+                    "focused_input_id": f"{win_id}||android.widget.EditText|dev.magina.wechatparity|{rect[0]},{rect[1]},{rect[2]},{rect[3]}",
+                    "focused_input_bounds": list(rect),
+                    "focused_input_window_id": None,
+                    "focused_input_pane": None,
+                }
+                if valid_node
+                else {
+                    "focused_identity_source": "ime_cursor_anchor",
+                    "focused_input_id": None,
+                    "focused_input_bounds": list(rect),
+                    "focused_input_window_id": win_id,
+                    "focused_input_pane": pane,
+                }
+            ),
+            "ui_find_input": {"ok": False, "error_code": "E_NOT_FOUND", "matches_count": 0},
         }
         if name == "disjoint_right_dead_end":
             res["probe_editor_origin"] = {
@@ -318,8 +417,16 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
             }
         return res
 
+    ime_only_meta = {
+        "focused_identity_source": "ime_only",
+        "focused_input_id": None,
+        "focused_input_bounds": None,
+        "focused_input_window_id": None,
+        "focused_input_pane": None,
+    }
     saved = {k: f"orig_{i}" for i, k in enumerate(EXPECTED_SETTINGS_KEYS)}
     return {
+        "schema_version": 2,
         "environment": {
             "api": "36",
             "qemu": "1",
@@ -347,6 +454,9 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
                 "keyboard_state_default": {"visible": False, "height": 0},
                 "probe_editor_bounds": {"ime_editor_bounds": None, "ime_editor_bounds_reason": "focus_unavailable"},
                 "probe_cursor_anchor": {"ime_cursor_anchor": None, "ime_cursor_anchor_reason": "ambiguous_window_overlap"},
+                "ui_find_pane": {**ime_only_meta, "matches_count": 1},
+                "ui_snapshot": dict(ime_only_meta),
+                "ui_find_input": {"ok": False, "error_code": "E_NOT_FOUND", "matches_count": 0},
             },
             "type_null_decor": {
                 "fixture_receipt": {"case": "type_null_decor", "landscape": True, "filtered_cursor_requests": 0, "legacy_cursor_requests": 0},
@@ -362,6 +472,9 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
                     "ime_cursor_anchor_reason": "input_type_null",
                     "ime_editor_contract_diag": {"input_type_is_null": True},
                 },
+                "ui_find_pane": {**ime_only_meta, "matches_count": 1},
+                "ui_snapshot": dict(ime_only_meta),
+                "ui_find_input": {"ok": False, "error_code": "E_NOT_FOUND", "matches_count": 0},
             },
         },
         "teardown": {
@@ -380,7 +493,7 @@ def _synthetic_valid_receipts() -> dict[str, Any]:
 
 def self_test() -> int:
     valid = _synthetic_valid_receipts()
-    errs = verify_receipts(valid)
+    errs = verify_receipts(valid, require_production_ui=True)
     if errs:
         print(f"SELF-TEST FAIL (valid rejected): {errs}", file=sys.stderr)
         return 1
@@ -396,11 +509,19 @@ def self_test() -> int:
             {"secure:default_input_method": "wrong"})),
         ("port_5037", lambda d: d["environment"].update({"adb_port": 5037})),
         ("token_leak", lambda d: d["environment"].update({"debug": "0123456789abcdef" * 2})),
+        ("ui_find_fabricated_input_ref", lambda d: d["scenarios"]["disjoint_right_dead_end"]["ui_find_input"].update(
+            {"ok": True, "error_code": None, "matches_count": 1})),
+        ("ui_find_wrong_source_on_dead_end", lambda d: d["scenarios"]["disjoint_right_dead_end"]["ui_find_pane"].update(
+            {"focused_identity_source": "ime_only"})),
+        ("ui_snapshot_bounds_mismatch", lambda d: d["scenarios"]["disjoint_left_dead_end"]["ui_snapshot"].update(
+            {"focused_input_bounds": [10, 10, 50, 50]})),
+        ("overlap_leaked_cursor_anchor_to_ui_find", lambda d: d["scenarios"]["overlap_right"]["ui_find_pane"].update(
+            {"focused_identity_source": "ime_cursor_anchor", "focused_input_bounds": [882, 220, 2316, 320]})),
     ]
     for label, mutate in mutations:
         mutated = copy.deepcopy(valid)
         mutate(mutated)
-        m_errs = verify_receipts(mutated)
+        m_errs = verify_receipts(mutated, require_production_ui=True)
         if not m_errs:
             print(f"SELF-TEST FAIL (mutation {label} was not caught)", file=sys.stderr)
             return 1
@@ -413,6 +534,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipts", type=Path)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--require-production-ui", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
@@ -420,7 +542,7 @@ def main() -> int:
     if not args.receipts:
         parser.error("specify --receipts <path> or --self-test")
     data = json.loads(args.receipts.read_text(encoding="utf-8"))
-    errs = verify_receipts(data)
+    errs = verify_receipts(data, require_production_ui=args.require_production_ui)
     if errs:
         for e in errs:
             print(f"FAIL: {e}", file=sys.stderr)

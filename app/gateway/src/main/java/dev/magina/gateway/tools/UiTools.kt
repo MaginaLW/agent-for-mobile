@@ -33,10 +33,14 @@ object UiTools {
         val a11yId: String?,
         /** null 表示节点文本不可读；空字符串表示明确读到空输入。 */
         val readableText: String?,
-        /** null 表示当前没有可由 a11y 复核的真实 focused editable bounds。 */
+        /** null 表示当前没有可复核的真实焦点输入几何（a11y 或 IME 光标锚点）。 */
         val bounds: Rect?,
         /** 显式身份（含来源）；两侧都取不到时为 null，下游一律 fail-closed。 */
         val identity: FocusIdentity?,
+        /** 光标锚点归属到的同应用多窗口 ID；a11y 或 IME-only 路径为 null。 */
+        val windowId: Int? = null,
+        /** 光标锚点归属到的同应用多窗口窗格（left/right/top/bottom 等）；其它路径为 null。 */
+        val windowPane: String? = null,
     ) {
         /**
          * 这个节点能不能拿去执行 a11y 动作（`ACTION_IME_ENTER` 等）。
@@ -55,6 +59,36 @@ object UiTools {
             get() = identity?.source == IdentitySource.A11Y
     }
 
+    internal fun attachFocusedInputMetadata(
+        target: JSONObject,
+        a11yId: String?,
+        identity: FocusIdentity?,
+        bounds: IntBounds?,
+        windowId: Int?,
+        windowPane: String?,
+    ): JSONObject = target
+        .put("focused_input_id", a11yId ?: JSONObject.NULL)
+        .put(
+            "focused_identity_source",
+            identity?.source?.name?.lowercase() ?: JSONObject.NULL,
+        )
+        .put(
+            "focused_input_bounds",
+            bounds?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) } ?: JSONObject.NULL,
+        )
+        .put("focused_input_window_id", windowId ?: JSONObject.NULL)
+        .put("focused_input_pane", windowPane ?: JSONObject.NULL)
+
+    private fun attachFocusedInputMetadata(target: JSONObject, focused: FocusedInputSnapshot): JSONObject =
+        attachFocusedInputMetadata(
+            target = target,
+            a11yId = focused.a11yId,
+            identity = focused.identity,
+            bounds = focused.bounds?.let { IntBounds(it.left, it.top, it.right, it.bottom) },
+            windowId = focused.windowId,
+            windowPane = focused.windowPane,
+        )
+
     private val CAPTURE_REASONS = setOf(
         "low_confidence", "unknown_page", "icon_unrecognized", "layout_changed", "risk_review",
     )
@@ -62,10 +96,9 @@ object UiTools {
     fun uiSnapshot(scope: String): JSONObject {
         val a11y = GatewayA11yService.require()
         val snap = a11y.snapshot(scope)
-        // 焦点身份来源随快照透出：a11y 一盲时大脑要能一眼看出走的是哪条链。
+        // 焦点身份来源与已核实几何随快照透出：a11y 一盲时大脑要能一眼看出走的是哪条链。
         val focused = focusedInputSnapshot(a11y)
-        snap.put("focused_identity_source", focused.identity?.source?.name?.lowercase() ?: JSONObject.NULL)
-            .put("focused_input_id", focused.a11yId ?: JSONObject.NULL)
+        attachFocusedInputMetadata(snap, focused)
         when {
             snap.optString("fusion") == "ocr" -> snap.put(
                 "note",
@@ -100,22 +133,14 @@ object UiTools {
         )
         val metrics = a11y.resources.displayMetrics
         val focusedInput = focusedInputSnapshot(a11y)
-        return JSONObject()
-            .put("matches", matches)
-            .put("scrolls", scrolls)
-            .put("screen_width", metrics.widthPixels)
-            .put("screen_height", metrics.heightPixels)
-            .put("focused_input_id", focusedInput.a11yId ?: JSONObject.NULL)
-            .put(
-                "focused_identity_source",
-                focusedInput.identity?.source?.name?.lowercase() ?: JSONObject.NULL,
-            )
-            .put(
-                "focused_input_bounds",
-                focusedInput.bounds?.let {
-                    JSONArray(listOf(it.left, it.top, it.right, it.bottom))
-                } ?: JSONObject.NULL,
-            )
+        return attachFocusedInputMetadata(
+            JSONObject()
+                .put("matches", matches)
+                .put("scrolls", scrolls)
+                .put("screen_width", metrics.widthPixels)
+                .put("screen_height", metrics.heightPixels),
+            focusedInput,
+        )
     }
 
     fun uiAction(ref: String, action: String, params: JSONObject, expected: SafetyTarget): JSONObject {
@@ -329,14 +354,16 @@ object UiTools {
             channel = "ime", retryable = true, fallback = "点击输入框重建焦点后重试一次",
         )
         Thread.sleep(250)
-        // 有 OCR ref 时读它的 bounds；全树空（IME-only 降级链）时没有任何 bounds 可用，
-        // 退到锚定截图底边的输入栏带读回——降级链不允许"无读回即成链"。
+        // 有 OCR ref 时读它的 bounds；无 ref 时优先用提交后新鲜解析的光标锚点几何精确裁剪，
+        // 单窗全树空（IME-only 降级链）无可用 bounds 时退到锚定截图底边的输入栏带读回——
+        // 降级链不允许"无读回即成链"。
+        val preferredBounds = if (target == null) focusedInputSnapshot(a11y).bounds else null
         var geometry: GatewayA11yService.InputBarReadback? = null
         val readback = ocrReadbackWithRetry(text) {
             if (target != null) {
                 a11y.ocrReadRegion(target.bounds)
             } else {
-                a11y.ocrReadInputBarRegion().also { geometry = it }.text
+                a11y.ocrReadInputBarRegion(preferredBounds).also { geometry = it }.text
             }
         }
         return result("ime_commit_ocr", true, readback.text, readback.verified).also { json ->
@@ -387,7 +414,7 @@ object UiTools {
             "enter" -> {
                 // 使用刚完成身份复核的同一节点执行；IME fallback 前再次复核焦点。
                 val focused = a11y.focusedEditable()
-                val snapshot = focusedInputSnapshot(focused)
+                val snapshot = focusedInputSnapshot(a11y, focused)
                 requireFocusedIdentity(expectedFocusIdentity, snapshot.identity)
                 requireInputEvidence(expectedInputCommitEvidence, snapshot)
                 requirePreparedTargetEvidence(
@@ -495,7 +522,9 @@ object UiTools {
         // a11y 腿更可靠：读的是输入框文本本身，没有长度上限、不吃屏幕几何假设。
         // 但 readableText 为 null 表示"这个节点没有 text 可读"而不是"框里是空的"
         // （微信屏蔽 a11y 树时正是如此），必须降级而不是当成已清空。
-        val snapshot = focusedInputSnapshot(a11y)
+        // 轮询期间不做 CursorAnchorInfo IPC：IME_CURSOR_ANCHOR 本身无 readableText，
+        // 下方 OCR 腿已直接按 expectedFocusedInputBounds 精确裁剪输入栏。
+        val snapshot = focusedInputSnapshot(a11y, allowCursorAnchor = false)
         val readable = snapshot.readableText
         // 还必须确认读的是**同一个输入框**。Enter 之前有三重身份复核，之后一次都没有；
         // 焦点若跳到别的可编辑节点（搜索框/评论框，或 App 自己挪走焦点），那个节点是空的，
@@ -582,34 +611,77 @@ object UiTools {
         )
     }
 
-    fun focusedInputIdentity(a11y: GatewayA11yService): FocusIdentity? =
-        focusedInputSnapshot(a11y).identity
+    fun focusedInputIdentity(
+        a11y: GatewayA11yService,
+        allowCursorAnchor: Boolean = true,
+    ): FocusIdentity? = focusedInputSnapshot(a11y, allowCursorAnchor = allowCursorAnchor).identity
 
-    fun focusedInputSnapshot(a11y: GatewayA11yService): FocusedInputSnapshot =
-        focusedInputSnapshot(a11y.focusedEditable())
+    fun focusedInputSnapshot(
+        a11y: GatewayA11yService,
+        allowCursorAnchor: Boolean = true,
+    ): FocusedInputSnapshot = focusedInputSnapshot(a11y, a11y.focusedEditable(), allowCursorAnchor)
 
-    private fun focusedInputSnapshot(node: AccessibilityNodeInfo?): FocusedInputSnapshot {
-        val imeSessionId = ImeBridge.focusedInputId.takeIf { ImeBridge.active }
-        // editable 是"这是个输入节点"的判据。findFocus(FOCUS_INPUT) 在本机微信会话页实测
-        // 会返回一个既不 focused 也不 editable 的残留节点（2026-07-25），拿它当 a11y 身份
-        // 比降级更危险——证据会绑到一个根本打不进字的节点上。
-        if (node != null && node.refresh() && node.isEditable) {
-            val bounds = Rect().also { node.getBoundsInScreen(it) }
-            val a11yId = focusedInputIdFromRefreshedNode(node)
+    internal fun chooseFocusedInputSnapshot(
+        a11yId: String?,
+        readableText: String?,
+        a11yBounds: Rect?,
+        imeSessionId: String?,
+        allowCursorAnchor: Boolean,
+        resolveAnchor: () -> CursorAnchorFocus?,
+    ): FocusedInputSnapshot {
+        if (a11yId != null) {
             return FocusedInputSnapshot(
                 a11yId = a11yId,
-                readableText = node.text?.toString(),
-                bounds = bounds.takeIf { it.width() > 0 && it.height() > 0 },
+                readableText = readableText,
+                bounds = a11yBounds,
                 identity = FocusIdentity.of(a11yId, imeSessionId),
             )
         }
-        // a11y 侧拿不到可用输入身份。绝不把 IME 会话 id 顶替成 a11y 节点 id——那会把
-        // 两套命名空间悄悄合成一套；这里显式产出 IME-only 身份。
+        if (allowCursorAnchor) {
+            val anchor = resolveAnchor()
+            val anchorIdentity = anchor?.let { FocusIdentity.ofCursorAnchor(it.windowId, it.sessionId) }
+            if (anchor != null && anchorIdentity != null) {
+                return FocusedInputSnapshot(
+                    a11yId = null,
+                    readableText = null,
+                    bounds = anchor.editorBounds,
+                    identity = anchorIdentity,
+                    windowId = anchor.windowId,
+                    windowPane = anchor.pane,
+                )
+            }
+        }
+        // a11y 侧拿不到可用输入身份且未取得可信光标锚点。绝不把 IME 会话 id 顶替成 a11y 节点 id——
+        // 那会把两套命名空间悄悄合成一套；这里显式产出 IME-only 身份（bounds 一致缺失）。
         return FocusedInputSnapshot(
             a11yId = null,
             readableText = null,
             bounds = null,
             identity = FocusIdentity.of(null, imeSessionId),
+        )
+    }
+
+    private fun focusedInputSnapshot(
+        a11y: GatewayA11yService,
+        node: AccessibilityNodeInfo?,
+        allowCursorAnchor: Boolean = true,
+    ): FocusedInputSnapshot {
+        val imeSessionId = ImeBridge.focusedInputId.takeIf { ImeBridge.active }
+        // editable 是"这是个输入节点"的判据。findFocus(FOCUS_INPUT) 在本机微信会话页实测
+        // 会返回一个既不 focused 也不 editable 的残留节点（2026-07-25），拿它当 a11y 身份
+        // 比降级更危险——证据会绑到一个根本打不进字的节点上。
+        val usableNode = node?.takeIf { it.refresh() && it.isEditable }
+        val a11yId = usableNode?.let(::focusedInputIdFromRefreshedNode)
+        val a11yBounds = usableNode?.let { n ->
+            Rect().also { n.getBoundsInScreen(it) }.takeIf { it.width() > 0 && it.height() > 0 }
+        }
+        return chooseFocusedInputSnapshot(
+            a11yId = a11yId,
+            readableText = usableNode?.text?.toString(),
+            a11yBounds = a11yBounds,
+            imeSessionId = imeSessionId,
+            allowCursorAnchor = allowCursorAnchor,
+            resolveAnchor = { resolveCursorAnchorFocus(a11y) },
         )
     }
 
