@@ -149,12 +149,18 @@ object SystemTools {
     /** package/activity 之外附带前台身份诊断（unknown 原因、窗口列表、最近窗口事件处置）。 */
     fun foregroundApp(): JSONObject = GatewayA11yService.require().foregroundDiagnostics()
 
-    fun keyboardState(probeEditorOrigin: Boolean = false, probeEditorBounds: Boolean = false): JSONObject {
-        if (probeEditorOrigin && probeEditorBounds) {
-            throw GatewayError(ErrorCode.E_INVALID_ARG, "原点与四边诊断请分次查询")
+    fun keyboardState(
+        probeEditorOrigin: Boolean = false,
+        probeEditorBounds: Boolean = false,
+        probeCursorAnchor: Boolean = false,
+    ): JSONObject {
+        val probeCount = listOf(probeEditorOrigin, probeEditorBounds, probeCursorAnchor).count { it }
+        if (probeCount > 1) {
+            throw GatewayError(ErrorCode.E_INVALID_ARG, "原点、四边与光标锚点诊断请分次查询")
         }
         val service = GatewayA11yService.require()
         val state = service.keyboardState()
+        if (probeCursorAnchor) return readCursorAnchor(service, state)
         if (probeEditorBounds) return readEditorBounds(service, state)
         if (!probeEditorOrigin) return state
         val session = ImeBridge.session() ?: return state.noEditorOrigin(Unavailable.NO_INPUT_TARGET)

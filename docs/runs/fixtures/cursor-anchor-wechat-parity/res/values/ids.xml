@@ -1,0 +1,4 @@
+<resources>
+    <item name="wechat_chat_input" type="id" />
+    <item name="wechat_left_input" type="id" />
+</resources>

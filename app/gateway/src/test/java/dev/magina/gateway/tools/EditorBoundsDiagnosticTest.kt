@@ -39,6 +39,8 @@ class EditorBoundsDiagnosticTest {
         override var isAccessibilityDataSensitive: Boolean = false,
         override var viewIdResourceName: String? = "com.tencent.mm:id/chat_input",
         override var isEditable: Boolean = true,
+        override var inputType: Int = InputType.TYPE_NULL,
+        override var className: String? = null,
         var refreshResult: Boolean = true,
         var bounds: IntBounds = IntBounds(1040, 1420, 2120, 1540),
         var onRefresh: ((FakeNode) -> Unit)? = null,
@@ -61,6 +63,8 @@ class EditorBoundsDiagnosticTest {
             isAccessibilityDataSensitive = isAccessibilityDataSensitive,
             viewIdResourceName = viewIdResourceName,
             isEditable = isEditable,
+            inputType = inputType,
+            className = className,
             refreshResult = refreshResult,
             bounds = bounds,
             onRefresh = onRefresh,
@@ -703,7 +707,8 @@ class EditorBoundsDiagnosticTest {
             assertFalse(bounds.has("filtered_visible_field"))
             assertFalse(bounds.has("node_focused"))
             assertFalse(bounds.has("ime_editor_focus_diag"))
-            assertEquals(0, env.editorContractCalls)
+            // Pathway 4B：before/after 采样前各做一次 TYPE_NULL/密码契约预检，但仍不依赖 contract 或 fieldId 即可成功。
+            assertEquals(2, env.editorContractCalls)
             assertEquals(1, env.beforePhase.viewIdLookupCalls)
             assertEquals(1, env.afterPhase.viewIdLookupCalls)
             assertEquals(1, env.beforePhase.rootFocusCalls)
@@ -921,7 +926,7 @@ class EditorBoundsDiagnosticTest {
             )
             assertEquals(1, env.beforePhase.rootFocusCalls)
             assertEquals(0, env.beforePhase.viewIdLookupCalls)
-            assertEquals(0, env.editorContractCalls)
+            assertEquals(1, env.editorContractCalls)
             assertEquals(0, env.imeRequestCalls)
         }
     }
@@ -949,7 +954,7 @@ class EditorBoundsDiagnosticTest {
             )
             assertEquals(1, beforeEnv.beforePhase.rootFocusCalls)
             assertEquals(0, beforeEnv.beforePhase.viewIdLookupCalls)
-            assertEquals(0, beforeEnv.editorContractCalls)
+            assertEquals(1, beforeEnv.editorContractCalls)
             assertEquals(0, beforeEnv.imeRequestCalls)
 
             val afterEnv = unfocusedServiceEnv(afterNode = node, afterRootFocus = badRootFocus)
@@ -970,7 +975,7 @@ class EditorBoundsDiagnosticTest {
             )
             assertEquals(1, afterEnv.afterPhase.rootFocusCalls)
             assertEquals(0, afterEnv.afterPhase.viewIdLookupCalls)
-            assertEquals(1, afterEnv.editorContractCalls)
+            assertEquals(2, afterEnv.editorContractCalls)
             assertEquals(1, afterEnv.imeRequestCalls)
         }
     }
@@ -1047,7 +1052,7 @@ class EditorBoundsDiagnosticTest {
             contract = null
         }
         assertFailure(readEditorBounds(pwdNodeEnv, JSONObject()), "sensitive_field")
-        assertEquals(0, pwdNodeEnv.editorContractCalls)
+        assertEquals(1, pwdNodeEnv.editorContractCalls)
         assertEquals(0, pwdNodeEnv.imeRequestCalls)
 
         val sensitiveNodeEnv = unfocusedServiceEnv(
@@ -1056,7 +1061,7 @@ class EditorBoundsDiagnosticTest {
             contract = null
         }
         assertFailure(readEditorBounds(sensitiveNodeEnv, JSONObject()), "sensitive_field")
-        assertEquals(0, sensitiveNodeEnv.editorContractCalls)
+        assertEquals(1, sensitiveNodeEnv.editorContractCalls)
         assertEquals(0, sensitiveNodeEnv.imeRequestCalls)
     }
 
@@ -1921,7 +1926,7 @@ class EditorBoundsDiagnosticTest {
             )
             assertEquals(1, env.beforePhase.rootFocusCalls)
             assertEquals(0, env.beforePhase.viewIdLookupCalls)
-            assertEquals(0, env.editorContractCalls)
+            assertEquals(1, env.editorContractCalls)
             assertEquals(0, env.imeRequestCalls)
         }
 
@@ -1948,7 +1953,7 @@ class EditorBoundsDiagnosticTest {
             ),
         )
         assertFailure(readEditorBounds(ambigEnv, JSONObject()), "ambiguous_id")
-        assertEquals(0, ambigEnv.editorContractCalls)
+        assertEquals(1, ambigEnv.editorContractCalls)
         assertEquals(0, ambigEnv.imeRequestCalls)
 
         val badBoundsSf = FakeNode(
@@ -1965,7 +1970,7 @@ class EditorBoundsDiagnosticTest {
             ),
         )
         assertFailure(readEditorBounds(badBoundsEnv, JSONObject()), "invalid_bounds")
-        assertEquals(0, badBoundsEnv.editorContractCalls)
+        assertEquals(1, badBoundsEnv.editorContractCalls)
         assertEquals(0, badBoundsEnv.imeRequestCalls)
     }
 
@@ -1992,7 +1997,7 @@ class EditorBoundsDiagnosticTest {
             assertFailure(readEditorBounds(env, JSONObject()), "sensitive_field")
             assertEquals(0, env.beforePhase.rootFocusCalls)
             assertEquals(0, env.beforePhase.viewIdLookupCalls)
-            assertEquals(0, env.editorContractCalls)
+            assertEquals(1, env.editorContractCalls)
             assertEquals(0, env.imeRequestCalls)
         }
 
@@ -3484,7 +3489,8 @@ class EditorBoundsDiagnosticTest {
             assertEquals(expected, reply.get("ime_editor_report_view_ids"))
             assertEquals(
                 setOf("ime_editor_bounds", "ime_editor_bounds_reason", "ime_editor_focus_phase", "ime_editor_focus_check",
-                    "ime_editor_focus_diag", "ime_editor_field_missing_name_matches", "ime_editor_report_view_ids"),
+                    "ime_editor_focus_diag", "ime_editor_contract_diag", "ime_editor_node_telemetry",
+                    "ime_editor_field_missing_name_matches", "ime_editor_report_view_ids"),
                 reply.keys().asSequence().toSet(),
             )
             assertEquals(0, env.imeRequestCalls)
@@ -3739,5 +3745,212 @@ class EditorBoundsDiagnosticTest {
         )
         assertFailure(readEditorBounds(sensitiveEnv, JSONObject()), "sensitive_field")
         assertEquals(0, sensitiveEnv.imeRequestCalls)
+    }
+
+    // ---- Pathway 4B：TYPE_NULL 预检、脱敏契约诊断、无短路节点遥测 ----
+
+    @Test
+    fun `TYPE_NULL fallback connection stops before currentFocus and classifies contract metadata without field_id_unresolved`() {
+        data class TypeNullCase(
+            val fieldIdValue: Int,
+            val expectedClass: String,
+            val resourceOverride: ResourceNameResult? = null,
+            val autofillPresent: Boolean? = null,
+            val autofillVirtual: Boolean? = null,
+            val handwriting: Boolean? = null,
+        )
+
+        val cases = listOf(
+            TypeNullCase(0, "zero", autofillPresent = false, autofillVirtual = null, handwriting = false),
+            TypeNullCase(-1, "no_id", autofillPresent = true, autofillVirtual = false, handwriting = true),
+            TypeNullCase(0x7f099999, "unresolved", resourceOverride = ResourceNameResult.Missing, autofillPresent = true, autofillVirtual = true),
+            TypeNullCase(0x7f099998, "non_id", resourceOverride = ResourceNameResult.Found("$pkg:string/not_an_id")),
+            TypeNullCase(fieldId, "id"),
+            TypeNullCase(0x7f099997, "resources_unavailable", resourceOverride = ResourceNameResult.ResourcesUnavailable),
+        )
+
+        for (c in cases) {
+            val env = FakeEnv(
+                contract = ImeEditorContract(
+                    inputType = InputType.TYPE_NULL,
+                    imeOptions = 0x10000004,
+                    actionId = 0,
+                    actionLabel = "SENSITIVE_LABEL_MUST_NOT_LEAK",
+                    fieldId = c.fieldIdValue,
+                    autofillIdPresent = c.autofillPresent,
+                    autofillIdVirtual = c.autofillVirtual,
+                    hasSupportedHandwritingGestures = c.handwriting,
+                ),
+                beforePhase = PhaseSnapshot(serviceFocus = null, rootFocus = null),
+            )
+            if (c.resourceOverride != null) {
+                env.resources[c.fieldIdValue] = c.resourceOverride
+            }
+
+            val reply = readEditorBounds(env, JSONObject())
+            assertFailure(reply, "input_type_null")
+            assertNoMissingIdAttribution(reply)
+            assertEquals(0, env.clearCacheCalls)
+            assertEquals(0, env.imeRequestCalls)
+            assertEquals(1, env.editorContractCalls)
+            assertFalse(reply.has("ime_editor_node_telemetry"))
+            assertFalse(reply.toString().contains("SENSITIVE_LABEL_MUST_NOT_LEAK"))
+            assertFalse(reply.toString().contains(fieldName))
+
+            val contractDiag = reply.getJSONObject("ime_editor_contract_diag")
+            assertEquals(8, contractDiag.length())
+            assertTrue(contractDiag.getBoolean("contract_present"))
+            assertTrue(contractDiag.getBoolean("input_type_is_null"))
+            assertEquals(InputType.TYPE_NULL, contractDiag.getInt("input_type"))
+            assertEquals(0x10000004, contractDiag.getInt("ime_options"))
+            assertEquals(c.expectedClass, contractDiag.getString("field_id_class"))
+            assertEquals(c.autofillPresent ?: JSONObject.NULL, contractDiag.get("autofill_id_present"))
+            assertEquals(c.autofillVirtual ?: JSONObject.NULL, contractDiag.get("autofill_id_virtual"))
+            assertEquals(c.handwriting ?: JSONObject.NULL, contractDiag.get("supported_handwriting_gestures"))
+        }
+    }
+
+    @Test
+    fun `non-short-circuited 2-unnamed-node telemetry distinguishes dead-end empty nodes from valid-bounds inputType match`() {
+        val chatInputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+
+        // Case 1：两个无名节点都是 [0,0,0,0]、inputType=0、不可见、未聚焦、不可编辑（纯死路）
+        val sfDeadEnd = FakeNode(
+            id = "n0",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+            isEditable = false,
+            inputType = InputType.TYPE_NULL,
+            className = "android.view.View",
+            bounds = IntBounds(0, 0, 0, 0),
+        )
+        val deadEndPeer = FakeNode(
+            id = "n1",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+            isEditable = false,
+            inputType = InputType.TYPE_NULL,
+            className = "android.view.View",
+            bounds = IntBounds(0, 0, 0, 0),
+        )
+        val deadEndEnv = FakeEnv(
+            contract = ImeEditorContract(chatInputType, 0x04, 0, null, fieldId = fieldId),
+            beforePhase = PhaseSnapshot(
+                serviceFocus = sfDeadEnd,
+                rootFocus = sfDeadEnd,
+                defaultNodesById = mapOf(fieldName to listOf(sfDeadEnd, deadEndPeer)),
+            ),
+        )
+        val deadEndReply = readEditorBounds(deadEndEnv, JSONObject())
+        val deadEndDiag = checkNotNull(assertFocusUnavailable(deadEndReply, "before_sample", "node_not_visible"))
+        assertEquals(2, deadEndDiag.getInt("window_field_total_matches"))
+        assertEquals(2, deadEndDiag.getInt("window_field_id_mismatch_matches"))
+        assertEquals(0, deadEndDiag.getInt("window_field_bounds_in_window_matches"))
+
+        val deadTelemetry = deadEndReply.getJSONObject("ime_editor_node_telemetry")
+        val deadSf = deadTelemetry.getJSONObject("service_focus")
+        assertTrue(deadSf.getBoolean("same_as_service"))
+        assertEquals("missing", deadSf.getString("view_id_state"))
+        assertEquals("empty", deadSf.getString("bounds_state"))
+        assertTrue(deadSf.isNull("bounds"))
+        assertEquals(InputType.TYPE_NULL, deadSf.getInt("input_type"))
+        assertFalse(deadSf.getBoolean("matches_contract_input_type"))
+        assertEquals("android.view.View", deadSf.getString("class_name"))
+
+        val deadSummary = deadTelemetry.getJSONObject("field_matches_summary")
+        assertEquals(2, deadSummary.getInt("total_matches"))
+        assertEquals(2, deadSummary.getInt("inspected_matches"))
+        assertEquals(2, deadSummary.getInt("unnamed_matches"))
+        assertEquals(2, deadSummary.getInt("empty_bounds_matches"))
+        assertEquals(0, deadSummary.getInt("bounds_in_window_matches"))
+        assertEquals(0, deadSummary.getInt("visible_matches"))
+        assertEquals(0, deadSummary.getInt("editable_matches"))
+        assertEquals(0, deadSummary.getInt("input_type_matches"))
+        assertEquals(1, deadSummary.getInt("same_as_service_matches"))
+        assertEquals(2, deadTelemetry.getJSONArray("field_matches").length())
+
+        // Case 2：两个无名节点中，其一具窗内有效四边 + 匹配 contract.inputType + editable + 同为 sfNode
+        val hiddenStub = FakeNode(
+            id = "stub_0",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+            isEditable = false,
+            inputType = InputType.TYPE_NULL,
+            className = "android.view.View",
+            bounds = IntBounds(0, 0, 0, 0),
+        )
+        val realEditor = FakeNode(
+            id = "real_1",
+            isFocused = false,
+            isVisibleToUser = false,
+            viewIdResourceName = null,
+            isEditable = true,
+            inputType = chatInputType,
+            className = "com.tencent.mm.ui.widget.cedit.api.MMFlexEditText",
+            bounds = editorBounds,
+        )
+        val matchEnv = FakeEnv(
+            contract = ImeEditorContract(chatInputType, 0x04, 0, null, fieldId = fieldId),
+            beforePhase = PhaseSnapshot(
+                serviceFocus = realEditor,
+                rootFocus = realEditor,
+                defaultNodesById = mapOf(fieldName to listOf(hiddenStub, realEditor)),
+            ),
+        )
+        val matchReply = readEditorBounds(matchEnv, JSONObject())
+        val matchDiag = checkNotNull(assertFocusUnavailable(matchReply, "before_sample", "node_not_visible"))
+        assertEquals(2, matchDiag.getInt("window_field_id_mismatch_matches"))
+        assertEquals(0, matchDiag.getInt("window_field_bounds_in_window_matches"))
+
+        val matchTelemetry = matchReply.getJSONObject("ime_editor_node_telemetry")
+        val matchSf = matchTelemetry.getJSONObject("service_focus")
+        assertEquals("in_window", matchSf.getString("bounds_state"))
+        assertTrue(matchSf.getBoolean("editable"))
+        assertTrue(matchSf.getBoolean("matches_contract_input_type"))
+        assertEquals(chatInputType, matchSf.getInt("input_type"))
+        assertEquals("com.tencent.mm.ui.widget.cedit.api.MMFlexEditText", matchSf.getString("class_name"))
+
+        val matchSummary = matchTelemetry.getJSONObject("field_matches_summary")
+        assertEquals(2, matchSummary.getInt("inspected_matches"))
+        assertEquals(2, matchSummary.getInt("unnamed_matches"))
+        assertEquals(1, matchSummary.getInt("bounds_in_window_matches"))
+        assertEquals(1, matchSummary.getInt("empty_bounds_matches"))
+        assertEquals(1, matchSummary.getInt("editable_matches"))
+        assertEquals(1, matchSummary.getInt("input_type_matches"))
+        assertEquals(1, matchSummary.getInt("same_as_service_matches"))
+
+        val rows = matchTelemetry.getJSONArray("field_matches")
+        assertEquals(2, rows.length())
+        val realRow = (0..1).map(rows::getJSONObject).single { it.getBoolean("same_as_service") }
+        assertEquals("missing", realRow.getString("view_id_state"))
+        assertEquals("in_window", realRow.getString("bounds_state"))
+        assertEquals(
+            listOf(editorBounds.left, editorBounds.top, editorBounds.right, editorBounds.bottom),
+            (0 until 4).map { realRow.getJSONArray("bounds").getInt(it) },
+        )
+        assertTrue(realRow.getBoolean("editable"))
+        assertTrue(realRow.getBoolean("matches_contract_input_type"))
+        assertEquals("com.tencent.mm.ui.widget.cedit.api.MMFlexEditText", realRow.getString("class_name"))
+    }
+
+    @Test
+    fun `sensitive_field omits contract diag and node telemetry`() {
+        val pwdContractEnv = focusedServiceEnv().apply {
+            contract = ImeEditorContract(
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                0,
+                0,
+                null,
+                fieldId = fieldId,
+            )
+        }
+        val pwdReply = readEditorBounds(pwdContractEnv, JSONObject())
+        assertFailure(pwdReply, "sensitive_field")
+        assertFalse(pwdReply.has("ime_editor_contract_diag"))
+        assertFalse(pwdReply.has("ime_editor_node_telemetry"))
+        assertEquals(0, pwdContractEnv.clearCacheCalls)
     }
 }

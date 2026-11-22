@@ -20,6 +20,8 @@ import dev.magina.gateway.ime.GatewayIme
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.ime.ImeEditorContract
 import dev.magina.gateway.ime.ImeSessionIdentity
+import dev.magina.gateway.ime.isPasswordInputType
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
@@ -62,8 +64,107 @@ internal interface EditorFocusNode {
     val isAccessibilityDataSensitive: Boolean
     val viewIdResourceName: String?
     val isEditable: Boolean
+    val inputType: Int get() = InputType.TYPE_NULL
+    val className: String? get() = null
     fun refresh(): Boolean
     fun boundsInScreen(): IntBounds
+}
+
+internal enum class NodeBoundsState(val wireName: String) {
+    EMPTY("empty"),
+    OUTSIDE_WINDOW("outside_window"),
+    IN_WINDOW("in_window"),
+}
+
+internal fun sanitizeClassName(raw: String?): String? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.length > 160) return "other"
+    return if (trimmed.all { it.isLetterOrDigit() || it == '.' || it == '_' || it == '$' }) trimmed else "other"
+}
+
+/** 单个无障碍节点的无短路脱敏遥测行（零文本、零包名、零资源名明文）。 */
+internal data class NodeTelemetryRow(
+    val sameAsService: Boolean,
+    val refreshed: Boolean,
+    val sameWindow: Boolean,
+    val samePackage: Boolean,
+    val focused: Boolean,
+    val visible: Boolean,
+    val editable: Boolean,
+    val viewIdState: String,
+    val boundsState: NodeBoundsState,
+    val bounds: IntBounds?,
+    val inputType: Int,
+    val matchesContractInputType: Boolean?,
+    val className: String?,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("same_as_service", sameAsService)
+        .put("refreshed", refreshed)
+        .put("same_window", sameWindow)
+        .put("same_package", samePackage)
+        .put("focused", focused)
+        .put("visible", visible)
+        .put("editable", editable)
+        .put("view_id_state", viewIdState)
+        .put("bounds_state", boundsState.wireName)
+        .put("bounds", bounds?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) } ?: JSONObject.NULL)
+        .put("input_type", inputType)
+        .put("matches_contract_input_type", matchesContractInputType ?: JSONObject.NULL)
+        .put("class_name", className ?: JSONObject.NULL)
+}
+
+internal data class FieldMatchTelemetrySummary(
+    val totalMatches: Int,
+    val inspectedMatches: Int,
+    val unnamedMatches: Int,
+    val boundsInWindowMatches: Int,
+    val emptyBoundsMatches: Int,
+    val outsideWindowMatches: Int,
+    val visibleMatches: Int,
+    val focusedMatches: Int,
+    val editableMatches: Int,
+    val inputTypeMatches: Int,
+    val sameAsServiceMatches: Int,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("total_matches", totalMatches)
+        .put("inspected_matches", inspectedMatches)
+        .put("unnamed_matches", unnamedMatches)
+        .put("bounds_in_window_matches", boundsInWindowMatches)
+        .put("empty_bounds_matches", emptyBoundsMatches)
+        .put("outside_window_matches", outsideWindowMatches)
+        .put("visible_matches", visibleMatches)
+        .put("focused_matches", focusedMatches)
+        .put("editable_matches", editableMatches)
+        .put("input_type_matches", inputTypeMatches)
+        .put("same_as_service_matches", sameAsServiceMatches)
+}
+
+private const val MAX_TELEMETRY_MATCH_ROWS = 16
+
+internal data class NodeTelemetrySnapshot(
+    val serviceFocus: NodeTelemetryRow?,
+    val fieldMatchSummary: FieldMatchTelemetrySummary?,
+    val fieldMatches: List<NodeTelemetryRow>,
+) {
+    fun toJson(): JSONObject {
+        val rows = JSONArray()
+        for (row in fieldMatches.take(MAX_TELEMETRY_MATCH_ROWS)) {
+            rows.put(row.toJson())
+        }
+        return JSONObject()
+            .put("service_focus", serviceFocus?.toJson() ?: JSONObject.NULL)
+            .put("field_matches_summary", fieldMatchSummary?.toJson() ?: JSONObject.NULL)
+            .put("field_matches", rows)
+    }
+}
+
+internal sealed interface A11yNodeDiagnosticResult {
+    data class Ready(val telemetry: NodeTelemetrySnapshot) : A11yNodeDiagnosticResult
+    data object SensitiveField : A11yNodeDiagnosticResult
+    data class Unavailable(val reason: String) : A11yNodeDiagnosticResult
 }
 
 internal interface EditorFocusWindow {
@@ -133,23 +234,90 @@ private data class MultiMatchScan(
     val visibleMatches: Int,
     val usable: List<FilteredFieldMatch>,
     val anonymous: List<AnonymousEditor>,
+    val telemetrySummary: FieldMatchTelemetrySummary,
+    val inspectedNodes: List<NodeTelemetryRow>,
 )
 
 private class Unavailable(val reason: String) : Exception(reason)
-private class MissingIdUnavailable(val phase: String, val source: String) : Exception("missing_id")
-private class AnonymousPairStopped(val pair: AnonymousEditorPair, val phase: String, val reason: String) : Exception(reason)
+private class MissingIdUnavailable(
+    val phase: String,
+    val source: String,
+    val contractDiag: JSONObject? = null,
+    val nodeTelemetry: NodeTelemetrySnapshot? = null,
+) : Exception("missing_id")
+
+private class AnonymousPairStopped(
+    val pair: AnonymousEditorPair,
+    val phase: String,
+    val reason: String,
+    val contractDiag: JSONObject? = null,
+    val nodeTelemetry: NodeTelemetrySnapshot? = null,
+) : Exception(reason)
+
 private class FocusUnavailable(
     val phase: String,
     val check: String,
     val diag: JSONObject? = null,
     val missingNameMatches: Int? = null,
+    val contractDiag: JSONObject? = null,
+    val nodeTelemetry: NodeTelemetrySnapshot? = null,
 ) : Exception()
 
-private sealed interface WindowFieldNameResult {
+internal sealed interface WindowFieldNameResult {
     data class Found(val name: String, val id: Int) : WindowFieldNameResult
     data object NoContract : WindowFieldNameResult
     data object MissingId : WindowFieldNameResult
     data object ResourcesUnavailable : WindowFieldNameResult
+}
+
+internal data class ClassifiedContractField(
+    val fieldIdClass: String,
+    val lookupResult: WindowFieldNameResult,
+)
+
+internal fun classifyContractField(
+    resourceName: (String, Int) -> ResourceNameResult,
+    pkg: String,
+    contract: ImeEditorContract?,
+): ClassifiedContractField {
+    if (contract == null) return ClassifiedContractField("no_contract", WindowFieldNameResult.NoContract)
+    val id = contract.fieldId
+    if (id == 0) return ClassifiedContractField("zero", WindowFieldNameResult.MissingId)
+    if (id == -1) return ClassifiedContractField("no_id", WindowFieldNameResult.MissingId)
+    return when (val result = resourceName(pkg, id)) {
+        is ResourceNameResult.Found ->
+            if (result.name.substringAfter(':', "").startsWith("id/")) {
+                ClassifiedContractField("id", WindowFieldNameResult.Found(result.name, id))
+            } else {
+                ClassifiedContractField("non_id", WindowFieldNameResult.MissingId)
+            }
+        ResourceNameResult.Missing -> ClassifiedContractField("unresolved", WindowFieldNameResult.MissingId)
+        ResourceNameResult.ResourcesUnavailable ->
+            ClassifiedContractField("resources_unavailable", WindowFieldNameResult.ResourcesUnavailable)
+    }
+}
+
+/** 固定 8 键脱敏契约诊断（零文本、零包名、零资源名、零 AutofillId 明文）。密码字段必须提前拦截，不得进入此函数。 */
+internal fun buildContractDiag(
+    resourceName: (String, Int) -> ResourceNameResult,
+    pkg: String,
+    contract: ImeEditorContract?,
+    preclassifiedFieldClass: String? = null,
+): JSONObject {
+    val fieldIdClass = preclassifiedFieldClass ?: try {
+        classifyContractField(resourceName, pkg, contract).fieldIdClass
+    } catch (_: SecurityException) {
+        "access_denied"
+    }
+    return JSONObject()
+        .put("contract_present", contract != null)
+        .put("input_type_is_null", contract?.let { it.inputType == InputType.TYPE_NULL } ?: JSONObject.NULL)
+        .put("input_type", contract?.inputType ?: JSONObject.NULL)
+        .put("ime_options", contract?.imeOptions ?: JSONObject.NULL)
+        .put("field_id_class", fieldIdClass)
+        .put("autofill_id_present", contract?.autofillIdPresent ?: JSONObject.NULL)
+        .put("autofill_id_virtual", contract?.autofillIdVirtual ?: JSONObject.NULL)
+        .put("supported_handwriting_gestures", contract?.hasSupportedHandwritingGestures ?: JSONObject.NULL)
 }
 
 private class ServiceFocusSnapshot(
@@ -161,6 +329,7 @@ private class ServiceFocusSnapshot(
     val samePackage: Boolean?,
     val sensitive: Boolean,
     val viewId: String?,
+    val telemetry: NodeTelemetryRow? = null,
 ) {
     val valid: Boolean
         get() = node != null && refreshed == true && visible == true && sameWindow == true && samePackage == true
@@ -194,6 +363,8 @@ private class WindowFieldSnapshot(
     val emptyBoundsMatches: Int? = null,
     val outsideWindowMatches: Int? = null,
     val visibleMatches: Int? = null,
+    val telemetrySummary: FieldMatchTelemetrySummary? = null,
+    val inspectedNodes: List<NodeTelemetryRow> = emptyList(),
 )
 
 /** 只读回执。即使两份独立测量一致，也不生成操作引用或输入身份。 */
@@ -221,7 +392,16 @@ internal fun readEditorBounds(
     var beforePair: AnonymousEditorPair? = null
     return try {
         if (!env.isGatewayImeSelected()) return unavailable("no_input_target")
-        val beforeResolved = currentFocus(env, pkg, "before_sample")
+        // Pathway 4B：在进入 currentFocus() 前先分类密码与 TYPE_NULL 兜底连接，绝不把 DecorView TYPE_NULL 误报为 field_id_unresolved。
+        val beforeContract = env.editorContract()
+        if (beforeContract != null && isPasswordInputType(beforeContract.inputType)) {
+            return unavailable("sensitive_field")
+        }
+        if (beforeContract != null && beforeContract.inputType == InputType.TYPE_NULL) {
+            return unavailable("input_type_null")
+                .put("ime_editor_contract_diag", buildContractDiag(env::resourceName, pkg, beforeContract))
+        }
+        val beforeResolved = currentFocus(env, pkg, "before_sample", beforeContract)
         beforePair = beforeResolved.anonymousPair
         val before = beforeResolved.focus
         val request = env.requestEditorBounds(session)
@@ -237,8 +417,15 @@ internal fun readEditorBounds(
         }
         if (env.session() != session || env.foregroundPackage() != pkg) return unavailable("context_changed")
         if (sample == null) return unavailable("no_ime_bounds")
-        val imeName = requireResourceName(env, pkg, sample.fieldId)
-        val afterResolved = currentFocus(env, pkg, "after_sample")
+        val afterContract = env.editorContract()
+        if (afterContract != null && isPasswordInputType(afterContract.inputType)) {
+            return unavailable("sensitive_field")
+        }
+        if (afterContract != null && afterContract.inputType == InputType.TYPE_NULL) {
+            return unavailable("context_changed")
+        }
+        val imeName = requireResourceName(env, pkg, sample.fieldId, afterContract)
+        val afterResolved = currentFocus(env, pkg, "after_sample", afterContract)
         val after = afterResolved.focus
         val pair = afterResolved.anonymousPair
         if (before != after || beforePair != pair || env.foregroundPackage() != pkg ||
@@ -283,7 +470,10 @@ internal fun readEditorBounds(
                 !env.isLandscape || (e.phase == "after_sample" && beforePair?.hasSameScope(e.pair) != true)) {
                 unavailable("context_changed")
             } else {
-                unavailable(e.reason).put("ime_editor_anonymous_pair", e.pair.receipt(e.phase, e.reason))
+                unavailable(e.reason)
+                    .put("ime_editor_anonymous_pair", e.pair.receipt(e.phase, e.reason))
+                    .also { if (e.contractDiag != null) it.put("ime_editor_contract_diag", e.contractDiag) }
+                    .also { if (e.nodeTelemetry != null) it.put("ime_editor_node_telemetry", e.nodeTelemetry.toJson()) }
             }
         } catch (_: SecurityException) {
             unavailable("access_denied")
@@ -293,6 +483,8 @@ internal fun readEditorBounds(
             .put("ime_editor_focus_phase", e.phase)
             .put("ime_editor_focus_check", e.check)
             .also { if (e.diag != null) it.put("ime_editor_focus_diag", e.diag) }
+            .also { if (e.contractDiag != null) it.put("ime_editor_contract_diag", e.contractDiag) }
+            .also { if (e.nodeTelemetry != null) it.put("ime_editor_node_telemetry", e.nodeTelemetry.toJson()) }
             .putOpt("ime_editor_field_missing_name_matches", e.missingNameMatches)
         if ((e.missingNameMatches ?: 0) > 0) {
             val reportViewIds = try {
@@ -307,6 +499,8 @@ internal fun readEditorBounds(
         unavailable("missing_id")
             .put("ime_editor_missing_id_phase", e.phase)
             .put("ime_editor_missing_id_source", e.source)
+            .also { if (e.contractDiag != null) it.put("ime_editor_contract_diag", e.contractDiag) }
+            .also { if (e.nodeTelemetry != null) it.put("ime_editor_node_telemetry", e.nodeTelemetry.toJson()) }
     } catch (e: Unavailable) {
         unavailable(e.reason)
     } catch (_: SecurityException) {
@@ -316,43 +510,56 @@ internal fun readEditorBounds(
     }
 }
 
-private fun requireResourceName(env: EditorBoundsEnvironment, pkg: String, resId: Int): String =
+private fun requireResourceName(
+    env: EditorBoundsEnvironment,
+    pkg: String,
+    resId: Int,
+    contract: ImeEditorContract?,
+): String =
     when (val result = env.resourceName(pkg, resId)) {
         is ResourceNameResult.Found -> result.name
-        ResourceNameResult.Missing -> throw MissingIdUnavailable("after_sample", "ime_sample_field_unresolved")
+        ResourceNameResult.Missing -> throw MissingIdUnavailable(
+            phase = "after_sample",
+            source = "ime_sample_field_unresolved",
+            contractDiag = buildContractDiag(env::resourceName, pkg, contract),
+        )
         ResourceNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
 
-private fun isPasswordInputType(inputType: Int): Boolean =
-    when (inputType and (InputType.TYPE_MASK_CLASS or InputType.TYPE_MASK_VARIATION)) {
-        InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
-        InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
-        InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
-        InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD -> true
-        else -> false
-    }
-
-private fun resolveWindowFieldNameResult(env: EditorBoundsEnvironment, pkg: String): WindowFieldNameResult {
-    val contract = env.editorContract() ?: return WindowFieldNameResult.NoContract
-    if (isPasswordInputType(contract.inputType)) throw Unavailable("sensitive_field")
-    val id = contract.fieldId
-    if (id == 0 || id == -1) return WindowFieldNameResult.MissingId
-    return when (val result = env.resourceName(pkg, id)) {
-        is ResourceNameResult.Found ->
-            if (result.name.substringAfter(':', "").startsWith("id/")) WindowFieldNameResult.Found(result.name, id)
-            else WindowFieldNameResult.MissingId
-        ResourceNameResult.Missing -> WindowFieldNameResult.MissingId
-        ResourceNameResult.ResourcesUnavailable -> WindowFieldNameResult.ResourcesUnavailable
-    }
+private fun resolveWindowFieldNameResult(
+    env: EditorBoundsEnvironment,
+    pkg: String,
+    contract: ImeEditorContract?,
+): ClassifiedContractField {
+    if (contract != null && isPasswordInputType(contract.inputType)) throw Unavailable("sensitive_field")
+    return classifyContractField(env::resourceName, pkg, contract)
 }
 
-private fun resolveWindowFieldName(env: EditorBoundsEnvironment, pkg: String, phase: String): String =
-    when (val result = resolveWindowFieldNameResult(env, pkg)) {
+private fun resolveWindowFieldName(
+    env: EditorBoundsEnvironment,
+    pkg: String,
+    phase: String,
+    contract: ImeEditorContract?,
+    sfTelemetry: NodeTelemetryRow?,
+): String {
+    val classified = resolveWindowFieldNameResult(env, pkg, contract)
+    return when (val result = classified.lookupResult) {
         is WindowFieldNameResult.Found -> result.name
-        WindowFieldNameResult.NoContract -> throw MissingIdUnavailable(phase, "field_contract_absent")
-        WindowFieldNameResult.MissingId -> throw MissingIdUnavailable(phase, "field_id_unresolved")
+        WindowFieldNameResult.NoContract -> throw MissingIdUnavailable(
+            phase = phase,
+            source = "field_contract_absent",
+            contractDiag = buildContractDiag(env::resourceName, pkg, contract, classified.fieldIdClass),
+            nodeTelemetry = sfTelemetry?.let { NodeTelemetrySnapshot(it, null, emptyList()) },
+        )
+        WindowFieldNameResult.MissingId -> throw MissingIdUnavailable(
+            phase = phase,
+            source = "field_id_unresolved",
+            contractDiag = buildContractDiag(env::resourceName, pkg, contract, classified.fieldIdClass),
+            nodeTelemetry = sfTelemetry?.let { NodeTelemetrySnapshot(it, null, emptyList()) },
+        )
         WindowFieldNameResult.ResourcesUnavailable -> throw Unavailable("resources_unavailable")
     }
+}
 
 /** 仅输出固定 23 键脱敏状态（布尔、非负整数、null 或固定小写枚举），不含文本、包名、资源名、坐标或窗口号。 */
 private fun buildFocusDiag(
@@ -427,9 +634,54 @@ private fun isFallbackRootFocusAllowed(
         !sf.sensitive
 }
 
+private fun inspectNodeTelemetryRow(
+    node: EditorFocusNode,
+    windowBounds: IntBounds,
+    sameAsService: Boolean,
+    sameWindow: Boolean,
+    samePackage: Boolean,
+    fieldName: String?,
+    contractInputType: Int?,
+): NodeTelemetryRow {
+    val name = node.viewIdResourceName
+    val viewIdState = when {
+        name.isNullOrBlank() -> "missing"
+        fieldName == null -> "unchecked"
+        name == fieldName -> "matches_field"
+        else -> "other"
+    }
+    val bounds = node.boundsInScreen()
+    val boundsState = when {
+        bounds.isEmpty -> NodeBoundsState.EMPTY
+        !windowBounds.contains(bounds) -> NodeBoundsState.OUTSIDE_WINDOW
+        else -> NodeBoundsState.IN_WINDOW
+    }
+    val nodeInputType = node.inputType
+    val matchesContractType = contractInputType
+        ?.takeIf { it != InputType.TYPE_NULL }
+        ?.let { nodeInputType == it }
+    return NodeTelemetryRow(
+        sameAsService = sameAsService,
+        refreshed = true,
+        sameWindow = sameWindow,
+        samePackage = samePackage,
+        focused = node.isFocused,
+        visible = node.isVisibleToUser,
+        editable = node.isEditable,
+        viewIdState = viewIdState,
+        boundsState = boundsState,
+        bounds = bounds.takeUnless { it.isEmpty },
+        inputType = nodeInputType,
+        matchesContractInputType = matchesContractType,
+        className = sanitizeClassName(node.className),
+    )
+}
+
 /**
  * 对多命中（或过滤后二次复核）列表按统一严格口径逐项刷新、扫描：
  * 任一刷新成功的同窗同包节点为密码/无障碍敏感时立即 fail-closed 抛 sensitive_field。
+ * Pathway 4B：在判断 `viewIdResourceName != fieldName` 之前先采集无短路脱敏节点遥测，
+ * 确保即使节点被剥离 `viewIdResourceName == null` 也能观测到真实 bounds/visible/focused/editable/inputType/className/same_as_service。
  */
 private fun scanMultiMatches(
     nodes: List<EditorFocusNode>,
@@ -438,6 +690,8 @@ private fun scanMultiMatches(
     fieldName: String,
     windowBounds: IntBounds,
     readAnonymousPair: Boolean = false,
+    sfNode: EditorFocusNode? = null,
+    contractInputType: Int? = null,
 ): MultiMatchScan {
     var boundsInWindowCount = 0
     var refreshFailedCount = 0
@@ -447,8 +701,17 @@ private fun scanMultiMatches(
     var emptyBoundsCount = 0
     var outsideWindowCount = 0
     var visibleCount = 0
+    var anyBoundsInWindowCount = 0
+    var anyEmptyBoundsCount = 0
+    var anyOutsideWindowCount = 0
+    var anyVisibleCount = 0
+    var anyFocusedCount = 0
+    var anyEditableCount = 0
+    var anyInputTypeMatchesCount = 0
+    var anySameAsServiceCount = 0
     val usable = mutableListOf<FilteredFieldMatch>()
     val anonymous = mutableListOf<AnonymousEditor>()
+    val inspectedNodes = mutableListOf<NodeTelemetryRow>()
     for (m in nodes) {
         if (!m.refresh()) {
             refreshFailedCount++
@@ -459,35 +722,61 @@ private fun scanMultiMatches(
             continue
         }
         if (m.isPassword || m.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
+        val row = inspectNodeTelemetryRow(
+            node = m,
+            windowBounds = windowBounds,
+            sameAsService = sfNode != null && m == sfNode,
+            sameWindow = true,
+            samePackage = true,
+            fieldName = fieldName,
+            contractInputType = contractInputType,
+        )
+        inspectedNodes += row
+        when (row.boundsState) {
+            NodeBoundsState.IN_WINDOW -> anyBoundsInWindowCount++
+            NodeBoundsState.EMPTY -> anyEmptyBoundsCount++
+            NodeBoundsState.OUTSIDE_WINDOW -> anyOutsideWindowCount++
+        }
+        if (row.visible) anyVisibleCount++
+        if (row.focused) anyFocusedCount++
+        if (row.editable) anyEditableCount++
+        if (row.matchesContractInputType == true) anyInputTypeMatchesCount++
+        if (row.sameAsService) anySameAsServiceCount++
+
         val name = m.viewIdResourceName
         if (name != fieldName) {
             idMismatchCount++
             if (name.isNullOrBlank()) {
                 missingNameCount++
                 if (readAnonymousPair) {
-                    anonymous += AnonymousEditor(m, m.boundsInScreen(), m.isFocused, m.isVisibleToUser, m.isEditable)
+                    anonymous += AnonymousEditor(
+                        m,
+                        row.bounds ?: IntBounds(0, 0, 0, 0),
+                        row.focused,
+                        row.visible,
+                        row.editable,
+                    )
                 }
             }
             continue
         }
-        val visible = m.isVisibleToUser
-        if (visible) visibleCount++
-        val bounds = m.boundsInScreen()
-        if (bounds.isEmpty) {
+        if (row.visible) visibleCount++
+        val bounds = row.bounds
+        if (bounds == null) {
             emptyBoundsCount++
             continue
         }
-        if (!windowBounds.contains(bounds)) {
+        if (row.boundsState != NodeBoundsState.IN_WINDOW) {
             outsideWindowCount++
             continue
         }
         boundsInWindowCount++
-        if (visible) {
+        if (row.visible) {
             usable += FilteredFieldMatch(
                 node = m,
                 bounds = bounds,
-                focused = m.isFocused,
-                editable = m.isEditable,
+                focused = row.focused,
+                editable = row.editable,
             )
         }
     }
@@ -503,11 +792,34 @@ private fun scanMultiMatches(
         visibleMatches = visibleCount,
         usable = usable,
         anonymous = anonymous,
+        telemetrySummary = FieldMatchTelemetrySummary(
+            totalMatches = nodes.size,
+            inspectedMatches = inspectedNodes.size,
+            unnamedMatches = missingNameCount,
+            boundsInWindowMatches = anyBoundsInWindowCount,
+            emptyBoundsMatches = anyEmptyBoundsCount,
+            outsideWindowMatches = anyOutsideWindowCount,
+            visibleMatches = anyVisibleCount,
+            focusedMatches = anyFocusedCount,
+            editableMatches = anyEditableCount,
+            inputTypeMatches = anyInputTypeMatchesCount,
+            sameAsServiceMatches = anySameAsServiceCount,
+        ),
+        inspectedNodes = inspectedNodes,
     )
 }
 
-private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: String): ResolvedFocus {
-    fun missing(check: String): Nothing = throw FocusUnavailable(phase, check)
+private fun currentFocus(
+    env: EditorBoundsEnvironment,
+    pkg: String,
+    phase: String,
+    contract: ImeEditorContract?,
+): ResolvedFocus {
+    fun missing(check: String): Nothing = throw FocusUnavailable(
+        phase = phase,
+        check = check,
+        contractDiag = buildContractDiag(env::resourceName, pkg, contract),
+    )
     if (!env.clearCache()) missing("cache_clear_failed")
     val root = env.activeRoot() ?: missing("active_root_missing")
     val window = root.window() ?: missing("active_window_missing")
@@ -532,6 +844,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     }
 
     val landscape = env.isLandscape
+    val windowBounds by lazy(LazyThreadSafetyMode.NONE) { window.boundsInScreen() }
+    val contractInputType = contract?.inputType
     val sfNode = env.serviceFocus()
     // 在 refresh 或字段枚举改变缓存前，分别保存服务和窗口根两次焦点查询的原始属性。
     val serviceReading = if (landscape) focusReading(sfNode) else null
@@ -545,6 +859,19 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         val samePackage = sfNode.packageName == pkg
         val sensitive = sfNode.isPassword || sfNode.isAccessibilityDataSensitive
         if (sameWindow && samePackage && sensitive) throw Unavailable("sensitive_field")
+        val sfTelemetry = if (!sensitive) {
+            inspectNodeTelemetryRow(
+                node = sfNode,
+                windowBounds = windowBounds,
+                sameAsService = true,
+                sameWindow = sameWindow,
+                samePackage = samePackage,
+                fieldName = null,
+                contractInputType = contractInputType,
+            )
+        } else {
+            null
+        }
         ServiceFocusSnapshot(
             node = sfNode,
             refreshed = true,
@@ -554,21 +881,55 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             samePackage = samePackage,
             sensitive = sensitive,
             viewId = if (sensitive) null else sfNode.viewIdResourceName?.takeIf { it.isNotBlank() },
+            telemetry = sfTelemetry,
         )
     }
 
-    fun missingField(check: String, field: WindowFieldSnapshot): Nothing {
-        val missingNames = field.missingNameMatches.takeIf { (field.idMismatchMatches ?: 0) > 0 }
-        throw FocusUnavailable(phase, check, buildFocusDiag(sf, getRootFocus(), field), missingNames)
+    val classifiedLookup = if (landscape || !sf.valid) resolveWindowFieldNameResult(env, pkg, contract) else null
+    val lookup = classifiedLookup?.lookupResult
+    val field = lookup as? WindowFieldNameResult.Found
+    val sfTelemetryWithField = sf.telemetry?.let { row ->
+        if (field == null) row
+        else row.copy(
+            viewIdState = when {
+                sf.viewId == null -> "missing"
+                sf.viewId == field.name -> "matches_field"
+                else -> "other"
+            },
+        )
     }
 
-    val lookup = if (landscape || !sf.valid) resolveWindowFieldNameResult(env, pkg) else null
-    val field = lookup as? WindowFieldNameResult.Found
+    fun contractDiag(): JSONObject = buildContractDiag(env::resourceName, pkg, contract, classifiedLookup?.fieldIdClass)
+
+    fun missingField(check: String, wf: WindowFieldSnapshot): Nothing {
+        val missingNames = wf.missingNameMatches.takeIf { (wf.idMismatchMatches ?: 0) > 0 }
+        val nodeTelemetry = NodeTelemetrySnapshot(
+            serviceFocus = sfTelemetryWithField,
+            fieldMatchSummary = wf.telemetrySummary,
+            fieldMatches = wf.inspectedNodes,
+        )
+        throw FocusUnavailable(
+            phase = phase,
+            check = check,
+            diag = buildFocusDiag(sf, getRootFocus(), wf),
+            missingNameMatches = missingNames,
+            contractDiag = contractDiag(),
+            nodeTelemetry = nodeTelemetry,
+        )
+    }
+
     val fieldMatches = field?.let { root.findNodesByViewId(it.name) }.orEmpty()
-    val windowBounds by lazy(LazyThreadSafetyMode.NONE) { window.boundsInScreen() }
     val fieldScan = if (field != null && fieldMatches.size >= 2 && (!sf.valid || fieldMatches.size == 2)) {
-        scanMultiMatches(fieldMatches, window.id, pkg, field.name, windowBounds,
-            readAnonymousPair = landscape && fieldMatches.size == 2)
+        scanMultiMatches(
+            nodes = fieldMatches,
+            windowId = window.id,
+            pkg = pkg,
+            fieldName = field.name,
+            windowBounds = windowBounds,
+            readAnonymousPair = landscape && fieldMatches.size == 2,
+            sfNode = sf.node,
+            contractInputType = contractInputType,
+        )
     } else null
     if (field != null && fieldScan?.anonymous?.size == 2) {
         val candidates = fieldScan.anonymous
@@ -577,7 +938,17 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             checkNotNull(rootReading), candidates.toSet())
         val reason = pair.stopReason() ?: if (!sf.valid || sf.focused != true ||
             (sf.viewId != null && sf.viewId != field.name)) "focus_conflict" else null
-        if (reason != null) throw AnonymousPairStopped(pair, phase, reason)
+        if (reason != null) throw AnonymousPairStopped(
+            pair = pair,
+            phase = phase,
+            reason = reason,
+            contractDiag = contractDiag(),
+            nodeTelemetry = NodeTelemetrySnapshot(
+                serviceFocus = sfTelemetryWithField,
+                fieldMatchSummary = fieldScan.telemetrySummary,
+                fieldMatches = fieldScan.inspectedNodes,
+            ),
+        )
         val target = checkNotNull(pair.focused)
         return ResolvedFocus(EditorFocus(target.node, window.id, field.name, target.bounds,
             target.editable, target.focused), usedWindowField = true, filteredAmbiguous = false, anonymousPair = pair)
@@ -591,15 +962,24 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         if (rootFocus != node) {
             missingField("root_focus_mismatch", WindowFieldSnapshot("not_attempted"))
         }
-        val expectedFieldName = if (!focused) resolveWindowFieldName(env, pkg, phase) else null
-        val name = sf.viewId ?: throw MissingIdUnavailable(phase, "service_node_unnamed")
+        val expectedFieldName = if (!focused) {
+            resolveWindowFieldName(env, pkg, phase, contract, sfTelemetryWithField)
+        } else {
+            null
+        }
+        val name = sf.viewId ?: throw MissingIdUnavailable(
+            phase = phase,
+            source = "service_node_unnamed",
+            contractDiag = contractDiag(),
+            nodeTelemetry = sfTelemetryWithField?.let { NodeTelemetrySnapshot(it, null, emptyList()) },
+        )
         if (expectedFieldName != null && expectedFieldName != name) throw Unavailable("different_id")
         val byName = if (landscape && field?.name == name) fieldMatches else root.findNodesByViewId(name)
         if (byName.singleOrNull() != node) throw Unavailable("ambiguous_id")
-        val bounds = node.boundsInScreen()
-        if (bounds.isEmpty || !window.boundsInScreen().contains(bounds)) throw Unavailable("invalid_bounds")
+        val bounds = sf.telemetry?.bounds ?: node.boundsInScreen()
+        if (bounds.isEmpty || !windowBounds.contains(bounds)) throw Unavailable("invalid_bounds")
         return ResolvedFocus(
-            focus = EditorFocus(node, window.id, name, bounds, node.isEditable, focused),
+            focus = EditorFocus(node, window.id, name, bounds, sf.telemetry?.editable ?: node.isEditable, focused),
             usedWindowField = false,
             filteredAmbiguous = false,
         )
@@ -610,11 +990,21 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     val fieldName = when (val result = checkNotNull(lookup)) {
         is WindowFieldNameResult.Found -> result.name
         WindowFieldNameResult.NoContract -> {
-            if (sfFailureCheck == null) throw MissingIdUnavailable(phase, "field_contract_absent")
+            if (sfFailureCheck == null) throw MissingIdUnavailable(
+                phase = phase,
+                source = "field_contract_absent",
+                contractDiag = contractDiag(),
+                nodeTelemetry = NodeTelemetrySnapshot(sfTelemetryWithField, null, emptyList()),
+            )
             missingField(sfFailureCheck, WindowFieldSnapshot("no_contract"))
         }
         WindowFieldNameResult.MissingId -> {
-            if (sfFailureCheck == null) throw MissingIdUnavailable(phase, "field_id_unresolved")
+            if (sfFailureCheck == null) throw MissingIdUnavailable(
+                phase = phase,
+                source = "field_id_unresolved",
+                contractDiag = contractDiag(),
+                nodeTelemetry = NodeTelemetrySnapshot(sfTelemetryWithField, null, emptyList()),
+            )
             missingField(sfFailureCheck, WindowFieldSnapshot("missing_id"))
         }
         WindowFieldNameResult.ResourcesUnavailable -> {
@@ -640,6 +1030,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
                 emptyBoundsMatches = 0,
                 outsideWindowMatches = 0,
                 visibleMatches = 0,
+                telemetrySummary = FieldMatchTelemetrySummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                inspectedNodes = emptyList(),
             ),
         )
     }
@@ -661,21 +1053,45 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
                 emptyBoundsMatches = 0,
                 outsideWindowMatches = 0,
                 visibleMatches = 0,
+                telemetrySummary = FieldMatchTelemetrySummary(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                inspectedNodes = emptyList(),
             )
             val check = if (sameAsService) checkNotNull(sfFailureCheck) else "node_refresh_failed"
             missingField(check, wf)
         }
         if (candidate.isPassword || candidate.isAccessibilityDataSensitive) throw Unavailable("sensitive_field")
-        val candFocused = candidate.isFocused
-        val candVisible = candidate.isVisibleToUser
         val candSameWindow = candidate.windowId == window.id
         val candSamePackage = candidate.packageName == pkg
-        val candBounds = candidate.boundsInScreen()
-        val candBoundsInWindow = !candBounds.isEmpty && windowBounds.contains(candBounds)
+        val candRow = inspectNodeTelemetryRow(
+            node = candidate,
+            windowBounds = windowBounds,
+            sameAsService = sameAsService,
+            sameWindow = candSameWindow,
+            samePackage = candSamePackage,
+            fieldName = fieldName,
+            contractInputType = contractInputType,
+        )
+        val candFocused = candRow.focused
+        val candVisible = candRow.visible
+        val candBounds = candRow.bounds ?: IntBounds(0, 0, 0, 0)
+        val candBoundsInWindow = candRow.boundsState == NodeBoundsState.IN_WINDOW
         val candViewId = candidate.viewIdResourceName?.takeIf { it.isNotBlank() }
         val sameWindowAndPkg = candSameWindow && candSamePackage
         val idMatched = sameWindowAndPkg && candViewId == fieldName
         val inWindowQualified = idMatched && candBoundsInWindow
+        val singleSummary = FieldMatchTelemetrySummary(
+            totalMatches = 1,
+            inspectedMatches = 1,
+            unnamedMatches = if (candViewId == null) 1 else 0,
+            boundsInWindowMatches = if (candBoundsInWindow) 1 else 0,
+            emptyBoundsMatches = if (candRow.boundsState == NodeBoundsState.EMPTY) 1 else 0,
+            outsideWindowMatches = if (candRow.boundsState == NodeBoundsState.OUTSIDE_WINDOW) 1 else 0,
+            visibleMatches = if (candVisible) 1 else 0,
+            focusedMatches = if (candFocused) 1 else 0,
+            editableMatches = if (candRow.editable) 1 else 0,
+            inputTypeMatches = if (candRow.matchesContractInputType == true) 1 else 0,
+            sameAsServiceMatches = if (sameAsService) 1 else 0,
+        )
         val wf = WindowFieldSnapshot(
             lookup = "unique",
             fieldName = fieldName,
@@ -694,6 +1110,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             emptyBoundsMatches = if (idMatched && candBounds.isEmpty) 1 else 0,
             outsideWindowMatches = if (idMatched && !candBounds.isEmpty && !windowBounds.contains(candBounds)) 1 else 0,
             visibleMatches = if (idMatched && candVisible) 1 else 0,
+            telemetrySummary = singleSummary,
+            inspectedNodes = listOf(candRow),
         )
         val candidateFocusCheck = when {
             !candVisible -> "node_not_visible"
@@ -710,12 +1128,17 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             val check = if (sameAsService) checkNotNull(sfFailureCheck) else "root_focus_mismatch"
             missingField(check, wf)
         }
-        val name = candViewId ?: throw MissingIdUnavailable(phase, "candidate_node_unnamed")
+        val name = candViewId ?: throw MissingIdUnavailable(
+            phase = phase,
+            source = "candidate_node_unnamed",
+            contractDiag = contractDiag(),
+            nodeTelemetry = NodeTelemetrySnapshot(sfTelemetryWithField, singleSummary, listOf(candRow)),
+        )
         if (name != fieldName) throw Unavailable("different_id")
         if (root.findNodesByViewId(name).singleOrNull() != candidate) throw Unavailable("ambiguous_id")
         if (!candBoundsInWindow) throw Unavailable("invalid_bounds")
         return ResolvedFocus(
-            focus = EditorFocus(candidate, window.id, name, candBounds, candidate.isEditable, candFocused),
+            focus = EditorFocus(candidate, window.id, name, candBounds, candRow.editable, candFocused),
             usedWindowField = true,
             filteredAmbiguous = false,
         )
@@ -737,6 +1160,8 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
             emptyBoundsMatches = scan.emptyBoundsMatches,
             outsideWindowMatches = scan.outsideWindowMatches,
             visibleMatches = scan.visibleMatches,
+            telemetrySummary = scan.telemetrySummary,
+            inspectedNodes = scan.inspectedNodes,
         )
         if (sfFailureCheck != null) {
             missingField(sfFailureCheck, wf)
@@ -766,13 +1191,23 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
         emptyBoundsMatches = scan.emptyBoundsMatches,
         outsideWindowMatches = scan.outsideWindowMatches,
         visibleMatches = scan.visibleMatches,
+        telemetrySummary = scan.telemetrySummary,
+        inspectedNodes = scan.inspectedNodes,
     )
     val rootFocus = getRootFocus()
     if (!isFallbackRootFocusAllowed(sf, candidate, rootFocus)) {
         val check = if (sameAsService) checkNotNull(sfFailureCheck) else "root_focus_mismatch"
         missingField(check, wf)
     }
-    val secondScan = scanMultiMatches(root.findNodesByViewId(fieldName), window.id, pkg, fieldName, windowBounds)
+    val secondScan = scanMultiMatches(
+        nodes = root.findNodesByViewId(fieldName),
+        windowId = window.id,
+        pkg = pkg,
+        fieldName = fieldName,
+        windowBounds = windowBounds,
+        sfNode = sf.node,
+        contractInputType = contractInputType,
+    )
     if (secondScan.usable.singleOrNull()?.node != candidate) throw Unavailable("ambiguous_id")
     return ResolvedFocus(
         focus = EditorFocus(candidate, window.id, fieldName, picked.bounds, picked.editable, picked.focused),
@@ -781,25 +1216,103 @@ private fun currentFocus(env: EditorBoundsEnvironment, pkg: String, phase: Strin
     )
 }
 
+/**
+ * Pathway 4B 独立只读节点扫描（供 Pathway 4A 组合探针复用）：
+ * 不以无障碍焦点可用为前提，直接采集 `sfNode` 与 `findNodesByViewId(fieldName)` 全量无短路遥测；
+ * 遇到密码或无障碍敏感节点立即返回 [A11yNodeDiagnosticResult.SensitiveField]（fail-closed）。
+ */
+internal fun inspectA11yNodesForDiagnostic(
+    clearCache: () -> Boolean,
+    activeRoot: () -> EditorFocusRoot?,
+    serviceFocus: () -> EditorFocusNode?,
+    resourceName: (String, Int) -> ResourceNameResult,
+    pkg: String,
+    contract: ImeEditorContract?,
+): A11yNodeDiagnosticResult {
+    return try {
+        if (!clearCache()) return A11yNodeDiagnosticResult.Unavailable("cache_clear_failed")
+        val root = activeRoot() ?: return A11yNodeDiagnosticResult.Unavailable("active_root_missing")
+        val window = root.window() ?: return A11yNodeDiagnosticResult.Unavailable("active_window_missing")
+        if (!window.isApplicationType || root.packageName != pkg) {
+            return A11yNodeDiagnosticResult.Unavailable("window_mismatch")
+        }
+        val windowBounds = window.boundsInScreen()
+        val contractInputType = contract?.inputType
+        val classified = classifyContractField(resourceName, pkg, contract)
+        val fieldName = (classified.lookupResult as? WindowFieldNameResult.Found)?.name
+
+        val sfNode = serviceFocus()
+        val sfRow = if (sfNode != null && sfNode.refresh()) {
+            val sameWindow = sfNode.windowId == window.id
+            val samePackage = sfNode.packageName == pkg
+            val sensitive = sfNode.isPassword || sfNode.isAccessibilityDataSensitive
+            if (sameWindow && samePackage && sensitive) return A11yNodeDiagnosticResult.SensitiveField
+            if (!sensitive) {
+                inspectNodeTelemetryRow(
+                    node = sfNode,
+                    windowBounds = windowBounds,
+                    sameAsService = true,
+                    sameWindow = sameWindow,
+                    samePackage = samePackage,
+                    fieldName = fieldName,
+                    contractInputType = contractInputType,
+                )
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+
+        if (fieldName == null) {
+            return A11yNodeDiagnosticResult.Ready(NodeTelemetrySnapshot(sfRow, null, emptyList()))
+        }
+        val matches = root.findNodesByViewId(fieldName)
+        val scan = scanMultiMatches(
+            nodes = matches,
+            windowId = window.id,
+            pkg = pkg,
+            fieldName = fieldName,
+            windowBounds = windowBounds,
+            readAnonymousPair = false,
+            sfNode = sfNode,
+            contractInputType = contractInputType,
+        )
+        A11yNodeDiagnosticResult.Ready(
+            NodeTelemetrySnapshot(
+                serviceFocus = sfRow,
+                fieldMatchSummary = scan.telemetrySummary,
+                fieldMatches = scan.inspectedNodes,
+            ),
+        )
+    } catch (e: Unavailable) {
+        if (e.reason == "sensitive_field") A11yNodeDiagnosticResult.SensitiveField
+        else A11yNodeDiagnosticResult.Unavailable(e.reason)
+    } catch (_: SecurityException) {
+        A11yNodeDiagnosticResult.Unavailable("access_denied")
+    }
+}
+
 /** 必须用 data class 把 equals/hashCode 委托给底层 AccessibilityNodeInfo，避免跨次 Binder 对象引用不等。 */
-@RequiresApi(34)
-private data class AndroidFocusNode(private val raw: AccessibilityNodeInfo) : EditorFocusNode {
+internal data class AndroidFocusNode(private val raw: AccessibilityNodeInfo) : EditorFocusNode {
     override val isFocused: Boolean get() = raw.isFocused
     override val isVisibleToUser: Boolean get() = raw.isVisibleToUser
     override val windowId: Int get() = raw.windowId
     override val packageName: String? get() = raw.packageName?.toString()
     override val isPassword: Boolean get() = raw.isPassword
-    override val isAccessibilityDataSensitive: Boolean get() = raw.isAccessibilityDataSensitive
+    override val isAccessibilityDataSensitive: Boolean
+        get() = Build.VERSION.SDK_INT >= 34 && raw.isAccessibilityDataSensitive
     override val viewIdResourceName: String? get() = raw.viewIdResourceName
     override val isEditable: Boolean get() = raw.isEditable
+    override val inputType: Int get() = raw.inputType
+    override val className: String? get() = raw.className?.toString()
     override fun refresh(): Boolean = raw.refresh()
     override fun boundsInScreen(): IntBounds = Rect().also(raw::getBoundsInScreen).let {
         IntBounds(it.left, it.top, it.right, it.bottom)
     }
 }
 
-@RequiresApi(34)
-private class AndroidFocusWindow(private val raw: AccessibilityWindowInfo) : EditorFocusWindow {
+internal class AndroidFocusWindow(private val raw: AccessibilityWindowInfo) : EditorFocusWindow {
     override val id: Int get() = raw.id
     override val isApplicationType: Boolean get() = raw.type == AccessibilityWindowInfo.TYPE_APPLICATION
     override val isActive: Boolean get() = raw.isActive
@@ -809,8 +1322,7 @@ private class AndroidFocusWindow(private val raw: AccessibilityWindowInfo) : Edi
     }
 }
 
-@RequiresApi(34)
-private class AndroidFocusRoot(private val raw: AccessibilityNodeInfo) : EditorFocusRoot {
+internal class AndroidFocusRoot(private val raw: AccessibilityNodeInfo) : EditorFocusRoot {
     override val packageName: String? get() = raw.packageName?.toString()
     override fun window(): EditorFocusWindow? = raw.window?.let(::AndroidFocusWindow)
     override fun findNodesByViewId(viewId: String): List<EditorFocusNode> =
