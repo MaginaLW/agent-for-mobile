@@ -184,4 +184,39 @@ class OcrTilePlannerTest {
         assertNotEquals(hiddenAll, visibleAll)
         assertNotEquals(hiddenAll, hiddenLeftOnly)
     }
+
+    @Test
+    fun `appWindowElementCap keeps single-window unchanged and reserves sparse-pane OCR slots in SAME_APP_MULTI`() {
+        // 单窗 / 非 SAME_APP_MULTI / <=1 应用窗：100% 沿用 maxElements
+        assertEquals(200, appWindowElementCap(WindowTopology.SINGLE, appWindowCount = 1, maxElements = 200))
+        assertEquals(400, appWindowElementCap(WindowTopology.SINGLE, appWindowCount = 1, maxElements = 400))
+        assertEquals(200, appWindowElementCap(WindowTopology.NONE, appWindowCount = 0, maxElements = 200))
+        assertEquals(200, appWindowElementCap(WindowTopology.CROSS_OR_UNKNOWN_MULTI, appWindowCount = 2, maxElements = 200))
+        assertEquals(400, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 1, maxElements = 400))
+
+        // PA2553 双窗平行视界：ui_find(400) -> 150/窗（保留 >=100 槽给稀疏窗 OCR）；ui_snapshot(200) -> 75/窗（保留 >=50 槽）
+        val findCap = appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = 400)
+        assertEquals(150, findCap)
+        assertTrue(400 - findCap * 2 >= 100)
+
+        val snapCap = appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = 200)
+        assertEquals(75, snapCap)
+        assertTrue(200 - snapCap * 2 >= 50)
+
+        // 3 应用窗也保持预留 >= 1/4 槽位
+        assertEquals(100, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 3, maxElements = 400))
+
+        // 边界值：极小正预算下至少 1；非正预算返回 0
+        assertEquals(1, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = 2))
+        assertEquals(1, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = 1))
+        assertEquals(0, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = 0))
+        assertEquals(0, appWindowElementCap(WindowTopology.SAME_APP_MULTI, appWindowCount = 2, maxElements = -10))
+
+        // 稠密右窗（如 500 个 Flutter a11y 节点）+ 16 个系统栏节点，在单窗限额下仍为左窗 OCR 留足 234 槽位
+        val systemBarNodes = 16
+        val denseRightNodes = 500
+        val cappedRight = minOf(denseRightNodes, findCap)
+        val remainingForLeftOcr = 400 - systemBarNodes - cappedRight
+        assertEquals(234, remainingForLeftOcr)
+    }
 }

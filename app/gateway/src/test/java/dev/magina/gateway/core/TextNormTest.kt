@@ -26,4 +26,19 @@ class TextNormTest {
         assertEquals(LabelMatchPolicy.Verdict.DIFFERENT, LabelMatchPolicy.verdict("张三", "张三、李四群"))
         assertEquals(LabelMatchPolicy.Verdict.DIFFERENT, LabelMatchPolicy.verdict("张三", "张三备份"))
     }
+
+    @Test
+    fun `OCR 归一 1 比 1 折叠繁转简而标题归一严格保持不折叠`() {
+        assertEquals("文件传输助手", TextNorm.ocr("文件传輸助手"))
+        assertEquals("pa2553横屏确认卡验收-20261122", TextNorm.ocr("PA2553橫屏确认卡验收-20261122"))
+        assertEquals("文件传輸助手".length, TextNorm.ocr("文件传輸助手").length)
+
+        // TextNorm.label() / LabelMatchPolicy 必须严格不动（遵守 ApprovalIntent 收件人标题策略边界）
+        assertEquals("文件传輸助手", TextNorm.label("文件传輸助手"))
+        assertNotEquals(TextNorm.label("文件传输助手"), TextNorm.label("文件传輸助手"))
+        assertEquals(
+            LabelMatchPolicy.Verdict.DIFFERENT,
+            LabelMatchPolicy.verdict("文件传输助手", "文件传輸助手"),
+        )
+    }
 }

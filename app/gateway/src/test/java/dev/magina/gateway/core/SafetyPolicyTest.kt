@@ -473,4 +473,71 @@ class SafetyPolicyTest {
 
         assertEquals(SafetyPolicy.fingerprint(first), SafetyPolicy.fingerprint(reordered))
     }
+
+    @Test
+    fun `traditional OCR danger and sensitive targets cannot bypass SafetyPolicy assess`() {
+        val retractableCases = listOf("發送", "評論", "回復", "發布", "發表")
+        for (word in retractableCases) {
+            val decision = policy.assess(
+                "ui_action",
+                Level.W,
+                JSONObject().put("ref", "o1").put("action", "click"),
+                normalContext.copy(target = SafetyTarget(ref = "o1", text = word, bounds = "[1,2][30,40]", source = "ocr")),
+            )
+            assertTrue("繁体发送词「$word」必须触发确认卡", decision is SafetyDecision.ConfirmationRequired)
+            assertEquals(RiskTier.RETRACTABLE, (decision as SafetyDecision.ConfirmationRequired).riskTier)
+        }
+
+        val irreversibleCases = listOf(
+            "刪除", "確認", "確定", "轉賬", "立即購買", "提交訂單",
+            "結算", "授權", "允許", "註銷", "卸載", "修改密碼", "恢復出廠",
+        )
+        for (word in irreversibleCases) {
+            val decision = policy.assess(
+                "ui_action",
+                Level.W,
+                JSONObject().put("ref", "o2").put("action", "click"),
+                normalContext.copy(target = SafetyTarget(ref = "o2", text = word, bounds = "[1,2][30,40]", source = "ocr")),
+            )
+            assertTrue("繁体危险/确认词「$word」必须触发确认卡", decision is SafetyDecision.ConfirmationRequired)
+            assertEquals(RiskTier.IRREVERSIBLE, (decision as SafetyDecision.ConfirmationRequired).riskTier)
+        }
+
+        // 敏感黑名单同样覆盖繁体变体并门前直接 E_BLOCKED
+        val sensitivePolicy = SafetyPolicy(sensitiveTargets = listOf("保密联系人"))
+        val blocked = sensitivePolicy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "s1").put("action", "click"),
+            normalContext.copy(target = SafetyTarget(ref = "s1", text = "聯繫保密聯繫人", bounds = "[1,2][30,40]", source = "ocr")),
+        )
+        assertTrue("繁体敏感黑名单命中必须直接阻断", blocked is SafetyDecision.Blocked)
+        assertEquals(ErrorCode.E_BLOCKED, (blocked as SafetyDecision.Blocked).code)
+
+        // 普通具名繁体导航（不含危险词）仍正常放行；assess 只做繁→简折叠，不拆空格也不折 o→0
+        val navAllowed = policy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "o3").put("action", "click"),
+            normalContext.copy(target = SafetyTarget(ref = "o3", text = "文件传輸助手", bounds = "[1,2][30,40]", source = "ocr")),
+        )
+        assertTrue("普通具名繁体导航不应被误拦", navAllowed is SafetyDecision.Allowed)
+
+        val oZeroPolicy = SafetyPolicy(sensitiveTargets = listOf("A0"))
+        val aoAllowed = oZeroPolicy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "o4").put("action", "click"),
+            normalContext.copy(target = SafetyTarget(ref = "o4", text = "AO", bounds = "[1,2][30,40]", source = "a11y")),
+        )
+        assertTrue("assess 不应折 o→0", aoAllowed is SafetyDecision.Allowed)
+
+        val spacedAllowed = policy.assess(
+            "ui_action",
+            Level.W,
+            JSONObject().put("ref", "o5").put("action", "click"),
+            normalContext.copy(target = SafetyTarget(ref = "o5", text = "发 送 帮助", bounds = "[1,2][30,40]", source = "a11y")),
+        )
+        assertTrue("assess 不应拆空格", spacedAllowed is SafetyDecision.Allowed)
+    }
 }
