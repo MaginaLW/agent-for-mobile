@@ -1,0 +1,234 @@
+[
+  {
+    "frame": {
+      "before-windows": "155.55 239.83\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #10 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "before-displays": "155.58 239.90\n  mCurrentFocus=Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n",
+      "accessibility-before": "155.59 239.93\nA11yWindow[AccessibilityWindowInfo[title=双编辑框实验, displayId=0, id=11, taskId=8, type=TYPE_APPLICATION, layer=0, focused=true, active=true, ...]]\nWindowInfo[WindowInfo[title=双编辑框实验, displayId=0, taskId=8, type=1, layer=0, token=android.os.BinderProxy@73c73509, focused=true, ...]]\n",
+      "release": "155.60 239.97\n",
+      "callback": "155.69 240.17\n{\"request\":928,\"context\":928,\"session\":1480379174,\"trigger_session\":1480379174,\"trigger_view\":1073741825,\"ime_view\":1073741825,\"ime_session\":0,\"generation\":2,\"started\":150253,\"acquired\":155626,\"completed\":155627,\"received\":155637,\"windows\":1,\"display\":0,\"title\":\"dev.magina.autofilltarget\\/dev.magina.autofilltarget.TargetActivity\",\"accessibility\":[{\"id\":11,\"title\":\"双编辑框实验\",\"display\":0,\"focused\":true,\"active\":true}]}\n",
+      "session1": "155.70 240.20\n    #1\n      id: 1480379174\n      taskId: 8\n      state: STATE_ACTIVE\n      mComponentName: ComponentInfo{dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n      mActivityToken: Token{4bfb6886 ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}}\n        #0: req=928, log=omitted\n      mCurrentViewId: 1073741825@1480379174\n      mDestroyed: false\n      mShowingSaveUi: false\n",
+      "during-windows": "155.73 240.27\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #10 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "during-displays": "155.75 240.32\n  mCurrentFocus=Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n",
+      "session2": "155.76 240.34\n    #1\n      id: 1480379174\n      taskId: 8\n      state: STATE_ACTIVE\n      mComponentName: ComponentInfo{dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n      mActivityToken: Token{4bfb6886 ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}}\n        #0: req=928, log=omitted\n      mCurrentViewId: 1073741825@1480379174\n      mDestroyed: false\n      mShowingSaveUi: false\n",
+      "accessibility": "155.78 240.37\nA11yWindow[AccessibilityWindowInfo[title=双编辑框实验, displayId=0, id=11, taskId=8, type=TYPE_APPLICATION, layer=0, focused=true, active=true, ...]]\nWindowInfo[WindowInfo[title=双编辑框实验, displayId=0, taskId=8, type=1, layer=0, token=android.os.BinderProxy@73c73509, focused=true, ...]]\n",
+      "after-windows": "155.79 240.40\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #10 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "after-displays": "155.82 240.43\n  mCurrentFocus=Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n",
+      "close": "155.83 240.46\n",
+      "origin": {
+        "request": 928,
+        "context": 928,
+        "session": 1480379174,
+        "trigger_session": 1480379174,
+        "trigger_view": 1073741825,
+        "ime_view": 1073741825,
+        "ime_session": 0,
+        "generation": 2,
+        "started": 150253,
+        "acquired": 155626,
+        "completed": 155627,
+        "received": 155637,
+        "windows": 1,
+        "display": 0,
+        "title": "dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity",
+        "accessibility": [
+          {
+            "id": 11,
+            "title": "双编辑框实验",
+            "display": 0,
+            "focused": true,
+            "active": true
+          }
+        ]
+      },
+      "result": {
+        "schema": 1,
+        "uid": 10217,
+        "verdict": "MATCHED",
+        "reason": "MATCH",
+        "editor_count": 2,
+        "focus_count": 1,
+        "raw_equals_count": 0,
+        "raw_fill_equals_count": 1,
+        "match_count": 1,
+        "view_id_match_count": 1,
+        "fill_focus_match_count": 1,
+        "before_current": true,
+        "after_current": true,
+        "chosen_is_focused": true,
+        "ime_match_side": "RIGHT",
+        "fill_focus_side": "RIGHT",
+        "selected_side": "RIGHT",
+        "selected_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "candidates": [
+          {
+            "bounds": [
+              40,
+              32,
+              240,
+              102
+            ],
+            "focused": false,
+            "native_matches_ime": false,
+            "native_matches_fill": false,
+            "raw_equals_ime": false,
+            "raw_equals_fill": false,
+            "id_in_session": true
+          },
+          {
+            "bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ],
+            "focused": true,
+            "native_matches_ime": true,
+            "native_matches_fill": true,
+            "raw_equals_ime": false,
+            "raw_equals_fill": true,
+            "id_in_session": true
+          }
+        ]
+      }
+    },
+    "oracle": {
+      "settled": true,
+      "windowFocus": true,
+      "manual_request_count": 1,
+      "connectionSide": "right",
+      "probeSide": "right",
+      "leftProbeCount": 0,
+      "rightProbeCount": 1,
+      "oracleAccessibilityWindow": 11,
+      "rightBounds": [
+        2100,
+        32,
+        2300,
+        102
+      ],
+      "instance": "first",
+      "oracleTaskId": 8
+    }
+  },
+  {
+    "frame": {
+      "before-windows": "200.84 409.13\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=9 mSession=omitted mClient=android.os.BinderProxy@6ab62e53\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n  Window #10 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #11 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "before-displays": "200.86 409.18\n  mCurrentFocus=Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n",
+      "accessibility-before": "200.87 409.20\nA11yWindow[AccessibilityWindowInfo[title=双编辑框实验, displayId=0, id=14, taskId=9, type=TYPE_APPLICATION, layer=0, focused=true, active=true, ...]]\nWindowInfo[WindowInfo[title=双编辑框实验, displayId=0, taskId=9, type=1, layer=0, token=android.os.BinderProxy@6ab62e53, focused=true, ...]]\n",
+      "release": "200.89 409.22\n",
+      "callback": "200.97 409.42\n{\"request\":932,\"context\":932,\"session\":1105342264,\"trigger_session\":1105342264,\"trigger_view\":1073741825,\"ime_view\":1073741825,\"ime_session\":0,\"generation\":4,\"started\":195439,\"acquired\":200929,\"completed\":200929,\"received\":200940,\"windows\":1,\"display\":0,\"title\":\"dev.magina.autofilltarget\\/dev.magina.autofilltarget.TargetActivity\",\"accessibility\":[{\"id\":14,\"title\":\"双编辑框实验\",\"display\":0,\"focused\":true,\"active\":true}]}\n",
+      "session1": "200.98 409.45\n    #1\n      id: 1105342264\n      taskId: 9\n      state: STATE_ACTIVE\n      mComponentName: ComponentInfo{dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n      mActivityToken: Token{0b8214be ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}}\n        #0: req=932, log=omitted\n      mCurrentViewId: 1073741825@1105342264\n      mDestroyed: false\n      mShowingSaveUi: false\n",
+      "during-windows": "201.00 409.50\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=9 mSession=omitted mClient=android.os.BinderProxy@6ab62e53\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n  Window #10 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #11 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "during-displays": "201.02 409.54\n  mCurrentFocus=Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n",
+      "session2": "201.03 409.57\n    #1\n      id: 1105342264\n      taskId: 9\n      state: STATE_ACTIVE\n      mComponentName: ComponentInfo{dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n      mActivityToken: Token{0b8214be ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}}\n        #0: req=932, log=omitted\n      mCurrentViewId: 1073741825@1105342264\n      mDestroyed: false\n      mShowingSaveUi: false\n",
+      "accessibility": "201.05 409.62\nA11yWindow[AccessibilityWindowInfo[title=双编辑框实验, displayId=0, id=14, taskId=9, type=TYPE_APPLICATION, layer=0, focused=true, active=true, ...]]\nWindowInfo[WindowInfo[title=双编辑框实验, displayId=0, taskId=9, type=1, layer=0, token=android.os.BinderProxy@6ab62e53, focused=true, ...]]\n",
+      "after-windows": "201.06 409.64\n  Window #0 Window{2246f3ec u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@64d5e22a\n    frame=[2285,0][2340,1080]\n  Window #1 Window{69b140ae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@8410bc47\n    frame=[0,0][153,1080]\n  Window #2 Window{823ef719 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@a00a3462\n    frame=[395,801][684,1538]\n  Window #3 Window{62c9408e u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@defdd9e5\n    frame=[0,1014][2340,1080]\n  Window #4 Window{52e72436 u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@1fbba683\n    frame=[0,0][1080,2340]\n  Window #5 Window{b8604bae u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@b0197605\n    frame=[0,0][2340,66]\n  Window #6 Window{118589fc u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@2881fa74\n    frame=[0,0][1080,2340]\n  Window #7 Window{d0756b6b u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@7f79d712\n    frame=[136,948][2340,1080]\n  Window #8 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=9 mSession=omitted mClient=android.os.BinderProxy@6ab62e53\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n    frame=[0,0][2340,1080]\n    isVisible=true\n  Window #9 Window{b6f40a30 u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}:\n    mDisplayId=0 taskId=8 mSession=omitted mClient=android.os.BinderProxy@73c73509\n    mOwnerUid=10216 showForAllUsers=false package=dev.magina.autofilltarget appop=NONE\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{0a662604 u0 dev.magina.autofilltarget/.TargetActivity t8}\n    frame=[0,0][2340,1080]\n  Window #10 Window{9ea43753 u0 synthetic}:\n    mDisplayId=0 taskId=6 mSession=omitted mClient=android.os.BinderProxy@f07f25be\n    ty=BASE_APPLICATION \n    mActivityRecord=ActivityRecord{252df637 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}\n    frame=[0,0][1080,2340]\n  Window #11 Window{4f7ffa9a u0 synthetic}:\n    mDisplayId=0 mSession=omitted mClient=android.os.BinderProxy@042514ae\n    frame=[0,0][2107,2340]\n  imeInputTarget in display# 0 Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n",
+      "after-displays": "201.08 409.69\n  mCurrentFocus=Window{2515516a u0 dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity}\n  mFocusedApp=ActivityRecord{f47b8055 u0 dev.magina.autofilltarget/.TargetActivity t9}\n",
+      "close": "201.09 409.72\n",
+      "origin": {
+        "request": 932,
+        "context": 932,
+        "session": 1105342264,
+        "trigger_session": 1105342264,
+        "trigger_view": 1073741825,
+        "ime_view": 1073741825,
+        "ime_session": 0,
+        "generation": 4,
+        "started": 195439,
+        "acquired": 200929,
+        "completed": 200929,
+        "received": 200940,
+        "windows": 1,
+        "display": 0,
+        "title": "dev.magina.autofilltarget/dev.magina.autofilltarget.TargetActivity",
+        "accessibility": [
+          {
+            "id": 14,
+            "title": "双编辑框实验",
+            "display": 0,
+            "focused": true,
+            "active": true
+          }
+        ]
+      },
+      "result": {
+        "schema": 1,
+        "uid": 10217,
+        "verdict": "MATCHED",
+        "reason": "MATCH",
+        "editor_count": 2,
+        "focus_count": 1,
+        "raw_equals_count": 0,
+        "raw_fill_equals_count": 1,
+        "match_count": 1,
+        "view_id_match_count": 1,
+        "fill_focus_match_count": 1,
+        "before_current": true,
+        "after_current": true,
+        "chosen_is_focused": true,
+        "ime_match_side": "RIGHT",
+        "fill_focus_side": "RIGHT",
+        "selected_side": "RIGHT",
+        "selected_bounds": [
+          2100,
+          32,
+          2300,
+          102
+        ],
+        "candidates": [
+          {
+            "bounds": [
+              40,
+              32,
+              240,
+              102
+            ],
+            "focused": false,
+            "native_matches_ime": false,
+            "native_matches_fill": false,
+            "raw_equals_ime": false,
+            "raw_equals_fill": false,
+            "id_in_session": true
+          },
+          {
+            "bounds": [
+              2100,
+              32,
+              2300,
+              102
+            ],
+            "focused": true,
+            "native_matches_ime": true,
+            "native_matches_fill": true,
+            "raw_equals_ime": false,
+            "raw_equals_fill": true,
+            "id_in_session": true
+          }
+        ]
+      }
+    },
+    "oracle": {
+      "settled": true,
+      "windowFocus": true,
+      "manual_request_count": 1,
+      "connectionSide": "right",
+      "probeSide": "right",
+      "leftProbeCount": 0,
+      "rightProbeCount": 1,
+      "oracleAccessibilityWindow": 14,
+      "rightBounds": [
+        2100,
+        32,
+        2300,
+        102
+      ],
+      "instance": "second",
+      "oracleTaskId": 9
+    }
+  }
+]

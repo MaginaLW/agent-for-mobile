@@ -7,17 +7,17 @@
 
 ### 11 月 22 日攻关顺序
 
-**A、B 已完成离线验收，C 暂缓。** PA2553 最近一次免安装复核中，`2289925` 在请求四边前即返回 `missing_id / before_sample / field_id_unresolved`。本次离线攻关补上了两个可以决定是否再上平板的对照。[真机复核与误选反例](knowledge/apps/wechat.md#横屏编辑框的四边能否单独确定输入目标)
+**A2 已定位断点，B 已在合成靶上验证宿主判窗依据，C 继续暂缓。** PA2553 最近一次免安装复核中，`2289925` 在请求四边前返回 `missing_id / before_sample / field_id_unresolved`。下表记录这一真机起点还缺哪些证据。[真机复核与误选反例](knowledge/apps/wechat.md#横屏编辑框的四边能否单独确定输入目标)
 
 | 工作包 | 本次结果或入场条件 | 剩余阻塞与验收 |
 |---|---|---|
-| A · 新结构的取样时机 | 右框首次聚焦通过。结构采集晚于当前连接建立 38 毫秒，第 2 代连接在采样前后一致，四边与靶应用实测相同。右框已聚焦后切换输入法时，只有右框收到探针，手动请求为零。阶段标记开启后 15.164 秒内没有可归属的新回调。 | 平板拟测的第二种起点仍缺新结构，观察器侧别与四边均空。若找到新的取样途径，须在该起点对齐连接代次、采集时刻、靶侧别和完整四边。[A1、A2 回执](runs/fixtures/editor-autofill/README.md#右框首次持焦与持焦后切换输入法) |
-| B · 结构来源窗口 | 9 场宿主回放覆盖单窗正例、同包错窗及既有拒绝条件。输入探针只到活动右窗。正确窗与同包另一窗口使用不同的自动填充会话号，但字段号、坐标相同，两份完整终结回执均选中同一右框。 | 双窗正例缺少独立来源，错窗被误接受。两场可交付的侧别和四边均留空。新的窗口依据须在同一对照中做到正确窗口可接受、错误窗口可拒绝。[九场回放与独立参照](runs/fixtures/editor-autofill/window-replay/README.md) |
+| A · 新结构的取样时机 | 右框首次聚焦时选框和四边均正确。按平板顺序持焦切换输入法，27.218 秒的完整靶进程方法轨迹中，编辑框创建连接 3 次，右框收到探针 1 次，View 焦点变化与自动填充进入通知均为 0。系统也没有新的结构请求。 | 断点已定位到客户端未产生新的焦点进入通知。同进程新 Activity 自然聚焦时，进入通知、请求、派发和回调均出现。持焦切换这一实际起点仍需取得属于新连接的结构。[A2 方法轨迹与正控](runs/fixtures/editor-autofill/README.md#持焦切换时的客户端方法轨迹) |
+| B · 结构来源窗口 | 两个同包同类 Activity 分别显式请求结构。宿主把每个请求所属的活跃会话、Activity、系统窗口及无障碍窗号逐项对齐，分别得到 11 和 14。两个右框字段号、四边相同。各配本窗均通过，保持各自请求新鲜、只对调期望窗号时，两个方向均返回 `WRONG_WINDOW`，侧别和四边均为空。 | 已验证 shell 读取系统诊断时可判窗。普通网关尚缺能将回调绑定到无障碍窗号的依据。下一步用相同的双向错窗对照验候选；保留公开观察器的误判作反例。[窗口归属对照](runs/fixtures/editor-autofill/window-replay/system-source/README.md) |
 | C · 真机只读诊断，依赖 A、B | 两包结果覆盖拟测起点后，准备能按指定会话只读取样、遵守应用排除设置的候选，再明确版本、服务变更、恢复范围及该轮授权。通过 `dispatch.ps1` 从已就位右窗核对微信是否实际提供结构。只保留身份比对结果、窗口号、四边、失败原因及收尾读回。 | 同轮核实唯一输入目标属于当前连接，来源窗口号与已核实右窗一致，完整矩形落在右窗内。缺项、冲突、目标排除即停，导航点击、输入、发送均为零。独立读回原输入法、启用清单、无障碍设置与原服务绑定、网关服务及转发。若另获准切换自动填充服务，连同原值一起读回。 |
 
-B 的第一个缺口已由公开接口核实。`AssistStructure.WindowNode.getDisplayId()` 只标识显示屏，而无障碍窗口号来自 `AccessibilityWindowInfo.getId()`。同屏、同包、四边相同仍可能来自另一窗口。两份回执若没有可独立对齐的来源，B 保留阻塞。另已查到 Android 16 服务端仍将仅含 `clientState` 的响应按空响应处理，因此 A 沿用已有空响应对照。[结构窗口接口](https://developer.android.com/reference/android/app/assist/AssistStructure.WindowNode) · [无障碍窗口接口](https://developer.android.com/reference/android/view/accessibility/AccessibilityWindowInfo) · [Android 16 响应判定](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/autofill/java/com/android/server/autofill/Session.java)
+公开接口的缺口仍在。`AssistStructure.WindowNode.getDisplayId()` 标识显示屏，无障碍窗口号来自 `AccessibilityWindowInfo.getId()`。本次合成靶的结构窗口标题为组件名，无障碍窗口标题为应用标签，两个实例也共用这些值。宿主实验取得窗号用到了系统诊断。A2 仍沿用空响应对照，Android 16 服务端会将仅含 `clientState` 的响应按空响应处理。[结构窗口接口](https://developer.android.com/reference/android/app/assist/AssistStructure.WindowNode) · [无障碍窗口接口](https://developer.android.com/reference/android/view/accessibility/AccessibilityWindowInfo) · [Android 16 响应判定](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/services/autofill/java/com/android/server/autofill/Session.java)
 
-任一离线包仍缺证据，#47 继续保留草稿。C 通过后，分别从桌面和微信左窗验自动就位。每次导航后重新读取前台、标题、输入焦点及编辑框，按起点记录首次结果和现场协助次数。两起点均通过后才排一次获授权的发送，核对设备确认卡决定、确认后目标、实际点击和消息区中的测试串。拒绝、超时或失效即结束。竖屏 P0 继续独立暂缓。[导航与发送规程](runbooks/P0-safety-hard-gate-smoke.md#横屏会话导航预演)
+下一轮继续离线核对两个条件。A2 需要在右框持续持焦、目标应用无须显式请求时取得本次输入连接的新结构。B 需要在候选网关的实际权限下复现正确窗通过、同包错窗拒绝。两项均覆盖拟测起点后再评估 C，#47 保留草稿。C 通过后，分别从桌面和微信左窗验自动就位。每次导航后重新读取前台、标题、输入焦点及编辑框，按起点记录首次结果和现场协助次数。两起点均通过后才排一次获授权的发送，核对设备确认卡决定、确认后目标、实际点击和消息区中的测试串。拒绝、超时或失效即结束。竖屏 P0 继续独立暂缓。[导航与发送规程](runbooks/P0-safety-hard-gate-smoke.md#横屏会话导航预演)
 
 **派单传输与无障碍稳定性另行观察。** 11 月 17 日两次 HTTP 失败都缺网关结果。先复用派单离线用例核对「设备发现失败」「请求无返回」「网关返回失败」能否区分。下次已授权任务若重现，只核对同一时段的端口转发、网关健康与服务绑定，停在能证实的最后一层。小红书空白页也仅在自然复现时记下页面与是否有系统遮罩。[派单判读](knowledge/brain/harness.md) · [小红书记录](knowledge/apps/xiaohongshu.md)
 

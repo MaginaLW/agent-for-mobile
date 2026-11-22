@@ -84,3 +84,29 @@ A2 以原输入法启动 `scenario=automatic-right-switch`。靶应用在 147676
 复现时沿用上文的私有 ADB、空表、独占模拟器身份、已装 APK 摘要与不同 UID 核验。A1 在启动右框前把观察器私有 `files/natural-stage` 置为 `1`，首先确认该场回执不存在。取得 A1 阳性后，在全新 AVD 核对原输入法仍被选用，将阶段设为 `1` 并启动 A2。先读靶应用私有的 `files/right-ready.json`，再确认当前输入法仍为原值，保存切换前的 `natural-1.json`。核实 `natural-2.json` 不存在，将阶段改为 `2`，切到实验输入法并读回。两场均保存靶应用的 `files/oracle.json`，取得后继续观察至少 6 秒，再读取服务对应阶段的私有目录、回执及实验 IME 的 `SyntheticProbeIme` 日志。
 
 以每场目录为参数运行 [verify_right_first.py](verify_right_first.py)。`oracle.json` 来自靶应用，A2 另存 `right-ready.json`。`ime.txt` 使用 `logcat -d -v threadtime -s SyntheticProbeIme:I AutofillObserver:W`。将阶段回执原文存为 `journal-read.txt`，解析后存为 `ledger.json`。经成功列目录确认文件不存在时，前者写 `ABSENT`，后者只记录阶段、`host_observation=journal_absent_at_close`、空样本和零回调数。`observation.json` 使用同一宿主单调时钟的毫秒值记录标记读回、靶回执读到与最终目录检查完成的时刻，对应 `marker_readback_ms`、`oracle_read_ms`、`journal_read_ms`。连接、采集和回调之间的先后关系取自设备单调时钟。
+
+### 持焦切换时的客户端方法轨迹
+
+在另一台全新 API 36 模拟器复用上述两份 APK。右框保持焦点时，切换输入法重建了输入连接，靶进程内没有发生新的 View 焦点变化或自动填充进入、退出调用。上一节只能定位到服务无新回调，本场将断点定位到客户端的焦点通知入口。
+
+| 设备单调时间（毫秒） | 直接回执 |
+|---|---|
+| 157825–158605 | 原输入法下，客户端以右框字段启动会话。系统请求 54 的结构采于 157923–157926，观察器在 158461 收到回调并返回空响应。系统在 158604 记录无法增强填充并结束会话，客户端在 158605 从 `ACTIVE` 转为 `FINISHED`，登记了左右两个字段。 |
+| 182815–204639 | 设备日志标出开始切换及观察结束。实验输入法在 184314 建立第 1 代连接，同一靶 Activity 和右框于 184317 记录收到探针。切换前后客户端均为 `FINISHED`、服务已启用、登记字段集合相同，右框保持焦点。系统常规请求历史仍只有原会话 1613176740，新增结构请求、派发和实验服务回调均为 0。 |
+| 225700–233245 | 在同一靶进程（PID 4198）新建另一个 Activity，让右框自然取得焦点。系统为新会话 1247239946 发起并派发请求 56。实验输入法第 3 代始于 227169，采集在 227180–227181，回调在 227231 到达。观察器选中的右框四边与该 Activity 的独立回执相同。 |
+
+用 Android 方法跟踪器只记录该靶进程，关闭采样，以类名和方法名汇总所有线程及同名重载的**入口次数**。正控涵盖整个新 Activity 启动，表中焦点入口计数属于进程；具体右框由靶回执及结构字段另外核实。两场手动请求均为 0。
+
+| 靶进程的方法 | 持焦切换 | 新 Activity 自然聚焦 |
+|---|---:|---:|
+| `View.onFocusChanged` | 0 | 3 |
+| `View.onWindowFocusChanged` | 0 | 14 |
+| `View.notifyEnterOrExitForAutoFillIfNeeded` | 0 | 12 |
+| `AutofillManager.notifyViewEntered / notifyViewExited` | 0 / 0 | 2 / 1 |
+| `AutofillManager.notifyViewEnteredForFillDialog` | 0 | 2 |
+| `AutofillManager.shouldIgnoreViewEnteredLocked`（判断是否忽略进入） | 0 | 1 |
+| 靶编辑框 `onCreateInputConnection` / 靶 Activity `receiveProbe` | 3 / 1 | 1 / 1 |
+
+切换段和正控段的方法轨迹分别覆盖 27.218051 秒（242585 条记录）和 12.560102 秒（306997 条）。两段均实读 ART 的 `data-file-overflow=false`，二进制记录数与 ART 头部声明逐条计数相等。切换场的服务回执观察窗口另由宿主计时 19.341 秒，收到靶回执后保留 8.779 秒，选中侧和四边均为空。Android 16 的 View 源码把焦点变化接到自动填充进入/退出通知。结合本次实测，当前连接已换，但右框持续持焦，没有产生新的进入调用；同窗触摸换框那一场曾走到的「字段已登记」拒绝分支，在本场没有被调用。[Android 16 View 焦点分发](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/View.java#L8782-L8838)
+
+复现时先在专属模拟器保存自动填充日志级别并设为 `verbose`，沿用上一节 A2。分别在切换前后保存 `dumpsys activity dev.magina.autofilltarget`、`dumpsys autofill`、阶段标记和带单调时钟的目标/系统日志。运行切换前，用 `am profile start --clock-type wall dev.magina.autofilltarget /data/local/tmp/switch.trace` 开启无采样方法跟踪，服务观察窗口结束后执行 `am profile stop dev.magina.autofilltarget` 并取回文件。之后换用 `control.trace` 同法记录同 PID 的全新 Activity 自然聚焦，独立保存新靶和服务回执。用 [count_focus_methods.py](count_focus_methods.py) 复算两份原件，命令为 `python count_focus_methods.py switch.trace control.trace`，会核查时钟、溢出标志和记录数。设备侧命令均经已核实归属的私有 ADB 运行。本轮 327 秒收尾，八项设置逐项恢复，自动填充日志从 `verbose` 恢复为入场的 `debug`，两包已卸载，自建模拟器、私有 ADB 与端口全部回收。
