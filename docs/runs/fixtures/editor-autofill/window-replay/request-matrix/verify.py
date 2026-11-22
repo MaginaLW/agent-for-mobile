@@ -166,8 +166,15 @@ def check_java(digests):
 def prepared():
     item = read(HERE / "prepared.json")
     check_java(item["input_sha256"])
-    require(item["compile_sdk"] == 35 and item["runtime_target_api"] == 36 and
-            not item["installed_in_this_attempt"] and not item["sampled_in_this_attempt"], "prepared APK scope")
+    require(item["compile_sdk"] == 35 and item["runtime_target_api"] == 36, "prepared APK scope")
+    receipts_path = HERE / "receipts.json"
+    if receipts_path.is_file():
+        live = read(receipts_path)
+        require(item["installed_in_this_attempt"] and item["sampled_in_this_attempt"]
+                and item["apk_sha256"] == live["environment"]["apk"], "prepared/receipts APK mismatch")
+        return {"compile_sdk": 35, "actual_device_samples": len(live["stages"]),
+                "adversarial_device_samples": len(live.get("adversarial", {}))}
+    require(not item["installed_in_this_attempt"] and not item["sampled_in_this_attempt"], "prepared APK scope")
     return {"compile_sdk":35, "actual_device_samples":0}
 
 
@@ -188,15 +195,19 @@ def capture(directory):
     require(state["phase"] == "closed" and state["status"] == "observed", "open emulator run")
     manifest = read(directory.parent / "hashes.json")
     require(state["apk"] == {name:manifest[name] for name in ("target","observer")}, "build/install mismatch")
-    return {"environment": {k: state[k] for k in ("api", "hardware", "initially_empty", "disable_usb",
+    out = {"environment": {k: state[k] for k in ("api", "hardware", "initially_empty", "disable_usb",
             "disable_mdns", "apk", "uids", "restored", "cleanup", "elapsed_seconds")},
             "compiled_java_sha256": {name:sha for name,sha in manifest.items() if name.endswith(".java")},
             "stages": {stage: read(directory / (stage + ".json")) for stage in STAGES}}
+    if "uninstalled" in state:
+        out["environment"]["uninstalled"] = state["uninstalled"]
+    adv_path = directory / "adversarial.json"
+    if adv_path.is_file():
+        out["adversarial"] = read(adv_path)
+    return out
 
 
-def check_stage(name, row):
-    require(row["matched"], name + ": missing request-correlated receipt")
-    obs, oracle = row["observer"], row["oracle"]
+def check_replies_against_oracle(name, obs, oracle):
     require(obs["before"] == obs["after"] and len(obs["replies"]) == 2
             and oracle["requests"] == len(oracle["callbacks"]) >= 2 and oracle["connections"] > 0
             and oracle["display_size"][0] > oracle["display_size"][1], name + ": inconsistent sampling")
@@ -214,13 +225,66 @@ def check_stage(name, row):
     first, second = obs["replies"]
     require(first["sequence"] + 1 == second["sequence"] and first["matrix"] == second["matrix"],
             name + ": changed matrix or request")
+    require(first["matrix"] == oracle["matrix"], name + ": target transform mismatch")
+    return first["matrix"]
+
+
+def check_stage(name, row):
+    require(row["matched"], name + ": missing request-correlated receipt")
+    obs, oracle = row["observer"], row["oracle"]
+    matrix = check_replies_against_oracle(name, obs, oracle)
     active = [w for w in obs["after"] if w["scope"] == "target" and w["active"] and w["focused"]]
     require(len(active) == 1 and active[0]["window"] == oracle["window"], name + ": oracle mismatch")
     focused = [e for e in active[0]["editors"] if e["focused"]]
     require(len(focused) == 1 and not focused[0]["named"] and focused[0]["screen_rect"] == oracle["bounds"],
             name + ": truth/visible node mismatch")
-    require(first["matrix"] == oracle["matrix"], name + ": target transform mismatch")
-    return active[0], first["matrix"]
+    return active[0], matrix
+
+
+def check_adversarial(adv):
+    require(isinstance(adv, dict) and {"match_parent", "unsupported", "opaque"}.issubset(adv.keys()),
+            "missing live adversarial controls")
+    # 1. match_parent: real MATCH_PARENT/WRAP_CONTENT EditText -> non-positive layout_size -> incomplete
+    mp = adv["match_parent"]
+    mp_matrix = check_replies_against_oracle("match_parent", mp["observer"], mp["oracle"])
+    mp_active = [w for w in mp["observer"]["after"] if w["scope"] == "target" and w["window"] == mp["oracle"]["window"]]
+    require(len(mp_active) == 1 and len(mp_active[0]["editors"]) == 1, "match_parent: missing target editor")
+    mp_layout = mp_active[0]["editors"][0]["layout_size"]
+    require(mp_layout is None or min(mp_layout) <= 0, "match_parent: expected non-positive layout_size")
+    require(min(mp["oracle"]["local_size"]) > 0, "match_parent: measured size not positive")
+    mp_res = result(mp_matrix, mp["observer"]["after"])
+    require(mp_res["decision"] == "incomplete" and mp_res["compatible_window"] is None,
+            "match_parent: non-positive layout_size was accepted")
+
+    # 2. unsupported: CODE_UNSUPPORTED (0) -> observer refuses matrix.json, records result_code_0
+    unsup = adv["unsupported"]
+    require(unsup["matrix_json_present"] is False
+            and unsup["probe_state"]["step"] == "result_code_0"
+            and unsup["oracle"]["requests"] == len(unsup["oracle"]["callbacks"]) >= 1
+            and unsup["oracle"]["callbacks"][0]["result_code"] == 0,
+            "unsupported: CODE_UNSUPPORTED fail-closed check failed")
+    require(accept_ime_reply({"result_code": 0, "matrix": unsup["oracle"]["matrix"]}) is None,
+            "unsupported: host accepted CODE_UNSUPPORTED")
+
+    # 3. opaque: AccessibilityDelegate strips visibleToUser/focused -> hidden_editors >= 1 & editors == [] -> incomplete
+    op = adv["opaque"]
+    op_matrix = check_replies_against_oracle("opaque", op["observer"], op["oracle"])
+    op_active = [w for w in op["observer"]["after"] if w["scope"] == "target" and w["window"] == op["oracle"]["window"]]
+    require(len(op_active) == 1 and op_active[0].get("hidden_editors", 0) >= 1 and op_active[0]["editors"] == [],
+            "opaque: expected hidden_editors >= 1 and empty visible editors")
+    op_res = result(op_matrix, op["observer"]["after"])
+    require(op_res["decision"] == "incomplete" and op_res["compatible_window"] is None,
+            "opaque: hidden/opaque editor was accepted")
+
+    return {
+        "match_parent": {"measured_local_size": mp["oracle"]["local_size"], "a11y_layout_size": mp_layout, **mp_res},
+        "unsupported": {"probe_step": unsup["probe_state"]["step"], "matrix_json_present": False,
+                        "target_requests": unsup["oracle"]["requests"],
+                        "callback_result_code": unsup["oracle"]["callbacks"][0]["result_code"],
+                        "compatible_window": None},
+        "opaque": {"hidden_editors": op_active[0]["hidden_editors"], "visible_editors": len(op_active[0]["editors"]),
+                   **op_res},
+    }
 
 
 def verify(bundle):
@@ -241,11 +305,16 @@ def verify(bundle):
                 and live[name]["compatible_window"] == active[name]["window"],
                 name + ": live snapshot did not uniquely resolve active window")
     require(len({active[n]["window"] for n in STAGES}) == len(STAGES), "window IDs reused")
-    live_pair_ids = {active["west"]["window"], active["east"]["window"]}
-    for name in ("west", "east"):
-        seen_ids = {w[0] for w in live[name]["windows"]}
-        require(seen_ids == live_pair_ids and len(live[name]["windows"]) == 2,
-                name + ": expected both west and east simultaneously visible in live snapshot")
+    sides = {name: stages[name]["oracle"] for name in STAGES}
+    for name, peer_name in (("east", "west"), ("west", "east")):
+        twins = [w for w in stages[name]["observer"]["after"] if w["scope"] == "target"]
+        require(len(twins) == 2 and len({w["window"] for w in twins}) == 2,
+                name + ": expected 2 simultaneously visible same-package windows")
+        peer = next(w for w in twins if w["window"] != active[name]["window"])
+        require(not peer["active"] and not peer["focused"]
+                and len(peer["editors"]) == 1
+                and peer["editors"][0]["screen_rect"] == sides[peer_name]["bounds"],
+                name + ": live sibling window mismatch")
     results = {}
     wrong_only = {}
     for a, b in (("west","east"), ("east","scaled"), ("east","overlap")):
@@ -259,7 +328,6 @@ def verify(bundle):
                 and wrong_only[b + "_on_" + a]["decision"] == "different_geometry"
                 and wrong_only[b + "_on_" + a]["compatible_window"] is None,
                 a + "/" + b + ": bidirectional wrong-window rejection failed")
-    sides = {name: stages[name]["oracle"] for name in STAGES}
     require(sides["west"]["bounds"] != sides["east"]["bounds"], "separation control failed")
     require(sides["east"]["bounds"] == sides["scaled"]["bounds"] == sides["overlap"]["bounds"],
             "outer rectangle control failed")
@@ -286,9 +354,15 @@ def verify(bundle):
     unknown = result(matrices["east"],[active["east"],{"scope":"unknown","window":-1}])
     require(all(x["decision"] == "incomplete" and x["compatible_window"] is None for x in (absent,hidden_res,unknown)),
             "unknown/hidden peer accepted")
-    return {"candidate_previous_origins":legacy_origins(), "same_snapshot":live,
-            "frozen_two_window_controls":results, "single_wrong_window_rejection":wrong_only,
-            "host_removed_layout_size":absent, "host_hidden_editor":hidden_res, "host_unknown_root":unknown}
+    if "uninstalled" in env:
+        require(all(env["uninstalled"].values()), "packages not cleanly uninstalled")
+    adv_summary = check_adversarial(bundle["adversarial"]) if "adversarial" in bundle else None
+    out = {"candidate_previous_origins":legacy_origins(), "same_snapshot":live,
+           "frozen_two_window_controls":results, "single_wrong_window_rejection":wrong_only,
+           "host_removed_layout_size":absent, "host_hidden_editor":hidden_res, "host_unknown_root":unknown}
+    if adv_summary is not None:
+        out["live_wechat_adversarial_controls"] = adv_summary
+    return out
 
 
 if __name__ == "__main__":
@@ -307,6 +381,9 @@ if __name__ == "__main__":
     elif args.receipts:
         print(json.dumps(verify(read(args.receipts)), indent=2))
     else:
-        print(json.dumps({"recorded_android":closed_evidence(), "prepared":prepared(),
-                          "original_candidate_anon_origins":legacy_origins(),
-                          "synthetic_model":model}, indent=2))
+        receipts_path = HERE / "receipts.json"
+        payload = {"prior_failed_attempts": closed_evidence(), "prepared": prepared(),
+                   "original_candidate_anon_origins": legacy_origins(), "synthetic_model": model}
+        if receipts_path.is_file():
+            payload["live_android_verification"] = verify(read(receipts_path))
+        print(json.dumps(payload, indent=2))
