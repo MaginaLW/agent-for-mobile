@@ -124,20 +124,22 @@ class SafetyPolicy(
             val identity = target?.focusIdentity
             if (
                 context.sameAppMultiWindow &&
-                (identity?.source == IdentitySource.IME_ONLY || target?.focusedInputBounds == null)
+                (identity?.source == IdentitySource.IME_ONLY ||
+                    target?.focusedInputBounds == null ||
+                    target.windowPane.isNullOrBlank())
             ) {
                 return SafetyDecision.Blocked(
                     ErrorCode.E_BLOCKED,
-                    "同应用多窗口下缺少输入框无障碍几何，拒绝盲按 Enter；请改用 ui_action 点击目标窗口内的具体按钮",
+                    "同应用多窗口下缺少输入框几何或窗格归属，拒绝盲按 Enter；请改用 ui_action 点击目标窗口内的具体按钮",
                 )
             }
-            // 两种身份模式共用同一条硬要求：基础证据身份（含来源）必须逐字段一致，
+            // 三种身份模式共用同一条硬要求：基础证据身份（含来源与锚点窗口）必须逐字段一致，
             // 且几何证据与来源一致地存在或缺失——不允许 blank == blank 平凡通过。
             val baseValid = identity != null &&
                 input != null && input.identity == identity &&
                 FocusIdentity.boundsConsistent(identity.source, target.focusedInputBounds) &&
-                // IME-only 降级链失去了 a11y 焦点身份与几何，OCR 读回是仅剩的落框机械证据。
-                (identity.source != IdentitySource.IME_ONLY || input.readbackVerified)
+                // 降级链（IME_ONLY / IME_CURSOR_ANCHOR）缺少可信 a11y 节点读回，OCR 读回是必需的落框机械证据。
+                (!identity.degraded || input.readbackVerified)
             // 存在已准备目标会话证据（如 P0 宏）时必须严格对齐；常规生产路径允许无 preparedTargetEvidence 进确认卡。
             val preparedValid = prepared == null || (
                 prepared.label.isNotBlank() &&
@@ -279,6 +281,12 @@ class SafetyPolicy(
                 IdentitySource.A11Y -> {
                     add("焦点输入：${identity.a11yInputId}")
                     add("焦点位置：${target.focusedInputBounds ?: "不可识别"}")
+                }
+                IdentitySource.IME_CURSOR_ANCHOR -> {
+                    add("焦点输入：a11y 节点被应用屏蔽，已由 IME 光标锚点归属窗口 #${identity.cursorAnchorWindowId}")
+                    add("焦点位置：${target.focusedInputBounds ?: "不可识别"}")
+                    add("IME 会话：${identity.imeSessionId}")
+                    add("落框验证：OCR 读回${if (target.inputCommitEvidence?.readbackVerified == true) "已通过" else "未通过"}")
                 }
                 IdentitySource.IME_ONLY -> {
                     add("焦点输入：a11y 不可见（App 屏蔽无障碍树），已降级为 IME 单命名空间")

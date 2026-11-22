@@ -955,6 +955,121 @@ class SafetyGateTest {
         assertEquals(0, paneDriftExecutorCalls)
     }
 
+    @Test
+    fun `same app multi window allows cursor anchor enter only with ocr readback, pane, bounds, and confirmation`() {
+        val anchor = FocusIdentity.ofCursorAnchor(20, imeSessionId)!!
+        val anchorBounds = "[1048,1834][2578,1946]"
+        val anchorInput = inputEvidence.copy(identity = anchor, readbackVerified = true)
+        val anchorContext = initialContext.copy(
+            sameAppMultiWindow = true,
+            target = SafetyTarget(
+                focusIdentity = anchor,
+                focusedInputBounds = anchorBounds,
+                inputCommitEvidence = anchorInput,
+                preparedTargetEvidence = null,
+                windowPane = "right",
+            ),
+        )
+
+        // 1) 无 OCR 读回必须门前阻断（0 确认卡、0 执行）
+        assertEnterBlocked(
+            anchorContext.copy(
+                target = anchorContext.target!!.copy(
+                    inputCommitEvidence = anchorInput.copy(readbackVerified = false),
+                ),
+            ),
+        )
+
+        // 2) 缺 windowPane 或缺 focusedInputBounds 必须门前阻断
+        assertEnterBlocked(anchorContext.copy(target = anchorContext.target!!.copy(windowPane = null)))
+        assertEnterBlocked(anchorContext.copy(target = anchorContext.target!!.copy(windowPane = "")))
+        assertEnterBlocked(anchorContext.copy(target = anchorContext.target!!.copy(focusedInputBounds = null)))
+
+        // 3) 用户拒绝确认卡 → E_BLOCKED 且 0 执行
+        var rejectedExecs = 0
+        val rejectGate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { false },
+            contextProvider = { anchorContext },
+            onExecutionFailure = { fail("用户拒绝不得记录失败") },
+        )
+        expectGatewayError(ErrorCode.E_BLOCKED) {
+            rejectGate.execute("press_key", Level.W, args) { _, _ -> rejectedExecs++ }
+        }
+        assertEquals(0, rejectedExecs)
+
+        // 4) 齐全证据 → 必走 ConfirmationRequired，确认卡明示光标锚点窗口/坐标/IME会话/OCR读回与右侧窗口
+        var cards = 0
+        var executions = 0
+        val approveGate = SafetyGate(
+            policy = SafetyPolicy(),
+            confirmer = { decision ->
+                cards++
+                val card = decision.cardText("c-anchor-1")
+                assertTrue("确认卡必须展示所在窗口", card.contains("所在窗口：右侧窗口"))
+                assertTrue(
+                    "确认卡必须明示 IME 光标锚点与窗口号",
+                    card.contains("焦点输入：a11y 节点被应用屏蔽，已由 IME 光标锚点归属窗口 #20"),
+                )
+                assertTrue("确认卡必须展示焦点位置", card.contains("焦点位置：$anchorBounds"))
+                assertTrue("确认卡必须展示 IME 会话", card.contains("IME 会话：$imeSessionId"))
+                assertTrue("确认卡必须展示 OCR 读回状态", card.contains("落框验证：OCR 读回已通过"))
+                true
+            },
+            contextProvider = { anchorContext },
+            onExecutionFailure = { fail("批准执行成功不得记录失败") },
+        )
+        approveGate.execute("press_key", Level.W, args) { _, _ -> executions++ }
+        assertEquals(1, cards)
+        assertEquals(1, executions)
+
+        // 5) 批准后任何飘移（窗口号、窗格、编辑框坐标、退回 IME_ONLY、会话更换、多窗切单窗）均 E_STALE_REF 且 0 执行
+        val otherWindow = FocusIdentity.ofCursorAnchor(10, imeSessionId)!!
+        val otherSession = FocusIdentity.ofCursorAnchor(20, "ime|fedcba9876543210fedcba98")!!
+        val driftedContexts = listOf(
+            anchorContext.copy(
+                target = anchorContext.target!!.copy(
+                    focusIdentity = otherWindow,
+                    inputCommitEvidence = anchorInput.copy(identity = otherWindow),
+                ),
+            ),
+            anchorContext.copy(target = anchorContext.target!!.copy(windowPane = "left")),
+            anchorContext.copy(target = anchorContext.target!!.copy(focusedInputBounds = "[1048,1820][2578,1946]")),
+            anchorContext.copy(
+                target = anchorContext.target!!.copy(
+                    focusIdentity = degraded,
+                    focusedInputBounds = null,
+                    inputCommitEvidence = anchorInput.copy(identity = degraded),
+                ),
+            ),
+            anchorContext.copy(
+                target = anchorContext.target!!.copy(
+                    focusIdentity = otherSession,
+                    inputCommitEvidence = anchorInput.copy(identity = otherSession),
+                ),
+            ),
+            anchorContext.copy(sameAppMultiWindow = false),
+        )
+        driftedContexts.forEach { drifted ->
+            var reads = 0
+            var driftExecs = 0
+            val driftGate = SafetyGate(
+                policy = SafetyPolicy(),
+                confirmer = { true },
+                contextProvider = {
+                    reads++
+                    if (reads == 1) anchorContext else drifted
+                },
+                onExecutionFailure = { fail("批准后飘移属于 E_STALE_REF，不得记录执行失败") },
+            )
+            expectGatewayError(ErrorCode.E_STALE_REF) {
+                driftGate.execute("press_key", Level.W, args) { _, _ -> driftExecs++ }
+            }
+            assertEquals(2, reads)
+            assertEquals(0, driftExecs)
+        }
+    }
+
     private fun expectGatewayError(code: ErrorCode, block: () -> Unit): GatewayError {
         try {
             block()

@@ -118,8 +118,14 @@ object ToolRegistry {
         },
         ToolSpec("keyboard_state", "读取软键盘可见性与高度。", Level.R, schema(emptyList(),
             "probe_editor_origin" to prop("boolean", "可选。用已在位的网关输入法查询当前编辑器的屏幕原点；原点只供诊断。"),
+            "probe_editor_bounds" to prop("boolean", "可选。核对输入焦点和输入法观察到的编辑框四边。横屏命中两个无名候选时报告各自的焦点属性和四边。仅供诊断，与原点/光标锚点查询分次使用。"),
+            "probe_cursor_anchor" to prop("boolean", "可选。绕开前置无障碍焦点闸门，直接向当前输入连接请求 CursorAnchorInfo（2参过滤优先、退回1参），结合同包可见应用窗口做互不重叠归属，并附脱敏契约与无短路节点遥测。仅供只读诊断，与原点/四边查询分次使用。"),
         )) {
-            SystemTools.keyboardState(it.opt("probe_editor_origin") == true)
+            SystemTools.keyboardState(
+                probeEditorOrigin = it.opt("probe_editor_origin") == true,
+                probeEditorBounds = it.opt("probe_editor_bounds") == true,
+                probeCursorAnchor = it.opt("probe_cursor_anchor") == true,
+            )
         },
         ToolSpec(
             "app_launch", "按别名或包名启动 app，执行后验前台。",
@@ -713,7 +719,7 @@ object ToolRegistry {
                             focused.identity,
                             bounds,
                         ),
-                        windowPane = a11y.paneForBounds(focused.bounds).takeIf { sameAppMulti },
+                        windowPane = (focused.windowPane ?: a11y.paneForBounds(focused.bounds)).takeIf { sameAppMulti },
                     )
                 }
             else -> null
@@ -839,6 +845,8 @@ object ToolRegistry {
                     add("IME 会话 ${expected.identity.imeSessionId} → ${identity.imeSessionId}")
                 identity.a11yInputId != expected.identity.a11yInputId ->
                     add("a11y 节点 ${expected.identity.a11yInputId} → ${identity.a11yInputId}")
+                identity.cursorAnchorWindowId != expected.identity.cursorAnchorWindowId ->
+                    add("光标锚点窗口 ${expected.identity.cursorAnchorWindowId} → ${identity.cursorAnchorWindowId}")
             }
             if (bounds != expected.bounds) add("焦点位置 ${expected.bounds} → $bounds")
         }.ifEmpty { listOf("身份逐项一致但短时目标已过期（TTL）") }.joinToString("；")

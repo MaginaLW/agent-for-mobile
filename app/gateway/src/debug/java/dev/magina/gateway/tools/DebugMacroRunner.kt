@@ -166,7 +166,7 @@ internal object MacroRunnerFactory {
             service.withFreshPreparedTargetGuard(P0_WECHAT_PACKAGE) { rawFresh, serviceInputProof ->
                 val fresh = adapter.decodeForRecorder(rawFresh)
                 val foregroundJson = service.ctx(Gateway.caps())
-                val focused = UiTools.focusedInputSnapshot(service)
+                val focused = UiTools.focusedInputSnapshot(service, allowCursorAnchor = false)
                 // 无焦点节点时 proof 几何是空 Rect 占位，不是真几何：显式置 null，
                 // 让 a11y 侧证据"一致地缺失"，不给错配留缝。
                 val proofBounds = P0MacroRect(

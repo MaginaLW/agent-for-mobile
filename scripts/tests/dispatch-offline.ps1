@@ -2761,6 +2761,261 @@ class Adb {
         finally {
             $env:DISPATCH_TEST_LANDSCAPE = $oldMode
             $gatewayStub.DefaultCapsJson = $caps
+            Remove-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case '横屏就位支持 IME CursorAnchorInfo 严格归属分支并拒绝伪造/越界/过期回执' {
+        . (Join-Path $RepoRoot 'scripts\lib\dispatch-landscape.ps1')
+        function New-CursorAnchorEditorObservations {
+            param(
+                [switch]$KeyboardVisible,
+                [switch]$Resized,
+                [switch]$IncludeNotFoundEditor,
+                [switch]$IncludeEmptyEditor,
+                [switch]$OmitMarker
+            )
+            $screenW = 2800
+            $screenH = 1968
+            $imeHeight = if ($KeyboardVisible) { 600 } else { 0 }
+            $usableBottom = if ($KeyboardVisible) { 1368 } else { $screenH }
+            $paneBottom = if ($KeyboardVisible -and $Resized) { 1368 } else { $screenH }
+            # 非可见键盘用例直接复刻 PA2553 微信横屏实测几何：[1048,1834,2578,1946] ⊂ 右窗 [927,0,2800,1968]。
+            $boxTop = if ($KeyboardVisible) { 1234 } else { 1834 }
+            $boxBottom = if ($KeyboardVisible) { 1346 } else { 1946 }
+            $editorBox = @(1048, $boxTop, 2578, $boxBottom)
+            $windows = @(
+                @{id=363; type='application'; root_package='com.tencent.mm'; active=$false; focused=$false; bounds=@(0,0,927,$paneBottom)},
+                @{id=364; type='application'; root_package='com.tencent.mm'; active=$true; focused=$true; bounds=@(927,0,2800,$paneBottom)}
+            )
+            if ($KeyboardVisible) {
+                $windows += @{id=365; type='input_method'; bounds=@(0,1368,2800,1968)}
+            }
+            $marker = if ($OmitMarker) { $null } else {
+                @{
+                    top_x=1067.0; top_y=[double]($boxTop + 30)
+                    baseline_x=1067.0; baseline_y=[double]($boxBottom - 28)
+                    bottom_x=1067.0; bottom_y=[double]($boxBottom - 17)
+                    flags=1; visibility='visible'
+                }
+            }
+            $anchor = @{
+                request_mode='legacy_1arg'
+                matrix_is_identity=$false
+                window_id=364
+                pane='right'
+                window_bounds=@(927,0,2800,$paneBottom)
+                same_package_window_count=2
+                total_app_window_count=2
+                session_id='ime-pa2553-1'
+                session_generation=3
+                editor_bounds=@{left=1048.0; top=[double]$boxTop; right=2578.0; bottom=[double]$boxBottom}
+                insertion_marker=$marker
+            }
+            $observed = [Collections.Generic.List[object]]::new()
+            $observed.Add(@{
+                tool='foreground_app'; args=@{}; outcome='success'; ok=$true
+                data=@{
+                    package='com.tencent.mm'; foreground_known=$true; revision=42
+                    window_topology='same_app_multi'; selected_window_id=364; windows=$windows
+                }
+            })
+            $observed.Add(@{
+                tool='ui_find'; args=@{text='文件传输助手'; scroll_search=$false}; outcome='success'; ok=$true
+                data=@{
+                    screen_width=$screenW; screen_height=$screenH
+                    focused_identity_source='ime_cursor_anchor'
+                    focused_input_id=$null
+                    focused_input_window_id=364
+                    focused_input_pane='right'
+                    focused_input_bounds=$editorBox
+                    matches=@(
+                        @{pane='left'; window_id=363; text='文件传输助手'; bounds=@(120,420,560,500)},
+                        @{pane='right'; window_id=364; text='文件传输助手'; bounds=@(1020,60,1460,140)}
+                    )
+                }
+            })
+            $observed.Add(@{
+                tool='keyboard_state'; args=@{probe_cursor_anchor=$true}; outcome='success'; ok=$true
+                data=@{
+                    visible=[bool]$KeyboardVisible; height=$imeHeight
+                    ime_editor_contract_diag=@{contract_present=$true; input_type_is_null=$false; input_type=0x24001}
+                    ime_cursor_anchor=$anchor
+                }
+            })
+            if ($IncludeNotFoundEditor) {
+                $observed.Add(@{
+                    tool='ui_find'; args=@{role='input'; scroll_search=$false}; outcome='gateway-tool-failure'; ok=$false
+                    error=@{code='E_NOT_FOUND'; message='not found'; channel='a11y'; retryable=$false; fallback=''}
+                })
+            }
+            elseif ($IncludeEmptyEditor) {
+                $observed.Add(@{
+                    tool='ui_find'; args=@{role='input'; scroll_search=$false}; outcome='success'; ok=$true
+                    data=@{
+                        screen_width=$screenW; screen_height=$screenH
+                        focused_identity_source='ime_cursor_anchor'
+                        focused_input_id=$null
+                        focused_input_window_id=364
+                        focused_input_pane='right'
+                        focused_input_bounds=$editorBox
+                        matches=@()
+                    }
+                })
+            }
+            for ($n = 0; $n -lt $observed.Count; $n++) {
+                $observed[$n].ctx = @{
+                    revision=42; app='com.tencent.mm'; foreground_known=$true; window_topology='same_app_multi'
+                    keyboard=@{visible=[bool]$KeyboardVisible; height=$imeHeight}
+                }
+                $observed[$n].audit_id = "ca-audit-$n"
+            }
+            return $observed.ToArray()
+        }
+        function Test-ObservedCursorAnchor($Observed) {
+            $calls = foreach ($o in $Observed) {
+                $env = @{ok=$o.ok; ctx=$o.ctx; audit_id=$o.audit_id}
+                if ($o.ContainsKey('data')) { $env.data = $o.data }
+                if ($o.ContainsKey('error')) { $env.error = $o.error }
+                [pscustomobject]@{
+                    Server='gateway'; Outcome=$o.outcome; Name=$o.tool; Input=$o.args; ResultEnvelope=$env
+                }
+            }
+            return Test-LandscapeEditorReceipt -Calls $calls
+        }
+
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations)) 'PA2553 实测几何 3 调用 CursorAnchor 回执未通过。'
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations -OmitMarker)) '无 insertion_marker 但具备有效 editor_bounds 未通过。'
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations -IncludeNotFoundEditor)) 'ui_find(role=input) 返回 E_NOT_FOUND 时的 CursorAnchor 分支未通过。'
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations -IncludeEmptyEditor)) 'ui_find(role=input) 返回空 matches 时的 CursorAnchor 分支未通过。'
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations -KeyboardVisible)) '可见键盘叠加时的 CursorAnchor 分支未通过。'
+        Assert-True (Test-ObservedCursorAnchor (New-CursorAnchorEditorObservations -KeyboardVisible -Resized)) '可见键盘且已缩窗时的 CursorAnchor 分支未通过。'
+
+        $nullBaseline = New-CursorAnchorEditorObservations
+        $nullBaseline[2].data.ime_cursor_anchor.insertion_marker.baseline_x = $null
+        $nullBaseline[2].data.ime_cursor_anchor.insertion_marker.baseline_y = $null
+        Assert-True (Test-ObservedCursorAnchor $nullBaseline) 'insertion_marker 双空 baseline 应合法通过。'
+
+        $fractionalBounds = New-CursorAnchorEditorObservations
+        $fractionalBounds[2].data.ime_cursor_anchor.editor_bounds = @{left=1048.2; top=1834.4; right=2578.3; bottom=1945.8}
+        Assert-True (Test-ObservedCursorAnchor $fractionalBounds) '与 Float.roundToInt 一致的小数 editor_bounds 应通过。'
+
+        foreach ($bad in @(
+            @{name='TYPE_NULL 输入契约'; change={ $badReads[2].data.ime_editor_contract_diag.input_type_is_null=$true }},
+            @{name='输入契约缺失'; change={ $badReads[2].data.ime_editor_contract_diag.contract_present=$false }},
+            @{name='缺少契约诊断对象'; change={ $badReads[2].data.Remove('ime_editor_contract_diag') }},
+            @{name='ambiguous_window_overlap 无锚点'; change={
+                $badReads[2].data.ime_cursor_anchor=$null
+                $badReads[2].data.ime_cursor_anchor_reason='ambiguous_window_overlap' }},
+            @{name='锚点非空但带拒绝原因'; change={ $badReads[2].data.ime_cursor_anchor_reason='ambiguous_window_overlap' }},
+            @{name='锚点归属左窗 pane'; change={ $badReads[2].data.ime_cursor_anchor.pane='left' }},
+            @{name='锚点错误 window_id'; change={ $badReads[2].data.ime_cursor_anchor.window_id=363 }},
+            @{name='锚点 window_bounds 失配'; change={ $badReads[2].data.ime_cursor_anchor.window_bounds=@(920,0,2800,1968) }},
+            @{name='同包窗数量不是 2'; change={ $badReads[2].data.ime_cursor_anchor.same_package_window_count=1 }},
+            @{name='总应用窗数量不是 2'; change={ $badReads[2].data.ime_cursor_anchor.total_app_window_count=3 }},
+            @{name='单位矩阵未变换'; change={ $badReads[2].data.ime_cursor_anchor.matrix_is_identity=$true }},
+            @{name='title 焦点来源不是 ime_cursor_anchor'; change={ $badReads[1].data.focused_identity_source='ime_only' }},
+            @{name='title 在 CursorAnchor 分支伪造非空 focused_input_id'; change={ $badReads[1].data.focused_input_id='364||EditText|com.tencent.mm|1048,1834,2578,1946' }},
+            @{name='title 焦点窗 ID 失配'; change={ $badReads[1].data.focused_input_window_id=363 }},
+            @{name='title 焦点窗格失配'; change={ $badReads[1].data.focused_input_pane='left' }},
+            @{name='title 焦点边框与 editor_bounds 失配'; change={ $badReads[1].data.focused_input_bounds=@(1048,1830,2578,1946) }},
+            @{name='editor_bounds 越过右窗左界'; change={
+                $badReads[2].data.ime_cursor_anchor.editor_bounds.left=900.0
+                $badReads[1].data.focused_input_bounds=@(900,1834,2578,1946) }},
+            @{name='editor_bounds 落在消息区'; change={
+                $badReads[2].data.ime_cursor_anchor.editor_bounds=@{left=1048.0; top=1200.0; right=2578.0; bottom=1312.0}
+                $badReads[2].data.ime_cursor_anchor.insertion_marker=$null
+                $badReads[1].data.focused_input_bounds=@(1048,1200,2578,1312) }},
+            @{name='editor_bounds 距底边超过一行'; change={
+                $badReads[2].data.ime_cursor_anchor.editor_bounds=@{left=1048.0; top=1650.0; right=2578.0; bottom=1762.0}
+                $badReads[2].data.ime_cursor_anchor.insertion_marker=$null
+                $badReads[1].data.focused_input_bounds=@(1048,1650,2578,1762) }},
+            @{name='editor_bounds 误为数组而非对象'; change={ $badReads[2].data.ime_cursor_anchor.editor_bounds=@(1048,1834,2578,1946) }},
+            @{name='仅含 marker 缺少 editor_bounds'; change={ $badReads[2].data.ime_cursor_anchor.editor_bounds=$null }},
+            @{name='insertion_marker 不可见'; change={ $badReads[2].data.ime_cursor_anchor.insertion_marker.visibility='invisible' }},
+            @{name='insertion_marker 横坐标越出 editor_bounds'; change={ $badReads[2].data.ime_cursor_anchor.insertion_marker.top_x=1040.0 }},
+            @{name='insertion_marker 底坐标越出 editor_bounds'; change={ $badReads[2].data.ime_cursor_anchor.insertion_marker.bottom_y=1960.0 }},
+            @{name='insertion_marker 半空 baseline'; change={ $badReads[2].data.ime_cursor_anchor.insertion_marker.baseline_y=$null }},
+            @{name='未显式传 probe_cursor_anchor=true'; change={ $badReads[2].args=@{} }},
+            @{name='keyboard_state 修订过期'; change={ $badReads[2].ctx.revision=41 }},
+            @{name='缺少 session_id'; change={ $badReads[2].data.ime_cursor_anchor.session_id='' }},
+            @{name='非法 session_generation=0'; change={ $badReads[2].data.ime_cursor_anchor.session_generation=0 }},
+            @{name='缺少 request_mode'; change={ $badReads[2].data.ime_cursor_anchor.request_mode='' }}
+        )) {
+            $badReads = New-CursorAnchorEditorObservations
+            & $bad.change
+            Assert-True (-not (Test-ObservedCursorAnchor $badReads)) "CursorAnchor 分支误接纳：$($bad.name)"
+        }
+
+        $underKeyboard = New-CursorAnchorEditorObservations -KeyboardVisible -OmitMarker
+        $underKeyboard[2].data.ime_cursor_anchor.editor_bounds = @{left=1048.0; top=1500.0; right=2578.0; bottom=1612.0}
+        $underKeyboard[1].data.focused_input_bounds = @(1048,1500,2578,1612)
+        Assert-True (-not (Test-ObservedCursorAnchor $underKeyboard)) 'CursorAnchor 分支误接纳：editor_bounds 在可见键盘下'
+
+        $badNotFoundCode = New-CursorAnchorEditorObservations -IncludeNotFoundEditor
+        $badNotFoundCode[3].error.code = 'E_TIMEOUT'
+        Assert-True (-not (Test-ObservedCursorAnchor $badNotFoundCode)) '误接纳：ui_find(role=input) 非 E_NOT_FOUND 失败'
+
+        $staleNotFound = New-CursorAnchorEditorObservations -IncludeNotFoundEditor
+        $staleNotFound[3].ctx.revision = 41
+        Assert-True (-not (Test-ObservedCursorAnchor $staleNotFound)) '误接纳：E_NOT_FOUND 回执修订过期'
+
+        $badEmptyEditorMeta = New-CursorAnchorEditorObservations -IncludeEmptyEditor
+        $badEmptyEditorMeta[3].data.focused_input_window_id = 363
+        Assert-True (-not (Test-ObservedCursorAnchor $badEmptyEditorMeta)) '误接纳：空 matches editor 的焦点窗 ID 失配'
+
+        $ocrWithoutAnchor = New-CursorAnchorEditorObservations -IncludeEmptyEditor
+        $ocrWithoutAnchor[2].data.Remove('ime_cursor_anchor')
+        $ocrWithoutAnchor[3].data.matches = @(@{role='input'; source='ocr'; flags='EF'; pane='right'; window_id=364; bounds=@(1048,1834,2578,1946)})
+        Assert-True (-not (Test-ObservedCursorAnchor $ocrWithoutAnchor)) '误接纳：纯 OCR 输入命中且无锚点'
+
+        $ocrWithAnchor = New-CursorAnchorEditorObservations -IncludeEmptyEditor
+        $ocrWithAnchor[3].data.matches = @(@{role='input'; source='ocr'; flags='EF'; pane='right'; window_id=364; bounds=@(1048,1834,2578,1946)})
+        Assert-True (-not (Test-ObservedCursorAnchor $ocrWithAnchor)) '误接纳：右窗出现纯 OCR 输入节点'
+
+        $twoNativeInputs = New-CursorAnchorEditorObservations -IncludeEmptyEditor
+        $nativeNode = @{role='input'; source='a11y'; flags='EF'; pane='right'; window_id=364; bounds=@(1048,1834,2578,1946)}
+        $twoNativeInputs[3].data.matches = @($nativeNode, $nativeNode)
+        Assert-True (-not (Test-ObservedCursorAnchor $twoNativeInputs)) '误接纳：2 个右窗原生输入命中（即使附带锚点）'
+
+        # 端到端验证：通过真实 JSONL 序列化与 Invoke-Dispatch / ConvertFrom-Json 完整走通 3 调用 CursorAnchor 回执。
+        $card = "<!-- dispatch: PA2553-landscape-prepare -->`n离线 CursorAnchor 会话就位"
+        $boundArgs = @('-Task', $card, '-Slug', 'offline-landscape-ca', '-ExpectedDeviceSerial','TABLET-TEST','-ExpectedGatewaySha256',('a' * 64))
+        $receiptFile = Join-Path $SentinelDir 'landscape-receipts.jsonl'
+        $oldMode = $env:DISPATCH_TEST_LANDSCAPE
+        function ConvertTo-LandscapeReceiptLines($Observed) {
+            for ($i = 0; $i -lt $Observed.Count; $i++) {
+                $observation = $Observed[$i]
+                $item = @{id="ca-receipt-$i"; type='mcp_tool_call'; server='gateway'; tool=$observation.tool; arguments=$observation.args}
+                @{type='item.started'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+                $payload = @{ok=$observation.ok; data=$observation.data; ctx=$observation.ctx; audit_id=$observation.audit_id} | ConvertTo-Json -Depth 12 -Compress
+                $item.result = @{content=@(@{type='text'; text=$payload})}
+                $item.status = 'completed'
+                @{type='item.completed'; item=$item} | ConvertTo-Json -Depth 12 -Compress
+            }
+        }
+        try {
+            $env:DISPATCH_TEST_LANDSCAPE = 'success'
+            Set-Content -LiteralPath $receiptFile -Value (ConvertTo-LandscapeReceiptLines (New-CursorAnchorEditorObservations)) -Encoding utf8
+            Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started') -Force -ErrorAction SilentlyContinue
+            $okResult = Invoke-Dispatch -Arguments $boundArgs
+            Assert-ExitCode $okResult 0
+            Assert-Contains $okResult.Text '宿主已核实同一微信会话窗口'
+            $okCalls = $okResult.ToolCalls -join "`n"
+            Assert-NotMatches $okCalls 'settings\s+(?:put|delete)|\sinstall\s|\sime\s+set'
+            Assert-Contains $okCalls 'forward --remove'
+
+            $badLive = New-CursorAnchorEditorObservations
+            $badLive[2].data.ime_editor_contract_diag.input_type_is_null = $true
+            Set-Content -LiteralPath $receiptFile -Value (ConvertTo-LandscapeReceiptLines $badLive) -Encoding utf8
+            Remove-Item -LiteralPath (Join-Path $SentinelDir 'landscape-started') -Force -ErrorAction SilentlyContinue
+            $failResult = Invoke-Dispatch -Arguments $boundArgs
+            Assert-ExitCode $failResult 1
+            Assert-Contains $failResult.Text '派单回执未证实'
+        }
+        finally {
+            $env:DISPATCH_TEST_LANDSCAPE = $oldMode
+            Remove-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
         }
     }
     Write-Host "dispatch offline: $($script:Passed) passed, $($script:Failed) failed"

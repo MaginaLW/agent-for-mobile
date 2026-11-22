@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.magina.wechatparity">
+    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35"/>
+    <application android:label="微信等效光标锚点靶" android:debuggable="true" android:allowBackup="false"
+                 android:theme="@style/ParityOpaqueWindow">
+        <activity android:name=".WeChatParityActivity" android:exported="true"
+                  android:screenOrientation="landscape"
+                  android:configChanges="orientation|screenSize|keyboardHidden"/>
+    </application>
+</manifest>

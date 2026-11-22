@@ -20,9 +20,12 @@ import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.ensureTargetPackageAllowed
+import dev.magina.gateway.ime.EditorOriginResult
+import dev.magina.gateway.ime.EditorOriginResult.Unavailable
 import dev.magina.gateway.ime.ImeBridge
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -146,31 +149,55 @@ object SystemTools {
     /** package/activity 之外附带前台身份诊断（unknown 原因、窗口列表、最近窗口事件处置）。 */
     fun foregroundApp(): JSONObject = GatewayA11yService.require().foregroundDiagnostics()
 
-    fun keyboardState(probeEditorOrigin: Boolean = false): JSONObject {
+    fun keyboardState(
+        probeEditorOrigin: Boolean = false,
+        probeEditorBounds: Boolean = false,
+        probeCursorAnchor: Boolean = false,
+    ): JSONObject {
+        val probeCount = listOf(probeEditorOrigin, probeEditorBounds, probeCursorAnchor).count { it }
+        if (probeCount > 1) {
+            throw GatewayError(ErrorCode.E_INVALID_ARG, "原点、四边与光标锚点诊断请分次查询")
+        }
         val service = GatewayA11yService.require()
         val state = service.keyboardState()
+        if (probeCursorAnchor) return readCursorAnchor(service, state)
+        if (probeEditorBounds) return readEditorBounds(service, state)
         if (!probeEditorOrigin) return state
-        state.put("ime_editor_origin", JSONObject.NULL)
-        val session = ImeBridge.session() ?: return state
+        val session = ImeBridge.session() ?: return state.noEditorOrigin(Unavailable.NO_INPUT_TARGET)
         val pkg = service.foregroundPackage()
-        if (pkg.isBlank() || !session.belongsTo(pkg) || Build.VERSION.SDK_INT < 34) return state
+        if (pkg.isBlank() || !session.belongsTo(pkg)) return state.noEditorOrigin(Unavailable.NO_INPUT_TARGET)
+        if (Build.VERSION.SDK_INT < 34) return state.noEditorOrigin(Unavailable.UNSUPPORTED_API)
         ensureTargetPackageAllowed(pkg, Gateway.skills::isBlockedApp)
         check(Looper.myLooper() != Looper.getMainLooper())
         val request = ImeBridge.requestEditorOrigin(session, ctx.mainExecutor)
-        val point = try {
+        return finishEditorOriginRead(state, request, session.id) {
+            service.foregroundPackage() == pkg && ImeBridge.session() == session
+        }
+    }
+
+    internal fun finishEditorOriginRead(
+        state: JSONObject, request: CompletableFuture<EditorOriginResult>, sessionId: String, stillCurrent: () -> Boolean,
+    ): JSONObject {
+        val result = try {
             request.get(2, TimeUnit.SECONDS)
         } catch (_: TimeoutException) {
             request.cancel(false)
-            null
+            Unavailable.TIMEOUT
         } catch (_: ExecutionException) {
-            null
+            Unavailable.REQUEST_FAILED
         }
-        if (point != null && service.foregroundPackage() == pkg && ImeBridge.session() == session) {
-            state.put("ime_editor_origin", JSONObject().put("session_id", session.id)
-                .put("x", point.x.toDouble()).put("y", point.y.toDouble()))
+        return when (result) {
+            is Unavailable -> state.noEditorOrigin(result)
+            is EditorOriginResult.Available -> {
+                if (!stillCurrent()) return state.noEditorOrigin(Unavailable.CONTEXT_CHANGED)
+                state.put("ime_editor_origin", JSONObject().put("session_id", sessionId)
+                    .put("x", result.point.x.toDouble()).put("y", result.point.y.toDouble()))
+            }
         }
-        return state
     }
+
+    private fun JSONObject.noEditorOrigin(reason: Unavailable): JSONObject =
+        put("ime_editor_origin", JSONObject.NULL).put("ime_editor_origin_reason", reason.name.lowercase())
 
     fun appLaunch(nameOrPackage: String): JSONObject {
         val pkg = Gateway.skills.resolvePackage(nameOrPackage)
