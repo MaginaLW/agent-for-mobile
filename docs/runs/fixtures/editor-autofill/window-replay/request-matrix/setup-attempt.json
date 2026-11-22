@@ -1,0 +1,84 @@
+{
+  "first": {
+    "api": "36",
+    "hardware": "1",
+    "phase": "closed",
+    "status": "failed",
+    "error": "no_target_west.json",
+    "elapsed_seconds": 187,
+    "restored": {
+      "default_input_method": true,
+      "enabled_input_methods": true,
+      "enabled_accessibility_services": true,
+      "accessibility_enabled": true,
+      "autofill_service": true,
+      "immersive_mode_confirmations": true,
+      "airplane_mode_on": true,
+      "wifi_on": true,
+      "accelerometer_rotation": true,
+      "user_rotation": true
+    },
+    "cleanup": {
+      "isolated_server_stopped": true,
+      "ports_released": true,
+      "emulator_stopped": true
+    },
+    "accepted_request_pairs": 0
+  },
+  "second": {
+    "api": "36",
+    "hardware": "1",
+    "phase": "closed",
+    "status": "failed",
+    "error": "no_target_east.json",
+    "elapsed_seconds": 273,
+    "restored": {
+      "default_input_method": true,
+      "enabled_input_methods": true,
+      "enabled_accessibility_services": true,
+      "accessibility_enabled": true,
+      "autofill_service": true,
+      "immersive_mode_confirmations": true,
+      "airplane_mode_on": true,
+      "wifi_on": true,
+      "accelerometer_rotation": true,
+      "user_rotation": true
+    },
+    "cleanup": {
+      "ports_released": true,
+      "isolated_server_stopped": true,
+      "emulator_stopped": true
+    },
+    "accepted_request_pairs": 0,
+    "west_target_oracle": {
+      "task": 8,
+      "window": 15,
+      "connections": 5,
+      "requests": 0,
+      "callbacks": [],
+      "bounds": [
+        556,
+        324,
+        756,
+        394
+      ],
+      "local_size": [
+        200,
+        70
+      ],
+      "matrix": [
+        1,
+        0,
+        556,
+        0,
+        1,
+        324,
+        0,
+        0,
+        1
+      ]
+    },
+    "observer_exception": "UnsupportedOperationException: ArrayMap is immutable",
+    "observer_frame": "dev.magina.publicwindow.WindowProbe.read"
+  }
+}

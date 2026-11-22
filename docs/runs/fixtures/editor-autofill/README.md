@@ -112,3 +112,5 @@ A2 以原输入法启动 `scenario=automatic-right-switch`。靶应用在 147676
 复现时先在专属模拟器保存自动填充日志级别并设为 `verbose`，沿用上一节 A2。分别在切换前后保存 `dumpsys activity dev.magina.autofilltarget`、`dumpsys autofill`、阶段标记和带单调时钟的目标/系统日志。运行切换前，用 `am profile start --clock-type wall dev.magina.autofilltarget /data/local/tmp/switch.trace` 开启无采样方法跟踪，服务观察窗口结束后执行 `am profile stop dev.magina.autofilltarget` 并取回文件。之后换用 `control.trace` 同法记录同 PID 的全新 Activity 自然聚焦，独立保存新靶和服务回执。用 [count_focus_methods.py](count_focus_methods.py) 复算两份原件，命令为 `python count_focus_methods.py switch.trace control.trace`，会核查时钟、溢出标志和记录数。设备侧命令均经已核实归属的私有 ADB 运行。本轮 327 秒收尾，八项设置逐项恢复，自动填充日志从 `verbose` 恢复为入场的 `debug`，两包已卸载，自建模拟器、私有 ADB 与端口全部回收。
 
 另一次隔离实验把原会话保持在 `ACTIVE` 后再切换输入法，并分别核对旧请求、新连接及靶应用写入结构的次数。右框持续持焦期间仍未取得新结构。[保留会话的对照](retained-session/README.md)
+
+系统助理渠道的首轮在角色选择时停止。普通助理树的采集、与新连接的关联及四边均待验证。夹具记录了首轮可核对的恢复结果和两种请求标志的验收方法。[系统助理实验](assistant-structure/README.md)
