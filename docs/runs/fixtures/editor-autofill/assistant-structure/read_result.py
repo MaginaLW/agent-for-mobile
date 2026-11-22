@@ -318,12 +318,113 @@ def summarize(directory):
     return out
 
 
+def verify_receipts(path):
+    """Independently re-verify sanitized closeout receipts offline."""
+    bundle = json.loads(path.read_text(encoding="utf-8-sig"))
+    env = bundle["environment"]
+    require(env["api"] == "36" and env["hardware"] == "1" and env["initially_empty"]
+            and env["disable_usb"] and env["disable_mdns"] and env["status"] == "observed"
+            and env["phase"] == "closed" and not env["cleanup_errors"]
+            and env["uids"]["target"] != env["uids"]["observer"]
+            and env["assistant_role_during"] == "dev.magina.autofillobserver"
+            and isinstance(env["assistant_holder_before"], str)
+            and env["assistant_holder_after"] == env["assistant_holder_before"]
+            and env["assistant_role_restored"] is True
+            and len(env["restored"]) == 13 and all(env["restored"].values())
+            and all(env["cleanup"].values()),
+            "sanitized receipt environment, role restoration, or cleanup incomplete")
+
+    a2 = bundle["a2"]
+    ime = a2["ime_anchor"]
+    oracle = a2["oracle"]
+    fresh, empty = a2["assist"], a2["noflag"]
+    require(inspect_sample(fresh, ime, expected_stage="assist") == "CURRENT_ASSIST_STRUCTURE", "a2 assist invalid")
+    require(inspect_sample(empty, ime, expected_stage="noflag") == "NO_STRUCTURE", "a2 noflag invalid")
+    replay = dict(fresh, request=empty["request"], sample_close=empty["sample_close"])
+    stale = inspect_sample(replay, ime, expected_stage="assist")
+    require(stale == "STALE_OR_UNORDERED_STRUCTURE", "offline stale replay not rejected")
+    focused = [e for e in fresh["editors"] if e["focused"]]
+    require(len(focused) == 1 and focused[0]["bounds"] == oracle["rightBounds"]
+            and sorted(e["bounds"] for e in fresh["editors"]) == sorted([oracle["rightBounds"], oracle["leftBounds"]]),
+            "a2 bounds mismatch")
+    shared_id = bool(fresh["ime_has_native_id"] and focused[0]["has_id"] and focused[0]["id_matches_ime"])
+    shared_res = bool(fresh["ime_has_resource_id"] and focused[0]["resource_matches_ime"])
+    require(not shared_id and not shared_res, "unexpected shared id on anonymous editors")
+    for stage, expected_writes in (("assist", 2), ("noflag", 0)):
+        tr = a2["trace"][stage]
+        require(tr["overflow"] is False
+                and tr["target"]["onProvideStructure"] == expected_writes
+                and tr["target"]["onProvideAutofillStructure"] == 0
+                and tr["target"]["onCreateInputConnection"] == 0
+                and tr["view"]["onFocusChanged"] == 0
+                and tr["view"]["onWindowFocusChanged"] == 0,
+                f"a2 trace invariant failed for {stage}")
+
+    ctrls = bundle["controls"]
+    sec = ctrls["secure"]
+    sec_dec = inspect_sample(sec["sample"], sec["ime_anchor"], expected_stage="secure")
+    require(sec["oracle"]["windowSecure"] is True and sec_dec == "ASSIST_BLOCKED"
+            and sec["sample"]["assist_blocked"] is True and sec["sample"]["editors"] == []
+            and sec["sample"]["focus_count"] == 0, "secure control failed")
+
+    cc = ctrls["ccoptout"]
+    cc_dec = inspect_sample(cc["sample"], cc["ime_anchor"], expected_stage="ccoptout")
+    require(cc["oracle"]["ccOptOut"] is True and cc_dec == "CURRENT_ASSIST_STRUCTURE"
+            and cc["sample"]["assist_blocked"] is False, "ccoptout control failed")
+
+    obf = ctrls["obfuscated"]
+    obf_dec = inspect_sample(obf["sample"], obf["ime_anchor"], expected_stage="obfuscated")
+    obf_f = [e for e in obf["sample"]["editors"] if e["focused"]]
+    require(obf["oracle"]["a11yObfuscated"] is True and obf_dec == "CURRENT_ASSIST_STRUCTURE"
+            and len(obf_f) == 1 and obf_f[0]["bounds"] == obf["oracle"]["rightBounds"], "obfuscated control failed")
+
+    mw1 = ctrls["multiwin_dialog"]
+    mw1_res = evaluate_multiwin(mw1["sample"], "multiwin", mw1["oracle"]["leftBounds"],
+                                mw1["oracle"]["rightBounds"], ime=mw1["ime_anchor"])
+    require(mw1_res["decision"] == "MULTIWIN_RIGHT_DISTINGUISHED"
+            and mw1_res["target_windows"] == 2 and mw1_res["window_bounds_disjoint"] is True,
+            "multiwin_dialog control failed")
+
+    mw2 = ctrls["multiwin_tasks"]
+    mw2_res = evaluate_multiwin(mw2["sample"], "multiwin2", mw2["pane_left"]["editorBounds"],
+                                mw2["pane_right"]["editorBounds"], ime=mw2["ime_anchor"])
+    require(mw2_res["decision"] == "MULTIWIN_RIGHT_DISTINGUISHED"
+            and mw2_res["target_activities"] == 2 and mw2_res["distinct_activity_ids"] == 2
+            and mw2_res["focused_state_flag"] is True and mw2_res["editor_bounds_disjoint"] is True,
+            "multiwin_tasks control failed")
+
+    return {
+        "verified": True,
+        "a2_decision": "CURRENT_ASSIST_STRUCTURE",
+        "noflag_decision": "NO_STRUCTURE",
+        "offline_older_structure": stale,
+        "common_native_id": False,
+        "common_resource_id": False,
+        "strict_selected_side": None,
+        "focused_bounds": focused[0]["bounds"],
+        "assistant_holder_before": env["assistant_holder_before"],
+        "assistant_role_during": env["assistant_role_during"],
+        "assistant_holder_after": env["assistant_holder_after"],
+        "restored_settings": len(env["restored"]),
+        "controls": {
+            "secure": {"decision": sec_dec, "assist_blocked": True, "editors": 0},
+            "ccoptout": {"decision": cc_dec, "root_cc_importance": cc["oracle"]["rootContentCaptureImportance"], "assist_blocked": False},
+            "obfuscated": {"decision": obf_dec, "pierced_a11y_obfuscation": True, "focused_bounds": obf_f[0]["bounds"]},
+            "multiwin_dialog": mw1_res,
+            "multiwin_tasks": mw2_res,
+        },
+        "cleanup": env["cleanup"],
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("directory", type=Path)
+    parser.add_argument("directory", type=Path, help="run directory (or JSON file with --receipts)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--samples-only", action="store_true", help="describe raw deliveries without certifying the run")
     mode.add_argument("--setup-only", action="store_true", help="verify the observed role-selection failure and cleanup")
+    mode.add_argument("--receipts", action="store_true", help="verify sanitized closeout receipts JSON offline")
     args = parser.parse_args()
-    verifier = verify_setup_stop if args.setup_only else observed_stages if args.samples_only else summarize
+    verifier = (verify_receipts if args.receipts else verify_setup_stop if args.setup_only
+                else observed_stages if args.samples_only else summarize)
     print(json.dumps(verifier(args.directory), indent=2))

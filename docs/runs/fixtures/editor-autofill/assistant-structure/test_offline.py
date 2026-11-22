@@ -308,4 +308,10 @@ if __name__ == "__main__":
     test_host_script_invariants()
     test_inspect_and_controls()
     test_full_summarize_and_role_readback_gate()
-    print(json.dumps({"offline_tests": "PASS", "checks": 4}, indent=2))
+    checks = 4
+    receipts = HERE / "receipts.json"
+    if receipts.is_file():
+        verified = rr.verify_receipts(receipts)
+        assert verified["verified"] is True and verified["strict_selected_side"] is None
+        checks += 1
+    print(json.dumps({"offline_tests": "PASS", "checks": checks}, indent=2))

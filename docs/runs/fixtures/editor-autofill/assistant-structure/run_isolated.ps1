@@ -489,7 +489,7 @@ try {
             Start-Sleep -Milliseconds 400
             [void](Call-Guest @('am', 'start', '-n', "$target/.LeftPaneActivity") 'start-pane-left')
             Save-Text $mw2Dir 'pane-left.json' (Wait-Fixture $target 'pane-left.json' 25)
-            [void](Call-Guest @('am', 'start', '--activity-multiple-task', '--activity-new-task', '-n', "$target/.RightPaneActivity") 'start-pane-right')
+            [void](Call-Guest @('am', 'start', '-f', '0x18000000', '-n', "$target/.RightPaneActivity") 'start-pane-right')
             Save-Text $mw2Dir 'pane-right.json' (Wait-Fixture $target 'pane-right.json' 25)
             Start-Sleep -Milliseconds 500
             $anchor = Get-LatestImeAnchor
