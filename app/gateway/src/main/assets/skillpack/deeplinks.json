@@ -5,7 +5,7 @@
       "prefix": "xhsdiscover://search/result",
       "app": "小红书",
       "expect_package": "com.xingin.xhs",
-      "note": "keyword 参数需 urlencode；一步直达搜索结果（vivo V2352A 2026-07-16 实测）",
+      "note": "keyword 参数需 urlencode；一步直达搜索结果（vivo V2352A 2026-07-16 实测；PA2553 桌面发起可能遇系统弹窗拦截，跨 App 正常）",
       "verified": "2026-07-16"
     },
     {
@@ -23,6 +23,13 @@
       "verified": ""
     },
     {
+      "prefix": "taobao://",
+      "app": "淘宝",
+      "expect_package": "com.taobao.taobao",
+      "note": "主 scheme（🔵 云端查阅未实测，deeplinks.md）",
+      "verified": ""
+    },
+    {
       "prefix": "openapp.jdmobile://virtual",
       "app": "京东",
       "expect_package": "com.jingdong.app.mall",
@@ -34,6 +41,13 @@
       "app": "京东",
       "expect_package": "com.jingdong.app.mall",
       "note": "主 scheme（🔵 未实测）",
+      "verified": ""
+    },
+    {
+      "prefix": "tmall://",
+      "app": "天猫",
+      "expect_package": "com.tmall.wireless",
+      "note": "主 scheme（🔵 云端查阅未实测，deeplinks.md）",
       "verified": ""
     }
   ]

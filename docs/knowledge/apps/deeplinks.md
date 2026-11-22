@@ -4,10 +4,11 @@
 
 | App / 系统 | 深链 | 效果 | 实测（设备/日期） |
 |---|---|---|---|
-| 小红书 | `xhsdiscover://search/result?keyword=<urlencoded>` | ✅ 一步直达搜索结果页 | vivo V2352A / 2026-07-16 |
+| 小红书 | `xhsdiscover://search/result?keyword=<urlencoded>` | ✅ 一步直达搜索结果页（PA2553 桌面发起会触发 `com.vivo.appfilter` 弹窗阻塞；从 `testtarget` 跨 App 发起成功，见 [xiaohongshu.md](xiaohongshu.md)） | vivo V2352A / 2026-07-16；PA2553 / 2026-11-18～19（有条件） |
 | 微信 | `am start -n com.tencent.mm/.ui.tools.ShareImgUI -a android.intent.action.SEND -t image/* --eu android.intent.extra.STREAM content://media/external/images/media/<id> --grant-read-uri-permission` | ✅ 直达「选择聊天」分享页（最近转发含文件传输助手）；shell 侧 URI 未被拒，FileProvider 语境终验在 M1a 代码 | vivo V2352A / 2026-07-17 |
 | 系统设置 | `am start -a android.settings.BLUETOOTH_SETTINGS` | ❌ OriginOS 上不把蓝牙页带到前台 | vivo V2352A / 2026-07-16 |
 | 系统设置 | 主设置 intent（`android.settings.SETTINGS`） | ✅ 正常 | vivo V2352A / 2026-07-16 |
+| 系统设置 | 无障碍设置 intent（`android.settings.ACCESSIBILITY_SETTINGS`） | ✅ 可靠带到前台 | OriginOS 6（S2 实测，见 [sys-cli.md](../android/sys-cli.md)） |
 
 ## 云端查阅候选（🔵 未实测，2026-07-17 整理，入库前逐条真机验证并移入上表）
 

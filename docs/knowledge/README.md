@@ -15,6 +15,7 @@
 | 操作微信 | [apps/wechat.md](apps/wechat.md) |
 | 操作小红书 | [apps/xiaohongshu.md](apps/xiaohongshu.md) |
 | 操作京东 | [apps/jd.md](apps/jd.md) |
+| 操作淘宝 | [apps/taobao.md](apps/taobao.md) |
 | 找深链（所有 app + 系统，含 🔵 候选区） | [apps/deeplinks.md](apps/deeplinks.md) |
 | 算成本账 / 额度容量 | [brain/cost.md](brain/cost.md) |
 | 大脑侧链路（headless/挂载/两段式） | [brain/harness.md](brain/harness.md) |
@@ -27,7 +28,7 @@
 knowledge/
 ├─ android/          # 安卓阵营：common · tablet(当前平板基线) · vivo-originos(历史手机基线) · m1b-capabilities · other-vendors · sys-cli
 ├─ ios/              # 苹果阵营：边界占位
-├─ apps/             # 每 app 一册（wechat/xiaohongshu/jd/…）+ deeplinks 注册表
+├─ apps/             # 每 app 一册（wechat/xiaohongshu/jd/taobao/…）+ deeplinks 注册表
 └─ brain/            # 大脑侧：cost(成本校准) · harness(链路坑) · mika(外部项目参考)
 ```
 

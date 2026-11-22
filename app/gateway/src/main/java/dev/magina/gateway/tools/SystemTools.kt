@@ -133,9 +133,12 @@ object SystemTools {
             ErrorCode.E_CHANNEL_DOWN,
             "system_set_state($key) 需要 Shizuku 特权通道（M1b）",
             channel = "shell", retryable = false,
-            fallback = "open_uri 打开对应系统设置页，用 ui_find/ui_action 点开关（UI 兜底链路）",
+            fallback = SYSTEM_SET_STATE_UI_FALLBACK,
         )
     }
+
+    internal const val SYSTEM_SET_STATE_UI_FALLBACK =
+        "先用 system_get_state 确认当前状态；如需 UI 兜底，调用 app_launch(\"设置\") 或 intent_send(action=\"android.settings.SETTINGS\", package=\"com.android.settings\") 打开主设置后用 ui_find/ui_action 导航（勿对 open_uri 传设置 action，OriginOS 上 BLUETOOTH_SETTINGS 子页直达不可靠）"
 
     fun verifyState(key: String, expected: String): JSONObject {
         val cur = getState(key)
@@ -210,7 +213,31 @@ object SystemTools {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ctx.startActivity(intent)
         val verified = waitForeground(pkg, 3000)
-        return JSONObject().put("launched", true).put("package", pkg).put("foreground_verified", verified)
+        val actual = if (verified) pkg else GatewayA11yService.instance?.let { runCatching { it.foregroundPackage() }.getOrNull() }
+        return buildAppLaunchResult(pkg, verified, actual)
+    }
+
+    internal fun buildAppLaunchResult(
+        pkg: String,
+        verified: Boolean,
+        actualPackage: String?,
+    ): JSONObject {
+        val normalizedActual = actualPackage?.trim()?.takeIf { it.isNotEmpty() }
+        return JSONObject()
+            .put("launched", true)
+            .put("package", pkg)
+            .put("foreground_verified", verified)
+            .put("actual_package", normalizedActual ?: JSONObject.NULL)
+            .apply {
+                if (!verified && normalizedActual != null) {
+                    val hint = if (normalizedActual == "com.vivo.appfilter") {
+                        "当前前台停在系统拦截弹窗（$normalizedActual），请立即停止并交现场用户处理"
+                    } else {
+                        "3s 内前台停在 $normalizedActual，未切到 $pkg；请先核对当前前台状态"
+                    }
+                    put("hint", hint)
+                }
+            }
     }
 
     fun clipboard(op: String, text: String?): JSONObject {
