@@ -1,0 +1,58 @@
+{
+  "id": "wechat_readonly_prepare",
+  "version": 1,
+  "app": "微信",
+  "expect_package": "com.tencent.mm",
+  "description": "纯只读检查前台非系统拦截后拉起微信，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁任何点击、输入或发送步骤。",
+  "readonly": true,
+  "verified": "",
+  "params": {},
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "launch_wechat",
+      "tool": "app_launch",
+      "args": {
+        "name": "微信"
+      }
+    },
+    {
+      "id": "wait_wechat_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.tencent.mm",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_wechat_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "read_wechat_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.tencent.mm",
+        "blocking_overlay_false": true,
+        "no_login_wall": true
+      }
+    }
+  ]
+}

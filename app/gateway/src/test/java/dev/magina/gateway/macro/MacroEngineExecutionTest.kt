@@ -34,6 +34,17 @@ class MacroEngineExecutionTest {
         }
     }
 
+    private fun loadRealCatalog(): MacroCatalog {
+        val macroDir = File(skillpackDir(), "macros")
+        val files = JSONObject(File(macroDir, "index.json").readText()).getJSONArray("files")
+        val raw = (0 until files.length()).map { idx ->
+            JSONObject(File(macroDir, files.getString(idx)).readText())
+        }
+        return MacroCatalog(raw) { pkg ->
+            pkg != null && pkg.startsWith("com.eg.android.AlipayGphone")
+        }
+    }
+
     private fun ctx(app: String, known: Boolean = true): JSONObject =
         JSONObject().put("app", app).put("activity", "").put("foreground_known", known)
 
@@ -250,5 +261,132 @@ class MacroEngineExecutionTest {
                 assertEquals(ErrorCode.E_INVALID_ARG, e.code)
             }
         }
+    }
+
+    @Test
+    fun `taobao_readonly_prepare dispatches ToolCatalog-aligned args and captures final snapshot`() {
+        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val engine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+        ) { tool, args ->
+            calls.add(tool to args)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "t-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.taobao.taobao"), "t-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "t-3")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "我的淘宝").put("desc", ""))),
+                    ctx("com.taobao.taobao"),
+                    "t-4",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+
+        val res = engine.run(JSONObject().put("name", "taobao_readonly_prepare").put("params", JSONObject()))
+        assertEquals("completed", res.getString("status"))
+        assertEquals(5, res.getInt("steps_executed"))
+        assertTrue(res.has("final_snapshot"))
+        assertEquals(listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_snapshot"), calls.map { it.first })
+
+        assertEquals(0, calls[0].second.length())
+        assertEquals("淘宝", calls[1].second.getString("name"))
+        assertFalse(calls[1].second.has("app"))
+        assertEquals("app_foreground", calls[2].second.getString("condition"))
+        assertEquals("com.taobao.taobao", calls[2].second.getString("package"))
+        assertEquals(5000, calls[2].second.getInt("timeout_ms"))
+        assertEquals("idle", calls[3].second.getString("condition"))
+        assertEquals(800, calls[3].second.getInt("quiet_ms"))
+        assertEquals(5000, calls[3].second.getInt("timeout_ms"))
+        assertEquals("full", calls[4].second.getString("scope"))
+    }
+
+    @Test
+    fun `taobao_readonly_prepare hands off on appfilter blocker and login wall`() {
+        val blockerCalls = mutableListOf<String>()
+        val blockerEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("请先登录") },
+        ) { tool, _ ->
+            blockerCalls.add(tool)
+            Envelope.ok(JSONObject().put("package", "com.vivo.appfilter"), ctx("com.vivo.appfilter"), "tb-1")
+        }
+        val blockerRes = blockerEngine.run(JSONObject().put("name", "taobao_readonly_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", blockerRes.getString("status"))
+        assertEquals("SYSTEM_BLOCKER", blockerRes.getString("failure_code"))
+        assertTrue(blockerRes.getBoolean("blocker_detected"))
+        assertEquals(listOf("foreground_app"), blockerCalls)
+
+        val loginEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("请先登录", "手机号登录") },
+        ) { tool, _ ->
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "tl-1")
+                "app_launch", "wait_for" -> Envelope.ok(JSONObject(), ctx("com.taobao.taobao"), "tl-2")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("elements", JSONArray().put(JSONObject().put("text", "请先登录后查看订单").put("desc", ""))),
+                    ctx("com.taobao.taobao"),
+                    "tl-3",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+        val loginRes = loginEngine.run(JSONObject().put("name", "taobao_readonly_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", loginRes.getString("status"))
+        assertEquals("LOGIN_WALL", loginRes.getString("failure_code"))
+        assertTrue(loginRes.getBoolean("blocker_detected"))
+    }
+
+    @Test
+    fun `wechat_readonly_prepare dispatches ToolCatalog-aligned readonly steps without input or click`() {
+        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val engine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { emptyList() },
+        ) { tool, args ->
+            calls.add(tool to args)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "w-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.tencent.mm"), "w-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.tencent.mm"), "w-3")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "微信").put("desc", ""))),
+                    ctx("com.tencent.mm"),
+                    "w-4",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+
+        val res = engine.run(JSONObject().put("name", "wechat_readonly_prepare").put("params", JSONObject()))
+        assertEquals("completed", res.getString("status"))
+        assertEquals(5, res.getInt("steps_executed"))
+        assertTrue(res.has("final_snapshot"))
+        assertEquals(listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_snapshot"), calls.map { it.first })
+
+        assertEquals(0, calls[0].second.length())
+        assertEquals("微信", calls[1].second.getString("name"))
+        assertFalse(calls[1].second.has("app"))
+        assertEquals("app_foreground", calls[2].second.getString("condition"))
+        assertEquals("com.tencent.mm", calls[2].second.getString("package"))
+        assertEquals(5000, calls[2].second.getInt("timeout_ms"))
+        assertEquals("idle", calls[3].second.getString("condition"))
+        assertEquals(800, calls[3].second.getInt("quiet_ms"))
+        assertEquals(5000, calls[3].second.getInt("timeout_ms"))
+        assertEquals("full", calls[4].second.getString("scope"))
     }
 }

@@ -50,6 +50,7 @@ class MacroCatalogAssetTest {
     fun `real macro assets load cleanly and keep unverified candidate status`() {
         val pack = loadPack()
         val catalog = loadRealMacros(pack)
+
         val xhs = catalog.find("xhs_search_prepare")
         assertNotNull("必须加载 xhs_search_prepare", xhs)
         assertEquals("com.xingin.xhs", xhs!!.expectPackage)
@@ -57,11 +58,49 @@ class MacroCatalogAssetTest {
         assertTrue(xhs.readonly)
         assertEquals(6, xhs.steps.size)
 
+        val taobao = catalog.find("taobao_readonly_prepare")
+        assertNotNull("必须加载 taobao_readonly_prepare", taobao)
+        assertEquals("com.taobao.taobao", taobao!!.expectPackage)
+        assertEquals("", taobao.verified)
+        assertTrue(taobao.readonly)
+        assertTrue(taobao.params.isEmpty())
+        assertEquals(5, taobao.steps.size)
+
+        val wechat = catalog.find("wechat_readonly_prepare")
+        assertNotNull("必须加载 wechat_readonly_prepare", wechat)
+        assertEquals("com.tencent.mm", wechat!!.expectPackage)
+        assertEquals("", wechat.verified)
+        assertTrue(wechat.readonly)
+        assertTrue(wechat.params.isEmpty())
+        assertEquals(5, wechat.steps.size)
+        val wechatAllowedTools = setOf("foreground_app", "app_launch", "wait_for", "ui_snapshot")
+        assertTrue(
+            "wechat_readonly_prepare 严禁包含点击、输入或发送步骤",
+            wechat.steps.all { it.tool in wechatAllowedTools },
+        )
+
+        for (spec in catalog.all()) {
+            assertEquals("", spec.verified)
+            assertFalse(pack.isBlockedApp(spec.expectPackage))
+            for (step in spec.steps) {
+                if (step.tool == "app_launch") {
+                    assertTrue(
+                        "${spec.id}/${step.id} app_launch 必须使用 name 参数",
+                        step.argsTemplate.optString("name").isNotBlank() && !step.argsTemplate.has("app"),
+                    )
+                }
+            }
+        }
+
         val listed = catalog.listForBrain()
-        assertEquals(1, listed.getInt("count"))
-        val item = listed.getJSONArray("macros").getJSONObject(0)
-        assertEquals("candidate_unverified", item.getString("status"))
-        assertFalse(pack.isBlockedApp(xhs.expectPackage))
+        assertEquals(3, listed.getInt("count"))
+        val macros = listed.getJSONArray("macros")
+        for (i in 0 until macros.length()) {
+            val item = macros.getJSONObject(i)
+            assertEquals("candidate_unverified", item.getString("status"))
+            assertEquals("", item.getString("verified"))
+            assertFalse(pack.isBlockedApp(item.getString("expect_package")))
+        }
     }
 
     @Test
