@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-24（本地分支 `codex/m3-macro-and-hardening`）。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
+> 更新 2026-11-25（本地分支 `codex/m3-macro-and-hardening`）。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
 > 2026-11-15 之前的过程记录、平板双窗研究和历史状态已移出主树，需要时用 `git show e1bae37:<路径>` 查看（如 `git show e1bae37:STATUS.md`）。
 
 ## 现在能做什么
@@ -67,14 +67,13 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 - **Phase 2 核心模块解耦（`94b8dcd`）**：将 `ToolRegistry.kt` 拆分为 `ToolCatalog.kt`、`ToolExecutionPipeline.kt`（引入 `CallOrigin.MACRO` 零旁路审计标记）与薄外观 `ToolRegistry.kt`；将 `GatewayA11yService.kt` 抽离 `A11yDiagnosticsFormatter.kt`、`A11yGestureController.kt`、`A11yOcrCoordinator.kt`。
 - **Phase 4 M3 宏系统与真机首跑（`57c4532` 实装 PA2553）**：
   - 落成 [M3 设计说明](docs/specs/2026-11-24-M3-宏系统与技能包-design.md) 与 `dev.magina.gateway.macro`（`MacroSpec`、`MacroCatalog`、`MacroEngine`），注册 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整黑名单/`SafetyGate`/`ConfirmOverlay` 管线），并新增只读样板 `xhs_search_prepare`。
-  - **PA2553 阶段 3 + M3 实机核验**（[详细跑测记录](docs/runs/2026-11-24-PA2553阶段3与M3宏样板真机验收.md)）：① 冷态进程未活且 `GatewayA11yService` `Crashed` 时后台起服被 `exported=false` + Android 16 `getFgsAllowStart=DENIED` 拦截，经 `am start MainActivity` + `run-as ... am start-foreground-service` 后 `dispatch.ps1` 20s 成功并自动重绑恢复双无障碍绑定与前导 `:` 基线；② 同签覆盖安装 `57c4532`（`389d372a...3c31`）后，`r3-gateway-tools-readonly-20261124` 20s 验证 `ocr`、`BLUETOOTH_SETTINGS` 兜底提示与 `xhs_search_prepare` 列表；③ 淘宝只读 `r3-taobao-readonly-20261124`（104s）两次点击「查看物流」均回到订单列表，按站规单轮停在 `reported-fail`；④ `skill-macro-xhs-tokyo-20261124` 验证 `skill_macro_exec` 6/6 子步 `completed`、71 元素 `final_snapshot` 及审计 `a-000038` + `origin=macro`（`a-000039`–`a-000044`）全通，但宏后大脑多做 5 次探测/重复快照并在点第 3 条前误触 `flags=""` 的 `FrameLayout` 返回 `E_VERIFY_FAIL`，整单 82s / 477,106 in_tok 仍高于 11-19 纯大脑基线（73s / 322,497 in_tok），故 `xhs_search_prepare.json` 维持 `verified: ""`。
+  - **PA2553 阶段 3 + M3 实机核验（11-24 至 11-25）**（[11-24 验收](docs/runs/2026-11-24-PA2553阶段3与M3宏样板真机验收.md) · [11-25 对照归因](docs/runs/2026-11-25-PA2553-M3宏收敛对照与阻断归因.md)）：① 冷态无进程且 `GatewayA11yService` `Crashed` 时后台起服被 `exported=false` + Android 16 `getFgsAllowStart=DENIED` 拦截，先 `am start MainActivity` 再 `run-as ... am start-foreground-service` 后 `dispatch.ps1` 20s 成功并自动重绑恢复双无障碍绑定与前导 `:` 基线；② 同签覆盖安装 `57c4532`（`389d372a...3c31`）后，`r3-gateway-tools-readonly-20261124` 20s 验证 `ocr`、`BLUETOOTH_SETTINGS` 兜底提示与 `xhs_search_prepare` 列表；③ 淘宝只读 `r3-taobao-readonly-20261124`（104s）两次点击「查看物流」均回到订单列表，按站规停在 `reported-fail`；④ 11-24 `skill-macro-xhs-tokyo-20261124` 验证 `skill_macro_exec` 6/6 `completed` 及 `origin=macro` 审计全通（82s / 477,106 in_tok / 27 调用，`fail/verify-fail`）；⑤ 11-25 精简 `gateway-executor-preamble.md` 与 `m0-3-xhs-summary.md` 后，`skill-macro-xhs-tokyo-20261125` 实证前置探测从 6 次降至首步直调 1 次（总调用 20 次、429,805 in_tok、零重复 `ui_snapshot`、零 `flags=""` 误点），但因无标签卡片/评论栏触发 5 次 `ConfirmOverlay` 且视频详情内评论切窗瞬态触发 `E_BLOCKED`，整单耗时 100s 记为 `fail (safety-denied)`，故 `xhs_search_prepare.json` 诚实保持 `verified: ""`。
 
 ## 下一步
 
-- **M3 提示词收敛与净胜重测**：精简 `scripts/prompts/gateway-executor-preamble.md` 与任务指引，避免调宏前重复做 `skill_macro_list`/`foreground_app`/`device_info`/`skillpack_lookup` 及调宏后重复 `ui_snapshot`，并约束勿点击 `flags=""` 节点；随后在 PA2553 补跑一次 `success` 净胜单，验证耗时/token 明确优于 11-19 基线后再将 `xhs_search_prepare.json` 转正 `verified`。
-- **日常只读链路体验排查**：按需排查淘宝全部订单页「查看物流」点击后回到订单列表的原因，以及小红书平板网格无标签卡片按钮的只读浏览确认卡体验；`mcp-transport-failure` 现场快照待后续真机传输失败复现时自然取证。
-- **M1-T 尾项**：横屏微信就位、备稿与确认卡发送已闭环；「左窗 → 冷 `ChattingUI` → 聚焦右窗」单笔合流派单为可选补验，标准竖屏 P0（`Allow`/`Stale`/`Deny`）继续独立暂缓。
-- **M3 后续扩展**：`xhs_search_prepare` 真机转正并录入 `verified` 日期后，按需推广至淘宝/京东物流前置导航宏及微信横屏只读就位宏。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
+- **M3 只读浏览卡点评估与新宏选型**：在用户确认设计方向后再决定后续路线——① 若继续优化小红书端到端只读体验，评估在安全前提下为无标签卡片关联兄弟标题文字或在同包视频详情弹窗场景处理瞬态多窗；② 或把已实测有效的 4→1 步声明式宏模式扩展至不依赖无标签深点击的场景（如淘宝/京东/设置前置导航或微信横屏只读就位宏）。
+- **日常只读链路体验排查**：按需排查淘宝全部订单页「查看物流」点击后回到订单列表的原因；`mcp-transport-failure` 现场快照待后续真机传输失败复现时自然取证。
+- **M1-T 尾项**：横屏微信就位、备稿与确认卡发送已闭环；「左窗 → 冷 `ChattingUI` → 聚焦右窗」单笔合流派单为可选补验，标准竖屏 P0（`Allow`/`Stale`/`Deny`）继续独立暂缓。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
 
 ## 2026-11-15 精简
 
@@ -94,4 +93,4 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 | M1 自研网关 | PA2553 非微信三项主验收已执行（首次无干预完成率 1/3，历史 M0 为 3/3）；2026-11-24 在 PA2553 上真机验通 PR #86 无障碍重绑与基线精确还原（保留前导 `:` 与 `AutoSendImageService`）、新版 `skillpack_lookup` 与 `ocr` 上报，淘宝单轮「查看物流」点击回弹待排查，`mcp-transport-failure` 快照待传输失败复现采集 |
 | M1-T 平板 | T0-L 入场完成；微信双窗研究路线放弃，生产网关支持单窗口与同应用平行视界（跨应用/未知多窗 fail-closed）；2026-11-22 PA2553 横屏微信三起点（已聚焦右窗 / 桌面启动 / 左窗导航+冷启聚焦）与 `ConfirmOverlay` 发送投递全链真机闭环（PR #47、#79–#83）；标准竖屏 P0 独立暂缓 |
 | M2 大脑上机 | 取消 |
-| M3 宏、入口、技能包 | 引擎已真机跑通（`skill_macro_list`/`skill_macro_exec` 6/6 与 `origin=macro` 审计在 PA2553 全通；因整单后续误点 `flags=""` 节点且耗时/token 暂高于 11-19 基线，`xhs_search_prepare` 维持 `verified: ""`，待精简 preamble 并净胜重测） |
+| M3 宏、入口、技能包 | 引擎及提示词前置收敛已真机跑通（`skill_macro_exec` 6/6 与 `origin=macro` 审计全通；11-25 验证首步直调 + 零重复快照 + 零 `flags=""` 误点，前置降至 1 步；因小红书无标签卡片触发 5 次确认卡及视频评论切窗瞬态 `E_BLOCKED`，`xhs_search_prepare` 维持 `verified: ""`） |

@@ -22,9 +22,10 @@
 ### 阶段 4 主线（M3 声明式宏系统与 App 技能包，已完成核心真机跑通，待降本转正）
 
 - **已离线落地（2026-11-24）**：按 [M3 设计说明](specs/2026-11-24-M3-宏系统与技能包-design.md) 实现 `dev.magina.gateway.macro`（`MacroSpec`/`MacroCatalog`/`MacroEngine`），注册 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整 `SafetyGate`/`ConfirmOverlay` 管线，保持 `DebugMacroRunner` / `P0WeChatPrepareMacro` 与 Release 隔离不变），并新增首个只读样板宏 `app/gateway/src/main/assets/skillpack/macros/xhs_search_prepare.json`（`verified: ""`）及 `scripts/report-ledger.ps1` 台账统计脚本。
-- **2026-11-24 PA2553 首跑实测与剩余优化**：
-  - `skill-macro-xhs-tokyo-20261124` 实机验证 `xhs_search_prepare` 6/6 子步 `status="completed"`、71 元素 `final_snapshot` 及审计 `a-000038` + `origin=macro`（`a-000039`–`a-000044`）全通；但宏后大脑另做 5 次探测/重复快照并误点 `flags=""` 的 `FrameLayout` 触发 `E_VERIFY_FAIL`，整单 82s / 477,106 in_tok（[11-19 纯大脑基线](runs/ledger.csv) 为 73s / 322,497 in_tok），`xhs_search_prepare.json` 诚实保持 `verified: ""`。
-  - **下一步待办**：① 优化 `scripts/prompts/gateway-executor-preamble.md` 与任务提示，消除调宏前 `skill_macro_list`/`foreground_app`/`device_info`/`skillpack_lookup` 四连探与调宏后重复 `ui_snapshot`，并约束勿点击 `flags=""` 容器节点；② 在 PA2553 补跑一次净胜 `success` 单确认耗时与 token 低于 11-19 基线后，将 `xhs_search_prepare.json` 更新为实测 `verified` 日期，再按需扩展淘宝/京东物流前置宏及微信横屏只读就位宏；③ 排查淘宝「查看物流」点击回弹原因及小红书无标签卡片按钮的只读确认卡体验。
+- **2026-11-24 至 11-25 PA2553 实测与收敛结论**：
+  - 11-24 `skill-macro-xhs-tokyo-20261124` 实机验证 `xhs_search_prepare` 6/6 子步 `status="completed"`、71 元素 `final_snapshot` 及审计 `a-000038` + `origin=macro`（`a-000039`–`a-000044`）全通；但宏后大脑另做 5 次探测/重复快照并误点 `flags=""` 的 `FrameLayout` 触发 `E_VERIFY_FAIL`，整单 82s / 477,106 in_tok（[11-19 纯大脑基线](runs/ledger.csv) 为 73s / 322,497 in_tok）。
+  - **11-25 提示词收敛已实证生效**（[对照归因](runs/2026-11-25-PA2553-M3宏收敛对照与阻断归因.md)）：精简 `scripts/prompts/gateway-executor-preamble.md` 与 `scripts/tasks/m0-3-xhs-summary.md` 后，`skill-macro-xhs-tokyo-20261125` 实现首步直调 `skill_macro_exec`（前置 6→1 次）、零重复 `ui_snapshot`、零 `flags=""` 误点 `E_VERIFY_FAIL`（总调用 27→20 次、in_tok 477k→429.8k）。但因小红书卡片/展开栏无标签触发 5 次 `ConfirmOverlay`（`100s`），且视频详情点击底部无标签控件后瞬态窗口触发 `E_BLOCKED`，台账记为 `fail (safety-denied)`，故 `xhs_search_prepare.json` 诚实保持 `verified: ""`。
+  - **下一步可选方向（待决策后再改动网关代码）**：① 在不放宽安全门红线前提下，评估为无标签卡片关联兄弟标题文案及区分同包视频弹窗瞬态窗口的方案；② 将已跑通的 4→1 步确定性前置宏模式先推广至其他低无标签点击场景（如设置/淘宝/京东前置导航与微信横屏只读就位宏），另择期排查淘宝「查看物流」点击回弹。
 
 ## 2. 按需再做（有具体任务需要时才排）
 
