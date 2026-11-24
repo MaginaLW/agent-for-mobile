@@ -368,17 +368,14 @@ class GatewayA11yService : AccessibilityService() {
     /** scope: interactive(默认，可交互 + 带文本) / full(全部有信号节点)。上限截断防 token 爆炸。 */
     @Synchronized
     fun snapshot(scope: String, maxElements: Int = 200): JSONObject {
-        val currentWindows = windows
-        val appSlices = appWindowSlices(currentWindows)
-        val topology = classifyWindowTopology(appSlices)
-        if (topology == WindowTopology.CROSS_OR_UNKNOWN_MULTI) {
-            throw GatewayError(
-                ErrorCode.E_BLOCKED,
-                "检测到跨应用或归属未知的多窗口（分屏/悬浮窗），已拒绝混采快照",
-                channel = "a11y",
-                fallback = "关闭无关分屏或悬浮小窗，保留单应用全屏或同应用平行视界后重试",
-            )
-        }
+        val settled = settleSnapshotWindows(
+            readWindows = { windows },
+            extractSlices = ::appWindowSlices,
+            sleep = SystemClock::sleep,
+        )
+        val currentWindows = settled.windows
+        val appSlices = settled.slices
+        val topology = settled.topology
         val paneByWinId = assignWindowPanes(appSlices)
         lastSnapshotRev = revision
         // 每次快照都切换命名空间；不能让上一屏的 e1/o1 在下一屏静默绑定到另一个目标。
@@ -425,11 +422,13 @@ class GatewayA11yService : AccessibilityService() {
                     count += 1
                     winCount += 1
                     val b = Rect().also { node.getBoundsInScreen(it) }
+                    val aggregatedLabel = SubtreeLabelPolicy.aggregate(node)
+                    val effectiveLabel = if (aggregatedLabel.isNotEmpty()) aggregatedLabel else text
                     val ref = refs.bind(
                         refBatch,
                         UiRefSource.A11Y,
                         count,
-                        RefEntry(node, text, text, desc, b, lastSnapshotRev, "a11y", windowId, pane),
+                        RefEntry(node, text, effectiveLabel, desc, b, lastSnapshotRev, "a11y", windowId, pane),
                     )
                     if (inFgWin) {
                         fgCount += 1
@@ -438,7 +437,7 @@ class GatewayA11yService : AccessibilityService() {
                     val json = JSONObject()
                         .put("ref", ref)
                         .put("role", A11yDiagnosticsFormatter.roleOf(node))
-                        .put("text", text.take(cap))
+                        .put("text", effectiveLabel.take(cap))
                         .put("desc", desc.take(cap))
                         .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
                         .put("flags", A11yDiagnosticsFormatter.flagsOf(node))
@@ -1029,6 +1028,18 @@ class GatewayA11yService : AccessibilityService() {
             "ref $ref 文本已从「${e.text.take(30)}」变为「${nowText.take(30)}」，拒绝操作",
             channel = "a11y", fallback = "先 ui_snapshot 确认目标再操作",
         )
+        if (e.source == "a11y" && e.text.isBlank() && e.desc.isBlank() && e.label.isNotEmpty()) {
+            val nowAggregated = if (nowText.isBlank() && nowDesc.isBlank()) {
+                SubtreeLabelPolicy.aggregate(e.node)
+            } else {
+                nowText
+            }
+            if (nowAggregated != e.label) throw GatewayError(
+                ErrorCode.E_STALE_REF,
+                "ref $ref 子树聚合标签已从「${e.label.take(30)}」变为「${nowAggregated.take(30)}」，拒绝操作",
+                channel = "a11y", fallback = "先 ui_snapshot 确认目标再操作",
+            )
+        }
         val b = Rect().also { e.node.getBoundsInScreen(it) }
         return Target(e.node, nowText.ifEmpty { e.label }, nowDesc, b, e.source, e.windowId, e.pane)
     }

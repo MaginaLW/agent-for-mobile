@@ -1,7 +1,12 @@
 package dev.magina.gateway.a11y
 
+import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.GatewayError
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class WindowTopologyPolicyTest {
@@ -96,5 +101,154 @@ class WindowTopologyPolicyTest {
         )
         assertEquals(101, matchSliceForPoint(nested, 1400, 900)?.windowId)
         assertEquals(100, matchSliceForPoint(nested, 100, 100)?.windowId)
+    }
+
+    @Test
+    fun `isTransientUnknownMultiWindow only allows single non-empty package paired with blank package`() {
+        val singlePlusNull = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, null, 1400, 0, 2800, 1800),
+        )
+        assertTrue(isTransientUnknownMultiWindow(singlePlusNull))
+
+        val twoSamePlusBlank = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, "com.tencent.mm", 400, 200, 1000, 800),
+            AppWindowSlice(12, "   ", 1400, 0, 2800, 1800),
+        )
+        assertTrue(isTransientUnknownMultiWindow(twoSamePlusBlank))
+
+        // 跨双包：立即返回 false（零等待）
+        val crossApp = listOf(
+            AppWindowSlice(10, "com.xingin.xhs", 0, 0, 1400, 1800),
+            AppWindowSlice(12, "com.jingdong.app.mall", 1400, 0, 2800, 1800),
+        )
+        assertFalse(isTransientUnknownMultiWindow(crossApp))
+
+        // 跨双包 + 空包：仍立即返回 false
+        val crossAppWithNull = crossApp + AppWindowSlice(13, null, 100, 100, 500, 500)
+        assertFalse(isTransientUnknownMultiWindow(crossAppWithNull))
+
+        // 全空包无已知应用：fail-closed 返回 false
+        val allBlank = listOf(
+            AppWindowSlice(10, null, 0, 0, 1400, 1800),
+            AppWindowSlice(11, "", 1400, 0, 2800, 1800),
+        )
+        assertFalse(isTransientUnknownMultiWindow(allBlank))
+
+        // 单窗 / 同应用双窗不触发瞬态重读
+        assertFalse(isTransientUnknownMultiWindow(listOf(AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800))))
+        assertFalse(
+            isTransientUnknownMultiWindow(
+                listOf(
+                    AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+                    AppWindowSlice(11, "com.tencent.mm", 1400, 0, 2800, 1800),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `settleSnapshotWindows fails closed with zero wait on cross-app multi-window`() {
+        val crossApp = listOf(
+            AppWindowSlice(10, "com.xingin.xhs", 0, 0, 1400, 1800),
+            AppWindowSlice(12, "com.jingdong.app.mall", 1400, 0, 2800, 1800),
+        )
+        var reads = 0
+        val sleeps = mutableListOf<Long>()
+        try {
+            settleSnapshotWindows(
+                readWindows = {
+                    reads += 1
+                    crossApp
+                },
+                extractSlices = { it },
+                sleep = { sleeps.add(it) },
+            )
+            fail("expected E_BLOCKED")
+        } catch (error: GatewayError) {
+            assertEquals(ErrorCode.E_BLOCKED, error.code)
+        }
+        assertEquals(1, reads)
+        assertTrue(sleeps.isEmpty())
+    }
+
+    @Test
+    fun `settleSnapshotWindows settles transient single-package plus null window within 4 rereads`() {
+        val transientSlices = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, null, 1400, 0, 2800, 1800),
+        )
+        val resolvedSameApp = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, "com.tencent.mm", 1400, 0, 2800, 1800),
+        )
+        val frames = listOf(transientSlices, transientSlices, resolvedSameApp)
+        var index = 0
+        val sleeps = mutableListOf<Long>()
+
+        val settled = settleSnapshotWindows(
+            readWindows = { frames[index++] },
+            extractSlices = { it },
+            sleep = { sleeps.add(it) },
+        )
+
+        assertEquals(WindowTopology.SAME_APP_MULTI, settled.topology)
+        assertEquals(resolvedSameApp, settled.slices)
+        assertEquals(listOf(80L, 80L), sleeps)
+    }
+
+    @Test
+    fun `settleSnapshotWindows stops immediately if cross-app appears during reread`() {
+        val transientSlices = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, null, 1400, 0, 2800, 1800),
+        )
+        val crossApp = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, "com.jingdong.app.mall", 1400, 0, 2800, 1800),
+        )
+        val frames = listOf(transientSlices, crossApp)
+        var index = 0
+        val sleeps = mutableListOf<Long>()
+
+        try {
+            settleSnapshotWindows(
+                readWindows = { frames[index++] },
+                extractSlices = { it },
+                sleep = { sleeps.add(it) },
+            )
+            fail("expected E_BLOCKED")
+        } catch (error: GatewayError) {
+            assertEquals(ErrorCode.E_BLOCKED, error.code)
+        }
+        assertEquals(listOf(80L), sleeps)
+        assertEquals(2, index)
+    }
+
+    @Test
+    fun `settleSnapshotWindows throws E_BLOCKED after 4 rereads if unknown package persists`() {
+        val persistentUnknown = listOf(
+            AppWindowSlice(10, "com.tencent.mm", 0, 0, 1400, 1800),
+            AppWindowSlice(11, null, 1400, 0, 2800, 1800),
+        )
+        var reads = 0
+        val sleeps = mutableListOf<Long>()
+
+        try {
+            settleSnapshotWindows(
+                readWindows = {
+                    reads += 1
+                    persistentUnknown
+                },
+                extractSlices = { it },
+                sleep = { sleeps.add(it) },
+            )
+            fail("expected E_BLOCKED")
+        } catch (error: GatewayError) {
+            assertEquals(ErrorCode.E_BLOCKED, error.code)
+        }
+        assertEquals(5, reads)
+        assertEquals(listOf(80L, 80L, 80L, 80L), sleeps)
     }
 }
