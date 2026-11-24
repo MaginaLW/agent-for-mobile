@@ -13,6 +13,7 @@ import dev.magina.gateway.core.SkillPack
 import dev.magina.gateway.core.TokenStore
 import dev.magina.gateway.core.UiMutationCoordinator
 import dev.magina.gateway.ime.ImeBridge
+import dev.magina.gateway.macro.MacroCatalog
 import dev.magina.gateway.testing.TestControl
 import dev.magina.gateway.testing.TestControlProvider
 
@@ -24,6 +25,8 @@ object Gateway {
     lateinit var appContext: Context
         private set
     lateinit var skills: SkillPack
+        private set
+    lateinit var macros: MacroCatalog
         private set
     lateinit var audit: Audit
         private set
@@ -45,6 +48,7 @@ object Gateway {
         if (::appContext.isInitialized) return
         appContext = context.applicationContext
         skills = SkillPack(appContext)
+        macros = MacroCatalog(appContext, skills::isBlockedApp)
         audit = Audit(appContext)
         testControl = TestControlProvider.create(appContext)
     }

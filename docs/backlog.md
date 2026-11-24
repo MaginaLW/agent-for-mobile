@@ -17,10 +17,10 @@
 3. **非微信日常只读任务包与守卫对齐（已离线加固）**：同步 [实测深链库](knowledge/apps/deeplinks.md)、[jd.md](knowledge/apps/jd.md)、[taobao.md](knowledge/apps/taobao.md) 与 `app/gateway/src/main/assets/skillpack/`（未实测候选维持 `verified: ""`，保持 `safety.json` 红线不变），升级 `SkillPack.kt` / `IntentTools.kt` / `SystemTools.kt` 并新增只读 `skillpack_lookup`，补齐 JVM 单测与 `scripts/tests/skillpack-sync-offline.ps1`。
 - **剩余真机回归项（按需排测）**：① 免重装 APK（在机脚本路径可验）：PA2553 派单收尾 `AutoSendImageService` 留存核实、传输失败现场快照自然复现采集，以及非微信三项日常只读任务（蓝牙、小红书、淘宝/京东）首跑稳定性复核；② 需先按授权构建并安装对应 APK：网关侧 `skillpack_lookup`、`IntentTools`/`SystemTools` 设置回退与 `actual_package` 输出真机校验。
 
-### 阶段 4 倾向方向 A：启动 M3（宏系统「教一遍」与 App 技能包，本轮不实施）
+### 阶段 4 主线（M3 声明式宏系统与 App 技能包，已完成离线实现，待真机对照）
 
-- **现状与边界**：扩展现有 `app/gateway/src/main/java/dev/magina/gateway/tools/MacroRunner.kt`（目前经 `DebugMacroRunner` 仅开放 debug 白名单 `P0WeChatPrepareMacro`，release 封闭失败）与 `app/gateway/src/main/java/dev/magina/gateway/core/SkillPack.kt`（加载 `app/gateway/src/main/assets/skillpack/` 路由与安全资产）框架，保持设备端 `ConfirmOverlay` 危险动作两段式硬门不变。
-- **规划主线**：打通「确定性低/零 token 宏回放优先 + 失败交大脑接管修复并回写」闭环；先选高频日常任务做首个端到端样板，并与 [派单台账](runs/ledger.csv) 全大脑基线对比 token 与耗时成本（本轮仅规划入档，不铺开源码实施）。
+- **已离线落地（2026-11-24）**：按 [M3 设计说明](specs/2026-11-24-M3-宏系统与技能包-design.md) 实现 `dev.magina.gateway.macro`（`MacroSpec`/`MacroCatalog`/`MacroEngine`），注册 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整 `SafetyGate`/`ConfirmOverlay` 管线，保持 `DebugMacroRunner` / `P0WeChatPrepareMacro` 与 Release 隔离不变），并新增首个只读样板宏 `app/gateway/src/main/assets/skillpack/macros/xhs_search_prepare.json`（`verified: ""`）及 `scripts/report-ledger.ps1` 台账统计脚本。
+- **PA2553 接入后合并真机验收**：与上述阶段 3 网关侧回归合并为同一候选 APK 一次安装验收，验证 `xhs_search_prepare` 端到端稳定性（含 `handoff_required` 与 `com.vivo.appfilter` 拦截分支），并用 `scripts/report-ledger.ps1` 与 [派单台账](runs/ledger.csv) 11-19 纯大脑基线（`73s / 322k tok`）对照耗时与 token 降幅；真机验证通过后再按规程将对应宏 `verified` 更新为实测日期。
 
 ## 2. 按需再做（有具体任务需要时才排）
 

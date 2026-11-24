@@ -4,6 +4,7 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.Level
+import dev.magina.gateway.macro.MacroEngine
 import dev.magina.gateway.tools.IntentTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
@@ -124,6 +125,33 @@ internal object ToolCatalog {
                 "app" to prop("string", "可选：app 别名（小红书/京东/淘宝/设置…）、包名或 URI 前缀；留空返回总览"),
             ),
         ) { Gateway.skills.lookupForBrain(it.optString("app").ifEmpty { null }) },
+        ToolSpec(
+            "skill_macro_list",
+            "列出网关内置的声明式生产宏（含用途、参数约束与验证状态）。高频任务开始前可按需查询。",
+            Level.R,
+            schema(emptyList()),
+        ) { Gateway.macros.listForBrain() },
+        ToolSpec(
+            "skill_macro_exec",
+            "执行已注册的声明式生产宏。每步均走统一安全门与 ConfirmOverlay，遇到非安全阻塞时返回 handoff_required 交大脑断点接管。",
+            Level.W,
+            schema(
+                listOf("name"),
+                "name" to prop("string", "生产宏 id（来自 skill_macro_list）"),
+                "params" to prop("object", "声明的宏参数键值对（可选）"),
+            ),
+        ) { args ->
+            MacroEngine(
+                catalog = Gateway.macros,
+                isBlockedApp = Gateway.skills::isBlockedApp,
+                loginWallKeywordsForPackage = { pkg ->
+                    Gateway.skills.appGuides[pkg]?.loginWallKeywords.orEmpty()
+                },
+                stepExecutor = { toolName, stepArgs ->
+                    ToolRegistry.callFromMacro(toolName, stepArgs).envelope
+                },
+            ).run(args)
+        },
 
         // ---------- L2 意图层 ----------
         ToolSpec(
@@ -258,9 +286,10 @@ internal object ToolCatalog {
         ) { UiTools.screenCapture(it.getString("reason"), it.optString("ref").ifEmpty { null }, it.optJSONArray("region")) },
     )
 
-    /** 敏感 app 前台时仍放行的工具（撤离、纯感知与静态技能包查询）；press_key 另限安全撤离键。 */
+    /** 敏感 app 前台时仍放行的工具（撤离、纯感知与静态技能包/宏目录查询）；press_key 另限安全撤离键。 */
     val BLOCKED_APP_ALLOWED = setOf(
-        "device_info", "foreground_app", "keyboard_state", "press_key", "app_launch", "wait_for", "skillpack_lookup",
+        "device_info", "foreground_app", "keyboard_state", "press_key", "app_launch", "wait_for",
+        "skillpack_lookup", "skill_macro_list",
     )
 
     fun listToolsJson(tools: List<ToolSpec>): JSONArray {
@@ -279,10 +308,12 @@ internal object ToolCatalog {
     fun channelOf(name: String): String = when {
         name.startsWith("ui_") || name in setOf("type_text", "press_key", "wait_for") -> "a11y"
         name.startsWith("system_") || name in setOf(
-            "device_info", "clipboard", "media_query", "foreground_app", "keyboard_state", "skillpack_lookup",
+            "device_info", "clipboard", "media_query", "foreground_app", "keyboard_state",
+            "skillpack_lookup", "skill_macro_list",
         ) -> "api"
         name in setOf("open_uri", "intent_send", "share_text", "share_file", "app_launch") -> "intent"
         name == "screen_capture" -> "vision"
+        name == "skill_macro_exec" -> "macro"
         // 受控宏走 a11y + IME 复合通道；此前落到空串，写出的审计行 channel 为空，
         // 而审计契约要求每行都有非空通道（2026-07-26：审计一能读到就立刻被这条卡住）。
         name == "macro_run" -> "a11y"

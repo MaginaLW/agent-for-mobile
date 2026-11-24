@@ -1,0 +1,76 @@
+{
+  "id": "xhs_search_prepare",
+  "version": 1,
+  "app": "小红书",
+  "expect_package": "com.xingin.xhs",
+  "description": "当不在小红书前台时，通过已验证深链直达搜索结果页、等待列表稳定并采集完整快照交回大脑阅读汇总；若已在小红书前台或遇拦截则断点交回大脑接管。",
+  "readonly": true,
+  "verified": "",
+  "params": {
+    "keyword": {
+      "type": "string",
+      "required": true,
+      "min_length": 1,
+      "max_length": 64
+    }
+  },
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "handoff_if_foreground_is": "com.xingin.xhs",
+      "handoff_reason": "当前已在小红书内，按站规从站内搜索框输入并读回提交",
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "open_search_deeplink",
+      "tool": "open_uri",
+      "args": {
+        "uri": "xhsdiscover://search/result?keyword={{keyword|urlencode}}"
+      }
+    },
+    {
+      "id": "wait_xhs_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.xingin.xhs",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_results_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "check_all_tab",
+      "tool": "ui_find",
+      "args": {
+        "text": "全部",
+        "scroll_search": false
+      },
+      "optional": true
+    },
+    {
+      "id": "read_results_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.xingin.xhs",
+        "blocking_overlay_false": true,
+        "no_login_wall": true
+      }
+    }
+  ]
+}

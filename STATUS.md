@@ -1,13 +1,13 @@
 # 项目状态
 
-> 更新 2026-11-23。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
+> 更新 2026-11-24（本地分支 `codex/m3-macro-and-hardening`）。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
 > 2026-11-15 之前的过程记录、平板双窗研究和历史状态已移出主树，需要时用 `git show e1bae37:<路径>` 查看（如 `git show e1bae37:STATUS.md`）。
 
 ## 现在能做什么
 
 | 能力 | 状态 | 依据 |
 |---|---|---|
-| 网关 App（无障碍 + MCP HTTP + 工具 + 安全门） | 历史手机上跑通；PA2553 上确认卡 overlay、开机恢复、中文 `ime_commit` 已真机验证；2026-11-16 对齐普通具名点击、常规回车、黑名单出站与同应用平行视界规则，并于 2026-11-22 在 PA2553 横屏微信验证 `SAME_APP_MULTI`、`ocr_reverify=exact_nav`、`IME_CURSOR_ANCHOR`、`ime_commit_ocr` 与 `ConfirmOverlay` 发送投递闭环（跨应用分屏与未知多窗仍严格 fail-closed）；2026-11-23 新增只读 `skillpack_lookup` 与深链/设置回退对齐（均仅完成离线验证，真机待验） | [overlay 记录](docs/runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[开机恢复](docs/runs/2026-11-12-网关开机恢复离线.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md)、[PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)、[PR #79](https://github.com/MaginaLW/agent-for-mobile/pull/79)–[#83](https://github.com/MaginaLW/agent-for-mobile/pull/83)、[PR #86](https://github.com/MaginaLW/agent-for-mobile/pull/86) |
+| 网关 App（无障碍 + MCP HTTP + 工具 + 安全门） | 历史手机上跑通；PA2553 上确认卡 overlay、开机恢复、中文 `ime_commit` 已真机验证；2026-11-16 对齐普通具名点击、常规回车、黑名单出站与同应用平行视界规则，并于 2026-11-22 在 PA2553 横屏微信验证 `SAME_APP_MULTI`、`ocr_reverify=exact_nav`、`IME_CURSOR_ANCHOR`、`ime_commit_ocr` 与 `ConfirmOverlay` 发送投递闭环（跨应用分屏与未知多窗仍严格 fail-closed）；2026-11-23 新增只读 `skillpack_lookup` 与深链/设置回退对齐；2026-11-24 离线完成 Ktor CIO 传输保活/异常兜底加固、`ToolRegistry`/`GatewayA11yService` 职责拆分及 M3 声明式宏引擎（`skill_macro_list` / `skill_macro_exec` + `xhs_search_prepare`，真机待验） | [overlay 记录](docs/runs/2026-11-10-无障碍overlay确认卡真机验证.md)、[开机恢复](docs/runs/2026-11-12-网关开机恢复离线.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md)、[M3 宏 spec](docs/specs/2026-11-24-M3-宏系统与技能包-design.md)、[PR #47](https://github.com/MaginaLW/agent-for-mobile/pull/47)、[PR #79](https://github.com/MaginaLW/agent-for-mobile/pull/79)–[#83](https://github.com/MaginaLW/agent-for-mobile/pull/83)、[PR #86](https://github.com/MaginaLW/agent-for-mobile/pull/86) |
 | 派单（Codex CLI + gateway） | 可用；入口 `scripts/dispatch.ps1`（固定 `codex + gateway`），内建预检与自启恢复；2026-11-23 新增无障碍基线还原抗抖动加固与 `mcp-transport-failure` 无凭据只读健康快照（均仅完成离线验证，真机待验） | [执行 harness spec](docs/specs/2026-07-17-执行harness-design.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md)、[PR #86](https://github.com/MaginaLW/agent-for-mobile/pull/86) |
 | 危险动作两段式硬门 | PA2553 本地测试按钮的真人 Allow、Stale、Deny 均通过；2026-11-22 横屏微信已真机全链验通「获授权草稿备稿 → 设备端 ConfirmOverlay 真人批准 → 固定裁区复核（`context=rechecked`）→ 实际点击「发送」→ 右窗消息区投递」 | [本地按钮实测](docs/runs/2026-11-19-PA2553本地确认卡验收.md) · [微信横屏发送与投递实测](docs/knowledge/apps/wechat.md#pa2553-起点-3-桌面就位确认卡发送投递与起点-2-根因定位) |
 | 占位工具 | `notifications_list`、`notification_reply`、`ui_diff`、`app_stop` 已从 `tools/list` 下架，按需实施时再挂回 | [能力现状](docs/knowledge/android/m1b-capabilities.md)、[设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) |
@@ -61,11 +61,17 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 - **R3.3 非微信日常只读任务包与守卫对齐**：同步小红书/淘宝/京东/系统设置深链与 `assets/skillpack/`，修复设置回退并暴露 `actual_package` 及只读工具 `skillpack_lookup`（[实测深链库](docs/knowledge/apps/deeplinks.md)）。
 - **离线验证与边界**：代码最终提交 `30fe7cd` 完整离线检查 `./scripts/check.ps1` **10/10 通过**（492 项 Release JVM 单测、Debug/Release Lint 与构建、63 项派单回归、159 项 runner 回归、4 项 `skillpack-sync` 校验、凭据扫描全绿）。离线通过不代替真机验证，本轮尚未在 PA2553 执行真机派单或重装网关 APK。
 
+## 阶段 4 离线起步与工程加固（2026-11-24，本地分支 `codex/m3-macro-and-hardening`）
+
+- **Phase 1 工程加固与质量门补全（`fd87443`）**：清理 `.checks/` 历史轮次目录释放 ~84.8 GB；对齐 [m1b-capabilities.md](docs/knowledge/android/m1b-capabilities.md) 工具下架与 `"ocr"` 能力位；为 `McpServer` 配置 CIO 180s 空闲超时、端口复用及脱敏 JSON-RPC `-32603` 兜底；新增 `scripts/report-ledger.ps1`、可选 `.githooks/pre-commit`（`scripts/install-git-hooks.ps1`），并将 5 套 `local-testbench-*-offline.ps1` 与台账统计离线测试纳入 `scripts/check.ps1`（12/12 通过）。
+- **Phase 2 核心模块解耦（`94b8dcd`）**：将 `ToolRegistry.kt` 拆分为 `ToolCatalog.kt`、`ToolExecutionPipeline.kt`（引入 `CallOrigin.MACRO` 零旁路审计标记）与薄外观 `ToolRegistry.kt`；将 `GatewayA11yService.kt` 抽离 `A11yDiagnosticsFormatter.kt`、`A11yGestureController.kt`、`A11yOcrCoordinator.kt`。
+- **Phase 4 M3 宏系统与首个样板（离线完成）**：落成 [M3 设计说明](docs/specs/2026-11-24-M3-宏系统与技能包-design.md) 与 `dev.magina.gateway.macro`（`MacroSpec`、`MacroCatalog`、`MacroEngine`），注册生产工具 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整黑名单/`SafetyGate`/`ConfirmOverlay` 管线，遇安全终态立刻中止且 `handoff_allowed=false`；非安全障碍返回 `handoff_required` 交大脑断点接管），并落地首个只读样板宏 `xhs_search_prepare`（`verified: ""`）。本轮仅完成离线验证，待 PA2553 接入后执行阶段 3 + 阶段 4 样板真机回归与 `ledger.csv` 降本对照。
+
 ## 下一步
 
-- **阶段 3 真机回归（按需）**：脚本侧（`AutoSendImageService` 留存、传输快照采集与非微信只读首跑稳定性）可免重装 APK 验证；网关侧（`skillpack_lookup`、`IntentTools`/`SystemTools` 设置回退与 `actual_package`）需按授权构建安装对应 APK 后在 PA2553 验证。
+- **阶段 3 + 阶段 4 PA2553 真机回归**：设备接入后，先跑免重装脚本侧回归（`AutoSendImageService` 留存、非微信三项只读），再按授权单次构建安装含 PR #86 + 传输加固 + 模块解耦 + M3 宏引擎的 APK，校验 `skillpack_lookup`、设置回退、`actual_package` 及 `xhs_search_prepare` 与 11-19 纯大脑基线（`73s / 322k tok`）对照。
 - **M1-T 尾项**：横屏微信就位、备稿与确认卡发送已闭环；「左窗 → 冷 `ChattingUI` → 聚焦右窗」单笔合流派单为可选补验，标准竖屏 P0（`Allow`/`Stale`/`Deny`）继续独立暂缓。
-- **后续规划方向（阶段 4 倾向方向 A）**：基于现有 `MacroRunner.kt` / `SkillPack.kt` 启动 M3（宏系统「教一遍」与 App 技能包，本轮未铺开实施）。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
+- **M3 后续扩展**：`xhs_search_prepare` 真机转正并录入 `verified` 日期后，按需推广至淘宝/京东物流前置导航宏及微信横屏只读就位宏。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
 
 ## 2026-11-15 精简
 
@@ -85,4 +91,4 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 | M1 自研网关 | PA2553 非微信三项主验收已执行（首次无干预完成率 1/3，历史 M0 为 3/3）；2026-11-23 阶段 3 稳定性与日常只读任务离线加固已随 [PR #86](https://github.com/MaginaLW/agent-for-mobile/pull/86) 合入 `main`（无障碍基线还原、传输失败只读取证、日常只读深链/守卫与 `skillpack_lookup`），真机回归待按需验证 |
 | M1-T 平板 | T0-L 入场完成；微信双窗研究路线放弃，生产网关支持单窗口与同应用平行视界（跨应用/未知多窗 fail-closed）；2026-11-22 PA2553 横屏微信三起点（已聚焦右窗 / 桌面启动 / 左窗导航+冷启聚焦）与 `ConfirmOverlay` 发送投递全链真机闭环（PR #47、#79–#83）；标准竖屏 P0 独立暂缓 |
 | M2 大脑上机 | 取消 |
-| M3 宏、入口、技能包 | 未开始（阶段 4 倾向方向 A：宏系统「教一遍」与 App 技能包） |
+| M3 宏、入口、技能包 | 离线原型就绪（M3 声明式宏引擎 `skill_macro_list`/`skill_macro_exec` 与样板 `xhs_search_prepare` 已完成离线单测与同步门，待 PA2553 真机实测对照） |
