@@ -13,7 +13,9 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import android.util.Log
 import dev.magina.gateway.core.BearerAuthGuard
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -34,7 +36,15 @@ object McpServer {
     fun start(port: Int, token: String) {
         if (engine != null) return
         val guard = BearerAuthGuard(token)
-        engine = embeddedServer(CIO, port = port, host = "127.0.0.1") {
+        engine = embeddedServer(
+            factory = CIO,
+            port = port,
+            host = "127.0.0.1",
+            configure = {
+                connectionIdleTimeoutSeconds = McpTransportPolicy.CONNECTION_IDLE_TIMEOUT_SECONDS
+                reuseAddress = McpTransportPolicy.REUSE_ADDRESS
+            },
+        ) {
             routing {
                 get("/health") {
                     if (acceptOriginOrRespond(call)) call.respondText("ok")
@@ -96,45 +106,52 @@ object McpServer {
             return
         }
 
-        val response: JSONObject = when (method) {
-            "initialize" -> rpcResult(
-                id,
-                JSONObject()
-                    .put(
-                        "protocolVersion",
-                        McpTransportPolicy.negotiateProtocolVersion(params.opt("protocolVersion") as? String),
-                    )
-                    .put("capabilities", JSONObject().put("tools", JSONObject()))
-                    .put(
-                        "serverInfo",
-                        JSONObject().put("name", "mobile-agent-gateway").put("version", "0.1.0-m1a"),
-                    ),
-            )
-            "ping" -> rpcResult(id, JSONObject())
-            "tools/list" -> rpcResult(id, JSONObject().put("tools", ToolRegistry.listToolsJson()))
-            "resources/list" -> rpcResult(id, JSONObject().put("resources", JSONArray()))
-            "prompts/list" -> rpcResult(id, JSONObject().put("prompts", JSONArray()))
-            "tools/call" -> {
-                val name = params.optString("name")
-                val args = params.optJSONObject("arguments") ?: JSONObject()
-                // 工具实现含阻塞等待（wait_for/确认卡片），放 IO 线程池
-                val result = withContext(Dispatchers.IO) { ToolRegistry.call(name, args) }
-                val content = JSONArray().put(
-                    JSONObject().put("type", "text").put("text", result.envelope.toString()),
-                )
-                result.imageBase64?.let {
-                    content.put(
-                        JSONObject().put("type", "image").put("data", it).put("mimeType", result.imageMime),
-                    )
-                }
-                rpcResult(
+        val response: JSONObject = try {
+            when (method) {
+                "initialize" -> rpcResult(
                     id,
                     JSONObject()
-                        .put("content", content)
-                        .put("isError", McpTransportPolicy.toolResultIsError(result.envelope)),
+                        .put(
+                            "protocolVersion",
+                            McpTransportPolicy.negotiateProtocolVersion(params.opt("protocolVersion") as? String),
+                        )
+                        .put("capabilities", JSONObject().put("tools", JSONObject()))
+                        .put(
+                            "serverInfo",
+                            JSONObject().put("name", "mobile-agent-gateway").put("version", "0.1.0-m1a"),
+                        ),
                 )
+                "ping" -> rpcResult(id, JSONObject())
+                "tools/list" -> rpcResult(id, JSONObject().put("tools", ToolRegistry.listToolsJson()))
+                "resources/list" -> rpcResult(id, JSONObject().put("resources", JSONArray()))
+                "prompts/list" -> rpcResult(id, JSONObject().put("prompts", JSONArray()))
+                "tools/call" -> {
+                    val name = params.optString("name")
+                    val args = params.optJSONObject("arguments") ?: JSONObject()
+                    // 工具实现含阻塞等待（wait_for/确认卡片），放 IO 线程池
+                    val result = withContext(Dispatchers.IO) { ToolRegistry.call(name, args) }
+                    val content = JSONArray().put(
+                        JSONObject().put("type", "text").put("text", result.envelope.toString()),
+                    )
+                    result.imageBase64?.let {
+                        content.put(
+                            JSONObject().put("type", "image").put("data", it).put("mimeType", result.imageMime),
+                        )
+                    }
+                    rpcResult(
+                        id,
+                        JSONObject()
+                            .put("content", content)
+                            .put("isError", McpTransportPolicy.toolResultIsError(result.envelope)),
+                    )
+                }
+                else -> rpcError(id, -32601, "method not found: $method")
             }
-            else -> rpcError(id, -32601, "method not found: $method")
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Log.w("McpServer", "Unhandled error for method=$method: ${t.javaClass.simpleName}")
+            McpTransportPolicy.internalErrorJsonRpc(id, t)
         }
         call.respondText(response.toString(), ContentType.Application.Json)
     }

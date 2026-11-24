@@ -1,6 +1,6 @@
 # 网关 M1b 能力现状与后置范围
 
-> 2026-09-27，基于协调 checkout `a253c8f` 的源码静态核对。这里记录**当前代码路径**，不是本轮真机验收或新候选结论；设备与批次状态仍以 [backlog](../../backlog.md) 和 [STATUS](../../../STATUS.md) 为准。`tools/list` 会逐条列出 [ToolRegistry](../../../app/gateway/src/main/java/dev/magina/gateway/mcp/ToolRegistry.kt) 的注册项，但注册不代表 handler 已能完成操作。下表的占位错误指请求通过前置拦截、到达 handler 之后；真实调用也可能先被黑名单或安全门阻断。
+> 2026-09-27 基于协调 checkout `a253c8f` 首次静态核对；2026-11-16 已按[网关与派单设定对齐 spec](../../specs/2026-11-16-网关与派单设定对齐-design.md#18-工具面与退役残余清理)同步工具下架与能力位状态。设备与批次状态仍以 [backlog](../../backlog.md) 和 [STATUS](../../../STATUS.md) 为准。下表中的 M1b 占位能力当前已从 `tools/list` 下架，待真实实施并接入对应通道时再挂回；真实调用也可能先被黑名单或安全门阻断。
 
 ## 当前可调用范围
 
@@ -9,12 +9,12 @@
 | `ui_snapshot`、`ui_find` | 已接 [UiTools](../../../app/gateway/src/main/java/dev/magina/gateway/tools/UiTools.kt) 和 [GatewayA11yService](../../../app/gateway/src/main/java/dev/magina/gateway/a11y/GatewayA11yService.kt)；前台树空或稀疏时尝试 OCR 融合 | 依赖无障碍与截图通道；OCR 失败时快照降级为纯 a11y，并给出 note。可用全量快照代替 `ui_diff`，但不能据此声称差量已实现。 |
 | `system_set_state(volume, value)` | [SystemTools](../../../app/gateway/src/main/java/dev/magina/gateway/tools/SystemTools.kt) 通过 `AudioManager` 写入并读回 | 返回 `applied`、`verified`、`actual`；其余 key 直接报 `E_CHANNEL_DOWN`，提示设置页 UI 路径。`system_verify_state` 当前复用普通 `getState`，不是 Shizuku `dumpsys` 交叉复核。 |
 | `app_launch` | 走 launcher Intent，并等待前台包名；返回 `foreground_verified` | `foreground_verified=false` 不等于落地成功；历史 ROM 后台启动限制见 [vivo 记录](vivo-originos.md)。这也不能代替强停。 |
-| `notifications_list`（R） | [ToolRegistry](../../../app/gateway/src/main/java/dev/magina/gateway/mcp/ToolRegistry.kt) 的固定 stub；[Manifest](../../../app/gateway/src/main/AndroidManifest.xml) 未声明 `NotificationListenerService` | handler 报 `E_CHANNEL_DOWN`；目前没有通知清单。兜底是打开目标 app，用 UI 读取。网关自己发出的确认通知不等于通知监听层。 |
-| `notification_reply`（D） | 固定 stub；没有读取通知和 RemoteInput 发送的实现 | handler 报 `E_CHANNEL_DOWN`，不存在通知回复能力。D 级调用会先经过 [SafetyGate](../../../app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt)，可能先要求真人确认；通过确认也不会让 stub 发送。不要为了探测可用性而调用它。 |
-| `ui_diff`（R） | `UiTools.uiDiff` 直接抛 `E_CHANNEL_DOWN` | `since_revision` 当前未被消费；调用方改用全量 `ui_snapshot`。现有快照 revision 与 ref 有效性不构成历史差量缓存。 |
-| `app_stop`（W） | `SystemTools.appStop` 直接抛 `E_CHANNEL_DOWN`；没有 Shizuku 执行路径 | `press_key(home)` 只是置后台，不是强停。`am force-stop` 仅在 [系统 CLI 候选册](sys-cli.md) 中备料。 |
+| `notifications_list`（R） | 已于 2026-11-16 从 `ToolRegistry.tools` 下架；[Manifest](../../../app/gateway/src/main/AndroidManifest.xml) 未声明 `NotificationListenerService` | 未注册进 `tools/list`；目前没有通知清单，兜底是打开目标 app 用 UI 读取。网关自己发出的确认通知不等于通知监听层。 |
+| `notification_reply`（D） | 已于 2026-11-16 从 `ToolRegistry.tools` 下架；没有读取通知和 RemoteInput 发送的实现 | 未注册进 `tools/list`，不存在通知回复能力；待实施并接入 D 级两段式确认与绑定后才挂回。 |
+| `ui_diff`（R） | 已于 2026-11-16 从 `ToolRegistry.tools` 下架；`UiTools.uiDiff` 原先直接抛 `E_CHANNEL_DOWN` | 未注册进 `tools/list`；调用方改用全量 `ui_snapshot`。现有快照 revision 与 ref 有效性不构成历史差量缓存。 |
+| `app_stop`（W） | 已于 2026-11-16 从 `ToolRegistry.tools` 下架；`SystemTools.appStop` 原先直接抛 `E_CHANNEL_DOWN`，没有 Shizuku 执行路径 | 未注册进 `tools/list`；`press_key(home)` 只是置后台，不是强停。`am force-stop` 仅在 [系统 CLI 候选册](sys-cli.md) 中备料。 |
 
-[Gateway.caps()](../../../app/gateway/src/main/java/dev/magina/gateway/Gateway.kt) 当前只报告 `a11y`、`ime`、`ime_active`、`overlay`；`shizuku`、`notif`、`ocr` 仍是注释。**OCR 代码已接入快照，但没有 `ocr` 能力位**；不能只凭能力位否定它，也不能只凭工具名或设计文档认定 Shizuku、通知层已接线。[设计表](../../specs/2026-07-17-M1执行网关-design.md)另列的 `notification_actions`、`notification_open` 不在注册表；`notifications_list` 也尚无设计中的 package/limit 参数，不能拿设计表当现行接口。现行确认通知仅支持拒绝和查看证据，批准来源按 [当前通知设计](../../specs/2026-08-01-通知栏审批布局-design.md) 的可见确认卡决定。
+[Gateway.caps()](../../../app/gateway/src/main/java/dev/magina/gateway/Gateway.kt) 当前上报 `a11y`、`ime`、`ime_active`、`overlay` 与 `ocr`（2026-11-16 设定对齐后补报 `"ocr"`）；`shizuku`、`notif` 仍是注释占位，不能凭设计文档认定 Shizuku、通知层已接线。[设计表](../../specs/2026-07-17-M1执行网关-design.md)另列的 `notification_actions`、`notification_open` 不在注册表；`notifications_list` 也尚无设计中的 package/limit 参数，不能拿设计表当现行接口。现行确认通知仅支持拒绝和查看证据，批准来源按 [当前通知设计](../../specs/2026-08-01-通知栏审批布局-design.md) 的可见确认卡决定。
 
 ## 按需求启用时的最小实施与验收
 

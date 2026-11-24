@@ -7,6 +7,27 @@ import java.net.URI
 internal object McpTransportPolicy {
     const val SUPPORTED_PROTOCOL_VERSION = "2025-03-26"
 
+    /**
+     * 覆盖设备端 ConfirmOverlay 默认 90s 等待与多轮调用间隔，避免 Ktor CIO 默认 45s 空闲断连
+     * 触发上游客户端连接池复用写失败（mcp-transport-failure）。
+     */
+    const val CONNECTION_IDLE_TIMEOUT_SECONDS = 180
+    const val REUSE_ADDRESS = true
+
+    /**
+     * 意外非受控异常的脱敏 JSON-RPC 兜底响应：只输出异常简单类名，绝不泄漏 message 或堆栈。
+     */
+    fun internalErrorJsonRpc(id: Any?, error: Throwable): JSONObject =
+        JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", id ?: JSONObject.NULL)
+            .put(
+                "error",
+                JSONObject()
+                    .put("code", -32603)
+                    .put("message", "internal server error: ${error.javaClass.simpleName}"),
+            )
+
     /** 单版本服务器：支持客户端所提版本时原样返回，否则返回服务器唯一支持的版本。 */
     fun negotiateProtocolVersion(requestedVersion: String?): String =
         if (requestedVersion == SUPPORTED_PROTOCOL_VERSION) requestedVersion else SUPPORTED_PROTOCOL_VERSION

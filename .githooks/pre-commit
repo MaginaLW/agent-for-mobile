@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+pinned_pwsh="$repo_root/toolchain/powershell-7.6.5/pwsh.exe"
+if [ -x "$pinned_pwsh" ]; then
+    pwsh_bin="$pinned_pwsh"
+elif command -v pwsh >/dev/null 2>&1; then
+    pwsh_bin="pwsh"
+else
+    echo "pre-commit: 找不到 PowerShell 7.5+ 可执行文件。" >&2
+    exit 1
+fi
+
+exec "$pwsh_bin" -NoProfile -File "$repo_root/scripts/check.ps1" -FastContentOnly
