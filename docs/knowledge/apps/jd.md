@@ -2,11 +2,14 @@
 
 > 来源：M0 实测（2026-07-16，vivo V2352A）与 PA2553 实测（2026-11-18）。
 
-## PA2553 实测（2026-11-18）
+## PA2553 实测（2026-11-18、2026-11-25）
 
+- **2026-11-25 `jd_readonly_prepare` 前置宏真机实测**（`m3-jd-readonly-prep-20261125`，[M3 双宏转正与 Wave 2 验收](../../runs/2026-11-25-PA2553-M3双宏转正与Wave2验收.md)）：
+  - 首步调用 `skill_macro_exec(name="jd_readonly_prepare", params={})` 后，5/5 只读子步全部 `OK`（`origin=macro`），返回 `data.status="completed"`、`ctx.app="com.jingdong.app.mall"`、`window_topology=single`、`blocking_overlay=false`、19 个元素；
+  - 随后导航进入「我的」命中京东登录墙（`登录/注册`），按前置守卫 cleanly 输出 `[AWAIT_CONFIRM]` 暂停（台账 `result=paused`，`turns=1`，`dur_s=41`，`in_tok=145,803`，`out_tok=486`，`cache_read=108,672`，0 次登录或写入尝试）；因未取得登录态下的 `success` 整单，`jd_readonly_prepare.json` 诚实保持 `verified: ""`。
 - 第一次派单启动京东时遇系统拦截弹窗阻断，无法进入京东主界面（3 次工具调用 / 51 秒），见 [PA2553 非微信主验收](../../runs/2026-11-18-PA2553非微信主验收.md)。
 - 现场人工把京东带入前台后，第二次派单推进到账号登录墙暂停（4 次工具调用 / 48 秒）。
-- 前置守卫：启动后先核对前台包名，遇系统拦截弹窗立即停止交现场用户处理；检测到登录页/登录墙关键词立即按前置条件停止（`[AWAIT_CONFIRM]`，前提是未调用任何危险工具），严禁代登录或处理验证码。
+- 前置守卫：优先首步调用 `skill_macro_exec(name="jd_readonly_prepare", params={})`（遇 `data.status="handoff_required"` 再断点接管），遇系统拦截弹窗立即停止交现场用户处理；检测到登录页/登录墙关键词立即按前置条件停止（`[AWAIT_CONFIRM]`，前提是未调用任何危险工具），严禁代登录或处理验证码。
 
 ## 历史记录（vivo V2352A，2026-07-16）
 
