@@ -54,7 +54,7 @@ class MacroCatalogAssetTest {
         val xhs = catalog.find("xhs_search_prepare")
         assertNotNull("必须加载 xhs_search_prepare", xhs)
         assertEquals("com.xingin.xhs", xhs!!.expectPackage)
-        assertEquals("", xhs.verified)
+        assertEquals("2026-11-25", xhs.verified)
         assertTrue(xhs.readonly)
         assertEquals(6, xhs.steps.size)
 
@@ -69,7 +69,7 @@ class MacroCatalogAssetTest {
         val wechat = catalog.find("wechat_readonly_prepare")
         assertNotNull("必须加载 wechat_readonly_prepare", wechat)
         assertEquals("com.tencent.mm", wechat!!.expectPackage)
-        assertEquals("", wechat.verified)
+        assertEquals("2026-11-25", wechat.verified)
         assertTrue(wechat.readonly)
         assertTrue(wechat.params.isEmpty())
         assertEquals(5, wechat.steps.size)
@@ -113,12 +113,12 @@ class MacroCatalogAssetTest {
             assertFalse(pack.isBlockedApp(item.getString("expect_package")))
             byId[item.getString("id")] = item
         }
-        assertEquals("candidate_unverified", byId.getValue("xhs_search_prepare").getString("status"))
-        assertEquals("", byId.getValue("xhs_search_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("xhs_search_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("xhs_search_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("taobao_readonly_prepare").getString("status"))
         assertEquals("2026-11-25", byId.getValue("taobao_readonly_prepare").getString("verified"))
-        assertEquals("candidate_unverified", byId.getValue("wechat_readonly_prepare").getString("status"))
-        assertEquals("", byId.getValue("wechat_readonly_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("wechat_readonly_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("wechat_readonly_prepare").getString("verified"))
         assertEquals("candidate_unverified", byId.getValue("jd_readonly_prepare").getString("status"))
         assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
     }

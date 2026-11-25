@@ -222,13 +222,14 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
     $macroIndex = Get-Content -LiteralPath (Join-Path $macroDir 'index.json') -Raw -Encoding utf8 | ConvertFrom-Json
     $macroFiles = @($macroIndex.files)
-    Assert-True ($macroFiles.Count -eq 3) "skillpack/macros/index.json 应登记 3 个宏，实际为 $($macroFiles.Count)"
+    Assert-True ($macroFiles.Count -eq 4) "skillpack/macros/index.json 应登记 4 个宏，实际为 $($macroFiles.Count)"
     $expectedVerifiedByFile = @{
-        'xhs_search_prepare.json'      = ''
+        'xhs_search_prepare.json'      = '2026-11-25'
         'taobao_readonly_prepare.json' = '2026-11-25'
-        'wechat_readonly_prepare.json' = ''
+        'wechat_readonly_prepare.json' = '2026-11-25'
+        'jd_readonly_prepare.json'     = ''
     }
-    foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json')) {
+    foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json', 'jd_readonly_prepare.json')) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"
         $macroObj = Get-Content -LiteralPath (Join-Path $macroDir $reqFile) -Raw -Encoding utf8 | ConvertFrom-Json
         $expectedVerified = $expectedVerifiedByFile[$reqFile]
@@ -275,6 +276,9 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         Assert-True ($text.Contains('skill_macro_exec', [StringComparison]::Ordinal)) "DryRun 输出缺少 skill_macro_exec：$relTask"
         if ($relTask -ceq 'scripts\tasks\m0-3-xhs-summary.md') {
             Assert-True ($text.Contains('xhs_search_prepare', [StringComparison]::Ordinal)) '小红书任务卡 DryRun 应包含 xhs_search_prepare'
+        }
+        if ($relTask -ceq 'scripts\tasks\m0-5-jd-order.md') {
+            Assert-True ($text.Contains('jd_readonly_prepare', [StringComparison]::Ordinal)) '京东任务卡 DryRun 应包含 jd_readonly_prepare'
         }
         if ($relTask -ceq 'scripts\tasks\taobao-order-readonly.md') {
             Assert-True ($text.Contains('taobao_readonly_prepare', [StringComparison]::Ordinal)) '淘宝只读任务卡 DryRun 应包含 taobao_readonly_prepare'

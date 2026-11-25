@@ -5,7 +5,7 @@
   "expect_package": "com.tencent.mm",
   "description": "纯只读检查前台非系统拦截后拉起微信，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁任何点击、输入或发送步骤。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-25",
   "params": {},
   "steps": [
     {

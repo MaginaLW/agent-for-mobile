@@ -5,7 +5,7 @@
   "expect_package": "com.xingin.xhs",
   "description": "当不在小红书前台时，通过已验证深链直达搜索结果页、等待列表稳定并采集完整快照交回大脑阅读汇总；若已在小红书前台或遇拦截则断点交回大脑接管。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-25",
   "params": {
     "keyword": {
       "type": "string",
