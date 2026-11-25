@@ -244,7 +244,7 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
         'wechat_readonly_prepare.json'    = '2026-11-25'
         'jd_readonly_prepare.json'        = ''
         'bili_readonly_prepare.json'      = '2026-11-25'
-        'bili_readonly_feed_prepare.json' = ''
+        'bili_readonly_feed_prepare.json' = '2026-11-26'
         'taobao_orders_prepare.json'      = ''
     }
     foreach ($reqFile in @(

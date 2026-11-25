@@ -1,6 +1,6 @@
 # 项目状态
 
-> 更新 2026-11-25。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
+> 更新 2026-11-26。本页只写：现在能做什么、卡在哪、下一步。待办与有效决定见 [backlog](docs/backlog.md)。
 > 2026-11-15 之前的过程记录、平板双窗研究和历史状态已移出主树，需要时用 `git show e1bae37:<路径>` 查看（如 `git show e1bae37:STATUS.md`）。
 
 ## 现在能做什么
@@ -68,14 +68,14 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 - **Phase 4 M3 宏系统与真机首跑（`57c4532` 实装 PA2553）**：
   - 落成 [M3 设计说明](docs/specs/2026-11-24-M3-宏系统与技能包-design.md) 与 `dev.magina.gateway.macro`（`MacroSpec`、`MacroCatalog`、`MacroEngine`），注册 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整黑名单/`SafetyGate`/`ConfirmOverlay` 管线），并新增只读样板 `xhs_search_prepare`。
   - **PA2553 阶段 3 + M3 实机核验、双宏转正、Wave 2 结案与 B 站替代验收（11-24 至 11-25）**（[11-24 验收](docs/runs/2026-11-24-PA2553阶段3与M3宏样板真机验收.md) · [11-25 对照归因](docs/runs/2026-11-25-PA2553-M3宏收敛对照与阻断归因.md) · [11-25 并行验收](docs/runs/2026-11-25-PA2553并行双线真机验收.md) · [11-25 双宏转正与 Wave 2 验收](docs/runs/2026-11-25-PA2553-M3双宏转正与Wave2验收.md) · [11-25 B 站只读宏验收](docs/runs/2026-11-25-PA2553-B站只读宏验收.md)）：① 冷态无进程且 `GatewayA11yService` `Crashed` 时先 `am start MainActivity` 再 `run-as ... am start-foreground-service` 起服，验通 PR #86 有界重绑与前导 `:`; ② 并行分支（[PR #88](https://github.com/MaginaLW/agent-for-mobile/pull/88) `2fc5f53`）落地 `WindowTopologyPolicy` 瞬态空包名短重读、`SubtreeLabelPolicy` 严格子树标签聚合（不改 `SafetyGate`）与 `taobao_readonly_prepare`（20s 转正 `verified: "2026-11-25"`）；③ Wave 1 提示词与任务卡收敛（明确 `data.status`/`data.final_snapshot` 信封读取、收敛小红书为纯列表摘要并禁点无标签卡片按钮、新增 `wechat-readonly-prepare.md`、扩展 `report-ledger.ps1` `m3-*` 归类）零重装验通：`wechat_readonly_prepare` **1 轮 24s `success`**、`xhs_search_prepare` **34s / 119,068 in_tok `success`**（0 ConfirmOverlay，全面优于 `73s / 322,497` 基线），双双转正 `verified: "2026-11-25"`；④ Wave 2A 淘宝「查看物流」单变量诊断配合用户归因结案（11-24 实为闪购/外卖订单无快递页，`交易关闭` 订单 `更多` 仅含 `删除订单`，网关代码零改动）；⑤ Wave 2B 新增 `jd_readonly_prepare`（[PR #89](https://github.com/MaginaLW/agent-for-mobile/pull/89)），因京东无法登录暂搁（`verified: ""`），按用户指示替代接入哔哩哔哩（`tv.danmaku.bili`，[PR #90](https://github.com/MaginaLW/agent-for-mobile/pull/90)）`bili_readonly_prepare`：首轮命中 `com.vivo.appfilter` 干净 `[AWAIT_CONFIRM]` 暂停（27s），放行后 **35s / 151,966 in_tok `success`**（5/5 宏子步 `OK`，具名点击「暂不开启」关推送提示并汇总 5 条公开视频，0 ConfirmOverlay），转正 `verified: "2026-11-25"`。
-- **阶段 5A M3 宏深化与派单运维离线落地（2026-11-25，`codex/stage5-m3-macro-and-ops`）**：
+- **阶段 5A M3 宏深化与派单运维离线落地与 PA2553 真机验收（2026-11-25 至 11-26，`codex/stage5-m3-macro-and-ops`，[PR #91](https://github.com/MaginaLW/agent-for-mobile/pull/91)）**：
   - 宏引擎新增受限条件跳过原语 `skip_if_ref_missing`（[MacroSpec](app/gateway/src/main/java/dev/magina/gateway/macro/MacroSpec.kt) / [MacroEngine](app/gateway/src/main/java/dev/magina/gateway/macro/MacroEngine.kt)）：静态校验仅允许引用前序 `save_ref` 槽位的步骤启用，运行期缺失 `ref` 时跳过并记入 `skipped_steps`，但真实执行期触发的 `E_STALE_REF` / `E_BLOCKED` / `E_CONFIRM_*` 仍严格按安全终态中止（零安全旁路）；
-  - 新增两枚深化只读候选宏（保持 `verified: ""`，不改动既有 4 枚已转正 `v1` 宏）：`bili_readonly_feed_prepare`（可选具名点击「暂不开启」关推送提示）与 `taobao_orders_prepare`（可选串联「我的淘宝 → 全部订单」）；
-  - 新增显式冷态起服脚本 [bootstrap-gateway.ps1](scripts/bootstrap-gateway.ps1)（保持 `dispatch.ps1` 默认不抢前景焦点）与离线测试，并在 [report-ledger.ps1](scripts/report-ledger.ps1) 补齐 `paused` 列、`bili` 类别与 `-ByMacro` 细分统计。本轮尚未在 PA2553 重装 APK 或做真机验收。
+  - 新增显式冷态起服脚本 [bootstrap-gateway.ps1](scripts/bootstrap-gateway.ps1)（保持 `dispatch.ps1` 默认不抢前景焦点）与离线测试，并在 [report-ledger.ps1](scripts/report-ledger.ps1) 补齐 `paused` 列、`bili` 类别与 `-ByMacro` 细分统计；
+  - **PA2553 真机验收（`9937a7d` 同签覆盖安装，[11-26 验收](docs/runs/2026-11-26-PA2553-阶段5A深化宏与冷态起服验收.md)）**：① `bootstrap-gateway.ps1 -ReturnHome -Json` 冷态起服（`cold_started` / `ReturnedHome=true` / `foreground`）与二次调用幂等（`already_running`）全部验通；② `bili_readonly_feed_prepare` **1 轮 27s / 50,739 in_tok `success`**（`skip_if_ref_missing` 精准跳过未出现弹窗，0 ConfirmOverlay，汇总 5 条公开视频），晋级 `verified: "2026-11-26"`（已验证前置宏增至 **5 枚**）；③ `taobao_orders_prepare` 实测 `fail`（`reported-fail`，42s / 91,410 in_tok）：已定位淘宝首页底栏 `role=button(desc="我的淘宝")` 与子节点 `role=text(text="我的淘宝")` 双命中致 `save_ref` 未绑定并跳过导航，按诚实门槛保留 `verified: ""`。
 
 ## 下一步
 
-- **M3 已验样板与扩展**：`taobao_readonly_prepare`、`wechat_readonly_prepare`、`xhs_search_prepare`、`bili_readonly_prepare` 均已转正 `verified: "2026-11-25"`；阶段 5A 新增的 `bili_readonly_feed_prepare` 与 `taobao_orders_prepare` 保持 `verified: ""`，待 PA2553 同签覆盖安装并实机验通后转正；京东因不可登录暂搁。
+- **M3 已验样板与扩展**：`taobao_readonly_prepare`、`wechat_readonly_prepare`、`xhs_search_prepare`、`bili_readonly_prepare`（`verified: "2026-11-25"`）与 `bili_readonly_feed_prepare`（`verified: "2026-11-26"`）共 **5 枚**已转正；`taobao_orders_prepare` 因底栏双节点非唯一匹配保留 `verified: ""`，京东因不可登录暂搁；[PR #91](https://github.com/MaginaLW/agent-for-mobile/pull/91) 维持 Draft 待用户审阅批准后合入 `main`。
 - **日常只读链路与冷态运维**：`mcp-transport-failure` 现场快照待后续真机传输失败复现时自然取证；PA2553 冷态无进程时可先显式运行 `scripts/bootstrap-gateway.ps1`；淘宝查物流任务按更新后的知识与任务卡跳过闪购/外卖与关闭订单并优先核对 `待收货` 或快递实物订单。
 - **M1-T 尾项**：横屏微信就位、备稿与确认卡发送已闭环；「左窗 → 冷 `ChattingUI` → 聚焦右窗」单笔合流派单为可选补验，标准竖屏 P0（`Allow`/`Stale`/`Deny`）继续独立暂缓。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
 
