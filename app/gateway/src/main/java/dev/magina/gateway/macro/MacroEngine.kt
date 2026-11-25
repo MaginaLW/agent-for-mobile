@@ -74,6 +74,13 @@ internal class MacroEngine(
         var stepsExecuted = 0
 
         for (step in spec.steps) {
+            if (step.skipIfRefMissing) {
+                val neededSlots = MacroContract.extractReferencedRefSlots(step.argsTemplate)
+                if (neededSlots.any { it !in savedRefs }) {
+                    skippedSteps.add(step.id)
+                    continue
+                }
+            }
             val resolvedArgs = MacroContract.renderArgs(step.argsTemplate, boundParams, savedRefs)
             val envelope = try {
                 stepsExecuted += 1
