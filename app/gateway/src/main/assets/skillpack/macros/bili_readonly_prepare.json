@@ -5,7 +5,7 @@
   "expect_package": "tv.danmaku.bili",
   "description": "纯只读检查前台非系统拦截后拉起哔哩哔哩，等待前台与列表稳定并采集完整快照交回大脑阅读；严禁任何点击、输入、互动或代登录。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-25",
   "params": {},
   "steps": [
     {

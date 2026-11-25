@@ -228,7 +228,7 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
         'taobao_readonly_prepare.json' = '2026-11-25'
         'wechat_readonly_prepare.json' = '2026-11-25'
         'jd_readonly_prepare.json'     = ''
-        'bili_readonly_prepare.json'   = ''
+        'bili_readonly_prepare.json'   = '2026-11-25'
     }
     foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json', 'jd_readonly_prepare.json', 'bili_readonly_prepare.json')) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"

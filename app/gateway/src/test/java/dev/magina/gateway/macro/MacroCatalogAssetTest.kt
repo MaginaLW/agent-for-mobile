@@ -95,7 +95,7 @@ class MacroCatalogAssetTest {
         val bili = catalog.find("bili_readonly_prepare")
         assertNotNull("必须加载 bili_readonly_prepare", bili)
         assertEquals("tv.danmaku.bili", bili!!.expectPackage)
-        assertEquals("", bili.verified)
+        assertEquals("2026-11-25", bili.verified)
         assertTrue(bili.readonly)
         assertTrue(bili.params.isEmpty())
         assertEquals(5, bili.steps.size)
@@ -133,8 +133,8 @@ class MacroCatalogAssetTest {
         assertEquals("2026-11-25", byId.getValue("wechat_readonly_prepare").getString("verified"))
         assertEquals("candidate_unverified", byId.getValue("jd_readonly_prepare").getString("status"))
         assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
-        assertEquals("candidate_unverified", byId.getValue("bili_readonly_prepare").getString("status"))
-        assertEquals("", byId.getValue("bili_readonly_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("bili_readonly_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("bili_readonly_prepare").getString("verified"))
     }
 
     @Test
