@@ -97,6 +97,16 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
         $parsed = ($jsonOut -join "`n") | ConvertFrom-Json -Depth 8
         Assert-True ($parsed.matched_rows -ge 1) '真实 ledger.csv 2026-11-18 以来应至少有一条记录'
         Assert-True ($null -ne $parsed.overall) 'JSON 缺少 overall 节点'
+
+        $byMacroOut = & $pwshPath -NoProfile -File $scriptPath -Since '2026-11-26' -ByMacro -Json
+        if ($LASTEXITCODE -ne 0) { throw "report-ledger.ps1 -Since '2026-11-26' -ByMacro -Json 执行失败，exit=$LASTEXITCODE" }
+        $byMacroParsed = ($byMacroOut -join "`n") | ConvertFrom-Json -Depth 8
+        Assert-True ($null -ne $byMacroParsed.overall) '2026-11-26 JSON 缺少 overall 节点'
+        Assert-True ($null -ne $byMacroParsed.overall.PSObject.Properties['paused']) '2026-11-26 overall 缺少 paused 属性'
+        $bySub = @{}
+        foreach ($item in $byMacroParsed.macro_breakdown) { $bySub[$item.category] = $item }
+        Assert-True ($bySub.ContainsKey('macro:taobao') -and $bySub['macro:taobao'].success -ge 1) '真实 ledger.csv 2026-11-26 macro_breakdown 缺少 macro:taobao 或 success < 1'
+        Assert-True ($bySub.ContainsKey('macro:bili') -and $bySub['macro:bili'].success -ge 1) '真实 ledger.csv 2026-11-26 macro_breakdown 缺少 macro:bili 或 success < 1'
     }
 
     Write-Host "report ledger offline: $passed passed, 0 failed"

@@ -75,7 +75,7 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 
 ## 下一步
 
-- **M3 已验样板与扩展**：`taobao_readonly_prepare`、`wechat_readonly_prepare`、`xhs_search_prepare`、`bili_readonly_prepare`（`verified: "2026-11-25"`）与 `bili_readonly_feed_prepare`、`taobao_orders_prepare`（`verified: "2026-11-26"`）共 **6 枚**已转正（`jd_readonly_prepare` 因不可登录保持 `""`；`bili_readonly_feed_prepare` 推送弹窗实际弹出分支待后续自然复现时补充观测）；[PR #91](https://github.com/MaginaLW/agent-for-mobile/pull/91) 维持 Draft 待用户审阅批准后合入 `main`。
+- **M3 已验样板与扩展**：`taobao_readonly_prepare`、`wechat_readonly_prepare`、`xhs_search_prepare`、`bili_readonly_prepare`（`verified: "2026-11-25"`）与 `bili_readonly_feed_prepare`、`taobao_orders_prepare`（`verified: "2026-11-26"`）共 **6 枚**已转正（`jd_readonly_prepare` 因不可登录保持 `""`；`bili_readonly_feed_prepare` 推送弹窗实际弹出分支待后续自然复现时补充观测）；阶段 5A（[PR #91](https://github.com/MaginaLW/agent-for-mobile/pull/91)）已完成收尾并合入 `main`。
 - **日常只读链路与冷态运维**：`mcp-transport-failure` 现场快照待后续真机传输失败复现时自然取证；PA2553 冷态无进程时可先显式运行 `scripts/bootstrap-gateway.ps1`；淘宝查物流任务按更新后的知识与任务卡跳过闪购/外卖与关闭订单并优先核对 `待收货` 或快递实物订单。
 - **M1-T 尾项**：横屏微信就位、备稿与确认卡发送已闭环；「左窗 → 冷 `ChattingUI` → 聚焦右窗」单笔合流派单为可选补验，标准竖屏 P0（`Allow`/`Stale`/`Deny`）继续独立暂缓。详见 [下一轮任务安排](docs/backlog.md#1-下一轮任务安排)。
 

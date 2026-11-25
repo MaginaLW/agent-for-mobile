@@ -761,16 +761,25 @@ class MacroEngineExecutionTest {
 
     @Test
     fun `skip_if_ref_missing never swallows safety terminal errors during real execution`() {
-        for (terminalCode in listOf(
+        val terminalCodes = listOf(
             ErrorCode.E_STALE_REF,
             ErrorCode.E_BLOCKED,
+            ErrorCode.E_CONFIRM_REQUIRED,
             ErrorCode.E_CONFIRM_TIMEOUT,
-        )) {
+            ErrorCode.E_PERM_MISSING,
+        )
+        assertEquals(
+            MacroContract.SAFETY_TERMINAL_ERROR_CODES,
+            terminalCodes.map { it.name }.toSet(),
+        )
+        for (terminalCode in terminalCodes) {
+            val calls = mutableListOf<String>()
             val engine = MacroEngine(
                 catalog = loadRealCatalog(),
                 isBlockedApp = { false },
                 loginWallKeywordsForPackage = { emptyList() },
             ) { tool, _ ->
+                calls.add(tool)
                 when (tool) {
                     "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "s-1")
                     "app_launch", "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("tv.danmaku.bili"), "s-2")
@@ -795,7 +804,100 @@ class MacroEngineExecutionTest {
                 assertFalse(e.retryable)
                 assertEquals(false, e.extra?.getBoolean("handoff_allowed"))
                 assertEquals("dismiss_push_prompt", e.extra?.getString("failed_step"))
+                assertEquals(
+                    listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_find", "ui_action"),
+                    calls,
+                )
             }
         }
+    }
+
+    @Test
+    fun `taobao_orders_prepare clears saved ref after clicking my taobao and skips second click cleanly when orders button missing`() {
+        assertTrue("ui_action" in MacroContract.MUTATING_STEP_TOOLS)
+
+        fun runCase(ordersNotFound: Boolean): Pair<JSONObject, List<Pair<String, JSONObject>>> {
+            val calls = mutableListOf<Pair<String, JSONObject>>()
+            val engine = MacroEngine(
+                catalog = loadRealCatalog(),
+                isBlockedApp = { false },
+                loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+            ) { tool, args ->
+                calls.add(tool to args)
+                when (tool) {
+                    "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "to-1")
+                    "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.taobao.taobao"), "to-2")
+                    "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "to-3")
+                    "ui_find" -> when (args.optString("desc")) {
+                        "我的淘宝" -> Envelope.ok(
+                            JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", "e-my"))),
+                            ctx("com.taobao.taobao"),
+                            "to-4",
+                        )
+                        "我的订单" -> if (ordersNotFound) {
+                            Envelope.err(GatewayError(ErrorCode.E_NOT_FOUND, "未见我的订单"), ctx("com.taobao.taobao"), "to-5")
+                        } else {
+                            Envelope.ok(
+                                JSONObject().put(
+                                    "matches",
+                                    JSONArray()
+                                        .put(JSONObject().put("ref", "e-orders-1"))
+                                        .put(JSONObject().put("ref", "e-orders-2")),
+                                ),
+                                ctx("com.taobao.taobao"),
+                                "to-5",
+                            )
+                        }
+                        else -> error("unexpected ui_find args: $args")
+                    }
+                    "ui_action" -> Envelope.ok(JSONObject().put("clicked", true), ctx("com.taobao.taobao"), "to-6")
+                    "ui_snapshot" -> Envelope.ok(
+                        JSONObject()
+                            .put("blocking_overlay", false)
+                            .put("count", 1)
+                            .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "我的淘宝页").put("desc", ""))),
+                        ctx("com.taobao.taobao"),
+                        "to-7",
+                    )
+                    else -> error("unexpected tool: $tool")
+                }
+            }
+            val res = engine.run(JSONObject().put("name", "taobao_orders_prepare").put("params", JSONObject()))
+            return res to calls
+        }
+
+        val (notFoundRes, notFoundCalls) = runCase(ordersNotFound = true)
+        assertEquals("completed", notFoundRes.getString("status"))
+        assertEquals(10, notFoundRes.getInt("steps_executed"))
+        assertEquals(
+            listOf("find_all_orders", "open_all_orders"),
+            (0 until notFoundRes.getJSONArray("skipped_steps").length()).map {
+                notFoundRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+        val notFoundCompleted = (0 until notFoundRes.getJSONArray("completed_steps").length()).map {
+            notFoundRes.getJSONArray("completed_steps").getString(it)
+        }
+        assertTrue("wait_orders_settle" in notFoundCompleted)
+        assertTrue("read_orders_snapshot" in notFoundCompleted)
+        assertTrue(notFoundRes.has("final_snapshot"))
+        assertEquals(listOf("e-my"), notFoundCalls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
+
+        val (multiRes, multiCalls) = runCase(ordersNotFound = false)
+        assertEquals("completed", multiRes.getString("status"))
+        assertEquals(10, multiRes.getInt("steps_executed"))
+        assertEquals(
+            listOf("open_all_orders"),
+            (0 until multiRes.getJSONArray("skipped_steps").length()).map {
+                multiRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+        val multiCompleted = (0 until multiRes.getJSONArray("completed_steps").length()).map {
+            multiRes.getJSONArray("completed_steps").getString(it)
+        }
+        assertTrue("wait_orders_settle" in multiCompleted)
+        assertTrue("read_orders_snapshot" in multiCompleted)
+        assertTrue(multiRes.has("final_snapshot"))
+        assertEquals(listOf("e-my"), multiCalls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
     }
 }
