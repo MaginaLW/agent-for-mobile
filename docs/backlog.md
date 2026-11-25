@@ -19,13 +19,14 @@
   - **已真机验证**：冷态起服后，PR #86 预检自动将 `GatewayA11yService` 从 `Crashed` 重绑恢复并完整保留前导 `:` 与 `AutoSendImageService`（`r3-script-bt-readonly-20261124-r2` `20s`）；同签升级 `57c4532` 后验通 `skillpack_lookup`、设置 `BLUETOOTH_SETTINGS` 兜底提示、`ocr` 能力上报与 `skill_macro_list`（`r3-gateway-tools-readonly-20261124` `20s`）。同时记录 PA2553 冷态无进程时须先 `am start MainActivity` 再 `run-as ... am start-foreground-service`（[vivo 知识](knowledge/android/vivo-originos.md)）。
   - **仍留待后续排查**：`r3-taobao-readonly-20261124`（104s）进入全部订单后两次点击「查看物流」均回到订单列表（`reported-fail`）；`mcp-transport-failure` 只读现场快照待后续真机传输失败复现时自然取证。
 
-### 阶段 4 主线（M3 声明式宏系统与 App 技能包，已完成核心真机跑通，待降本转正）
+### 阶段 4 主线（M3 声明式宏系统与 App 技能包，已完成首轮合流与淘宝宏转正）
 
 - **已离线落地（2026-11-24）**：按 [M3 设计说明](specs/2026-11-24-M3-宏系统与技能包-design.md) 实现 `dev.magina.gateway.macro`（`MacroSpec`/`MacroCatalog`/`MacroEngine`），注册 `skill_macro_list`（R）与 `skill_macro_exec`（W，强制经 `ToolRegistry.callFromMacro` 走完整 `SafetyGate`/`ConfirmOverlay` 管线，保持 `DebugMacroRunner` / `P0WeChatPrepareMacro` 与 Release 隔离不变），并新增首个只读样板宏 `app/gateway/src/main/assets/skillpack/macros/xhs_search_prepare.json`（`verified: ""`）及 `scripts/report-ledger.ps1` 台账统计脚本。
 - **2026-11-24 至 11-25 PA2553 实测与收敛结论**：
   - 11-24 `skill-macro-xhs-tokyo-20261124` 实机验证 `xhs_search_prepare` 6/6 子步 `status="completed"`、71 元素 `final_snapshot` 及审计 `a-000038` + `origin=macro`（`a-000039`–`a-000044`）全通；但宏后大脑另做 5 次探测/重复快照并误点 `flags=""` 的 `FrameLayout` 触发 `E_VERIFY_FAIL`，整单 82s / 477,106 in_tok（[11-19 纯大脑基线](runs/ledger.csv) 为 73s / 322,497 in_tok）。
   - **11-25 提示词收敛已实证生效**（[对照归因](runs/2026-11-25-PA2553-M3宏收敛对照与阻断归因.md)）：精简 `scripts/prompts/gateway-executor-preamble.md` 与 `scripts/tasks/m0-3-xhs-summary.md` 后，`skill-macro-xhs-tokyo-20261125` 实现首步直调 `skill_macro_exec`（前置 6→1 次）、零重复 `ui_snapshot`、零 `flags=""` 误点 `E_VERIFY_FAIL`（总调用 27→20 次、in_tok 477k→429.8k）。但因小红书卡片/展开栏无标签触发 5 次 `ConfirmOverlay`（`100s`），且视频详情点击底部无标签控件后瞬态窗口触发 `E_BLOCKED`，台账记为 `fail (safety-denied)`，故 `xhs_search_prepare.json` 诚实保持 `verified: ""`。
-  - **下一步可选方向（待决策后再改动网关代码）**：① 在不放宽安全门红线前提下，评估为无标签卡片关联兄弟标题文案及区分同包视频弹窗瞬态窗口的方案；② 将已跑通的 4→1 步确定性前置宏模式先推广至其他低无标签点击场景（如设置/淘宝/京东前置导航与微信横屏只读就位宏），另择期排查淘宝「查看物流」点击回弹。
+  - **11-25 并行双线改造与合流真机验收**（[并行验收](runs/2026-11-25-PA2553并行双线真机验收.md)）：方向 1 新增 `WindowTopologyPolicy` 瞬态空包名短重读（仅同包+空包触发，跨双包零等待且重读仍未知/跨包仍 `E_BLOCKED`）与 `SubtreeLabelPolicy` 严格非交互子树标签聚合（不改 `SafetyGate.kt`）；方向 2 新增 `taobao_readonly_prepare.json` 与 `wechat_readonly_prepare.json`。PA2553 实测：`taobao_readonly_prepare` **1 步 20s `success`**（转正 `verified: "2026-11-25"`）；`wechat_readonly_prepare` 网关返回 `completed/28` 元素但因模型未解包 `data` 记 `reported-fail`（保留 `""`）；小红书卡片外层容器实锤嵌套互动图标与作者按钮，`SubtreeLabelPolicy` 按安全红线拒绝聚合并触发 `ConfirmOverlay`（`confirm-timeout`，`xhs_search_prepare` 保留 `""`）。
+  - **下一步待办**：① 补跑一次带 `data.final_snapshot` 读取指引的 `wechat_readonly_prepare` 单轮验证转正，并视需扩展京东/设置低盲点前置宏与微调小红书无详情模式（严格优先列表摘要）；② 另择期排查淘宝「查看物流」点击回弹原因。
 
 ## 2. 按需再做（有具体任务需要时才排）
 
@@ -33,7 +34,7 @@
 - 语义意图生产接线：基础模块已在代码中，接线范围见 [语义意图 spec §5](specs/2026-08-02-语义意图审批-design.md)。
 - 分享落地 activity 白名单：必须来自真机观测，没有观测就保持空。
 - 微信相关任务（M0-2/M0-4 发消息、发图）：PA2553 横屏 M0-2 文本备稿与 `ConfirmOverlay` 发送投递已实机验通（[实测闭环](knowledge/apps/wechat.md#pa2553-起点-3-桌面就位确认卡发送投递与起点-2-根因定位)）；M0-4 跨应用发图与标准竖屏 P0 仍按需后置（[标准入口](runbooks/P0-safety-hard-gate-smoke.md#2-标准入口) · [平板知识](knowledge/android/tablet.md) · [微信知识](knowledge/apps/wechat.md)），不恢复已删除的研究栈。
-- 语音/分享入口按需再做；M3 核心规划（宏系统「教一遍」与 App 技能包）已列入 [阶段 4 倾向方向 A](#1-下一轮任务安排)。
+- 语音/分享入口按需再做；M3 后续宏扩展与排查见 [阶段 4 主线](#1-下一轮任务安排)。
 
 ## 3. 有效决定
 
