@@ -11,7 +11,7 @@
 - 开发指南：[AGENTS.md](AGENTS.md)
 - 当前状态与下一步：[STATUS.md](STATUS.md)
 - 待办与有效决定：[docs/backlog.md](docs/backlog.md)
-- 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md) · [2026-11-16 设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md)
+- 总体设计：[方向一 spec](docs/specs/2026-07-16-方向一-手机执行器与订阅大脑-design.md) · [2026-11-16 设定对齐 spec](docs/specs/2026-11-16-网关与派单设定对齐-design.md) · [M3 宏系统与技能包 spec](docs/specs/2026-11-24-M3-宏系统与技能包-design.md)
 - 文档结构：`docs/specs`（设计）· `docs/runbooks`（规程）· `docs/knowledge`（实测经验，按需读）· `docs/runs`（关键跑测记录与台账）
 
 ## 目录
@@ -21,6 +21,8 @@
 | `app/gateway` | 网关 App：无障碍、MCP HTTP server、工具、SafetyGate、确认卡、IME、OCR |
 | `app/test-target` | 本地测试台用的靶标 App（`-PlocalTestbench=true` 时纳入） |
 | `scripts/dispatch.ps1` | 派单入口（Codex + gateway） |
+| `scripts/bootstrap-gateway.ps1` | PA2553 冷态网关显式起服与只读无障碍核验 |
+| `scripts/report-ledger.ps1` | 派单台账聚合与按宏细分统计 |
 | `scripts/run-p0-safety-smoke.ps1` | 危险动作硬门的监督式真机跑测 |
 | `scripts/run-local-testbench.ps1` | 本地 AVD 测试台 |
 | `scripts/check.ps1` | 提交前一键离线检查 |

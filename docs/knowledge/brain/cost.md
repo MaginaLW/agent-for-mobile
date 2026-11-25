@@ -25,6 +25,13 @@
 - Codex 没有美元硬上限，DryRun、提示词与结果摘要显示“订阅通道/无 API 硬上限”。原只服务 Claude 的 `-MaxBudgetUsd` 已于 2026-11-15 随 Claude 分支删除。
 - Codex 仍受 1–60 分钟墙钟、整棵 Job 进程树归零，以及 stdout 16 MiB / stderr 4 MiB 的机械上限约束。
 
+## M3 生产前置宏实测降本校准（PA2553，2026-11-25 至 11-26）
+
+- 小红书 5 笔记总结：基线 `73s / 322,497 in_tok`（2026-11-19 `xhs-tokyo-five-unassisted`）→ `xhs_search_prepare` `34s / 119,068 in_tok`（2026-11-25，纯列表摘要）。
+- 淘宝订单物流直达：基线 `90s`（2026-11-18）→ `taobao_orders_prepare` `25s / 52,530 in_tok`（2026-11-26 `m3-taobao-orders-promote-r2-20261126`，11/11 子步直达「全部订单」）。
+- 哔哩哔哩公开推荐流：`bili_readonly_prepare` `35s / 151,966 in_tok`（2026-11-25）→ `bili_readonly_feed_prepare` `27s / 50,739 in_tok`（首轮免滚屏）与 `32s / 113,317 in_tok`（复测 1 次滚屏）。
+- 持续校准入口：`scripts/report-ledger.ps1 -ByMacro`（含 `paused` 列、`bili` 类别与按宏细分统计）。
+
 ## 结论（M0 发现 #12，可行性级别）
 
 - 纯视觉任务比原估**高一个数量级**——每轮都带截图是成本主因（微信 a11y 树为空所致，见 [../apps/wechat.md](../apps/wechat.md)）。
