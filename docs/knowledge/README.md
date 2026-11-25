@@ -16,6 +16,7 @@
 | 操作小红书 | [apps/xiaohongshu.md](apps/xiaohongshu.md) |
 | 操作京东 | [apps/jd.md](apps/jd.md) |
 | 操作淘宝 | [apps/taobao.md](apps/taobao.md) |
+| 操作哔哩哔哩（B 站） | [apps/bilibili.md](apps/bilibili.md) |
 | 找深链（所有 app + 系统，含 🔵 候选区） | [apps/deeplinks.md](apps/deeplinks.md) |
 | 算成本账 / 额度容量 | [brain/cost.md](brain/cost.md) |
 | 大脑侧链路（headless/挂载/两段式） | [brain/harness.md](brain/harness.md) |
