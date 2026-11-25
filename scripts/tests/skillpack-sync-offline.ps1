@@ -142,9 +142,58 @@ function Assert-SkillPackSync {
     }
 }
 
+function Assert-MacroAssetsSync {
+    param(
+        [Parameter(Mandatory)]$AppsJson,
+        [Parameter(Mandatory)]$SafetyJson,
+        [Parameter(Mandatory)][string]$MacroDir
+    )
+
+    $indexPath = Join-Path $MacroDir 'index.json'
+    Assert-True (Test-Path -LiteralPath $indexPath -PathType Leaf) '缺少 assets/skillpack/macros/index.json。'
+    $indexJson = Get-Content -LiteralPath $indexPath -Raw -Encoding utf8 | ConvertFrom-Json
+    $files = @($indexJson.files)
+    Assert-True ($files.Count -ge 1) 'skillpack/macros/index.json files 不得为空。'
+
+    $blockedPrefixes = @($SafetyJson.blocked_app_prefixes)
+    $registeredPackages = @()
+    foreach ($p in $AppsJson.aliases.PSObject.Properties) { $registeredPackages += [string]$p.Value }
+    $allowedTools = @(
+        'foreground_app', 'system_get_state', 'skillpack_lookup', 'app_launch', 'open_uri',
+        'wait_for', 'ui_snapshot', 'ui_find', 'ui_action', 'type_text', 'press_key'
+    )
+    $seenIds = @{}
+
+    foreach ($fileName in $files) {
+        $macroPath = Join-Path $MacroDir ([string]$fileName)
+        Assert-True (Test-Path -LiteralPath $macroPath -PathType Leaf) "宏文件不存在：$fileName"
+        $macro = Get-Content -LiteralPath $macroPath -Raw -Encoding utf8 | ConvertFrom-Json
+        $id = [string]$macro.id
+        Assert-True (-not [string]::IsNullOrWhiteSpace($id)) "宏缺少 id：$fileName"
+        Assert-True (-not $seenIds.ContainsKey($id)) "存在重复宏 id：$id"
+        $seenIds[$id] = $true
+
+        $pkg = [string]$macro.expect_package
+        Assert-True ($pkg -in $registeredPackages) "宏 $id expect_package=$pkg 未在 aliases 注册。"
+        foreach ($bp in $blockedPrefixes) {
+            Assert-True (-not $pkg.StartsWith([string]$bp, [StringComparison]::Ordinal)) "宏 $id expect_package 命中黑名单：$pkg"
+        }
+        $ver = [string]$macro.verified
+        Assert-True ($ver -ceq '' -or $ver -match '^\d{4}-\d{2}-\d{2}$') "宏 $id verified 格式非法：$ver"
+
+        $steps = @($macro.steps)
+        Assert-True ($steps.Count -ge 1) "宏 $id steps 不能为空。"
+        foreach ($step in $steps) {
+            $tool = [string]$step.tool
+            Assert-True ($tool -in $allowedTools) "宏 $id 步骤 $($step.id) 使用非法/嵌套工具：$tool"
+        }
+    }
+}
+
 $appsPath = Join-Path $repoRoot 'app\gateway\src\main\assets\skillpack\apps.json'
 $deeplinksPath = Join-Path $repoRoot 'app\gateway\src\main\assets\skillpack\deeplinks.json'
 $safetyPath = Join-Path $repoRoot 'app\gateway\src\main\assets\skillpack\safety.json'
+$macroDir = Join-Path $repoRoot 'app\gateway\src\main\assets\skillpack\macros'
 $deeplinksMdPath = Join-Path $repoRoot 'docs\knowledge\apps\deeplinks.md'
 $manifestPath = Join-Path $repoRoot 'app\gateway\src\main\AndroidManifest.xml'
 $readmePath = Join-Path $repoRoot 'docs\knowledge\README.md'
@@ -160,6 +209,7 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
     Assert-SkillPackSync -AppsJson $appsJson -DeeplinksJson $deeplinksJson -SafetyJson $safetyJson `
         -DeeplinksMd $deeplinksMd -ManifestXml $manifestXml
+    Assert-MacroAssetsSync -AppsJson $appsJson -SafetyJson $safetyJson -MacroDir $macroDir
 }
 
 Test-Case 'knowledge_readme_index_covers_all_app_docs' {
@@ -176,6 +226,8 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
     Assert-True ($preamble -notmatch 'vivo X100|OriginOS|PA2553|Android 16|1260[×x]2800|360[×x]800|横屏应用多窗|文件传输助手') `
         'gateway-executor-preamble.md 不得包含设备/ROM 特定词。'
     Assert-True ($preamble.Contains('skillpack_lookup', [StringComparison]::Ordinal)) 'preamble 应引导调用 skillpack_lookup。'
+    Assert-True ($preamble.Contains('skill_macro_list', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_list。'
+    Assert-True ($preamble.Contains('skill_macro_exec', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_exec。'
     Assert-True ($preamble.Contains('system_get_state', [StringComparison]::Ordinal)) 'preamble 应引导优先调用 system_get_state。'
 
     $tasks = @(
@@ -193,6 +245,10 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         $text = ($out | Out-String)
         Assert-True ($code -eq 0) "dispatch DryRun 失败（$relTask, exit=$code）：$text"
         Assert-True ($text.Contains('skillpack_lookup', [StringComparison]::Ordinal)) "DryRun 输出缺少 skillpack_lookup：$relTask"
+        Assert-True ($text.Contains('skill_macro_exec', [StringComparison]::Ordinal)) "DryRun 输出缺少 skill_macro_exec：$relTask"
+        if ($relTask -ceq 'scripts\tasks\m0-3-xhs-summary.md') {
+            Assert-True ($text.Contains('xhs_search_prepare', [StringComparison]::Ordinal)) '小红书任务卡 DryRun 应包含 xhs_search_prepare'
+        }
         Assert-True ($text -notmatch '绕过确认卡|自动代登录|自动过验证码|open_uri 打开对应系统设置页') "DryRun 输出命中违禁指引：$relTask"
     }
 }
@@ -225,6 +281,31 @@ Test-Case 'negative_selftest_rejects_unverified_promotion_duplicates_and_manifes
         Assert-SkillPackSync -AppsJson $appsJson -DeeplinksJson $deeplinksJson -SafetyJson $safetyJson `
             -DeeplinksMd $deeplinksMd -ManifestXml $badManifest
     } 'AndroidManifest\.xml <queries> 不一致'
+
+    $badMacroRoot = Join-Path $repoRoot ('.checks\skillpack-macro-neg-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $badMacroRoot -Force | Out-Null
+    try {
+        '{"files":["bad.json"]}' | Set-Content -LiteralPath (Join-Path $badMacroRoot 'index.json') -Encoding utf8
+        @'
+{
+  "id": "bad_nested",
+  "version": 1,
+  "app": "支付宝",
+  "expect_package": "com.eg.android.AlipayGphone",
+  "description": "invalid",
+  "readonly": true,
+  "verified": "",
+  "params": {},
+  "steps": [{"id": "s1", "tool": "skill_macro_exec", "args": {}}]
+}
+'@ | Set-Content -LiteralPath (Join-Path $badMacroRoot 'bad.json') -Encoding utf8
+        Assert-Throws {
+            Assert-MacroAssetsSync -AppsJson $appsJson -SafetyJson $safetyJson -MacroDir $badMacroRoot
+        } '黑名单|非法/嵌套工具'
+    }
+    finally {
+        Remove-Item -LiteralPath $badMacroRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "skillpack sync offline: $passed passed, 0 failed"

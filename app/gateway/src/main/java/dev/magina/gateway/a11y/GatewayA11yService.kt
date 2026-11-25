@@ -1,13 +1,10 @@
 package dev.magina.gateway.a11y
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
 import android.graphics.Bitmap
-import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.SystemClock
-import android.util.Base64
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -15,19 +12,13 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.magina.gateway.core.ErrorCode
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.ocr.OcrEngine
 import dev.magina.gateway.overlay.ConfirmOverlay
-import dev.magina.gateway.ime.ImeBridge
-import dev.magina.gateway.vision.TileOcrLine
-import dev.magina.gateway.vision.TileRect
 import dev.magina.gateway.vision.appWindowElementCap
-import dev.magina.gateway.vision.buildOcrCacheSignature
-import dev.magina.gateway.vision.offsetAndFilterTileLines
-import dev.magina.gateway.vision.planOcrTiles
 import dev.magina.gateway.vision.sparseWindowIds
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -104,7 +95,22 @@ class GatewayA11yService : AccessibilityService() {
         capture = ::captureBitmapRetry,
         currentRevision = { revision },
     )
-    private var forceFreshOcrOnce = false
+    private val ocrCoordinator = A11yOcrCoordinator(
+        freshVisionSession = freshVisionSession,
+        captureRawBitmap = ::captureBitmap,
+        captureRetriedBitmap = ::captureBitmapRetry,
+        currentRevision = { revision },
+        currentImeTop = {
+            windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                ?.let { w -> Rect().also { w.getBoundsInScreen(it) }.top } ?: Int.MAX_VALUE
+        },
+        currentBottomInset = ::systemBottomInset,
+        displayMetrics = { resources.displayMetrics },
+    )
+    private val gestureController = A11yGestureController(
+        service = this,
+        onGestureCompleted = { ocrCoordinator.invalidateCache() },
+    )
 
     val revision: Long get() = rev.get()
 
@@ -193,7 +199,7 @@ class GatewayA11yService : AccessibilityService() {
             // 前台身份判不出来时，让失败的那次调用自己带上原因，不必事后另起一次诊断。
             .put("foreground_reason", foreground.reason.name.lowercase())
             // known=true 还不够：自举来的身份没有 Activity，安全门要据此在确认卡上说明白。
-            .put("foreground_identity_source", identitySourceName(foreground))
+            .put("foreground_identity_source", A11yDiagnosticsFormatter.identitySourceName(foreground))
             .put("window_topology", topology.wireName)
             .put("revision", revision)
             .put("keyboard", keyboardState())
@@ -264,13 +270,6 @@ class GatewayA11yService : AccessibilityService() {
         )
     }
 
-    /** 身份来源：事件得来 / 冷启动自举得来 / 尚未建立。 */
-    private fun identitySourceName(resolved: ResolvedForeground): String = when {
-        !resolved.known -> "unknown"
-        resolved.bootstrapped -> "bootstrap"
-        else -> "event"
-    }
-
     /**
      * 只读前台身份诊断：解析结论 + 已接受身份 + 实时窗口列表 + 最近事件处置记录。
      * R 级，`foreground_known=false` 时也可调用——正是为了查清"为什么 unknown"而存在。
@@ -281,72 +280,16 @@ class GatewayA11yService : AccessibilityService() {
         val selected = applicationWindow(currentWindows)
         val appSlices = appWindowSlices(currentWindows)
         val topology = classifyWindowTopology(appSlices)
-        // 先解析（必要时自举）再读 identity：否则同一次诊断里会出现"resolved 已自举、
-        // tracked_identity 仍是 null"这种自相矛盾的输出。
         val resolved = resolveForegroundOf(currentWindows, appSlices, topology)
-        val identity = foregroundWindowTracker.current()
-        val windowsJson = JSONArray()
-        for (window in currentWindows) {
-            val b = Rect().also(window::getBoundsInScreen)
-            windowsJson.put(
-                JSONObject()
-                    .put("id", window.id)
-                    .put("type", windowTypeName(window.type))
-                    .put("active", window.isActive)
-                    .put("focused", window.isFocused)
-                    .put("root_package", runCatching { window.root?.packageName?.toString() }.getOrNull() ?: JSONObject.NULL)
-                    .put("title", window.title?.toString().orEmpty())
-                    .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
-            )
-        }
-        val eventsJson = JSONArray()
-        for (record in foregroundWindowTracker.recentEvents()) {
-            eventsJson.put(
-                JSONObject()
-                    .put("seq", record.seq)
-                    .put("at_ms", record.atMillis)
-                    .put("kind", record.kind)
-                    .put("window_id", record.eventWindowId)
-                    .put("package", record.packageName)
-                    .put("activity", record.activityName)
-                    .put("decision", record.decision.name.lowercase())
-                    .put("selected_window_id", record.selectedApplicationWindowId ?: JSONObject.NULL)
-                    .put("windows", record.windows.joinToString(",") {
-                        "${it.id}:${it.type.name}:${if (it.isActive) "a" else "-"}${if (it.isFocused) "f" else "-"}"
-                    })
-            )
-        }
-        return JSONObject()
-            .put("package", resolved.packageName)
-            .put("activity", resolved.activityName)
-            .put("foreground_known", resolved.known)
-            .put("foreground_reason", resolved.reason.name.lowercase())
-            .put("foreground_identity_source", identitySourceName(resolved))
-            .put("window_topology", topology.wireName)
-            .put("selected_window_id", selected?.id ?: JSONObject.NULL)
-            .put(
-                "tracked_identity",
-                (identity as? ForegroundIdentity.Known)?.let {
-                    JSONObject()
-                        .put("window_id", it.windowId)
-                        .put("package", it.packageName)
-                        .put("activity", it.activityName)
-                        .put("bootstrapped", it.bootstrapped)
-                } ?: JSONObject.NULL,
-            )
-            .put("now_ms", System.currentTimeMillis())
-            .put("revision", revision)
-            .put("windows", windowsJson)
-            .put("recent_events", eventsJson)
-    }
-
-    private fun windowTypeName(type: Int): String = when (type) {
-        AccessibilityWindowInfo.TYPE_APPLICATION -> "application"
-        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "input_method"
-        AccessibilityWindowInfo.TYPE_SYSTEM -> "system"
-        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "a11y_overlay"
-        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "split_divider"
-        else -> "other_$type"
+        return A11yDiagnosticsFormatter.buildForegroundDiagnosticsJson(
+            currentWindows = currentWindows,
+            selected = selected,
+            topology = topology,
+            resolved = resolved,
+            identity = foregroundWindowTracker.current(),
+            recentEvents = foregroundWindowTracker.recentEvents(),
+            revision = revision,
+        )
     }
 
     private fun foregroundWindows(
@@ -494,11 +437,11 @@ class GatewayA11yService : AccessibilityService() {
                     }
                     val json = JSONObject()
                         .put("ref", ref)
-                        .put("role", roleOf(node))
+                        .put("role", A11yDiagnosticsFormatter.roleOf(node))
                         .put("text", text.take(cap))
                         .put("desc", desc.take(cap))
                         .put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
-                        .put("flags", flagsOf(node))
+                        .put("flags", A11yDiagnosticsFormatter.flagsOf(node))
                         .put("source", "a11y")
                         .put("window_id", windowId)
                         .put("pane", pane)
@@ -550,7 +493,7 @@ class GatewayA11yService : AccessibilityService() {
         }
         if (needOcr && count < maxElements && !ConfirmOverlay.isAwaitingDecision) {
             try {
-                val shot = ocrScreen(topology, sparseSlices)
+                val shot = ocrCoordinator.ocrScreen(topology, sparseSlices)
                 usedVisionGeneration = shot.generation
                 usedCaptureRevision = shot.revision
                 var ocrIdx = 0
@@ -573,7 +516,7 @@ class GatewayA11yService : AccessibilityService() {
                             jsonByRef[decision.hostRef]
                                 ?.put("text", line.text.take(cap))
                                 ?.put("source", "fused")
-                                ?.put("confidence", conf2(line.conf))
+                                ?.put("confidence", ocrCoordinator.conf2(line.conf))
                             continue
                         }
                         FusionDecision.DropDuplicate -> continue
@@ -603,7 +546,7 @@ class GatewayA11yService : AccessibilityService() {
                             .put("source", "ocr")
                             .put("window_id", ocrWinId)
                             .put("pane", ocrPane)
-                            .put("confidence", conf2(line.conf))
+                            .put("confidence", ocrCoordinator.conf2(line.conf))
                     )
                 }
                 fusion = "ocr"
@@ -635,11 +578,11 @@ class GatewayA11yService : AccessibilityService() {
     /** debug 受控宏内部使用：无论 a11y 树是否稠密，都先取得独立世代的真实新截图。 */
     @Synchronized
     internal fun forceFreshVision(scope: String = "interactive", maxElements: Int = 400): JSONObject {
-        forceFreshOcrOnce = true
+        ocrCoordinator.forceFreshOcrOnce = true
         return try {
             freshVisionSession.withFreshCapture { snapshot(scope, maxElements) }
         } finally {
-            forceFreshOcrOnce = false
+            ocrCoordinator.forceFreshOcrOnce = false
         }
     }
 
@@ -893,8 +836,6 @@ class GatewayA11yService : AccessibilityService() {
             .maxOrNull() ?: 0
     }
 
-    private fun conf2(c: Float): Double = Math.round(c * 100.0) / 100.0
-
     fun find(text: String?, role: String?, desc: String?): JSONArray {
         val snap = snapshot("interactive", maxElements = 400)
         val out = JSONArray()
@@ -940,7 +881,7 @@ class GatewayA11yService : AccessibilityService() {
             } else {
                 sparseSlices
             }
-            runCatching { ocrScreen(topology, targetSlices) }
+            runCatching { ocrCoordinator.ocrScreen(topology, targetSlices) }
                 .onSuccess { shot ->
                     lastVisionSenseError = null
                     shot.lines.forEach { out.add(it.text) }
@@ -1215,16 +1156,22 @@ class GatewayA11yService : AccessibilityService() {
 
     fun perform(target: Target, action: String, params: JSONObject): JSONObject {
         rejectWhileConfirming()
-        val node = target.node ?: return performGesture(target, action, params)
+        val node = target.node ?: return gestureController.performOcrGesture(
+            target = target,
+            action = action,
+            params = params,
+            gestureScrollBounds = ::currentAppScrollBounds,
+            currentRevision = { revision },
+        )
         val ok = when (action) {
-            "click" -> clickNode(node, target.bounds)
+            "click" -> gestureController.clickNode(node, target.bounds)
             "long_click" -> node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
             "focus" -> node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
             "scroll" -> {
                 val dir = params.optString("direction", "forward")
                 val act = if (dir == "backward") AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
                 else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                scrollable(node).performAction(act)
+                gestureController.scrollable(node).performAction(act)
             }
             "set_text" -> {
                 val args = Bundle().apply {
@@ -1246,105 +1193,16 @@ class GatewayA11yService : AccessibilityService() {
         return JSONObject().put("done", true).put("revision_after", revision)
     }
 
-    /** OCR 元素动作：无 a11y 节点，坐标手势通道（spec §5.4：ocr 来源 ref 用 bounds 中心 dispatchGesture）。 */
-    private fun performGesture(target: Target, action: String, params: JSONObject): JSONObject {
-        val ok = when (action) {
-            "click" -> tapGesture(target.bounds.exactCenterX(), target.bounds.exactCenterY())
-            "long_click" -> tapGesture(target.bounds.exactCenterX(), target.bounds.exactCenterY(), 700L)
-            "scroll" -> gestureScroll(params.optString("direction", "forward") != "backward")
-            else -> throw GatewayError(
-                ErrorCode.E_INVALID_ARG, "OCR 元素仅支持 click/long_click/scroll（无 a11y 节点通道）",
-                fallback = "输入用 type_text(ref=本元素)；其余动作先 ui_snapshot 找 a11y 元素",
-            )
-        }
-        if (!ok) throw GatewayError(
-            ErrorCode.E_VERIFY_FAIL, "坐标手势 $action 派发失败", channel = "vision", retryable = true,
-            fallback = "重试一次；仍失败 screen_capture(reason=layout_changed) 复核",
-        )
-        return JSONObject().put("done", true).put("revision_after", revision)
-    }
-
-    /**
-     * 点击：
-     * - 开关/勾选类（isCheckable，如 vivo 系统设置的蓝牙/WiFi Switch）用**坐标手势**点 bounds 中心——
-     *   这类节点对 ACTION_CLICK 返回 true 却不 toggle（vivo 真机实锤：a11y click 无效、input tap 有效），
-     *   dispatchGesture 模拟真实触摸方可切换。
-     * - 其余节点自身不可点时向上找最近可点祖先（微信列表条目常见结构）→ ACTION_CLICK。
-     */
-    private fun clickNode(node: AccessibilityNodeInfo, bounds: Rect): Boolean {
-        if (node.isCheckable) {
-            // 开关滑块通常在行右侧；点整行中心会落在文字标签上（vivo 实锤：中心无效、滑块坐标有效）
-            // → 宽行（width > 2*height）点右侧滑块估计位，近方形（滑块本体）点中心。
-            val b = bounds
-            val x = if (b.width() > b.height() * 2) b.right - b.height() / 2f else b.exactCenterX()
-            return tapGesture(x, b.exactCenterY())
-        }
-        var n: AccessibilityNodeInfo? = node
-        var hops = 0
-        while (n != null && hops < 5) {
-            if (n.isClickable) return n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            n = n.parent; hops++
-        }
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-    }
-
-    /** 坐标手势点击（dispatchGesture）：ACTION_CLICK 对某些 ROM 定制控件无效时的兜底。同步等结果。 */
-    private fun tapGesture(
-        cx: Float,
-        cy: Float,
-        durationMs: Long = 60L,
-        preDispatch: () -> Unit = {},
-    ): Boolean {
-        val path = Path().apply { moveTo(cx, cy) }
-        return dispatchStroke(path, durationMs, preDispatch)
+    private fun currentAppScrollBounds(): Rect {
+        val winId = appWindowId()
+        return windows.firstOrNull { it.id == winId }
+            ?.let { w -> Rect().also { w.getBoundsInScreen(it) } }
+            ?: Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
     }
 
     /** 手势滚动：OCR 页（无 a11y 列表节点）的翻页通道。活动应用窗口内竖直滑约 1/4 屏。 */
-    fun gestureScroll(forward: Boolean): Boolean {
-        val winId = appWindowId()
-        val b = windows.firstOrNull { it.id == winId }
-            ?.let { w -> Rect().also { w.getBoundsInScreen(it) } }
-            ?: Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-        val cx = b.exactCenterX()
-        val y1 = b.top + b.height() * (if (forward) 0.62f else 0.38f)
-        val y2 = b.top + b.height() * (if (forward) 0.38f else 0.62f)
-        val path = Path().apply { moveTo(cx, y1); lineTo(cx, y2) }
-        return dispatchStroke(path, 400L)
-    }
-
-    /**
-     * 派发单笔手势并同步等结果。成功后失效 OCR 缓存——事件静默 app（微信类）的页面变化
-     * 不产生 revision 增量，不失效会读到旧屏。
-     */
-    private fun dispatchStroke(path: Path, durationMs: Long, preDispatch: () -> Unit = {}): Boolean {
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
-            .build()
-        val done = CompletableFuture<Boolean>()
-        preDispatch()
-        val dispatched = dispatchGesture(
-            gesture,
-            object : GestureResultCallback() {
-                override fun onCompleted(d: GestureDescription?) { done.complete(true) }
-                override fun onCancelled(d: GestureDescription?) { done.complete(false) }
-            },
-            null,
-        )
-        if (!dispatched) return false
-        val ok = runCatching { done.get(2, TimeUnit.SECONDS) }.getOrDefault(false)
-        if (ok) ocrCache.invalidate()
-        return ok
-    }
-
-    private fun scrollable(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
-        var n: AccessibilityNodeInfo? = node
-        var hops = 0
-        while (n != null && hops < 8) {
-            if (n.isScrollable) return n
-            n = n.parent; hops++
-        }
-        return node
-    }
+    fun gestureScroll(forward: Boolean): Boolean =
+        gestureController.gestureScroll(currentAppScrollBounds(), forward)
 
     fun focusedEditable(): AccessibilityNodeInfo? = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
 
@@ -1414,7 +1272,7 @@ class GatewayA11yService : AccessibilityService() {
         )
         // 若真实输入节点已出现，就不再发手势；状态机随后仍会校验 IME 与 session fingerprint。
         if (focusedEditable()?.let { it.refresh() } == true) return true
-        return tapGesture(x.toFloat(), y.toFloat()) {
+        return gestureController.tapGesture(x.toFloat(), y.toFloat()) {
             requireFreshActionState(captureRevision, expectedWindowId, expectedPackage, imeMustBeHidden = true)
         }
     }
@@ -1533,126 +1391,6 @@ class GatewayA11yService : AccessibilityService() {
         captureBitmap()
     }
 
-    // ---------- L5 OCR：整屏识别缓存与区域直读 ----------
-
-    private data class OcrShot(
-        val revision: Long,
-        val at: Long,
-        val generation: Long,
-        val signature: String,
-        val lines: List<OcrEngine.OcrLine>,
-    )
-
-    private val ocrCache = FreshVisionCache<OcrShot>()
-
-    /**
-     * 整屏/分窗切片 OCR，按 revision + 窗格/键盘签名缓存 + 2s TTL（spec §9：页面不变不重跑）。
-     * - 大屏 `SAME_APP_MULTI`（如 PA2553 2800×1968）按稀疏窗格与 1400px 垂向切片识别，
-     *   绕开 ML Kit 内部大幅降采样对 43px 窄栏文字的置信度塌方，保持 0px 坐标偏移且零跨缝重复；
-     * - 单窗手机或 ≤1600px 小屏保持原整屏识别路径不变。
-     */
-    @Synchronized
-    private fun ocrScreen(
-        topology: WindowTopology = WindowTopology.SINGLE,
-        sparseSlices: List<AppWindowSlice> = emptyList(),
-    ): OcrShot {
-        val r = revision
-        // 键盘弹出时只识键盘上方：按键/候选词不是页面内容，顺带省识别时间
-        val imeTop = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            ?.let { w -> Rect().also { w.getBoundsInScreen(it) }.top } ?: Int.MAX_VALUE
-        val cacheSignature = buildOcrCacheSignature(topology, sparseSlices, imeTop)
-        return ocrCache.getOrLoad(
-            forceFresh = forceFreshOcrOnce,
-            reusable = {
-                it.revision == r &&
-                    it.signature == cacheSignature &&
-                    SystemClock.elapsedRealtime() - it.at < 2_000
-            },
-            loader = {
-                val capture = freshVisionSession.captureForOcr()
-                if (capture.revision != r) throw GatewayError(
-                    ErrorCode.E_STALE_REF,
-                    "OCR 截图与请求 revision 不一致",
-                    channel = "vision",
-                    retryable = true,
-                )
-                val full = capture.payload
-                val tiles = planOcrTiles(topology, sparseSlices, full.width, full.height, imeTop)
-                val lines = if (tiles.isNotEmpty()) {
-                    val combined = ArrayList<OcrEngine.OcrLine>()
-                    for (tile in tiles) {
-                        val tileBmp = Bitmap.createBitmap(
-                            full, tile.crop.left, tile.crop.top, tile.crop.width, tile.crop.height,
-                        )
-                        val rawLines = try {
-                            OcrEngine.recognize(tileBmp, OcrEngine.MIN_CONF).map { l ->
-                                TileOcrLine(
-                                    l.text,
-                                    l.conf,
-                                    TileRect(l.bounds.left, l.bounds.top, l.bounds.right, l.bounds.bottom),
-                                )
-                            }
-                        } finally {
-                            if (tileBmp !== full && !tileBmp.isRecycled) tileBmp.recycle()
-                        }
-                        offsetAndFilterTileLines(tile, rawLines).forEach { mapped ->
-                            combined += OcrEngine.OcrLine(
-                                mapped.text,
-                                mapped.conf,
-                                Rect(mapped.bounds.left, mapped.bounds.top, mapped.bounds.right, mapped.bounds.bottom),
-                            )
-                        }
-                    }
-                    combined
-                } else {
-                    val page = if (imeTop in 1 until full.height)
-                        Bitmap.createBitmap(full, 0, 0, full.width, imeTop) else full
-                    try {
-                        OcrEngine.recognize(page, OcrEngine.MIN_CONF)
-                    } finally {
-                        if (page !== full && !page.isRecycled) page.recycle()
-                    }
-                }
-                OcrShot(capture.revision, SystemClock.elapsedRealtime(), capture.generation, cacheSignature, lines)
-            },
-        )
-    }
-
-    /** 已有位图时直接裁剪识别，不再重复截图（读回重试时省掉一次截图与节流风险）。 */
-    private fun ocrReadRegionOf(full: Bitmap, r: Rect): String? {
-        if (r.width() <= 0 || r.height() <= 0) return null
-        val clipped = Rect(
-            r.left.coerceAtLeast(0), r.top.coerceAtLeast(0),
-            r.right.coerceAtMost(full.width), r.bottom.coerceAtMost(full.height),
-        )
-        if (clipped.width() <= 0 || clipped.height() <= 0) return null
-        val piece = Bitmap.createBitmap(full, clipped.left, clipped.top, clipped.width(), clipped.height())
-        val lines = OcrEngine.recognize(piece, 0.25f)
-        if (lines.isEmpty()) return null
-        return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
-            .joinToString(" ") { it.text }
-    }
-
-    /** 任意区域 OCR 直读（type_text 树空读回验证用）：返回区域邻域内按位置拼接的文本，无文字 → null。 */
-    fun ocrReadRegion(bounds: Rect): String? {
-        val full = captureBitmapRetry()
-        val m = bounds.height().coerceAtLeast(16)
-        val r = Rect(
-            (bounds.left - m).coerceAtLeast(0),
-            (bounds.top - m).coerceAtLeast(0),
-            (bounds.right + m).coerceAtMost(full.width),
-            (bounds.bottom + m).coerceAtMost(full.height),
-        )
-        if (r.width() <= 0 || r.height() <= 0) return null
-        val piece = Bitmap.createBitmap(full, r.left, r.top, r.width(), r.height())
-        val lines = OcrEngine.recognize(piece, 0.25f)
-        if (lines.isEmpty()) return null
-        return lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
-            .joinToString(" ") { it.text }
-    }
-
-    /** 读回结果连同实际使用的几何一起返回——2026-07-26 排查实测：字明明在框里却读回 null，
-     *  没有几何就只能靠猜。region/screen 只是尺寸数字，不含任何屏幕内容。 */
     internal data class InputBarReadback(
         val text: String?,
         val region: Rect,
@@ -1661,105 +1399,13 @@ class GatewayA11yService : AccessibilityService() {
         val metricsWidth: Int,
         val metricsHeight: Int,
         val bottomInset: Int,
-        /** 区域是怎么来的：`focused_bounds`（已知焦点几何）或 `bottom_band`（写死的兜底带）。 */
         val regionSource: String = "bottom_band",
     )
 
-    /**
-     * IME 单命名空间降级链的读回区域：a11y 拿不到焦点节点时没有 bounds 可用，改用锚定
-     * 系统底部 inset 的输入栏带。这是"打进去的字确实落到框里"的唯一剩余机械证据，不能省。
-     *
-     * **几何以截图位图自身尺寸为准**，不用 `displayMetrics`：两者在本机不一定相等，
-     * 而裁剪发生在位图坐标系里，用错坐标系会把整条输入栏裁掉。
-     * 读回带比盲点带更高（[INPUT_BAR_READBACK_HEIGHT_PX]）：盲点只需要一个可点的中心，
-     * 读回要覆盖整条输入栏，包括基线落在 inset 之下的文字。
-     *
-     * [preferredBounds] 是**已知的焦点输入框几何**：有它就按它裁，那条写死的底部带只是兜底。
-     * 底部带隐含了"竖屏 + 输入栏贴底 + 左右各留 6%"三条假设，全是这台机器上微信会话页的样子；
-     * 换 App 或换姿势就不成立，所以但凡有真几何就别用它。
-     */
-    internal fun ocrReadInputBarRegion(preferredBounds: Rect? = null): InputBarReadback {
-        val metrics = resources.displayMetrics
-        val inset = systemBottomInset()
-        val full = captureBitmapRetry()
-        val preferred = preferredBounds?.let { wanted ->
-            Rect(
-                wanted.left.coerceIn(0, full.width - 1),
-                wanted.top.coerceIn(0, full.height - 1),
-                wanted.right.coerceIn(1, full.width),
-                wanted.bottom.coerceIn(1, full.height),
-            )
-                // 必须 ≥32：小于这个尺寸 ML Kit 直接抛 "width and height should be at least 32"，
-                // 而这里的异常会被 runCatching 吞成 null，下游就分不清"没读到"和"读到了空"。
-                // 与 ocrReadbackResult 的 usableBounds 同一把尺子（2026-07-26 已被退化 bounds 咬过一次）。
-                .takeIf { it.width() >= MIN_OCR_EDGE_PX && it.height() >= MIN_OCR_EDGE_PX }
-        }
-        val bottom = full.height
-        val top = (bottom - INPUT_BAR_READBACK_HEIGHT_PX).coerceAtLeast(0)
-        val region = preferred ?: Rect(
-            (full.width * 0.06).toInt(),
-            top,
-            (full.width * 0.94).toInt(),
-            bottom,
-        )
-        val text = runCatching { ocrReadRegionOf(full, region) }.getOrNull()
-        return InputBarReadback(
-            text = text,
-            region = region,
-            screenWidth = full.width,
-            screenHeight = full.height,
-            metricsWidth = metrics.widthPixels,
-            metricsHeight = metrics.heightPixels,
-            bottomInset = inset,
-            regionSource = if (preferred != null) "focused_bounds" else "bottom_band",
-        )
-    }
+    fun ocrReadRegion(bounds: Rect): String? = ocrCoordinator.ocrReadRegion(bounds)
 
-    fun screenshotPngBase64(region: Rect?): JSONObject {
-        val full = captureBitmap()
-        val cropped = if (region != null) {
-            val r = Rect(
-                region.left.coerceIn(0, full.width - 1),
-                region.top.coerceIn(0, full.height - 1),
-                region.right.coerceIn(1, full.width),
-                region.bottom.coerceIn(1, full.height),
-            )
-            Bitmap.createBitmap(full, r.left, r.top, r.width(), r.height())
-        } else full
+    internal fun ocrReadInputBarRegion(preferredBounds: Rect? = null): InputBarReadback =
+        ocrCoordinator.ocrReadInputBarRegion(preferredBounds)
 
-        val bos = ByteArrayOutputStream()
-        cropped.compress(Bitmap.CompressFormat.PNG, 90, bos)
-        return JSONObject()
-            .put("mime", "image/png")
-            .put("base64", Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP))
-            .put("width", cropped.width)
-            .put("height", cropped.height)
-            .put("offset", JSONArray(listOf(region?.left ?: 0, region?.top ?: 0)))
-            .put("scale", 1.0) // 网关坐标主权：始终物理像素，无缩放
-            .put("revision", revision)
-    }
-
-    private fun roleOf(n: AccessibilityNodeInfo): String {
-        val cls = n.className?.toString().orEmpty()
-        return when {
-            n.isEditable -> "input"
-            n.isCheckable -> "switch"
-            n.isScrollable -> "list"
-            n.isClickable && cls.contains("Image") -> "icon_button"
-            n.isClickable -> "button"
-            cls.contains("TextView") -> "text"
-            else -> cls.substringAfterLast('.').ifEmpty { "node" }
-        }
-    }
-
-    private fun flagsOf(n: AccessibilityNodeInfo): String = buildString {
-        if (n.isClickable) append("C")
-        if (n.isLongClickable) append("L")
-        if (n.isEditable) append("E")
-        if (n.isScrollable) append("S")
-        if (n.isCheckable) append("K")
-        if (n.isChecked) append("k")
-        if (n.isFocused) append("F")
-        if (!n.isEnabled) append("x")
-    }
+    fun screenshotPngBase64(region: Rect?): JSONObject = ocrCoordinator.screenshotPngBase64(region)
 }

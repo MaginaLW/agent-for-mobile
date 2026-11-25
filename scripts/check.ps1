@@ -12,6 +12,7 @@ diff-check、凭据扫描各跑各的，漏掉哪一项没人拦得住。本脚�
 用法：
   scripts/check.ps1              # 全量（含 gradle；依赖须已缓存，缺失时报错）
   scripts/check.ps1 -SkipGradle  # 只跑脚本与仓库侧（改文档/PowerShell 时够用）
+  scripts/check.ps1 -FastContentOnly  # 仅跑空白/冲突标记与凭据扫描（供 pre-commit 使用）
   scripts/check.ps1 -Clean       # 只清场：停 gradle daemon、删残留跑测目录与旧日志，不跑校验
 
 执行顺序有意为之：先跑秒级的便宜检查（快失败），再 gradle，最慢的监督式 runner 套件放最后，
@@ -22,6 +23,7 @@ Gradle 使用一次性 daemon 和进程内 Kotlin 编译，构建后释放本轮
 [CmdletBinding()]
 param(
     [switch]$SkipGradle,
+    [switch]$FastContentOnly,
     [switch]$Clean,
     # 监督式 runner 套件的分片数。0=按机器状态自动决定（健康 3 片、不健康 1 片）；
     # 1=顺序跑（怀疑并行导致假失败时用这个复现）。
@@ -167,6 +169,7 @@ Invoke-Check '空白字符与冲突标记（工作树 + index）' {
     'clean'
 }
 
+if (-not $FastContentOnly) {
 Invoke-Check '提交内容双视图离线测试' {
     Invoke-Logged -LogName 'check-git-content-offline.log' -FilePath $PwshPath -Arguments @(
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\check-git-content-offline.ps1')
@@ -207,6 +210,29 @@ Invoke-Check '技能包与守卫同步离线测试' {
         '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\skillpack-sync-offline.ps1')
     ) | Out-Null
     Get-LastMeaningfulLine (Join-Path $LogDir 'skillpack-sync-offline.log')
+}
+
+Invoke-Check '本地测试台离线测试' {
+    $benchSuites = @(
+        @{ Name = 'startup'; File = 'scripts\tests\local-testbench-startup-offline.ps1' },
+        @{ Name = 'negative'; File = 'scripts\tests\local-testbench-negative-paths-offline.ps1' },
+        @{ Name = 'human-ready'; File = 'scripts\tests\local-testbench-human-ready-offline.ps1' },
+        @{ Name = 'human-allow'; File = 'scripts\tests\local-testbench-human-allow-offline.ps1' },
+        @{ Name = 'r5'; File = 'scripts\tests\local-testbench-r5-offline.ps1' }
+    )
+    foreach ($suite in $benchSuites) {
+        Invoke-Logged -LogName "local-testbench-$($suite.Name).log" -FilePath $PwshPath -Arguments @(
+            '-NoProfile', '-File', (Join-Path $RepoRoot $suite.File)
+        ) | Out-Null
+    }
+    '5 suites passed (startup/negative/human-ready/human-allow/r5)'
+}
+
+Invoke-Check '台账统计离线测试' {
+    Invoke-Logged -LogName 'report-ledger-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\report-ledger-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'report-ledger-offline.log')
 }
 
 if ($SkipGradle) {
@@ -301,6 +327,7 @@ Invoke-Check '监督式 runner 离线测试' {
     # 逐片的 passed 数相加再报，避免"某片一条没跑却全绿"这种看起来通过的失败。
     $passed = Get-RunnerOfflinePassedCount -Summaries $summaries.ToArray()
     "$shards 片并行，合计 $passed passed"
+}
 }
 
 Invoke-Check '凭据扫描' {
