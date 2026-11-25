@@ -115,7 +115,7 @@ class MacroCatalogAssetTest {
         val biliFeed = catalog.find("bili_readonly_feed_prepare")
         assertNotNull("必须加载 bili_readonly_feed_prepare", biliFeed)
         assertEquals("tv.danmaku.bili", biliFeed!!.expectPackage)
-        assertEquals("2026-11-26", biliFeed.verified)
+        assertEquals("", biliFeed.verified)
         assertTrue(biliFeed.readonly)
         assertTrue(biliFeed.params.isEmpty())
         assertEquals(8, biliFeed.steps.size)
@@ -123,6 +123,10 @@ class MacroCatalogAssetTest {
             "bili_readonly_feed_prepare 的 ui_action 必须配置 skip_if_ref_missing=true",
             biliFeed.steps.filter { it.tool == "ui_action" }.all { it.skipIfRefMissing },
         )
+        val dismissPushStep = biliFeed.steps.first { it.id == "find_dismiss_push_prompt" }
+        assertEquals("button", dismissPushStep.argsTemplate.optString("role"))
+        assertEquals("暂不开启", dismissPushStep.argsTemplate.optString("text"))
+        assertFalse(dismissPushStep.argsTemplate.optBoolean("scroll_search", true))
         assertFalse(
             "暂不开启不应命中危险/确认词",
             safetyPolicy.containsProtectedActionKeyword("暂不开启"),
@@ -139,7 +143,15 @@ class MacroCatalogAssetTest {
             "taobao_orders_prepare 的 ui_action 必须配置 skip_if_ref_missing=true",
             taobaoOrders.steps.filter { it.tool == "ui_action" }.all { it.skipIfRefMissing },
         )
-        for (targetLabel in listOf("我的淘宝", "全部订单")) {
+        val findMyTaobao = taobaoOrders.steps.first { it.id == "find_my_taobao" }
+        assertEquals("button", findMyTaobao.argsTemplate.optString("role"))
+        assertEquals("我的淘宝", findMyTaobao.argsTemplate.optString("desc"))
+        assertFalse(findMyTaobao.argsTemplate.optBoolean("scroll_search", true))
+        val findAllOrders = taobaoOrders.steps.first { it.id == "find_all_orders" }
+        assertEquals("button", findAllOrders.argsTemplate.optString("role"))
+        assertEquals("我的订单", findAllOrders.argsTemplate.optString("desc"))
+        assertFalse(findAllOrders.argsTemplate.optBoolean("scroll_search", true))
+        for (targetLabel in listOf("我的淘宝", "我的订单", "我的订单全部", "全部订单")) {
             assertFalse(
                 "$targetLabel 不应命中危险/确认词",
                 safetyPolicy.containsProtectedActionKeyword(targetLabel),
@@ -177,8 +189,8 @@ class MacroCatalogAssetTest {
         assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("bili_readonly_prepare").getString("status"))
         assertEquals("2026-11-25", byId.getValue("bili_readonly_prepare").getString("verified"))
-        assertEquals("verified", byId.getValue("bili_readonly_feed_prepare").getString("status"))
-        assertEquals("2026-11-26", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
+        assertEquals("candidate_unverified", byId.getValue("bili_readonly_feed_prepare").getString("status"))
+        assertEquals("", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
         assertEquals("candidate_unverified", byId.getValue("taobao_orders_prepare").getString("status"))
         assertEquals("", byId.getValue("taobao_orders_prepare").getString("verified"))
     }

@@ -5,7 +5,7 @@
   "expect_package": "tv.danmaku.bili",
   "description": "深化只读前置宏：检查前台非系统拦截后拉起哔哩哔哩，若出现「暂不开启」推送提示则安全具名点击关闭（未出现时自动跳过），等待列表稳定后采集完整快照交回大脑阅读；严禁点击无标签图标或代登录。",
   "readonly": true,
-  "verified": "2026-11-26",
+  "verified": "",
   "params": {},
   "steps": [
     {
@@ -46,6 +46,7 @@
       "tool": "ui_find",
       "args": {
         "text": "暂不开启",
+        "role": "button",
         "scroll_search": false
       },
       "optional": true,

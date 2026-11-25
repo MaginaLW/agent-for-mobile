@@ -599,6 +599,10 @@ class MacroEngineExecutionTest {
         assertEquals("completed", clickedRes.getString("status"))
         assertEquals(8, clickedRes.getInt("steps_executed"))
         assertEquals(0, clickedRes.getJSONArray("skipped_steps").length())
+        val biliFindArgs = clickCalls.first { it.first == "ui_find" }.second
+        assertEquals("button", biliFindArgs.optString("role"))
+        assertEquals("暂不开启", biliFindArgs.optString("text"))
+        assertFalse(biliFindArgs.optBoolean("scroll_search", true))
         assertEquals("e-dismiss", clickCalls.first { it.first == "ui_action" }.second.getString("ref"))
 
         val absentCalls = mutableListOf<String>()
@@ -687,7 +691,13 @@ class MacroEngineExecutionTest {
                 "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.taobao.taobao"), "to-2")
                 "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "to-3")
                 "ui_find" -> {
-                    val slotRef = if (args.optString("text") == "我的淘宝") "e-my" else "e-orders"
+                    assertEquals("button", args.optString("role"))
+                    assertFalse(args.optBoolean("scroll_search", true))
+                    val slotRef = when (args.optString("desc")) {
+                        "我的淘宝" -> "e-my"
+                        "我的订单" -> "e-orders"
+                        else -> error("unexpected ui_find args: $args")
+                    }
                     Envelope.ok(
                         JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", slotRef))),
                         ctx("com.taobao.taobao"),
@@ -710,6 +720,12 @@ class MacroEngineExecutionTest {
         assertEquals("completed", res.getString("status"))
         assertEquals(11, res.getInt("steps_executed"))
         assertEquals(0, res.getJSONArray("skipped_steps").length())
+        val uiFindCalls = calls.filter { it.first == "ui_find" }.map { it.second }
+        assertEquals(2, uiFindCalls.size)
+        assertEquals("button", uiFindCalls[0].optString("role"))
+        assertEquals("我的淘宝", uiFindCalls[0].optString("desc"))
+        assertEquals("button", uiFindCalls[1].optString("role"))
+        assertEquals("我的订单", uiFindCalls[1].optString("desc"))
         assertEquals(listOf("e-my", "e-orders"), calls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
 
         val loginWallEngine = MacroEngine(

@@ -3,7 +3,7 @@
   "version": 1,
   "app": "淘宝",
   "expect_package": "com.taobao.taobao",
-  "description": "深化只读前置宏：检查前台非系统拦截后拉起淘宝，按已验证只读路径尝试具名点击「我的淘宝」与「全部订单」（未唯一匹配时自动跳过），等待稳定并核验非登录墙后采集完整快照交回大脑查看物流；严禁下单、支付或触碰删除订单。",
+  "description": "深化只读前置宏：检查前台非系统拦截后拉起淘宝，按 role=button + desc 唯一匹配尝试具名点击「我的淘宝」与「我的订单」（未唯一匹配时自动跳过），等待稳定并核验非登录墙后采集完整快照交回大脑查看物流；严禁下单、支付或触碰删除订单。",
   "readonly": true,
   "verified": "",
   "params": {},
@@ -45,7 +45,8 @@
       "id": "find_my_taobao",
       "tool": "ui_find",
       "args": {
-        "text": "我的淘宝",
+        "role": "button",
+        "desc": "我的淘宝",
         "scroll_search": false
       },
       "optional": true,
@@ -73,7 +74,8 @@
       "id": "find_all_orders",
       "tool": "ui_find",
       "args": {
-        "text": "全部订单",
+        "role": "button",
+        "desc": "我的订单",
         "scroll_search": false
       },
       "optional": true,
