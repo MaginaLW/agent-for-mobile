@@ -133,7 +133,7 @@ internal object ToolCatalog {
         ) { Gateway.macros.listForBrain() },
         ToolSpec(
             "skill_macro_exec",
-            "执行已注册的声明式生产宏。每步均走统一安全门与 ConfirmOverlay，遇到非安全阻塞时返回 handoff_required 交大脑断点接管。",
+            "执行已注册的声明式生产宏。每步均走统一安全门与 ConfirmOverlay；当 data.status=\"completed\" 时直接返回 data.final_snapshot 与 ctx.app，遇到非安全阻塞时返回 data.status=\"handoff_required\" 交大脑断点接管。",
             Level.W,
             schema(
                 listOf("name"),

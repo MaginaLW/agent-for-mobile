@@ -24,6 +24,14 @@ class SkillMacroToolCatalogTest {
         assertEquals(Level.W, runSpec!!.level)
         assertEquals("macro", ToolRegistry.channelOf("skill_macro_exec"))
         assertFalse("skill_macro_exec 不得在敏感应用前台绕过放行", "skill_macro_exec" in ToolRegistry.BLOCKED_APP_ALLOWED)
+        assertTrue(
+            "skill_macro_exec 描述必须包含 data.status",
+            runSpec.description.contains("data.status"),
+        )
+        assertTrue(
+            "skill_macro_exec 描述必须包含 data.final_snapshot",
+            runSpec.description.contains("data.final_snapshot"),
+        )
 
         val names = (0 until ToolRegistry.listToolsJson().length())
             .map { ToolRegistry.listToolsJson().getJSONObject(it).getString("name") }

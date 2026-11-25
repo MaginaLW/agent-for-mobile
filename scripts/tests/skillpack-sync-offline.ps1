@@ -222,13 +222,14 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
     $macroIndex = Get-Content -LiteralPath (Join-Path $macroDir 'index.json') -Raw -Encoding utf8 | ConvertFrom-Json
     $macroFiles = @($macroIndex.files)
-    Assert-True ($macroFiles.Count -eq 3) "skillpack/macros/index.json 应登记 3 个宏，实际为 $($macroFiles.Count)"
+    Assert-True ($macroFiles.Count -eq 4) "skillpack/macros/index.json 应登记 4 个宏，实际为 $($macroFiles.Count)"
     $expectedVerifiedByFile = @{
-        'xhs_search_prepare.json'      = ''
+        'xhs_search_prepare.json'      = '2026-11-25'
         'taobao_readonly_prepare.json' = '2026-11-25'
-        'wechat_readonly_prepare.json' = ''
+        'wechat_readonly_prepare.json' = '2026-11-25'
+        'jd_readonly_prepare.json'     = ''
     }
-    foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json')) {
+    foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json', 'jd_readonly_prepare.json')) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"
         $macroObj = Get-Content -LiteralPath (Join-Path $macroDir $reqFile) -Raw -Encoding utf8 | ConvertFrom-Json
         $expectedVerified = $expectedVerifiedByFile[$reqFile]
@@ -254,13 +255,15 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
     Assert-True ($preamble.Contains('skill_macro_list', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_list。'
     Assert-True ($preamble.Contains('skill_macro_exec', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_exec。'
     Assert-True ($preamble.Contains('system_get_state', [StringComparison]::Ordinal)) 'preamble 应引导优先调用 system_get_state。'
+    Assert-True ($preamble.Contains('data.final_snapshot', [StringComparison]::Ordinal)) 'preamble 应明确引导消费 data.final_snapshot。'
 
     $tasks = @(
         'scripts\tasks\m0-1-bluetooth-off.md',
         'scripts\tasks\check-bluetooth.md',
         'scripts\tasks\m0-3-xhs-summary.md',
         'scripts\tasks\m0-5-jd-order.md',
-        'scripts\tasks\taobao-order-readonly.md'
+        'scripts\tasks\taobao-order-readonly.md',
+        'scripts\tasks\wechat-readonly-prepare.md'
     )
     foreach ($relTask in $tasks) {
         $taskFile = Join-Path $repoRoot $relTask
@@ -274,8 +277,14 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         if ($relTask -ceq 'scripts\tasks\m0-3-xhs-summary.md') {
             Assert-True ($text.Contains('xhs_search_prepare', [StringComparison]::Ordinal)) '小红书任务卡 DryRun 应包含 xhs_search_prepare'
         }
+        if ($relTask -ceq 'scripts\tasks\m0-5-jd-order.md') {
+            Assert-True ($text.Contains('jd_readonly_prepare', [StringComparison]::Ordinal)) '京东任务卡 DryRun 应包含 jd_readonly_prepare'
+        }
         if ($relTask -ceq 'scripts\tasks\taobao-order-readonly.md') {
             Assert-True ($text.Contains('taobao_readonly_prepare', [StringComparison]::Ordinal)) '淘宝只读任务卡 DryRun 应包含 taobao_readonly_prepare'
+        }
+        if ($relTask -ceq 'scripts\tasks\wechat-readonly-prepare.md') {
+            Assert-True ($text.Contains('wechat_readonly_prepare', [StringComparison]::Ordinal)) '微信只读前置任务卡 DryRun 应包含 wechat_readonly_prepare'
         }
         Assert-True ($text -notmatch '绕过确认卡|自动代登录|自动过验证码|open_uri 打开对应系统设置页') "DryRun 输出命中违禁指引：$relTask"
     }

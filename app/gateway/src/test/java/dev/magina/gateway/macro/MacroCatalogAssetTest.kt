@@ -54,7 +54,7 @@ class MacroCatalogAssetTest {
         val xhs = catalog.find("xhs_search_prepare")
         assertNotNull("必须加载 xhs_search_prepare", xhs)
         assertEquals("com.xingin.xhs", xhs!!.expectPackage)
-        assertEquals("", xhs.verified)
+        assertEquals("2026-11-25", xhs.verified)
         assertTrue(xhs.readonly)
         assertEquals(6, xhs.steps.size)
 
@@ -69,7 +69,7 @@ class MacroCatalogAssetTest {
         val wechat = catalog.find("wechat_readonly_prepare")
         assertNotNull("必须加载 wechat_readonly_prepare", wechat)
         assertEquals("com.tencent.mm", wechat!!.expectPackage)
-        assertEquals("", wechat.verified)
+        assertEquals("2026-11-25", wechat.verified)
         assertTrue(wechat.readonly)
         assertTrue(wechat.params.isEmpty())
         assertEquals(5, wechat.steps.size)
@@ -77,6 +77,19 @@ class MacroCatalogAssetTest {
         assertTrue(
             "wechat_readonly_prepare 严禁包含点击、输入或发送步骤",
             wechat.steps.all { it.tool in wechatAllowedTools },
+        )
+
+        val jd = catalog.find("jd_readonly_prepare")
+        assertNotNull("必须加载 jd_readonly_prepare", jd)
+        assertEquals("com.jingdong.app.mall", jd!!.expectPackage)
+        assertEquals("", jd.verified)
+        assertTrue(jd.readonly)
+        assertTrue(jd.params.isEmpty())
+        assertEquals(5, jd.steps.size)
+        val jdReadonlyTools = setOf("foreground_app", "app_launch", "wait_for", "ui_snapshot")
+        assertTrue(
+            "jd_readonly_prepare 必须仅包含只读前置步骤",
+            jd.steps.all { it.tool in jdReadonlyTools },
         )
 
         for (spec in catalog.all()) {
@@ -92,7 +105,7 @@ class MacroCatalogAssetTest {
         }
 
         val listed = catalog.listForBrain()
-        assertEquals(3, listed.getInt("count"))
+        assertEquals(4, listed.getInt("count"))
         val byId = HashMap<String, JSONObject>()
         val macros = listed.getJSONArray("macros")
         for (i in 0 until macros.length()) {
@@ -100,12 +113,14 @@ class MacroCatalogAssetTest {
             assertFalse(pack.isBlockedApp(item.getString("expect_package")))
             byId[item.getString("id")] = item
         }
-        assertEquals("candidate_unverified", byId.getValue("xhs_search_prepare").getString("status"))
-        assertEquals("", byId.getValue("xhs_search_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("xhs_search_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("xhs_search_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("taobao_readonly_prepare").getString("status"))
         assertEquals("2026-11-25", byId.getValue("taobao_readonly_prepare").getString("verified"))
-        assertEquals("candidate_unverified", byId.getValue("wechat_readonly_prepare").getString("status"))
-        assertEquals("", byId.getValue("wechat_readonly_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("wechat_readonly_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("wechat_readonly_prepare").getString("verified"))
+        assertEquals("candidate_unverified", byId.getValue("jd_readonly_prepare").getString("status"))
+        assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
     }
 
     @Test
