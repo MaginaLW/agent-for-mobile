@@ -57,16 +57,32 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
     Test-Case 'categorizes_m3_macro_runs_under_macro' {
         Assert-True ((Get-LedgerTaskCategory 'm3-taobao-readonly-prep-20261125') -ceq 'macro') 'm3-taobao-readonly-prep-20261125 应归类为 macro'
         Assert-True ((Get-LedgerTaskCategory 'm3-wechat-readonly-prep-20261125') -ceq 'macro') 'm3-wechat-readonly-prep-20261125 应归类为 macro'
+        Assert-True ((Get-LedgerTaskCategory 'bili-readonly-browse') -ceq 'bili') 'bili-readonly-browse 应归类为 bili'
 
         $m3CsvPath = Join-Path $scratch 'ledger-m3.csv'
         @"
 time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason
 2026-11-25T10:00:00,m3-taobao-readonly-prep-20261125,1,codex,,1,1000,50,500,0,,10,success,,,,
 2026-11-25T10:05:00,m3-wechat-readonly-prep-20261125,1,codex,,1,1200,60,600,0,,12,success,,,,
+2026-11-25T10:10:00,m3-jd-readonly-prep-20261125,1,codex,,1,1400,70,700,0,,15,paused,,,,
+2026-11-25T10:15:00,m3-bili-readonly-promote-20261125,1,codex,,1,1600,80,800,0,,18,paused,,,,
+2026-11-25T10:20:00,m3-bili-readonly-promote-r2-20261125,1,codex,,1,1800,90,900,0,,20,success,,,,
+2026-11-25T10:25:00,skill-macro-xhs-tokyo-20261125,1,codex,,1,2000,100,1000,0,,25,fail,,,,verify-fail
 "@ | Set-Content -LiteralPath $m3CsvPath -Encoding utf8
         $m3Data = Get-LedgerReportData -Path $m3CsvPath -SinceDate '2026-11-25' -BrainFilter 'codex'
         $m3Macro = @($m3Data.categories | Where-Object { $_.category -ceq 'macro' })[0]
-        Assert-True ($null -ne $m3Macro -and $m3Macro.runs -eq 2 -and $m3Macro.success -eq 2) 'm3-* 宏任务应聚合到 macro 类别'
+        Assert-True ($null -ne $m3Macro -and $m3Macro.runs -eq 6 -and $m3Macro.success -eq 3 -and $m3Macro.paused -eq 2 -and $m3Macro.fail -eq 1) 'm3-* 宏任务应聚合到 macro 类别并统计 paused'
+
+        $bySub = @{}
+        foreach ($item in $m3Data.macro_breakdown) { $bySub[$item.category] = $item }
+        Assert-True ($bySub['macro:taobao'].runs -eq 1 -and $bySub['macro:wechat'].runs -eq 1) 'macro_breakdown 缺少 taobao/wechat'
+        Assert-True ($bySub['macro:jd'].paused -eq 1 -and $bySub['macro:bili'].runs -eq 2 -and $bySub['macro:bili'].paused -eq 1 -and $bySub['macro:bili'].success -eq 1) 'macro_breakdown jd/bili 统计不符'
+        Assert-True ($bySub['macro:xhs'].fail -eq 1) 'macro_breakdown xhs 统计不符'
+
+        $tableOut = (& $pwshPath -NoProfile -File $scriptPath -LedgerPath $m3CsvPath -Since '2026-11-25' -ByMacro) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "report-ledger.ps1 -ByMacro 执行失败，exit=$LASTEXITCODE" }
+        Assert-True ($tableOut -match '\bpaused\b') '默认报表输出应包含 paused 列'
+        Assert-True ($tableOut.Contains('macro:bili', [StringComparison]::Ordinal)) '-ByMacro 应输出 macro:bili 细分行'
     }
 
     Test-Case 'rejects_invalid_since_format' {

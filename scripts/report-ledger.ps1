@@ -5,12 +5,14 @@
   scripts/report-ledger.ps1
   scripts/report-ledger.ps1 -Since 2026-11-18
   scripts/report-ledger.ps1 -Brain all -Json
+  scripts/report-ledger.ps1 -ByMacro
 #>
 [CmdletBinding()]
 param(
     [string]$LedgerPath = '',
     [string]$Since = '',
     [string]$Brain = 'codex',
+    [switch]$ByMacro,
     [switch]$Json
 )
 
@@ -30,7 +32,22 @@ function Get-LedgerTaskCategory {
         'bluetooth' { return 'bluetooth' }
         'wechat' { return 'wechat' }
         '^p0-' { return 'p0' }
+        'bili' { return 'bili' }
         default { return 'other' }
+    }
+}
+
+function Get-LedgerMacroSubcategory {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Slug)
+
+    $s = $Slug.ToLowerInvariant()
+    switch -Regex ($s) {
+        'xhs' { return 'macro:xhs' }
+        'taobao' { return 'macro:taobao' }
+        'wechat' { return 'macro:wechat' }
+        'jd' { return 'macro:jd' }
+        'bili' { return 'macro:bili' }
+        default { return 'macro:other' }
     }
 }
 
@@ -144,18 +161,35 @@ function Get-LedgerReportData {
         $filtered.Add($row)
     }
 
-    $order = @('xhs', 'taobao_jd', 'bluetooth', 'wechat', 'p0', 'macro', 'other')
+    $order = @('xhs', 'taobao_jd', 'bluetooth', 'wechat', 'p0', 'bili', 'macro', 'other')
     $grouped = @{}
     foreach ($cat in $order) { $grouped[$cat] = [Collections.Generic.List[object]]::new() }
+
+    $macroOrder = @('macro:xhs', 'macro:taobao', 'macro:wechat', 'macro:jd', 'macro:bili', 'macro:other')
+    $macroGrouped = @{}
+    foreach ($sub in $macroOrder) { $macroGrouped[$sub] = [Collections.Generic.List[object]]::new() }
+
     foreach ($row in $filtered) {
-        $cat = Get-LedgerTaskCategory ([string]$row.slug)
+        $slug = [string]$row.slug
+        $cat = Get-LedgerTaskCategory $slug
         $grouped[$cat].Add($row)
+        if ($cat -ceq 'macro') {
+            $sub = Get-LedgerMacroSubcategory $slug
+            $macroGrouped[$sub].Add($row)
+        }
     }
 
     $categories = [Collections.Generic.List[object]]::new()
     foreach ($cat in $order) {
         if ($grouped[$cat].Count -gt 0) {
             $categories.Add((Get-LedgerGroupStats -Name $cat -Rows $grouped[$cat].ToArray()))
+        }
+    }
+
+    $macroBreakdown = [Collections.Generic.List[object]]::new()
+    foreach ($sub in $macroOrder) {
+        if ($macroGrouped[$sub].Count -gt 0) {
+            $macroBreakdown.Add((Get-LedgerGroupStats -Name $sub -Rows $macroGrouped[$sub].ToArray()))
         }
     }
 
@@ -172,6 +206,7 @@ function Get-LedgerReportData {
         matched_rows = $filtered.Count
         overall = Get-LedgerGroupStats -Name 'overall' -Rows $filtered.ToArray()
         categories = $categories.ToArray()
+        macro_breakdown = $macroBreakdown.ToArray()
         fail_reasons = $failReasons
     }
 }
@@ -190,7 +225,11 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
     Write-Host ("Ledger 统计（brain={0}, since={1}, matched={2}/{3}）" -f $report.brain, $(if ($report.since) { $report.since } else { 'all' }), $report.matched_rows, $report.total_rows) -ForegroundColor Cyan
     $rowsToPrint = @($report.categories) + @($report.overall)
-    $rowsToPrint | Format-Table category, runs, success, fail, timeout, preflight_fail, success_rate_pct, avg_dur_s, median_dur_s, avg_in_tok, avg_cache_hit_pct, avg_out_tok -AutoSize
+    $rowsToPrint | Format-Table category, runs, success, fail, paused, timeout, preflight_fail, success_rate_pct, avg_dur_s, median_dur_s, avg_in_tok, avg_cache_hit_pct, avg_out_tok -AutoSize
+    if ($ByMacro -and $report.macro_breakdown.Count -gt 0) {
+        Write-Host '宏细分统计：' -ForegroundColor Cyan
+        $report.macro_breakdown | Format-Table category, runs, success, fail, paused, timeout, preflight_fail, success_rate_pct, avg_dur_s, median_dur_s, avg_in_tok, avg_cache_hit_pct, avg_out_tok -AutoSize
+    }
     if ($report.fail_reasons.Count -gt 0) {
         Write-Host '失败原因分布：' -ForegroundColor DarkGray
         $report.fail_reasons | Format-Table fail_reason, count -AutoSize
