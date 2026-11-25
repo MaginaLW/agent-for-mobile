@@ -5,7 +5,7 @@
 ## PA2553 实测结论（2026-11-25 至 2026-11-26）
 
 - **公开列表免登录可读**：PA2553 上无需登录即可通过 `bili_readonly_prepare` 5/5 步稳定拉起首页公开推荐流；跳过首页顶栏非阻断入口后，经 1 次列表滚动直接汇总出 5 条不同视频的标题、UP 主、播放量与时长（`35s / 151,966 in_tok`、`result=success`、0 `ConfirmOverlay`、0 `E_VERIFY_FAIL`/0 `E_BLOCKED`）。
-- **深化只读前置宏 `bili_readonly_feed_prepare`（2026-11-26 转正）**：在首页稳定后以 `optional + save_ref` 探测「暂不开启」推送弹窗，并借助 `skip_if_ref_missing` 在弹窗未出现或非唯一匹配时安全跳过 `ui_action`；PA2553 实测 `m3-bili-feed-promote-20261125` 1 轮 **`27s / 50,739 in_tok` `result=success`**（`skipped_steps=["find_dismiss_push_prompt","dismiss_push_prompt"]`，0 `ConfirmOverlay`），直接消费 `final_snapshot` 汇总 5 条公开视频，晋级 `verified: "2026-11-26"`。
+- **深化只读前置宏 `bili_readonly_feed_prepare`（2026-11-26 转正）**：在首页稳定后以 `optional + save_ref` 配合 `role="button" + text="暂不开启"`（`scroll_search=false`）探测推送弹窗（避免弹窗弹出时被 OCR 融合双产出 `role="button"` 与 `role="text"` 双命中误跳过），并借助 `skip_if_ref_missing` 在弹窗未出现时安全跳过 `ui_action`；PA2553 `m3-bili-feed-promote-20261125`（`27s / 50,739 in_tok` `success`）及收窄选择器复测 `m3-bili-feed-promote-r2-20261126`（`c4ae700`，`32s / 113,317 in_tok` `success`，`skipped_steps=["find_dismiss_push_prompt","dismiss_push_prompt"]`，0 `ConfirmOverlay`）均直接消费 `final_snapshot`（并按需滚屏补齐）汇总 5 条公开视频，转正 `verified: "2026-11-26"`；两轮实测中「暂不开启」弹窗均未弹出（`E_NOT_FOUND`），弹窗实际弹出时的 `role="button"` 命中分支待后续自然复现时补充观测。
 - **应用内推送提示**：宏返回后若首页出现「开启推送通知」提示，执行器具名点击「暂不开启」即可继续读取推荐列表（不触发确认卡）。
 - **系统跳转拦截**：从网关主界面冷启动跳转哔哩哔哩时可能命中 vivo `com.vivo.appfilter` 弹窗，宏引擎准确返回 `handoff_required(blocker_detected=true)` 并由大脑以 `[AWAIT_CONFIRM]` 优雅暂停，待现场用户放行后重跑即可一次完成。
 

@@ -5,7 +5,7 @@
   "expect_package": "com.taobao.taobao",
   "description": "深化只读前置宏：检查前台非系统拦截后拉起淘宝，按 role=button + desc 唯一匹配尝试具名点击「我的淘宝」与「我的订单」（未唯一匹配时自动跳过），等待稳定并核验非登录墙后采集完整快照交回大脑查看物流；严禁下单、支付或触碰删除订单。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-26",
   "params": {},
   "steps": [
     {

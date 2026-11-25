@@ -115,7 +115,7 @@ class MacroCatalogAssetTest {
         val biliFeed = catalog.find("bili_readonly_feed_prepare")
         assertNotNull("必须加载 bili_readonly_feed_prepare", biliFeed)
         assertEquals("tv.danmaku.bili", biliFeed!!.expectPackage)
-        assertEquals("", biliFeed.verified)
+        assertEquals("2026-11-26", biliFeed.verified)
         assertTrue(biliFeed.readonly)
         assertTrue(biliFeed.params.isEmpty())
         assertEquals(8, biliFeed.steps.size)
@@ -135,7 +135,7 @@ class MacroCatalogAssetTest {
         val taobaoOrders = catalog.find("taobao_orders_prepare")
         assertNotNull("必须加载 taobao_orders_prepare", taobaoOrders)
         assertEquals("com.taobao.taobao", taobaoOrders!!.expectPackage)
-        assertEquals("", taobaoOrders.verified)
+        assertEquals("2026-11-26", taobaoOrders.verified)
         assertTrue(taobaoOrders.readonly)
         assertTrue(taobaoOrders.params.isEmpty())
         assertEquals(11, taobaoOrders.steps.size)
@@ -189,10 +189,10 @@ class MacroCatalogAssetTest {
         assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("bili_readonly_prepare").getString("status"))
         assertEquals("2026-11-25", byId.getValue("bili_readonly_prepare").getString("verified"))
-        assertEquals("candidate_unverified", byId.getValue("bili_readonly_feed_prepare").getString("status"))
-        assertEquals("", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
-        assertEquals("candidate_unverified", byId.getValue("taobao_orders_prepare").getString("status"))
-        assertEquals("", byId.getValue("taobao_orders_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("bili_readonly_feed_prepare").getString("status"))
+        assertEquals("2026-11-26", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("taobao_orders_prepare").getString("status"))
+        assertEquals("2026-11-26", byId.getValue("taobao_orders_prepare").getString("verified"))
     }
 
     @Test
