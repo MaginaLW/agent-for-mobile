@@ -389,4 +389,89 @@ class MacroEngineExecutionTest {
         assertEquals(5000, calls[3].second.getInt("timeout_ms"))
         assertEquals("full", calls[4].second.getString("scope"))
     }
+
+    @Test
+    fun `jd_readonly_prepare completes 5 readonly steps with app_launch name 京东 and returns final snapshot`() {
+        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val engine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+        ) { tool, args ->
+            calls.add(tool to args)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "j-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.jingdong.app.mall"), "j-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.jingdong.app.mall"), "j-3")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "我的京东").put("desc", ""))),
+                    ctx("com.jingdong.app.mall"),
+                    "j-4",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+
+        val res = engine.run(JSONObject().put("name", "jd_readonly_prepare").put("params", JSONObject()))
+        assertEquals("completed", res.getString("status"))
+        assertEquals(5, res.getInt("steps_executed"))
+        assertTrue(res.has("final_snapshot"))
+        assertEquals(1, res.getJSONObject("final_snapshot").getInt("count"))
+        assertEquals(listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_snapshot"), calls.map { it.first })
+
+        assertEquals(0, calls[0].second.length())
+        assertEquals("京东", calls[1].second.getString("name"))
+        assertFalse(calls[1].second.has("app"))
+        assertEquals("app_foreground", calls[2].second.getString("condition"))
+        assertEquals("com.jingdong.app.mall", calls[2].second.getString("package"))
+        assertEquals(5000, calls[2].second.getInt("timeout_ms"))
+        assertEquals("idle", calls[3].second.getString("condition"))
+        assertEquals(800, calls[3].second.getInt("quiet_ms"))
+        assertEquals(5000, calls[3].second.getInt("timeout_ms"))
+        assertEquals("full", calls[4].second.getString("scope"))
+    }
+
+    @Test
+    fun `jd_readonly_prepare hands off on SYSTEM_BLOCKER and LOGIN_WALL`() {
+        val blockerCalls = mutableListOf<String>()
+        val blockerEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("请先登录") },
+        ) { tool, _ ->
+            blockerCalls.add(tool)
+            Envelope.ok(JSONObject().put("package", "com.vivo.appfilter"), ctx("com.vivo.appfilter"), "jb-1")
+        }
+        val blockerRes = blockerEngine.run(JSONObject().put("name", "jd_readonly_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", blockerRes.getString("status"))
+        assertEquals("SYSTEM_BLOCKER", blockerRes.getString("failure_code"))
+        assertTrue(blockerRes.getBoolean("blocker_detected"))
+        assertEquals(listOf("foreground_app"), blockerCalls)
+
+        val loginEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("请先登录", "手机号登录") },
+        ) { tool, _ ->
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "jl-1")
+                "app_launch", "wait_for" -> Envelope.ok(JSONObject(), ctx("com.jingdong.app.mall"), "jl-2")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("elements", JSONArray().put(JSONObject().put("text", "请先登录后查看订单").put("desc", ""))),
+                    ctx("com.jingdong.app.mall"),
+                    "jl-3",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+        val loginRes = loginEngine.run(JSONObject().put("name", "jd_readonly_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", loginRes.getString("status"))
+        assertEquals("LOGIN_WALL", loginRes.getString("failure_code"))
+        assertTrue(loginRes.getBoolean("blocker_detected"))
+    }
 }

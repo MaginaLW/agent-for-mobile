@@ -79,6 +79,19 @@ class MacroCatalogAssetTest {
             wechat.steps.all { it.tool in wechatAllowedTools },
         )
 
+        val jd = catalog.find("jd_readonly_prepare")
+        assertNotNull("必须加载 jd_readonly_prepare", jd)
+        assertEquals("com.jingdong.app.mall", jd!!.expectPackage)
+        assertEquals("", jd.verified)
+        assertTrue(jd.readonly)
+        assertTrue(jd.params.isEmpty())
+        assertEquals(5, jd.steps.size)
+        val jdReadonlyTools = setOf("foreground_app", "app_launch", "wait_for", "ui_snapshot")
+        assertTrue(
+            "jd_readonly_prepare 必须仅包含只读前置步骤",
+            jd.steps.all { it.tool in jdReadonlyTools },
+        )
+
         for (spec in catalog.all()) {
             assertFalse(pack.isBlockedApp(spec.expectPackage))
             for (step in spec.steps) {
@@ -92,7 +105,7 @@ class MacroCatalogAssetTest {
         }
 
         val listed = catalog.listForBrain()
-        assertEquals(3, listed.getInt("count"))
+        assertEquals(4, listed.getInt("count"))
         val byId = HashMap<String, JSONObject>()
         val macros = listed.getJSONArray("macros")
         for (i in 0 until macros.length()) {
@@ -106,6 +119,8 @@ class MacroCatalogAssetTest {
         assertEquals("2026-11-25", byId.getValue("taobao_readonly_prepare").getString("verified"))
         assertEquals("candidate_unverified", byId.getValue("wechat_readonly_prepare").getString("status"))
         assertEquals("", byId.getValue("wechat_readonly_prepare").getString("verified"))
+        assertEquals("candidate_unverified", byId.getValue("jd_readonly_prepare").getString("status"))
+        assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
     }
 
     @Test

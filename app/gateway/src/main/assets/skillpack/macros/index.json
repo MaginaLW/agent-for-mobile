@@ -2,6 +2,7 @@
   "files": [
     "xhs_search_prepare.json",
     "taobao_readonly_prepare.json",
-    "wechat_readonly_prepare.json"
+    "wechat_readonly_prepare.json",
+    "jd_readonly_prepare.json"
   ]
 }
