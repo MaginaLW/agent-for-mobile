@@ -29,6 +29,7 @@ internal data class MacroStepSpec(
     val argsTemplate: JSONObject,
     val optional: Boolean = false,
     val saveRef: String? = null,
+    val skipIfRefMissing: Boolean = false,
     val handoffIfForegroundIs: String? = null,
     val handoffReason: String? = null,
     val captureAsFinalSnapshot: Boolean = false,
@@ -122,6 +123,7 @@ internal object MacroContract {
         require(stepsArray != null && stepsArray.length() > 0) { "宏 $id steps 不能为空" }
         val steps = ArrayList<MacroStepSpec>(stepsArray.length())
         val stepIds = HashSet<String>()
+        val declaredRefSlots = HashSet<String>()
         for (i in 0 until stepsArray.length()) {
             val s = stepsArray.getJSONObject(i)
             val stepId = s.optString("id").trim()
@@ -131,10 +133,23 @@ internal object MacroContract {
             require(tool in ALLOWED_STEP_TOOLS) { "宏 $id 步骤 $stepId 工具不在白名单：$tool" }
             val argsTemplate = s.optJSONObject("args") ?: JSONObject()
             validateTemplateObject(id, stepId, argsTemplate, params.keys)
+            val referencedSlots = extractReferencedRefSlots(argsTemplate)
+            for (slot in referencedSlots) {
+                require(slot in declaredRefSlots) {
+                    "宏 $id 步骤 $stepId 引用了未由前序步骤 save_ref 声明的槽位：$slot"
+                }
+            }
+            val skipIfRefMissing = s.optBoolean("skip_if_ref_missing", false)
+            if (skipIfRefMissing) {
+                require(referencedSlots.isNotEmpty()) {
+                    "宏 $id 步骤 $stepId 启用 skip_if_ref_missing 但 args 未引用任何 {{ref:...}} 槽位"
+                }
+            }
 
             val saveRef = s.optString("save_ref").trim().takeIf { it.isNotEmpty() }
             if (saveRef != null) {
                 require(tool == "ui_find") { "宏 $id 步骤 $stepId 仅 ui_find 允许 save_ref" }
+                declaredRefSlots.add(saveRef)
             }
             val handoffFg = s.optString("handoff_if_foreground_is").trim().takeIf { it.isNotEmpty() }
             val handoffReason = s.optString("handoff_reason").trim().takeIf { it.isNotEmpty() }
@@ -154,6 +169,7 @@ internal object MacroContract {
                     argsTemplate = argsTemplate,
                     optional = s.optBoolean("optional", false),
                     saveRef = saveRef,
+                    skipIfRefMissing = skipIfRefMissing,
                     handoffIfForegroundIs = handoffFg,
                     handoffReason = handoffReason,
                     captureAsFinalSnapshot = s.optBoolean("capture_as_final_snapshot", false),
@@ -213,6 +229,35 @@ internal object MacroContract {
                         else -> throw IllegalArgumentException(
                             "宏 $macroId 步骤 $stepId 包含非法模板表达式：{{$token}}",
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    fun extractReferencedRefSlots(template: JSONObject): Set<String> {
+        val slots = LinkedHashSet<String>()
+        collectRefSlots(template, slots)
+        return slots
+    }
+
+    private fun collectRefSlots(value: Any?, out: MutableSet<String>) {
+        when (value) {
+            is JSONObject -> {
+                for (k in value.keys()) {
+                    collectRefSlots(value.opt(k), out)
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until value.length()) {
+                    collectRefSlots(value.opt(i), out)
+                }
+            }
+            is String -> {
+                for (match in TEMPLATE_REGEX.findAll(value)) {
+                    val token = match.groupValues[1].trim()
+                    if (REF_TOKEN_REGEX.matches(token)) {
+                        out.add(token.removePrefix("ref:"))
                     }
                 }
             }

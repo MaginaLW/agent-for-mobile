@@ -1,5 +1,6 @@
 package dev.magina.gateway.macro
 
+import dev.magina.gateway.core.SafetyPolicy
 import dev.magina.gateway.core.SkillPack
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,6 +105,59 @@ class MacroCatalogAssetTest {
             bili.steps.all { it.tool in jdReadonlyTools },
         )
 
+        val safetyPolicy = SafetyPolicy(
+            irreversibleWords = pack.dangerWords,
+            retractableWords = pack.sendWords,
+            sensitiveTargets = pack.sensitiveTargets,
+            actionConfirmWords = pack.actionConfirmWords,
+        )
+
+        val biliFeed = catalog.find("bili_readonly_feed_prepare")
+        assertNotNull("必须加载 bili_readonly_feed_prepare", biliFeed)
+        assertEquals("tv.danmaku.bili", biliFeed!!.expectPackage)
+        assertEquals("2026-11-26", biliFeed.verified)
+        assertTrue(biliFeed.readonly)
+        assertTrue(biliFeed.params.isEmpty())
+        assertEquals(8, biliFeed.steps.size)
+        assertTrue(
+            "bili_readonly_feed_prepare 的 ui_action 必须配置 skip_if_ref_missing=true",
+            biliFeed.steps.filter { it.tool == "ui_action" }.all { it.skipIfRefMissing },
+        )
+        val dismissPushStep = biliFeed.steps.first { it.id == "find_dismiss_push_prompt" }
+        assertEquals("button", dismissPushStep.argsTemplate.optString("role"))
+        assertEquals("暂不开启", dismissPushStep.argsTemplate.optString("text"))
+        assertFalse(dismissPushStep.argsTemplate.optBoolean("scroll_search", true))
+        assertFalse(
+            "暂不开启不应命中危险/确认词",
+            safetyPolicy.containsProtectedActionKeyword("暂不开启"),
+        )
+
+        val taobaoOrders = catalog.find("taobao_orders_prepare")
+        assertNotNull("必须加载 taobao_orders_prepare", taobaoOrders)
+        assertEquals("com.taobao.taobao", taobaoOrders!!.expectPackage)
+        assertEquals("2026-11-26", taobaoOrders.verified)
+        assertTrue(taobaoOrders.readonly)
+        assertTrue(taobaoOrders.params.isEmpty())
+        assertEquals(11, taobaoOrders.steps.size)
+        assertTrue(
+            "taobao_orders_prepare 的 ui_action 必须配置 skip_if_ref_missing=true",
+            taobaoOrders.steps.filter { it.tool == "ui_action" }.all { it.skipIfRefMissing },
+        )
+        val findMyTaobao = taobaoOrders.steps.first { it.id == "find_my_taobao" }
+        assertEquals("button", findMyTaobao.argsTemplate.optString("role"))
+        assertEquals("我的淘宝", findMyTaobao.argsTemplate.optString("desc"))
+        assertFalse(findMyTaobao.argsTemplate.optBoolean("scroll_search", true))
+        val findAllOrders = taobaoOrders.steps.first { it.id == "find_all_orders" }
+        assertEquals("button", findAllOrders.argsTemplate.optString("role"))
+        assertEquals("我的订单", findAllOrders.argsTemplate.optString("desc"))
+        assertFalse(findAllOrders.argsTemplate.optBoolean("scroll_search", true))
+        for (targetLabel in listOf("我的淘宝", "我的订单", "我的订单全部", "全部订单")) {
+            assertFalse(
+                "$targetLabel 不应命中危险/确认词",
+                safetyPolicy.containsProtectedActionKeyword(targetLabel),
+            )
+        }
+
         for (spec in catalog.all()) {
             assertFalse(pack.isBlockedApp(spec.expectPackage))
             for (step in spec.steps) {
@@ -117,7 +171,7 @@ class MacroCatalogAssetTest {
         }
 
         val listed = catalog.listForBrain()
-        assertEquals(5, listed.getInt("count"))
+        assertEquals(7, listed.getInt("count"))
         val byId = HashMap<String, JSONObject>()
         val macros = listed.getJSONArray("macros")
         for (i in 0 until macros.length()) {
@@ -135,6 +189,10 @@ class MacroCatalogAssetTest {
         assertEquals("", byId.getValue("jd_readonly_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("bili_readonly_prepare").getString("status"))
         assertEquals("2026-11-25", byId.getValue("bili_readonly_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("bili_readonly_feed_prepare").getString("status"))
+        assertEquals("2026-11-26", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("taobao_orders_prepare").getString("status"))
+        assertEquals("2026-11-26", byId.getValue("taobao_orders_prepare").getString("verified"))
     }
 
     @Test
@@ -185,6 +243,26 @@ class MacroCatalogAssetTest {
         }, "未声明参数")
         assertRejected({ it.put("steps", JSONArray()) }, "steps")
         assertRejected({ it.put("verified", "2026/11/24") }, "verified")
+        assertRejected({
+            it.put(
+                "steps",
+                JSONArray().put(
+                    JSONObject().put("id", "s1").put("tool", "ui_action")
+                        .put("args", JSONObject().put("ref", "e1").put("action", "click"))
+                        .put("skip_if_ref_missing", true),
+                ),
+            )
+        }, "未引用")
+        assertRejected({
+            it.put(
+                "steps",
+                JSONArray().put(
+                    JSONObject().put("id", "s1").put("tool", "ui_action")
+                        .put("args", JSONObject().put("ref", "{{ref:missing}}").put("action", "click"))
+                        .put("skip_if_ref_missing", true),
+                ),
+            )
+        }, "未由前序步骤 save_ref 声明")
 
         try {
             MacroCatalog(listOf(base, JSONObject(base.toString())), pack::isBlockedApp)

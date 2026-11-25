@@ -687,7 +687,7 @@ function Ensure-GatewayPreflightReady {
             $startExit = $LASTEXITCODE
         }
         if ($startExit -ne 0) {
-            $state.Problem = 'gateway 前台服务未运行且自动拉起失败。'
+            $state.Problem = 'gateway 前台服务未运行且自动拉起失败。若设备处于冷态无进程，请先显式运行 scripts/bootstrap-gateway.ps1。'
             return $state
         }
         $state.StartedService = $true

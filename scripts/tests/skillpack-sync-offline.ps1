@@ -183,9 +183,24 @@ function Assert-MacroAssetsSync {
 
         $steps = @($macro.steps)
         Assert-True ($steps.Count -ge 1) "宏 $id steps 不能为空。"
+        $declaredRefSlots = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($step in $steps) {
             $tool = [string]$step.tool
             Assert-True ($tool -in $allowedTools) "宏 $id 步骤 $($step.id) 使用非法/嵌套工具：$tool"
+            $argsJson = ($step.args | ConvertTo-Json -Depth 10 -Compress)
+            $refSlots = @([regex]::Matches($argsJson, '\{\{\s*ref:([a-zA-Z0-9_]+)\s*\}\}') | ForEach-Object { $_.Groups[1].Value })
+            foreach ($slot in $refSlots) {
+                Assert-True ($declaredRefSlots.Contains($slot)) "宏 $id 步骤 $($step.id) 引用了未由前序步骤 save_ref 声明的槽位：$slot"
+            }
+            $skipIfMissingProp = $step.PSObject.Properties['skip_if_ref_missing']
+            if ($null -ne $skipIfMissingProp -and [bool]$skipIfMissingProp.Value) {
+                Assert-True ($refSlots.Count -ge 1) "宏 $id 步骤 $($step.id) 启用 skip_if_ref_missing 但 args 未引用任何 {{ref:...}} 槽位"
+            }
+            $saveRefProp = $step.PSObject.Properties['save_ref']
+            if ($null -ne $saveRefProp -and -not [string]::IsNullOrWhiteSpace([string]$saveRefProp.Value)) {
+                Assert-True ($tool -ceq 'ui_find') "宏 $id 步骤 $($step.id) 仅 ui_find 允许 save_ref"
+                [void]$declaredRefSlots.Add(([string]$saveRefProp.Value).Trim())
+            }
             if ($tool -ceq 'app_launch') {
                 $argNames = @($step.args.PSObject.Properties.Name)
                 Assert-True (('name' -in $argNames) -and -not [string]::IsNullOrWhiteSpace([string]$step.args.name) -and ('app' -notin $argNames)) `
@@ -222,15 +237,25 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
     $macroIndex = Get-Content -LiteralPath (Join-Path $macroDir 'index.json') -Raw -Encoding utf8 | ConvertFrom-Json
     $macroFiles = @($macroIndex.files)
-    Assert-True ($macroFiles.Count -eq 5) "skillpack/macros/index.json 应登记 5 个宏，实际为 $($macroFiles.Count)"
+    Assert-True ($macroFiles.Count -eq 7) "skillpack/macros/index.json 应登记 7 个宏，实际为 $($macroFiles.Count)"
     $expectedVerifiedByFile = @{
-        'xhs_search_prepare.json'      = '2026-11-25'
-        'taobao_readonly_prepare.json' = '2026-11-25'
-        'wechat_readonly_prepare.json' = '2026-11-25'
-        'jd_readonly_prepare.json'     = ''
-        'bili_readonly_prepare.json'   = '2026-11-25'
+        'xhs_search_prepare.json'         = '2026-11-25'
+        'taobao_readonly_prepare.json'    = '2026-11-25'
+        'wechat_readonly_prepare.json'    = '2026-11-25'
+        'jd_readonly_prepare.json'        = ''
+        'bili_readonly_prepare.json'      = '2026-11-25'
+        'bili_readonly_feed_prepare.json' = '2026-11-26'
+        'taobao_orders_prepare.json'      = '2026-11-26'
     }
-    foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json', 'jd_readonly_prepare.json', 'bili_readonly_prepare.json')) {
+    foreach ($reqFile in @(
+        'xhs_search_prepare.json',
+        'taobao_readonly_prepare.json',
+        'wechat_readonly_prepare.json',
+        'jd_readonly_prepare.json',
+        'bili_readonly_prepare.json',
+        'bili_readonly_feed_prepare.json',
+        'taobao_orders_prepare.json'
+    )) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"
         $macroObj = Get-Content -LiteralPath (Join-Path $macroDir $reqFile) -Raw -Encoding utf8 | ConvertFrom-Json
         $expectedVerified = $expectedVerifiedByFile[$reqFile]
@@ -344,6 +369,23 @@ Test-Case 'negative_selftest_rejects_unverified_promotion_duplicates_and_manifes
         Assert-Throws {
             Assert-MacroAssetsSync -AppsJson $appsJson -SafetyJson $safetyJson -MacroDir $badMacroRoot
         } '黑名单|非法/嵌套工具'
+
+        @'
+{
+  "id": "bad_skip_without_ref",
+  "version": 1,
+  "app": "淘宝",
+  "expect_package": "com.taobao.taobao",
+  "description": "invalid skip_if_ref_missing",
+  "readonly": true,
+  "verified": "",
+  "params": {},
+  "steps": [{"id": "s1", "tool": "ui_action", "args": {"ref": "e1", "action": "click"}, "skip_if_ref_missing": true}]
+}
+'@ | Set-Content -LiteralPath (Join-Path $badMacroRoot 'bad.json') -Encoding utf8
+        Assert-Throws {
+            Assert-MacroAssetsSync -AppsJson $appsJson -SafetyJson $safetyJson -MacroDir $badMacroRoot
+        } 'skip_if_ref_missing'
     }
     finally {
         Remove-Item -LiteralPath $badMacroRoot -Recurse -Force -ErrorAction SilentlyContinue

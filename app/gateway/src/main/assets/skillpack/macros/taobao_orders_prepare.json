@@ -1,0 +1,116 @@
+{
+  "id": "taobao_orders_prepare",
+  "version": 1,
+  "app": "淘宝",
+  "expect_package": "com.taobao.taobao",
+  "description": "深化只读前置宏：检查前台非系统拦截后拉起淘宝，按 role=button + desc 唯一匹配尝试具名点击「我的淘宝」与「我的订单」（未唯一匹配时自动跳过），等待稳定并核验非登录墙后采集完整快照交回大脑查看物流；严禁下单、支付或触碰删除订单。",
+  "readonly": true,
+  "verified": "2026-11-26",
+  "params": {},
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "launch_taobao",
+      "tool": "app_launch",
+      "args": {
+        "name": "淘宝"
+      }
+    },
+    {
+      "id": "wait_taobao_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.taobao.taobao",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_taobao_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "find_my_taobao",
+      "tool": "ui_find",
+      "args": {
+        "role": "button",
+        "desc": "我的淘宝",
+        "scroll_search": false
+      },
+      "optional": true,
+      "save_ref": "my_taobao"
+    },
+    {
+      "id": "open_my_taobao",
+      "tool": "ui_action",
+      "args": {
+        "ref": "{{ref:my_taobao}}",
+        "action": "click"
+      },
+      "skip_if_ref_missing": true
+    },
+    {
+      "id": "wait_my_taobao_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "find_all_orders",
+      "tool": "ui_find",
+      "args": {
+        "role": "button",
+        "desc": "我的订单",
+        "scroll_search": false
+      },
+      "optional": true,
+      "save_ref": "all_orders"
+    },
+    {
+      "id": "open_all_orders",
+      "tool": "ui_action",
+      "args": {
+        "ref": "{{ref:all_orders}}",
+        "action": "click"
+      },
+      "skip_if_ref_missing": true
+    },
+    {
+      "id": "wait_orders_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "read_orders_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.taobao.taobao",
+        "blocking_overlay_false": true,
+        "no_login_wall": true
+      }
+    }
+  ]
+}

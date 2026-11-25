@@ -235,6 +235,13 @@ Invoke-Check '台账统计离线测试' {
     Get-LastMeaningfulLine (Join-Path $LogDir 'report-ledger-offline.log')
 }
 
+Invoke-Check '网关冷态起服离线测试' {
+    Invoke-Logged -LogName 'bootstrap-gateway-offline.log' -FilePath $PwshPath -Arguments @(
+        '-NoProfile', '-File', (Join-Path $RepoRoot 'scripts\tests\bootstrap-gateway-offline.ps1')
+    ) | Out-Null
+    Get-LastMeaningfulLine (Join-Path $LogDir 'bootstrap-gateway-offline.log')
+}
+
 if ($SkipGradle) {
     Write-Host '跳过 gradle（-SkipGradle）：Kotlin 侧未验证。' -ForegroundColor Yellow
     $results.Add([pscustomobject]@{ Name = 'Android JVM/Lint/构建'; Ok = $null; Seconds = 0; Detail = '已跳过' })

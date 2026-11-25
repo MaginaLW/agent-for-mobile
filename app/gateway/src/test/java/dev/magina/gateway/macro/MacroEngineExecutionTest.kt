@@ -564,4 +564,340 @@ class MacroEngineExecutionTest {
         assertEquals("LOGIN_WALL", loginRes.getString("failure_code"))
         assertTrue(loginRes.getBoolean("blocker_detected"))
     }
+
+    @Test
+    fun `bili_readonly_feed_prepare clicks dismiss prompt when unique and skips cleanly when absent or ambiguous`() {
+        val clickCalls = mutableListOf<Pair<String, JSONObject>>()
+        val clickEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("手机号登录", "扫码登录", "一键登录", "请先登录", "登录后即可") },
+        ) { tool, args ->
+            clickCalls.add(tool to args)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "bf-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("tv.danmaku.bili"), "bf-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("tv.danmaku.bili"), "bf-3")
+                "ui_find" -> Envelope.ok(
+                    JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", "e-dismiss").put("text", "暂不开启"))),
+                    ctx("tv.danmaku.bili"),
+                    "bf-4",
+                )
+                "ui_action" -> Envelope.ok(JSONObject().put("clicked", true), ctx("tv.danmaku.bili"), "bf-5")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "公开视频标题").put("desc", ""))),
+                    ctx("tv.danmaku.bili"),
+                    "bf-6",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+        val clickedRes = clickEngine.run(JSONObject().put("name", "bili_readonly_feed_prepare").put("params", JSONObject()))
+        assertEquals("completed", clickedRes.getString("status"))
+        assertEquals(8, clickedRes.getInt("steps_executed"))
+        assertEquals(0, clickedRes.getJSONArray("skipped_steps").length())
+        val biliFindArgs = clickCalls.first { it.first == "ui_find" }.second
+        assertEquals("button", biliFindArgs.optString("role"))
+        assertEquals("暂不开启", biliFindArgs.optString("text"))
+        assertFalse(biliFindArgs.optBoolean("scroll_search", true))
+        assertEquals("e-dismiss", clickCalls.first { it.first == "ui_action" }.second.getString("ref"))
+
+        val absentCalls = mutableListOf<String>()
+        val absentEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("手机号登录", "扫码登录", "一键登录", "请先登录", "登录后即可") },
+        ) { tool, _ ->
+            absentCalls.add(tool)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "ba-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("tv.danmaku.bili"), "ba-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("tv.danmaku.bili"), "ba-3")
+                "ui_find" -> Envelope.err(GatewayError(ErrorCode.E_NOT_FOUND, "未见暂不开启"), ctx("tv.danmaku.bili"), "ba-4")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "公开视频标题").put("desc", ""))),
+                    ctx("tv.danmaku.bili"),
+                    "ba-5",
+                )
+                else -> error("未命中的可选弹窗不应触发工具：$tool")
+            }
+        }
+        val absentRes = absentEngine.run(JSONObject().put("name", "bili_readonly_feed_prepare").put("params", JSONObject()))
+        assertEquals("completed", absentRes.getString("status"))
+        assertFalse("ui_action" in absentCalls)
+        assertEquals(
+            listOf("find_dismiss_push_prompt", "dismiss_push_prompt"),
+            (0 until absentRes.getJSONArray("skipped_steps").length()).map {
+                absentRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+
+        val multiCalls = mutableListOf<String>()
+        val multiEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { emptyList() },
+        ) { tool, _ ->
+            multiCalls.add(tool)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "bm-1")
+                "app_launch", "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("tv.danmaku.bili"), "bm-2")
+                "ui_find" -> Envelope.ok(
+                    JSONObject().put(
+                        "matches",
+                        JSONArray()
+                            .put(JSONObject().put("ref", "e-1"))
+                            .put(JSONObject().put("ref", "e-2")),
+                    ),
+                    ctx("tv.danmaku.bili"),
+                    "bm-3",
+                )
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject().put("blocking_overlay", false).put("count", 0).put("elements", JSONArray()),
+                    ctx("tv.danmaku.bili"),
+                    "bm-4",
+                )
+                else -> error("多条匹配未绑定 ref 时不应触发：$tool")
+            }
+        }
+        val multiRes = multiEngine.run(JSONObject().put("name", "bili_readonly_feed_prepare").put("params", JSONObject()))
+        assertEquals("completed", multiRes.getString("status"))
+        assertFalse("ui_action" in multiCalls)
+        assertEquals(
+            listOf("dismiss_push_prompt"),
+            (0 until multiRes.getJSONArray("skipped_steps").length()).map {
+                multiRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+    }
+
+    @Test
+    fun `taobao_orders_prepare navigates through my taobao and all orders and enforces login wall`() {
+        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val engine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+        ) { tool, args ->
+            calls.add(tool to args)
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "to-1")
+                "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.taobao.taobao"), "to-2")
+                "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "to-3")
+                "ui_find" -> {
+                    assertEquals("button", args.optString("role"))
+                    assertFalse(args.optBoolean("scroll_search", true))
+                    val slotRef = when (args.optString("desc")) {
+                        "我的淘宝" -> "e-my"
+                        "我的订单" -> "e-orders"
+                        else -> error("unexpected ui_find args: $args")
+                    }
+                    Envelope.ok(
+                        JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", slotRef))),
+                        ctx("com.taobao.taobao"),
+                        "to-4",
+                    )
+                }
+                "ui_action" -> Envelope.ok(JSONObject().put("clicked", true), ctx("com.taobao.taobao"), "to-5")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("count", 1)
+                        .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "全部订单").put("desc", ""))),
+                    ctx("com.taobao.taobao"),
+                    "to-6",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+        val res = engine.run(JSONObject().put("name", "taobao_orders_prepare").put("params", JSONObject()))
+        assertEquals("completed", res.getString("status"))
+        assertEquals(11, res.getInt("steps_executed"))
+        assertEquals(0, res.getJSONArray("skipped_steps").length())
+        val uiFindCalls = calls.filter { it.first == "ui_find" }.map { it.second }
+        assertEquals(2, uiFindCalls.size)
+        assertEquals("button", uiFindCalls[0].optString("role"))
+        assertEquals("我的淘宝", uiFindCalls[0].optString("desc"))
+        assertEquals("button", uiFindCalls[1].optString("role"))
+        assertEquals("我的订单", uiFindCalls[1].optString("desc"))
+        assertEquals(listOf("e-my", "e-orders"), calls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
+
+        val loginWallEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+        ) { tool, _ ->
+            when (tool) {
+                "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "tl-1")
+                "app_launch", "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "tl-2")
+                "ui_find" -> Envelope.err(GatewayError(ErrorCode.E_NOT_FOUND, "not found"), ctx("com.taobao.taobao"), "tl-3")
+                "ui_snapshot" -> Envelope.ok(
+                    JSONObject()
+                        .put("blocking_overlay", false)
+                        .put("elements", JSONArray().put(JSONObject().put("text", "请先登录淘宝").put("desc", ""))),
+                    ctx("com.taobao.taobao"),
+                    "tl-4",
+                )
+                else -> error("unexpected tool: $tool")
+            }
+        }
+        val loginRes = loginWallEngine.run(JSONObject().put("name", "taobao_orders_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", loginRes.getString("status"))
+        assertEquals("LOGIN_WALL", loginRes.getString("failure_code"))
+        assertTrue(loginRes.getBoolean("blocker_detected"))
+        assertEquals(
+            listOf("find_my_taobao", "open_my_taobao", "find_all_orders", "open_all_orders"),
+            (0 until loginRes.getJSONArray("skipped_steps").length()).map {
+                loginRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+    }
+
+    @Test
+    fun `skip_if_ref_missing never swallows safety terminal errors during real execution`() {
+        val terminalCodes = listOf(
+            ErrorCode.E_STALE_REF,
+            ErrorCode.E_BLOCKED,
+            ErrorCode.E_CONFIRM_REQUIRED,
+            ErrorCode.E_CONFIRM_TIMEOUT,
+            ErrorCode.E_PERM_MISSING,
+        )
+        assertEquals(
+            MacroContract.SAFETY_TERMINAL_ERROR_CODES,
+            terminalCodes.map { it.name }.toSet(),
+        )
+        for (terminalCode in terminalCodes) {
+            val calls = mutableListOf<String>()
+            val engine = MacroEngine(
+                catalog = loadRealCatalog(),
+                isBlockedApp = { false },
+                loginWallKeywordsForPackage = { emptyList() },
+            ) { tool, _ ->
+                calls.add(tool)
+                when (tool) {
+                    "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "s-1")
+                    "app_launch", "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("tv.danmaku.bili"), "s-2")
+                    "ui_find" -> Envelope.ok(
+                        JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", "e-dismiss"))),
+                        ctx("tv.danmaku.bili"),
+                        "s-3",
+                    )
+                    "ui_action" -> Envelope.err(
+                        GatewayError(terminalCode, "safety failure on click"),
+                        ctx("tv.danmaku.bili"),
+                        "s-4",
+                    )
+                    else -> error("安全终态后不得继续执行：$tool")
+                }
+            }
+            try {
+                engine.run(JSONObject().put("name", "bili_readonly_feed_prepare").put("params", JSONObject()))
+                fail("skip_if_ref_missing=true 绝不能吞掉执行期 $terminalCode")
+            } catch (e: GatewayError) {
+                assertEquals(terminalCode, e.code)
+                assertFalse(e.retryable)
+                assertEquals(false, e.extra?.getBoolean("handoff_allowed"))
+                assertEquals("dismiss_push_prompt", e.extra?.getString("failed_step"))
+                assertEquals(
+                    listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_find", "ui_action"),
+                    calls,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `taobao_orders_prepare clears saved ref after clicking my taobao and skips second click cleanly when orders button missing`() {
+        assertTrue("ui_action" in MacroContract.MUTATING_STEP_TOOLS)
+
+        fun runCase(ordersNotFound: Boolean): Pair<JSONObject, List<Pair<String, JSONObject>>> {
+            val calls = mutableListOf<Pair<String, JSONObject>>()
+            val engine = MacroEngine(
+                catalog = loadRealCatalog(),
+                isBlockedApp = { false },
+                loginWallKeywordsForPackage = { listOf("登录", "请先登录") },
+            ) { tool, args ->
+                calls.add(tool to args)
+                when (tool) {
+                    "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "to-1")
+                    "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx("com.taobao.taobao"), "to-2")
+                    "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx("com.taobao.taobao"), "to-3")
+                    "ui_find" -> when (args.optString("desc")) {
+                        "我的淘宝" -> Envelope.ok(
+                            JSONObject().put("matches", JSONArray().put(JSONObject().put("ref", "e-my"))),
+                            ctx("com.taobao.taobao"),
+                            "to-4",
+                        )
+                        "我的订单" -> if (ordersNotFound) {
+                            Envelope.err(GatewayError(ErrorCode.E_NOT_FOUND, "未见我的订单"), ctx("com.taobao.taobao"), "to-5")
+                        } else {
+                            Envelope.ok(
+                                JSONObject().put(
+                                    "matches",
+                                    JSONArray()
+                                        .put(JSONObject().put("ref", "e-orders-1"))
+                                        .put(JSONObject().put("ref", "e-orders-2")),
+                                ),
+                                ctx("com.taobao.taobao"),
+                                "to-5",
+                            )
+                        }
+                        else -> error("unexpected ui_find args: $args")
+                    }
+                    "ui_action" -> Envelope.ok(JSONObject().put("clicked", true), ctx("com.taobao.taobao"), "to-6")
+                    "ui_snapshot" -> Envelope.ok(
+                        JSONObject()
+                            .put("blocking_overlay", false)
+                            .put("count", 1)
+                            .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", "我的淘宝页").put("desc", ""))),
+                        ctx("com.taobao.taobao"),
+                        "to-7",
+                    )
+                    else -> error("unexpected tool: $tool")
+                }
+            }
+            val res = engine.run(JSONObject().put("name", "taobao_orders_prepare").put("params", JSONObject()))
+            return res to calls
+        }
+
+        val (notFoundRes, notFoundCalls) = runCase(ordersNotFound = true)
+        assertEquals("completed", notFoundRes.getString("status"))
+        assertEquals(10, notFoundRes.getInt("steps_executed"))
+        assertEquals(
+            listOf("find_all_orders", "open_all_orders"),
+            (0 until notFoundRes.getJSONArray("skipped_steps").length()).map {
+                notFoundRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+        val notFoundCompleted = (0 until notFoundRes.getJSONArray("completed_steps").length()).map {
+            notFoundRes.getJSONArray("completed_steps").getString(it)
+        }
+        assertTrue("wait_orders_settle" in notFoundCompleted)
+        assertTrue("read_orders_snapshot" in notFoundCompleted)
+        assertTrue(notFoundRes.has("final_snapshot"))
+        assertEquals(listOf("e-my"), notFoundCalls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
+
+        val (multiRes, multiCalls) = runCase(ordersNotFound = false)
+        assertEquals("completed", multiRes.getString("status"))
+        assertEquals(10, multiRes.getInt("steps_executed"))
+        assertEquals(
+            listOf("open_all_orders"),
+            (0 until multiRes.getJSONArray("skipped_steps").length()).map {
+                multiRes.getJSONArray("skipped_steps").getString(it)
+            },
+        )
+        val multiCompleted = (0 until multiRes.getJSONArray("completed_steps").length()).map {
+            multiRes.getJSONArray("completed_steps").getString(it)
+        }
+        assertTrue("wait_orders_settle" in multiCompleted)
+        assertTrue("read_orders_snapshot" in multiCompleted)
+        assertTrue(multiRes.has("final_snapshot"))
+        assertEquals(listOf("e-my"), multiCalls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
+    }
 }
