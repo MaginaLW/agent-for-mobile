@@ -27,7 +27,10 @@
   - **结构与策略底座**：[PR #88](https://github.com/MaginaLW/agent-for-mobile/pull/88)（`2fc5f53`）落地 `WindowTopologyPolicy` 瞬态空包名短重读、`SubtreeLabelPolicy` 严格非交互子树标签聚合（不改 `SafetyGate.kt`），并使 `taobao_readonly_prepare` 1 步 20s `success` 转正 `verified: "2026-11-25"`。
   - **Wave 1 提示词与任务卡收敛零重装转正（`4e7dd7d`）**：明确 `{"ok": true, "data": {...}, "ctx": {...}}` 信封与 `data.status`/`data.final_snapshot` 读取指引、收敛小红书为纯列表摘要并严禁点击无标签卡片按钮、新增 `scripts/tasks/wechat-readonly-prepare.md`。PA2553 实测：`wechat_readonly_prepare` **1 轮 24s `success`**（零越界操作），`xhs_search_prepare` + 1 次列表滚动 **34s / 119,068 in_tok `success`**（0 `ConfirmOverlay`、0 `E_VERIFY_FAIL`/`E_BLOCKED`，全面优于 `73s / 322,497 in_tok` 基线），双双晋级 `verified: "2026-11-25"`（提交 `b04fcab`）。
   - **Wave 2B 京东只读前置宏实测与哔哩哔哩替代验收（[PR #89](https://github.com/MaginaLW/agent-for-mobile/pull/89) · [PR #90](https://github.com/MaginaLW/agent-for-mobile/pull/90) · [B 站验收](runs/2026-11-25-PA2553-B站只读宏验收.md)）**：新增 `jd_readonly_prepare.json` 验通 5/5 宏子步与登录墙 `[AWAIT_CONFIRM]` `paused`（因设备端京东无法登录暂搁，保持 `verified: ""`）；按用户指示替代接入哔哩哔哩（`tv.danmaku.bili`、`AndroidManifest.xml` `<queries>`、`apps.json` 与 `bili_readonly_prepare.json`），PA2553 首轮遇 `com.vivo.appfilter` 干净暂停（27s），放行后 `m3-bili-readonly-promote-r2-20261125` **35s / 151,966 in_tok `success`**（5/5 宏子步 `OK`，具名点击「暂不开启」关推送提示并汇总 5 条公开视频，0 `ConfirmOverlay`），晋级 `verified: "2026-11-25"`。
-  - **下一步待办**：淘宝、微信、小红书、哔哩哔哩 4 枚只读前置宏均已转正；京东宏暂搁按需再测；后续结合明确业务需求扩展新应用确定性前置宏。
+  - **阶段 5A 宏深化与派单运维离线落地（2026-11-25，`codex/stage5-m3-macro-and-ops`）**：
+    - `MacroSpec` / `MacroEngine` 新增 `skip_if_ref_missing` 受限条件跳过原语（静态校验前序 `save_ref` 声明，运行期缺失 `ref` 时跳过并保留执行期安全终态零吞错），并新增两枚未验证深化候选宏 `bili_readonly_feed_prepare.json` 与 `taobao_orders_prepare.json`（保持 `verified: ""`）；
+    - 新增显式冷态起服工具 `scripts/bootstrap-gateway.ps1` 与离线回归测试 `scripts/tests/bootstrap-gateway-offline.ps1`（纳入 `scripts/check.ps1`），保持 `dispatch.ps1` 默认不抢前景焦点；并在 `scripts/report-ledger.ps1` 补齐 `paused` 列、`bili` 类别与 `-ByMacro` 细分统计。本轮仅完成离线开发与回归，待 PA2553 真机同签覆盖安装并实测候选宏后再转正。
+  - **下一步待办**：淘宝、微信、小红书、哔哩哔哩 4 枚 `v1` 只读前置宏已转正；阶段 5A 新增 `bili_readonly_feed_prepare` 与 `taobao_orders_prepare` 待 PA2553 真机验收；京东宏暂搁按需再测；后续按需推进设备端网关面板（`MainActivity` 宏目录/审计回放）或语义意图审批生产接线。
 
 ## 2. 按需再做（有具体任务需要时才排）
 
