@@ -223,10 +223,16 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
     $macroIndex = Get-Content -LiteralPath (Join-Path $macroDir 'index.json') -Raw -Encoding utf8 | ConvertFrom-Json
     $macroFiles = @($macroIndex.files)
     Assert-True ($macroFiles.Count -eq 3) "skillpack/macros/index.json 应登记 3 个宏，实际为 $($macroFiles.Count)"
+    $expectedVerifiedByFile = @{
+        'xhs_search_prepare.json'      = ''
+        'taobao_readonly_prepare.json' = '2026-11-25'
+        'wechat_readonly_prepare.json' = ''
+    }
     foreach ($reqFile in @('xhs_search_prepare.json', 'taobao_readonly_prepare.json', 'wechat_readonly_prepare.json')) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"
         $macroObj = Get-Content -LiteralPath (Join-Path $macroDir $reqFile) -Raw -Encoding utf8 | ConvertFrom-Json
-        Assert-True ([string]$macroObj.verified -ceq '') "候选宏 $reqFile verified 必须为空字符串"
+        $expectedVerified = $expectedVerifiedByFile[$reqFile]
+        Assert-True ([string]$macroObj.verified -ceq $expectedVerified) "宏 $reqFile verified 应为 '$expectedVerified'，实际为 '$($macroObj.verified)'"
         Assert-True ($macroObj.readonly -eq $true) "只读前置宏 $reqFile readonly 必须为 true"
     }
 }

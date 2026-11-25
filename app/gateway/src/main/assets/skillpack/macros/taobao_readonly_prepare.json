@@ -5,7 +5,7 @@
   "expect_package": "com.taobao.taobao",
   "description": "检查前台非系统拦截后拉起淘宝，等待前台与页面稳定并采集只读完整快照交回大脑阅读；若遇系统拦截弹窗、登录墙或遮挡弹窗则断点交回大脑接管。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-25",
   "params": {},
   "steps": [
     {

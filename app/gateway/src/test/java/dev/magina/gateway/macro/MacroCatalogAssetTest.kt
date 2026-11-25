@@ -47,7 +47,7 @@ class MacroCatalogAssetTest {
     }
 
     @Test
-    fun `real macro assets load cleanly and keep unverified candidate status`() {
+    fun `real macro assets load cleanly and reflect verified vs unverified status`() {
         val pack = loadPack()
         val catalog = loadRealMacros(pack)
 
@@ -61,7 +61,7 @@ class MacroCatalogAssetTest {
         val taobao = catalog.find("taobao_readonly_prepare")
         assertNotNull("必须加载 taobao_readonly_prepare", taobao)
         assertEquals("com.taobao.taobao", taobao!!.expectPackage)
-        assertEquals("", taobao.verified)
+        assertEquals("2026-11-25", taobao.verified)
         assertTrue(taobao.readonly)
         assertTrue(taobao.params.isEmpty())
         assertEquals(5, taobao.steps.size)
@@ -80,7 +80,6 @@ class MacroCatalogAssetTest {
         )
 
         for (spec in catalog.all()) {
-            assertEquals("", spec.verified)
             assertFalse(pack.isBlockedApp(spec.expectPackage))
             for (step in spec.steps) {
                 if (step.tool == "app_launch") {
@@ -94,13 +93,19 @@ class MacroCatalogAssetTest {
 
         val listed = catalog.listForBrain()
         assertEquals(3, listed.getInt("count"))
+        val byId = HashMap<String, JSONObject>()
         val macros = listed.getJSONArray("macros")
         for (i in 0 until macros.length()) {
             val item = macros.getJSONObject(i)
-            assertEquals("candidate_unverified", item.getString("status"))
-            assertEquals("", item.getString("verified"))
             assertFalse(pack.isBlockedApp(item.getString("expect_package")))
+            byId[item.getString("id")] = item
         }
+        assertEquals("candidate_unverified", byId.getValue("xhs_search_prepare").getString("status"))
+        assertEquals("", byId.getValue("xhs_search_prepare").getString("verified"))
+        assertEquals("verified", byId.getValue("taobao_readonly_prepare").getString("status"))
+        assertEquals("2026-11-25", byId.getValue("taobao_readonly_prepare").getString("verified"))
+        assertEquals("candidate_unverified", byId.getValue("wechat_readonly_prepare").getString("status"))
+        assertEquals("", byId.getValue("wechat_readonly_prepare").getString("verified"))
     }
 
     @Test
