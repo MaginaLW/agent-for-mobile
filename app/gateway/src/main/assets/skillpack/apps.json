@@ -8,7 +8,8 @@
     "天猫": "com.tmall.wireless",
     "支付宝": "com.eg.android.AlipayGphone",
     "设置": "com.android.settings",
-    "相册": "com.vivo.gallery"
+    "相册": "com.vivo.gallery",
+    "哔哩哔哩": "tv.danmaku.bili"
   },
   "share_components": {
     "com.tencent.mm": "com.tencent.mm.ui.tools.ShareImgUI"
@@ -75,6 +76,19 @@
       ],
       "readonly_rules": [
         "禁止用 android.settings.BLUETOOTH_SETTINGS 直达蓝牙页（OriginOS 不可靠）；改用 app_launch(\"设置\") 或 android.settings.SETTINGS 后 UI 导航"
+      ]
+    },
+    "tv.danmaku.bili": {
+      "app": "哔哩哔哩",
+      "known_blockers": ["com.vivo.appfilter"],
+      "login_wall_keywords": ["手机号登录", "扫码登录", "一键登录", "请先登录", "登录后即可"],
+      "pre_guards": [
+        "启动后先核对前台包名，遇系统拦截弹窗立即停止交现场用户处理",
+        "公开视频列表浏览无需登录；若出现强制遮挡登录弹窗立即停止，绝不代登录或处理验证码"
+      ],
+      "readonly_rules": [
+        "仅公开只读浏览视频列表与标题摘要；不点赞、不投币、不收藏、不关注、不发弹幕或评论",
+        "严禁点击无标签图标按钮或进入大会员/付费充值页"
       ]
     }
   }

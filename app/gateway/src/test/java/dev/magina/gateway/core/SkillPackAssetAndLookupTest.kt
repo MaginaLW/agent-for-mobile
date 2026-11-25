@@ -105,6 +105,7 @@ class SkillPackAssetAndLookupTest {
             "com.jingdong.app.mall",
             "com.taobao.taobao",
             "com.android.settings",
+            "tv.danmaku.bili",
         )
         assertTrue(
             "app_guides 必须覆盖目标 App 集合",
@@ -145,6 +146,12 @@ class SkillPackAssetAndLookupTest {
         val xhs = pack.lookupForBrain("小红书")
         assertEquals("com.xingin.xhs", xhs.getString("package"))
         assertFalse(xhs.getBoolean("blocked"))
+
+        val bili = pack.lookupForBrain("哔哩哔哩")
+        assertTrue(bili.getBoolean("matched"))
+        assertEquals("tv.danmaku.bili", bili.getString("package"))
+        assertFalse(bili.getBoolean("blocked"))
+        assertTrue(bili.has("app_guide"))
 
         val alipay = pack.lookupForBrain("支付宝")
         assertTrue(alipay.getBoolean("matched"))
