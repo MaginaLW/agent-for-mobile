@@ -54,6 +54,21 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
         Assert-True ($macro.runs -eq 1 -and $null -eq $macro.avg_cache_hit_pct) 'in_tok=0 时缓存命中率应安全为 null'
     }
 
+    Test-Case 'categorizes_m3_macro_runs_under_macro' {
+        Assert-True ((Get-LedgerTaskCategory 'm3-taobao-readonly-prep-20261125') -ceq 'macro') 'm3-taobao-readonly-prep-20261125 应归类为 macro'
+        Assert-True ((Get-LedgerTaskCategory 'm3-wechat-readonly-prep-20261125') -ceq 'macro') 'm3-wechat-readonly-prep-20261125 应归类为 macro'
+
+        $m3CsvPath = Join-Path $scratch 'ledger-m3.csv'
+        @"
+time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason
+2026-11-25T10:00:00,m3-taobao-readonly-prep-20261125,1,codex,,1,1000,50,500,0,,10,success,,,,
+2026-11-25T10:05:00,m3-wechat-readonly-prep-20261125,1,codex,,1,1200,60,600,0,,12,success,,,,
+"@ | Set-Content -LiteralPath $m3CsvPath -Encoding utf8
+        $m3Data = Get-LedgerReportData -Path $m3CsvPath -SinceDate '2026-11-25' -BrainFilter 'codex'
+        $m3Macro = @($m3Data.categories | Where-Object { $_.category -ceq 'macro' })[0]
+        Assert-True ($null -ne $m3Macro -and $m3Macro.runs -eq 2 -and $m3Macro.success -eq 2) 'm3-* 宏任务应聚合到 macro 类别'
+    }
+
     Test-Case 'rejects_invalid_since_format' {
         $err = $null
         try { Get-LedgerReportData -Path $csvPath -SinceDate '2026/11/18' | Out-Null } catch { $err = $_ }

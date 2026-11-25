@@ -254,13 +254,15 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
     Assert-True ($preamble.Contains('skill_macro_list', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_list。'
     Assert-True ($preamble.Contains('skill_macro_exec', [StringComparison]::Ordinal)) 'preamble 应引导调用 skill_macro_exec。'
     Assert-True ($preamble.Contains('system_get_state', [StringComparison]::Ordinal)) 'preamble 应引导优先调用 system_get_state。'
+    Assert-True ($preamble.Contains('data.final_snapshot', [StringComparison]::Ordinal)) 'preamble 应明确引导消费 data.final_snapshot。'
 
     $tasks = @(
         'scripts\tasks\m0-1-bluetooth-off.md',
         'scripts\tasks\check-bluetooth.md',
         'scripts\tasks\m0-3-xhs-summary.md',
         'scripts\tasks\m0-5-jd-order.md',
-        'scripts\tasks\taobao-order-readonly.md'
+        'scripts\tasks\taobao-order-readonly.md',
+        'scripts\tasks\wechat-readonly-prepare.md'
     )
     foreach ($relTask in $tasks) {
         $taskFile = Join-Path $repoRoot $relTask
@@ -276,6 +278,9 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         }
         if ($relTask -ceq 'scripts\tasks\taobao-order-readonly.md') {
             Assert-True ($text.Contains('taobao_readonly_prepare', [StringComparison]::Ordinal)) '淘宝只读任务卡 DryRun 应包含 taobao_readonly_prepare'
+        }
+        if ($relTask -ceq 'scripts\tasks\wechat-readonly-prepare.md') {
+            Assert-True ($text.Contains('wechat_readonly_prepare', [StringComparison]::Ordinal)) '微信只读前置任务卡 DryRun 应包含 wechat_readonly_prepare'
         }
         Assert-True ($text -notmatch '绕过确认卡|自动代登录|自动过验证码|open_uri 打开对应系统设置页') "DryRun 输出命中违禁指引：$relTask"
     }

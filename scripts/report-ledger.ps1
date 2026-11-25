@@ -24,7 +24,7 @@ function Get-LedgerTaskCategory {
 
     $s = $Slug.ToLowerInvariant()
     switch -Regex ($s) {
-        '^skill-macro|^macro-' { return 'macro' }
+        '^skill-macro|^macro-|^m3-' { return 'macro' }
         'xhs' { return 'xhs' }
         'taobao|jd-' { return 'taobao_jd' }
         'bluetooth' { return 'bluetooth' }
