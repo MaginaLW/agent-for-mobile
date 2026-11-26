@@ -241,12 +241,12 @@ internal object P0FocusProbeValidator {
                 add("OCR 没识别出「$P0_FILE_TRANSFER_ASSISTANT」标题（识别抖动？）")
             } else if (
                 titleCandidates.none {
-                    it.source in setOf("ocr", "fused") &&
-                        it.confidence?.let { c -> c.isFinite() && c >= MIN_OCR_CONFIDENCE } == true &&
+                    ConversationTitlePolicy.isTrustedForRecognition(it.source, it.confidence) &&
                         it.stage == P0ElementStage.TOOLBAR &&
-                        validBounds(it.bounds, w, h) &&
-                        it.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                        it.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
+                        ConversationTitlePolicy.isInToolbarBand(
+                            it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom,
+                            0, 0, w, h,
+                        )
                 }
             ) {
                 add(
@@ -289,12 +289,12 @@ internal object P0FocusProbeValidator {
             // 这一识别判断，从不是点击目标（真正的盲点坐标是下面独立算出的固定 region），
             // 严格相等在这类 OCR 附加字符场景下会永远漏判，改用 contains。
             normalized(element.text).contains(P0_FILE_TRANSFER_ASSISTANT) &&
-                element.source in setOf("ocr", "fused") &&
-                element.confidence?.let { it.isFinite() && it >= MIN_OCR_CONFIDENCE } == true &&
+                ConversationTitlePolicy.isTrustedForRecognition(element.source, element.confidence) &&
                 element.stage == P0ElementStage.TOOLBAR &&
-                validBounds(element.bounds, w, h) &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
+                ConversationTitlePolicy.isInToolbarBand(
+                    element.bounds.left, element.bounds.top, element.bounds.right, element.bounds.bottom,
+                    0, 0, w, h,
+                )
         } ?: return null
 
         // 中心安全底栏，几何由 [p0FocusProbeRegion] 统一计算——Android 侧
@@ -887,22 +887,17 @@ internal class P0WeChatPrepareMacro(
         return snapshot.elements.firstOrNull { element ->
             isTargetLabelLoosely(element) && trustedForRecognition(element, snapshot) &&
                 element.stage == P0ElementStage.TOOLBAR &&
-                validBounds(element.bounds, w, h) &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.3).toInt()..(w * 0.7).toInt() &&
-                validBounds(element.bounds, w, h)
+                ConversationTitlePolicy.isInToolbarBand(
+                    element.bounds.left, element.bounds.top, element.bounds.right, element.bounds.bottom,
+                    0, 0, w, h,
+                )
         }
     }
 
-    /** 仅用于页面识别，不用于任何点击目标；置信度门槛见 [MIN_RECOGNITION_OCR_CONFIDENCE]。 */
+    /** 仅用于页面识别，不用于任何点击目标；置信度门槛与生产 [ConversationTitlePolicy] 同源。 */
     private fun trustedForRecognition(element: P0MacroElement, snapshot: P0MacroSnapshot): Boolean =
-        when (element.source) {
-            "a11y" -> true
-            "ocr", "fused" -> element.confidence?.let {
-                it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
-            } == true
-            else -> false
-        } && validBounds(element.bounds, snapshot.screenWidth, snapshot.screenHeight)
+        ConversationTitlePolicy.isTrustedForRecognition(element.source, element.confidence) &&
+            validBounds(element.bounds, snapshot.screenWidth, snapshot.screenHeight)
 
     private fun hasTopTitle(snapshot: P0MacroSnapshot, title: String): Boolean {
         val w = snapshot.screenWidth
@@ -910,8 +905,10 @@ internal class P0WeChatPrepareMacro(
         return snapshot.elements.any { element ->
             (normalized(element.text) == title || normalized(element.description) == title) &&
                 trustedForRecognition(element, snapshot) && element.stage == P0ElementStage.TOOLBAR &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.3).toInt()..(w * 0.7).toInt()
+                ConversationTitlePolicy.isInToolbarBand(
+                    element.bounds.left, element.bounds.top, element.bounds.right, element.bounds.bottom,
+                    0, 0, w, h,
+                )
         }
     }
 

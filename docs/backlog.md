@@ -32,12 +32,13 @@
     - 新增显式冷态起服工具 `scripts/bootstrap-gateway.ps1` 与离线回归测试 `scripts/tests/bootstrap-gateway-offline.ps1`（纳入 `scripts/check.ps1`），保持 `dispatch.ps1` 默认不抢前景焦点；并在 `scripts/report-ledger.ps1` 补齐 `paused` 列、`bili` 类别与 `-ByMacro` 细分统计。
     - **PA2553 真机验收结果（`9937a7d` 首轮 + `c4ae700` 选择器收窄复测）**：① `bootstrap-gateway.ps1` 冷态起服（`cold_started` / `ReturnedHome=true`）与二次幂等（`already_running`）全部验通；② 首轮 `bili_readonly_feed_prepare` **1 轮 27s / 50,739 in_tok `success`**，同时定位 `taobao_orders_prepare` 首页底栏双节点命中问题；③ `c4ae700` 将两枚深化宏收窄为 `role="button"` + 精确 `desc`/`text`（`scroll_search=false`）后重装复测：`taobao_orders_prepare` **1 轮 25s / 52,530 in_tok `success`**（11/11 子步全 `OK`，直达「全部订单」页，0 ConfirmOverlay），`bili_readonly_feed_prepare` **1 轮 32s / 113,317 in_tok `success`**（0 ConfirmOverlay），双宏同步转正 `verified: "2026-11-26"`（`bili_readonly_feed_prepare` 推送弹窗实际弹出分支待后续自然复现时补充观测）。
   - **阶段 6A 设备端执行网关 App 本体升级（离线已落地，分支 `codex/stage6a-gateway-app-panel`）**：统一 `BuildConfig.VERSION_NAME`（`0.2.0-m3` / `versionCode=2`），落地纯 Kotlin `AuditLogReader`、`GatewayDashboardModel` 与 4 标签只读/自检控制台 `MainActivity`（默认遮罩 token 并于 `onPause` 复原、7 项权限与电池白名单自检、宏目录/技能包只读展示、异步审计回放），补齐纯 JVM 单测（离线通过不代替真机装包验证）。
-  - **下一步待办**：淘宝（`taobao_readonly_prepare`、`taobao_orders_prepare`）、微信（`wechat_readonly_prepare`）、小红书（`xhs_search_prepare`）、哔哩哔哩（`bili_readonly_prepare`、`bili_readonly_feed_prepare`）共 **6 枚**只读前置宏已转正（`jd_readonly_prepare` 保持 `""` 暂搁按需再测）；紧接推进 **阶段 6B-1 语义意图审批生产接线**，装包后顺带完成阶段 6A 4 标签面板真机核对。
+  - **阶段 6B-1 语义意图审批生产接线（离线已落地，分支 `codex/stage6b1-semantic-intent-wiring`）**：`SafetyGate`、`ToolExecutionPipeline`、`AndroidIntentEvidenceReader`、`ConversationTitlePolicy` 与 `InputCommitEvidence`/`PreparedTargetEvidence` 同源重建安装已全部接线并通过离线单测，已同步 [硬门 spec §2](specs/2026-07-19-危险动作统一硬门-design.md#2-安全不变量) 与 [语义意图审批 spec](specs/2026-08-02-语义意图审批-design.md)（离线通过不代替真机验证，PA2553 真机验收待执行）。
+  - **下一步待办**：淘宝（`taobao_readonly_prepare`、`taobao_orders_prepare`）、微信（`wechat_readonly_prepare`）、小红书（`xhs_search_prepare`）、哔哩哔哩（`bili_readonly_prepare`、`bili_readonly_feed_prepare`）共 **6 枚**只读前置宏已转正（`jd_readonly_prepare` 保持 `""` 暂搁按需再测）；后续优先排 **PA2553 阶段 6A + 6B-1 真机验收**，再按需推进系统内置 App 技能包/宏扩展（6B-2）。
 
 ## 2. 按需再做（有具体任务需要时才排）
 
 - M1b 占位工具：通知读取/回复、`ui_diff`、Shizuku 强停当前已从 `tools/list` 下架；按需实施与必验失败路径见 [能力现状](knowledge/android/m1b-capabilities.md)。
-- 语义意图生产接线：基础模块已在代码中，接线范围见 [语义意图 spec §5](specs/2026-08-02-语义意图审批-design.md)。
+- 语义意图生产接线：阶段 6B-1 离线接线与单测已落地（[语义意图 spec §5](specs/2026-08-02-语义意图审批-design.md#5-落地切分与进度)），PA2553 真机验收待排期。
 - 分享落地 activity 白名单：必须来自真机观测，没有观测就保持空。
 - 微信相关任务（M0-2/M0-4 发消息、发图）：PA2553 横屏 M0-2 文本备稿与 `ConfirmOverlay` 发送投递已实机验通（[实测闭环](knowledge/apps/wechat.md#pa2553-起点-3-桌面就位确认卡发送投递与起点-2-根因定位)）；M0-4 跨应用发图与标准竖屏 P0 仍按需后置（[标准入口](runbooks/P0-safety-hard-gate-smoke.md#2-标准入口) · [平板知识](knowledge/android/tablet.md) · [微信知识](knowledge/apps/wechat.md)），不恢复已删除的研究栈。
 - 语音/分享入口按需再做；M3 后续宏扩展与排查见 [阶段 4 主线](#1-下一轮任务安排)。

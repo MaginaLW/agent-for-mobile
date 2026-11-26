@@ -25,7 +25,12 @@ object ToolRegistry {
         var testAttempt: TestConfirmationAttempt? = null
         var staleKey: String = ""
         var targetLabel: String = ""
+        var targetWindowPane: String? = null
         var inputPreview: String? = null
+        var debugStaleInjected: Boolean = false
+        var semanticIntentActive: Boolean = false
+        var initialUiLabelText: String? = null
+        var initialUiLabelDesc: String? = null
 
         fun readContext(reader: () -> SafetyContext): SafetyContext {
             contextReads += 1
@@ -46,7 +51,12 @@ object ToolRegistry {
         fun captureApprovalScope(context: SafetyContext, riskTier: RiskTier?) {
             if (staleKey.isNotEmpty()) return
             targetLabel = context.target?.preparedTargetEvidence?.label.orEmpty()
+            targetWindowPane = context.target?.windowPane
             inputPreview = context.target?.inputCommitEvidence?.preview
+            initialUiLabelText = context.target?.text
+            initialUiLabelDesc = context.target?.description
+            semanticIntentActive = context.target?.preparedTargetEvidence != null &&
+                context.target.inputCommitEvidence != null
             staleKey = StaleReconfirmGuard.key(
                 toolName = toolName,
                 riskTier = riskTier ?: RiskTier.IRREVERSIBLE,

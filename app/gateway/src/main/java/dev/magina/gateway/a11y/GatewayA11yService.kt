@@ -86,6 +86,7 @@ class GatewayA11yService : AccessibilityService() {
         val source: String,
         val windowId: Int = -1,
         val pane: String = "full",
+        val confidence: Double? = null,
     )
 
     private val refs = SnapshotRefRegistry<RefEntry>()
@@ -228,6 +229,50 @@ class GatewayA11yService : AccessibilityService() {
         if (classifyWindowTopology(slices) != WindowTopology.SAME_APP_MULTI) return null
         val slice = matchSliceForPoint(slices, bounds.centerX(), bounds.centerY()) ?: return null
         return assignWindowPanes(slices)[slice.windowId]
+    }
+
+    internal fun paneRegionBounds(pane: String?): Rect {
+        if (!pane.isNullOrBlank()) {
+            val slices = appWindowSlices()
+            if (classifyWindowTopology(slices) == WindowTopology.SAME_APP_MULTI) {
+                val paneMap = assignWindowPanes(slices)
+                val slice = slices.firstOrNull { paneMap[it.windowId] == pane }
+                if (slice != null) return Rect(slice.left, slice.top, slice.right, slice.bottom)
+            }
+        }
+        val metrics = resources.displayMetrics
+        return Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+    }
+
+    /** 只读读取当前缓存快照内的目标会话标题，绝不刷新或作废 SnapshotRefRegistry 中的既有 ref。 */
+    internal fun currentSnapshotTitle(pane: String?): ConversationTitleObservation? {
+        val currentWindows = windows
+        val fgWinId = applicationWindow(currentWindows)?.id
+        val blocking = hasBlockingOverlay(exposedWindows(currentWindows), fgWinId)
+        val region = paneRegionBounds(pane)
+        val elements = refs.currentEntries().mapNotNull { (_, entry) ->
+            if (!pane.isNullOrBlank() && entry.pane.isNotBlank() && entry.pane != pane && entry.pane != "full") {
+                return@mapNotNull null
+            }
+            ConversationTitleElement(
+                text = entry.label.ifEmpty { entry.text },
+                description = entry.desc,
+                source = entry.source,
+                confidence = entry.confidence,
+                left = entry.bounds.left,
+                top = entry.bounds.top,
+                right = entry.bounds.right,
+                bottom = entry.bounds.bottom,
+            )
+        }
+        return ConversationTitlePolicy.readTitle(
+            elements = elements,
+            regionLeft = region.left,
+            regionTop = region.top,
+            regionWidth = region.width(),
+            regionHeight = region.height(),
+            blockingOverlay = blocking,
+        )
     }
 
     /**
@@ -511,11 +556,12 @@ class GatewayA11yService : AccessibilityService() {
                     )) {
                         is FusionDecision.Fuse -> {
                             val he = checkNotNull(refs.current(decision.hostRef))
-                            check(refs.replace(decision.hostRef, he.copy(label = line.text, source = "fused")))
+                            val conf = ocrCoordinator.conf2(line.conf)
+                            check(refs.replace(decision.hostRef, he.copy(label = line.text, source = "fused", confidence = conf)))
                             jsonByRef[decision.hostRef]
                                 ?.put("text", line.text.take(cap))
                                 ?.put("source", "fused")
-                                ?.put("confidence", ocrCoordinator.conf2(line.conf))
+                                ?.put("confidence", conf)
                             continue
                         }
                         FusionDecision.DropDuplicate -> continue
@@ -528,11 +574,12 @@ class GatewayA11yService : AccessibilityService() {
                     val slice = matchSliceForPoint(appSlices, b.centerX(), b.centerY())
                     val ocrWinId = slice?.windowId ?: -1
                     val ocrPane = slice?.let { paneByWinId[it.windowId] } ?: "full"
+                    val conf = ocrCoordinator.conf2(line.conf)
                     val ref = refs.bind(
                         refBatch,
                         UiRefSource.OCR,
                         ocrIdx,
-                        RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr", ocrWinId, ocrPane),
+                        RefEntry(null, "", line.text, "", b, lastSnapshotRev, "ocr", ocrWinId, ocrPane, conf),
                     )
                     elements.put(
                         JSONObject()
@@ -545,7 +592,7 @@ class GatewayA11yService : AccessibilityService() {
                             .put("source", "ocr")
                             .put("window_id", ocrWinId)
                             .put("pane", ocrPane)
-                            .put("confidence", ocrCoordinator.conf2(line.conf))
+                            .put("confidence", conf)
                     )
                 }
                 fusion = "ocr"

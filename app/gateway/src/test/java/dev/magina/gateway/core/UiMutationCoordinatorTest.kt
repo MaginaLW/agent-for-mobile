@@ -78,6 +78,18 @@ class UiMutationCoordinatorTest {
             invalidateInputEvidenceForMutation(store, Level.R, "ui_snapshot"),
         )
         assertEquals(readEvidence, store.current(strict))
+
+        val sendEvidence = seed()
+        assertFalse(
+            invalidateInputEvidenceForMutation(
+                store = store,
+                level = Level.W,
+                toolName = "ui_action",
+                action = "click",
+                isRetractableSendAction = true,
+            ),
+        )
+        assertEquals(sendEvidence, store.current(strict))
     }
 
     @Test
@@ -113,6 +125,25 @@ class UiMutationCoordinatorTest {
         )
         assertEquals(
             preservedByEnter,
+            store.current(
+                "com.tencent.mm",
+                strict,
+                "[1,2][30,40]",
+            ),
+        )
+
+        val preservedBySendClick = seed()
+        assertFalse(
+            invalidatePreparedTargetForMutation(
+                store = store,
+                level = Level.W,
+                toolName = "ui_action",
+                action = "click",
+                isRetractableSendAction = true,
+            ),
+        )
+        assertEquals(
+            preservedBySendClick,
             store.current(
                 "com.tencent.mm",
                 strict,
