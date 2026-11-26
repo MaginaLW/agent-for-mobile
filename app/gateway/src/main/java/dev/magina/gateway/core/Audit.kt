@@ -74,6 +74,9 @@ class Audit(
      */
     val writeFailures: Long get() = failures.get()
 
+    /** 只读暴露审计目录供面板回放器查询，不改变写入与清理契约。 */
+    fun auditDirectory(): File = dirProvider()
+
     fun nextId(): String = "a-%06d".format(seq.incrementAndGet())
 
     @Synchronized

@@ -14,6 +14,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import android.util.Log
+import dev.magina.gateway.BuildConfig
 import dev.magina.gateway.core.BearerAuthGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -118,7 +119,7 @@ object McpServer {
                         .put("capabilities", JSONObject().put("tools", JSONObject()))
                         .put(
                             "serverInfo",
-                            JSONObject().put("name", "mobile-agent-gateway").put("version", "0.1.0-m1a"),
+                            JSONObject().put("name", "mobile-agent-gateway").put("version", BuildConfig.VERSION_NAME),
                         ),
                 )
                 "ping" -> rpcResult(id, JSONObject())
