@@ -5,7 +5,7 @@
   "expect_package": "com.android.notes",
   "description": "纯只读检查前台非系统拦截后拉起原子笔记，等待前台与页面稳定并采集完整快照交回大脑核对结构；严禁新建、编辑、删除或分享笔记，不摘录私人正文。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-27",
   "params": {},
   "steps": [
     {

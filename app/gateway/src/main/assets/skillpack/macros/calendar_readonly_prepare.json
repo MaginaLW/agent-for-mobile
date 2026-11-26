@@ -5,7 +5,7 @@
   "expect_package": "com.bbk.calendar",
   "description": "纯只读检查前台非系统拦截后拉起日历，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁新建、编辑、删除日程或订阅日历。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-27",
   "params": {},
   "steps": [
     {

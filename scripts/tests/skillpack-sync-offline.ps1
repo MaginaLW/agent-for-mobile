@@ -251,13 +251,13 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
         'bili_readonly_prepare.json'        = '2026-11-25'
         'bili_readonly_feed_prepare.json'   = '2026-11-26'
         'taobao_orders_prepare.json'        = '2026-11-26'
-        'settings_state_readonly_check.json' = ''
-        'gallery_readonly_prepare.json'     = ''
-        'clock_readonly_prepare.json'       = ''
-        'calendar_readonly_prepare.json'    = ''
-        'notes_readonly_prepare.json'       = ''
-        'filemanager_readonly_prepare.json' = ''
-        'calculator_readonly_prepare.json'  = ''
+        'settings_state_readonly_check.json' = '2026-11-27'
+        'gallery_readonly_prepare.json'     = '2026-11-27'
+        'clock_readonly_prepare.json'       = '2026-11-27'
+        'calendar_readonly_prepare.json'    = '2026-11-27'
+        'notes_readonly_prepare.json'       = '2026-11-27'
+        'filemanager_readonly_prepare.json' = '2026-11-27'
+        'calculator_readonly_prepare.json'  = '2026-11-27'
     }
     foreach ($reqFile in @(
         'xhs_search_prepare.json',

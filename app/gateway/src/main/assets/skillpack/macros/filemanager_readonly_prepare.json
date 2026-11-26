@@ -5,7 +5,7 @@
   "expect_package": "com.android.filemanager",
   "description": "纯只读检查前台非系统拦截后拉起文件管理，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁删除、移动、重命名、安装 APK 或触发一键清理。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-27",
   "params": {},
   "steps": [
     {

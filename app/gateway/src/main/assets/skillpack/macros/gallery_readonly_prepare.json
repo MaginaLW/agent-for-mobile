@@ -5,7 +5,7 @@
   "expect_package": "com.vivo.gallery",
   "description": "纯只读检查前台非系统拦截后拉起相册，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁删除、编辑、重命名或对外分享照片。",
   "readonly": true,
-  "verified": "",
+  "verified": "2026-11-27",
   "params": {},
   "steps": [
     {

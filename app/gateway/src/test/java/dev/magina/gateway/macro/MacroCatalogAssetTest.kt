@@ -161,7 +161,7 @@ class MacroCatalogAssetTest {
         val settingsCheck = catalog.find("settings_state_readonly_check")
         assertNotNull("必须加载 settings_state_readonly_check", settingsCheck)
         assertEquals("com.android.settings", settingsCheck!!.expectPackage)
-        assertEquals("", settingsCheck.verified)
+        assertEquals("2026-11-27", settingsCheck.verified)
         assertTrue(settingsCheck.readonly)
         assertTrue(settingsCheck.params.containsKey("key"))
         assertEquals(1, settingsCheck.steps.size)
@@ -180,7 +180,7 @@ class MacroCatalogAssetTest {
             val spec = catalog.find(macroId)
             assertNotNull("必须加载 $macroId", spec)
             assertEquals(expectedPkg, spec!!.expectPackage)
-            assertEquals("", spec.verified)
+            assertEquals("2026-11-27", spec.verified)
             assertTrue("$macroId 必须为只读宏", spec.readonly)
             assertTrue("$macroId 应无参数", spec.params.isEmpty())
             assertEquals(5, spec.steps.size)
@@ -225,7 +225,7 @@ class MacroCatalogAssetTest {
         assertEquals("2026-11-26", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("taobao_orders_prepare").getString("status"))
         assertEquals("2026-11-26", byId.getValue("taobao_orders_prepare").getString("verified"))
-        for (unverifiedBuiltinId in listOf(
+        for (verifiedBuiltinId in listOf(
             "settings_state_readonly_check",
             "gallery_readonly_prepare",
             "clock_readonly_prepare",
@@ -234,8 +234,8 @@ class MacroCatalogAssetTest {
             "filemanager_readonly_prepare",
             "calculator_readonly_prepare",
         )) {
-            assertEquals("candidate_unverified", byId.getValue(unverifiedBuiltinId).getString("status"))
-            assertEquals("", byId.getValue(unverifiedBuiltinId).getString("verified"))
+            assertEquals("verified", byId.getValue(verifiedBuiltinId).getString("status"))
+            assertEquals("2026-11-27", byId.getValue(verifiedBuiltinId).getString("verified"))
         }
     }
 
