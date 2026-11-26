@@ -134,7 +134,12 @@ function Assert-SkillPackSync {
     Assert-True (($queried -join ',') -ceq ($expectedQueried -join ',')) 'apps.json aliases 与 AndroidManifest.xml <queries> 不一致。'
 
     $guideKeys = @($AppsJson.app_guides.PSObject.Properties | ForEach-Object { $_.Name })
-    foreach ($reqPkg in @('com.xingin.xhs', 'com.jingdong.app.mall', 'com.taobao.taobao', 'com.android.settings', 'tv.danmaku.bili')) {
+    foreach ($reqPkg in @(
+        'com.xingin.xhs', 'com.jingdong.app.mall', 'com.taobao.taobao', 'com.android.settings',
+        'com.vivo.gallery', 'tv.danmaku.bili',
+        'com.android.BBKClock', 'com.bbk.calendar', 'com.android.notes',
+        'com.android.filemanager', 'com.android.bbkcalculator'
+    )) {
         Assert-True ($reqPkg -in $guideKeys) "apps.json app_guides 缺少 $reqPkg。"
     }
     foreach ($gk in $guideKeys) {
@@ -237,15 +242,22 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
     $macroIndex = Get-Content -LiteralPath (Join-Path $macroDir 'index.json') -Raw -Encoding utf8 | ConvertFrom-Json
     $macroFiles = @($macroIndex.files)
-    Assert-True ($macroFiles.Count -eq 7) "skillpack/macros/index.json 应登记 7 个宏，实际为 $($macroFiles.Count)"
+    Assert-True ($macroFiles.Count -eq 14) "skillpack/macros/index.json 应登记 14 个宏，实际为 $($macroFiles.Count)"
     $expectedVerifiedByFile = @{
-        'xhs_search_prepare.json'         = '2026-11-25'
-        'taobao_readonly_prepare.json'    = '2026-11-25'
-        'wechat_readonly_prepare.json'    = '2026-11-25'
-        'jd_readonly_prepare.json'        = ''
-        'bili_readonly_prepare.json'      = '2026-11-25'
-        'bili_readonly_feed_prepare.json' = '2026-11-26'
-        'taobao_orders_prepare.json'      = '2026-11-26'
+        'xhs_search_prepare.json'           = '2026-11-25'
+        'taobao_readonly_prepare.json'      = '2026-11-25'
+        'wechat_readonly_prepare.json'      = '2026-11-25'
+        'jd_readonly_prepare.json'          = ''
+        'bili_readonly_prepare.json'        = '2026-11-25'
+        'bili_readonly_feed_prepare.json'   = '2026-11-26'
+        'taobao_orders_prepare.json'        = '2026-11-26'
+        'settings_state_readonly_check.json' = ''
+        'gallery_readonly_prepare.json'     = ''
+        'clock_readonly_prepare.json'       = ''
+        'calendar_readonly_prepare.json'    = ''
+        'notes_readonly_prepare.json'       = ''
+        'filemanager_readonly_prepare.json' = ''
+        'calculator_readonly_prepare.json'  = ''
     }
     foreach ($reqFile in @(
         'xhs_search_prepare.json',
@@ -254,7 +266,14 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
         'jd_readonly_prepare.json',
         'bili_readonly_prepare.json',
         'bili_readonly_feed_prepare.json',
-        'taobao_orders_prepare.json'
+        'taobao_orders_prepare.json',
+        'settings_state_readonly_check.json',
+        'gallery_readonly_prepare.json',
+        'clock_readonly_prepare.json',
+        'calendar_readonly_prepare.json',
+        'notes_readonly_prepare.json',
+        'filemanager_readonly_prepare.json',
+        'calculator_readonly_prepare.json'
     )) {
         Assert-True ($reqFile -in $macroFiles) "skillpack/macros/index.json 缺少 $reqFile"
         $macroObj = Get-Content -LiteralPath (Join-Path $macroDir $reqFile) -Raw -Encoding utf8 | ConvertFrom-Json
@@ -266,7 +285,7 @@ Test-Case 'deeplinks_md_and_skillpack_assets_and_manifest_sync' {
 
 Test-Case 'knowledge_readme_index_covers_all_app_docs' {
     $readme = Get-Content -LiteralPath $readmePath -Raw -Encoding utf8
-    foreach ($rel in @('apps/taobao.md', 'apps/jd.md', 'apps/xiaohongshu.md', 'apps/bilibili.md', 'apps/deeplinks.md')) {
+    foreach ($rel in @('apps/taobao.md', 'apps/jd.md', 'apps/xiaohongshu.md', 'apps/bilibili.md', 'apps/系统内置App.md', 'apps/deeplinks.md')) {
         Assert-True ($readme.Contains($rel, [StringComparison]::Ordinal)) "docs/knowledge/README.md 未索引 $rel"
         $full = Join-Path $repoRoot ("docs\knowledge\" + $rel.Replace('/', '\'))
         Assert-True (Test-Path -LiteralPath $full -PathType Leaf) "索引指向文件不存在：$rel"
@@ -290,8 +309,29 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         'scripts\tasks\m0-5-jd-order.md',
         'scripts\tasks\taobao-order-readonly.md',
         'scripts\tasks\wechat-readonly-prepare.md',
-        'scripts\tasks\bili-readonly-browse.md'
+        'scripts\tasks\bili-readonly-browse.md',
+        'scripts\tasks\settings-state-check.md',
+        'scripts\tasks\gallery-readonly-check.md',
+        'scripts\tasks\clock-readonly-prepare.md',
+        'scripts\tasks\calendar-readonly-prepare.md',
+        'scripts\tasks\notes-readonly-prepare.md',
+        'scripts\tasks\filemanager-readonly-prepare.md',
+        'scripts\tasks\calculator-readonly-prepare.md'
     )
+    $expectedTaskMacros = @{
+        'scripts\tasks\m0-3-xhs-summary.md'           = 'xhs_search_prepare'
+        'scripts\tasks\m0-5-jd-order.md'              = 'jd_readonly_prepare'
+        'scripts\tasks\taobao-order-readonly.md'      = 'taobao_readonly_prepare'
+        'scripts\tasks\wechat-readonly-prepare.md'    = 'wechat_readonly_prepare'
+        'scripts\tasks\bili-readonly-browse.md'       = 'bili_readonly_prepare'
+        'scripts\tasks\settings-state-check.md'       = 'settings_state_readonly_check'
+        'scripts\tasks\gallery-readonly-check.md'     = 'gallery_readonly_prepare'
+        'scripts\tasks\clock-readonly-prepare.md'     = 'clock_readonly_prepare'
+        'scripts\tasks\calendar-readonly-prepare.md'  = 'calendar_readonly_prepare'
+        'scripts\tasks\notes-readonly-prepare.md'     = 'notes_readonly_prepare'
+        'scripts\tasks\filemanager-readonly-prepare.md' = 'filemanager_readonly_prepare'
+        'scripts\tasks\calculator-readonly-prepare.md'  = 'calculator_readonly_prepare'
+    }
     foreach ($relTask in $tasks) {
         $taskFile = Join-Path $repoRoot $relTask
         Assert-True (Test-Path -LiteralPath $taskFile -PathType Leaf) "缺少任务卡：$relTask"
@@ -301,20 +341,9 @@ Test-Case 'preamble_is_device_agnostic_and_tasks_dryrun_clean' {
         Assert-True ($code -eq 0) "dispatch DryRun 失败（$relTask, exit=$code）：$text"
         Assert-True ($text.Contains('skillpack_lookup', [StringComparison]::Ordinal)) "DryRun 输出缺少 skillpack_lookup：$relTask"
         Assert-True ($text.Contains('skill_macro_exec', [StringComparison]::Ordinal)) "DryRun 输出缺少 skill_macro_exec：$relTask"
-        if ($relTask -ceq 'scripts\tasks\m0-3-xhs-summary.md') {
-            Assert-True ($text.Contains('xhs_search_prepare', [StringComparison]::Ordinal)) '小红书任务卡 DryRun 应包含 xhs_search_prepare'
-        }
-        if ($relTask -ceq 'scripts\tasks\m0-5-jd-order.md') {
-            Assert-True ($text.Contains('jd_readonly_prepare', [StringComparison]::Ordinal)) '京东任务卡 DryRun 应包含 jd_readonly_prepare'
-        }
-        if ($relTask -ceq 'scripts\tasks\taobao-order-readonly.md') {
-            Assert-True ($text.Contains('taobao_readonly_prepare', [StringComparison]::Ordinal)) '淘宝只读任务卡 DryRun 应包含 taobao_readonly_prepare'
-        }
-        if ($relTask -ceq 'scripts\tasks\wechat-readonly-prepare.md') {
-            Assert-True ($text.Contains('wechat_readonly_prepare', [StringComparison]::Ordinal)) '微信只读前置任务卡 DryRun 应包含 wechat_readonly_prepare'
-        }
-        if ($relTask -ceq 'scripts\tasks\bili-readonly-browse.md') {
-            Assert-True ($text.Contains('bili_readonly_prepare', [StringComparison]::Ordinal)) '哔哩哔哩只读任务卡 DryRun 应包含 bili_readonly_prepare'
+        if ($expectedTaskMacros.ContainsKey($relTask)) {
+            $expectedMacro = $expectedTaskMacros[$relTask]
+            Assert-True ($text.Contains($expectedMacro, [StringComparison]::Ordinal)) "任务卡 $relTask DryRun 应包含 $expectedMacro"
         }
         Assert-True ($text -notmatch '绕过确认卡|自动代登录|自动过验证码|open_uri 打开对应系统设置页') "DryRun 输出命中违禁指引：$relTask"
     }

@@ -1,0 +1,57 @@
+{
+  "id": "filemanager_readonly_prepare",
+  "version": 1,
+  "app": "文件管理",
+  "expect_package": "com.android.filemanager",
+  "description": "纯只读检查前台非系统拦截后拉起文件管理，等待前台与页面稳定并采集完整快照交回大脑阅读；严禁删除、移动、重命名、安装 APK 或触发一键清理。",
+  "readonly": true,
+  "verified": "",
+  "params": {},
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "launch_filemanager",
+      "tool": "app_launch",
+      "args": {
+        "name": "文件管理"
+      }
+    },
+    {
+      "id": "wait_filemanager_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.android.filemanager",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_filemanager_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "read_filemanager_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.android.filemanager",
+        "blocking_overlay_false": true
+      }
+    }
+  ]
+}

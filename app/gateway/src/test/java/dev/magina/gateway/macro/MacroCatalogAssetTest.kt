@@ -158,6 +158,38 @@ class MacroCatalogAssetTest {
             )
         }
 
+        val settingsCheck = catalog.find("settings_state_readonly_check")
+        assertNotNull("必须加载 settings_state_readonly_check", settingsCheck)
+        assertEquals("com.android.settings", settingsCheck!!.expectPackage)
+        assertEquals("", settingsCheck.verified)
+        assertTrue(settingsCheck.readonly)
+        assertTrue(settingsCheck.params.containsKey("key"))
+        assertEquals(1, settingsCheck.steps.size)
+        assertEquals("system_get_state", settingsCheck.steps[0].tool)
+        assertTrue(settingsCheck.steps[0].captureAsFinalSnapshot)
+
+        val builtinPrepareExpectations = listOf(
+            "gallery_readonly_prepare" to "com.vivo.gallery",
+            "clock_readonly_prepare" to "com.android.BBKClock",
+            "calendar_readonly_prepare" to "com.bbk.calendar",
+            "notes_readonly_prepare" to "com.android.notes",
+            "filemanager_readonly_prepare" to "com.android.filemanager",
+            "calculator_readonly_prepare" to "com.android.bbkcalculator",
+        )
+        for ((macroId, expectedPkg) in builtinPrepareExpectations) {
+            val spec = catalog.find(macroId)
+            assertNotNull("必须加载 $macroId", spec)
+            assertEquals(expectedPkg, spec!!.expectPackage)
+            assertEquals("", spec.verified)
+            assertTrue("$macroId 必须为只读宏", spec.readonly)
+            assertTrue("$macroId 应无参数", spec.params.isEmpty())
+            assertEquals(5, spec.steps.size)
+            assertTrue(
+                "$macroId 必须仅包含只读前置步骤",
+                spec.steps.all { it.tool in jdReadonlyTools },
+            )
+        }
+
         for (spec in catalog.all()) {
             assertFalse(pack.isBlockedApp(spec.expectPackage))
             for (step in spec.steps) {
@@ -171,7 +203,7 @@ class MacroCatalogAssetTest {
         }
 
         val listed = catalog.listForBrain()
-        assertEquals(7, listed.getInt("count"))
+        assertEquals(14, listed.getInt("count"))
         val byId = HashMap<String, JSONObject>()
         val macros = listed.getJSONArray("macros")
         for (i in 0 until macros.length()) {
@@ -193,6 +225,18 @@ class MacroCatalogAssetTest {
         assertEquals("2026-11-26", byId.getValue("bili_readonly_feed_prepare").getString("verified"))
         assertEquals("verified", byId.getValue("taobao_orders_prepare").getString("status"))
         assertEquals("2026-11-26", byId.getValue("taobao_orders_prepare").getString("verified"))
+        for (unverifiedBuiltinId in listOf(
+            "settings_state_readonly_check",
+            "gallery_readonly_prepare",
+            "clock_readonly_prepare",
+            "calendar_readonly_prepare",
+            "notes_readonly_prepare",
+            "filemanager_readonly_prepare",
+            "calculator_readonly_prepare",
+        )) {
+            assertEquals("candidate_unverified", byId.getValue(unverifiedBuiltinId).getString("status"))
+            assertEquals("", byId.getValue(unverifiedBuiltinId).getString("verified"))
+        }
     }
 
     @Test

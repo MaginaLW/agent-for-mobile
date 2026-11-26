@@ -1,0 +1,57 @@
+{
+  "id": "calculator_readonly_prepare",
+  "version": 1,
+  "app": "计算器",
+  "expect_package": "com.android.bbkcalculator",
+  "description": "纯只读检查前台非系统拦截后拉起计算器，等待前台与页面稳定并采集完整快照交回大脑阅读；未获明确计算指示时不主动按键或清空历史。",
+  "readonly": true,
+  "verified": "",
+  "params": {},
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "launch_calculator",
+      "tool": "app_launch",
+      "args": {
+        "name": "计算器"
+      }
+    },
+    {
+      "id": "wait_calculator_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.android.bbkcalculator",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_calculator_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "read_calculator_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.android.bbkcalculator",
+        "blocking_overlay_false": true
+      }
+    }
+  ]
+}

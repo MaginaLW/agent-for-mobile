@@ -1,0 +1,27 @@
+{
+  "id": "settings_state_readonly_check",
+  "version": 1,
+  "app": "设置",
+  "expect_package": "com.android.settings",
+  "description": "L1 API-first 纯只读系统状态核对：无需进入系统设置 UI，直接通过 system_get_state 查询指定白名单键（bluetooth/wifi/airplane/battery/network/screen/volume/brightness）并回传真值源，避免设置前台触发安全中心无障碍回收。",
+  "readonly": true,
+  "verified": "",
+  "params": {
+    "key": {
+      "type": "string",
+      "required": true,
+      "min_length": 2,
+      "max_length": 16
+    }
+  },
+  "steps": [
+    {
+      "id": "query_system_state",
+      "tool": "system_get_state",
+      "args": {
+        "key": "{{key}}"
+      },
+      "capture_as_final_snapshot": true
+    }
+  ]
+}
