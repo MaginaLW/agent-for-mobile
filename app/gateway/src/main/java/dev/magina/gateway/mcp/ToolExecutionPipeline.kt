@@ -57,6 +57,10 @@ internal enum class CallOrigin(val wireName: String) {
     MACRO("macro"),
 }
 
+internal fun isInitialContextRead(contextReads: Int): Boolean = contextReads == 1
+
+internal fun isRecheckContextRead(contextReads: Int): Boolean = contextReads > 1
+
 /**
  * 统一工具执行与安全门管线（MODEL 与 MACRO 共用同一道黑名单、SafetyGate、ConfirmOverlay 与 Audit）。
  */
@@ -554,7 +558,7 @@ internal class ToolExecutionPipeline(
                         hasProtectedKeyword = policy::containsProtectedActionKeyword,
                     )
                 } catch (error: GatewayError) {
-                    if (error.code != ErrorCode.E_STALE_REF || !call.semanticIntentActive || call.contextReads == 0) {
+                    if (error.code != ErrorCode.E_STALE_REF || !call.semanticIntentActive || !isRecheckContextRead(call.contextReads)) {
                         throw error
                     }
                     val expectedText = call.initialUiLabelText.orEmpty()
@@ -604,7 +608,7 @@ internal class ToolExecutionPipeline(
                         focusBoundsStr,
                     )
                     if (
-                        call.contextReads == 0 &&
+                        isInitialContextRead(call.contextReads) &&
                         preparedEvidence == null &&
                         inputEvidence != null &&
                         focused.identity != null &&

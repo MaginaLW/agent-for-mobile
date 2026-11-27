@@ -54,13 +54,34 @@ internal fun parseConversationTitleElements(
 internal class AndroidIntentEvidenceReader(
     private val a11yProvider: () -> GatewayA11yService?,
     private val targetPaneProvider: () -> String?,
+    private val settleWaitMs: Long = 300L,
+    private val sleep: (Long) -> Unit = { Thread.sleep(it) },
 ) : IntentEvidenceReader {
+
+    private data class ReadAttempt(
+        val readback: IntentEvidenceReadback,
+        val titleFound: Boolean,
+        val focusSettled: Boolean,
+    )
 
     override fun read(): IntentEvidenceReadback {
         val a11y = a11yProvider() ?: return unavailable()
-        val ctx = runCatching { a11y.ctx(Gateway.caps()) }.getOrNull() ?: return unavailable()
+        val first = readOnce(a11y) ?: return unavailable()
+        val needsSettle = (!first.titleFound || !first.focusSettled) && settleWaitMs > 0L
+        val finalAttempt = if (needsSettle) {
+            // 仅在切回后标题或焦点尚未落定时等一次稳态，绝不重试内容或标题 Mismatch。
+            sleep(settleWaitMs)
+            readOnce(a11y) ?: return unavailable()
+        } else {
+            first
+        }
+        return finalAttempt.readback
+    }
+
+    private fun readOnce(a11y: GatewayA11yService): ReadAttempt? {
+        val ctx = runCatching { a11y.ctx(Gateway.caps()) }.getOrNull() ?: return null
         val pkg = ctx.optString("app").takeIf { ctx.optBoolean("foreground_known", false) && it.isNotBlank() }
-            ?: return unavailable()
+            ?: return null
 
         val pane = targetPaneProvider()
         val snap = runCatching { a11y.forceFreshVision("interactive") }.getOrNull()
@@ -89,12 +110,16 @@ internal class AndroidIntentEvidenceReader(
             ocrText to IntentReadbackChannel.OCR
         }
 
-        return IntentEvidenceReadback(
-            packageName = pkg,
-            targetLabel = titleObservation?.label,
-            content = contentText,
-            targetChannel = titleObservation?.channel ?: IntentReadbackChannel.A11Y,
-            contentChannel = contentChannel,
+        return ReadAttempt(
+            readback = IntentEvidenceReadback(
+                packageName = pkg,
+                targetLabel = titleObservation?.label,
+                content = contentText,
+                targetChannel = titleObservation?.channel ?: IntentReadbackChannel.A11Y,
+                contentChannel = contentChannel,
+            ),
+            titleFound = titleObservation != null,
+            focusSettled = focused?.identity != null,
         )
     }
 

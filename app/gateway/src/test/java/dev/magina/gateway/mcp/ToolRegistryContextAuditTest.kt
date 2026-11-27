@@ -304,6 +304,25 @@ class ToolRegistryContextAuditTest {
         assertEquals("ocr_reverify=exact_nav", call.safetyNote)
     }
 
+    @Test
+    fun `context read phase helpers distinguish initial read from post-confirm recheck`() {
+        val call = scope()
+        assertFalse(isInitialContextRead(call.contextReads))
+        assertFalse(isRecheckContextRead(call.contextReads))
+
+        call.readContext {
+            assertTrue(isInitialContextRead(call.contextReads))
+            assertFalse(isRecheckContextRead(call.contextReads))
+            initialContext
+        }
+
+        call.readContext {
+            assertFalse(isInitialContextRead(call.contextReads))
+            assertTrue(isRecheckContextRead(call.contextReads))
+            initialContext
+        }
+    }
+
     private inline fun <reified T : Throwable> expectError(block: () -> Unit): T {
         try {
             block()
