@@ -78,8 +78,9 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
   - 重构 [MainActivity](app/gateway/src/main/java/dev/magina/gateway/MainActivity.kt) 为 4 标签原生只读/自检控制台（状态 / 宏目录 / 技能包 / 审计，默认遮罩 token 并在 `onPause` 自动恢复遮罩，异步读取审计日志，保持 `.MainActivity` 与轻量启动契约不变）。
   - **2026-11-27 PA2553 实测状态（[11-27 验收](docs/runs/2026-11-27-PA2553-阶段6A冷启与6B-2系统内置App真机验收.md)）**：PA2553 真机冷启/幂等/零崩溃（`bootstrap-gateway.ps1` `cold_started` / `already_running`、`logcat` 零崩溃）、`stage6a-console-readonly-20261127` 4-Tab 控制台安全只读派单（63s `success`、25 条审计全 `OK`、`ConfirmOverlay = 0`、宏目录 6/8 与技能包 14 项及审计 73 条 4 类筛选 `31/1/1/73` 与 7 项自检 5/2、基线精确还原与无障碍重绑复原），以及现场 2 项人工目视检查（点击「显示 token」明文显示/`onPause` 自动恢复遮罩、点击「⑤ 电池优化 / 后台保活设置」跳转系统设置无崩溃）均已验收通过。
 
-- **阶段 6B-1 语义意图审批生产接线（离线已落地，PA2553 真机按用户要求暂延未测）**：
-  - 依据 [语义意图审批 spec](docs/specs/2026-08-02-语义意图审批-design.md) 完成真实 [SafetyGate](app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt) 与 [ToolExecutionPipeline](app/gateway/src/main/java/dev/magina/gateway/mcp/ToolExecutionPipeline.kt) 生产接线：补齐 `InputCommitEvidence` OCR 基线与同源 `monotonicClock` 重建安装、`ConversationTitlePolicy`（生产与 P0 同源标题提取）、严格只读 `AndroidIntentEvidenceReader`、`UiMutationCoordinator` 对 II 级发送点击窄保留，以及仅接受可见 `ConfirmOverlay` 批准、I 级零等待 / II 级 300s 有界前台等待 + 360s 意图有效期 + 原子消费与只读重建链；同步更新 [硬门 spec §2](docs/specs/2026-07-19-危险动作统一硬门-design.md#2-安全不变量) 与 `RiskTier` 注释，补齐 `SafetyGateSemanticIntentTest` 与 `ConversationTitlePolicyTest`。**阶段 6B-1 语义意图审批与设备端 `ConfirmOverlay` 真人确认卡（含通知「查看全部证据」跳转）按用户要求继续暂延未测（仅只读核对 `dev.magina.testtarget` `0.1.0-testbench` 在机已装）**。
+- **阶段 6B-1 语义意图审批生产接线与 PA2553 真机验收（2026-11-27 验收通过，[11-27 语义意图验收](docs/runs/2026-11-27-PA2553-阶段6B-1语义意图审批真机验收.md)）**：
+  - 依据 [语义意图审批 spec](docs/specs/2026-08-02-语义意图审批-design.md) 完成真实 [SafetyGate](app/gateway/src/main/java/dev/magina/gateway/core/SafetyGate.kt) 与 [ToolExecutionPipeline](app/gateway/src/main/java/dev/magina/gateway/mcp/ToolExecutionPipeline.kt) 生产接线：补齐 `InputCommitEvidence` OCR 基线与同源 `monotonicClock` 重建安装、`ConversationTitlePolicy`（生产与 P0 同源标题提取）、严格只读 `AndroidIntentEvidenceReader`、`UiMutationCoordinator` 对 II 级发送点击窄保留，以及仅接受可见 `ConfirmOverlay` 批准、I 级零等待 / II 级 300s 有界前台等待 + 360s 意图有效期 + 原子消费与只读重建链（含 `7570f3d` 上下文读取与稳态等待修复、`cc86ce4` `test-target` 顶部标题带隔离、`eb5abad` `ConfirmOverlay` 底部防遮挡布局与 `ConfirmOverlayVisibilityController` 锁屏自动隐藏/解锁恢复修复）；同步更新 [硬门 spec §2](docs/specs/2026-07-19-危险动作统一硬门-design.md#2-安全不变量) 与 `RiskTier` 注释，补齐 `:gateway` 675 Debug / 578 Release 离线单测。
+  - **2026-11-27 PA2553 真机验收闭环（`eb5abad` / `0.2.0-m3`）**：启用受控 `GatewayIme` 后实测通过 Leg 1B（桌面批准 → 3s 后切回 `testtarget`，审计集齐 `decided_via=overlay`、`intent_wait=recovered`、`intent_evidence=rebuilt`、`intent_match=matched`，回调 `0 -> 1`）与 300s 前台等待超时保护（`E_STALE_REF`）；验通外部 `am broadcast --ez allowed true` 拦截、锁屏自动隐藏/解锁恢复与通知 `VISIBILITY_PRIVATE` 脱敏（现场目视确认锁屏无卡/无明文/无允许）、通知「拒绝」→ `E_BLOCKED`（`decided_via=notification`）及 90s `E_CONFIRM_TIMEOUT`（回调均保持 `0`、零重试），收尾双读还原全部 5 项设备基线。
 
 - **阶段 6B-2 系统内置 App 技能包、只读宏与真机验收转正（2026-11-27 PA2553 验收通过）**：
   - 基于 2026-11-26 PA2553 严格只读三源交叉实测包名表，在 [apps.json](app/gateway/src/main/assets/skillpack/apps.json) 与 [AndroidManifest.xml](app/gateway/src/main/AndroidManifest.xml) `<queries>` 1:1 新增注册 5 个高频内置 App（`闹钟时钟` `com.android.BBKClock`、`日历` `com.bbk.calendar`、`原子笔记` `com.android.notes`、`文件管理` `com.android.filemanager`、`计算器` `com.android.bbkcalculator`，合计 14 项 1:1 映射、零 `QUERY_ALL_PACKAGES`），并补齐 `com.vivo.gallery` 及新增 5 项的 `app_guides`；
@@ -87,9 +88,8 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 
 ## 下一步
 
-- **暂延项按需排期**：
-  - 阶段 6A（冷启、4-Tab 控制台安全只读派单与现场 2 项人工目视）及阶段 6B-2 均已在 PA2553 验收闭环；
-  - 仅剩 **阶段 6B-1 语义意图审批与设备端 `ConfirmOverlay` 真人确认卡（含通知「查看全部证据」跳转）** 按用户要求继续暂延（未测，待按需排期，含 `ConfirmOverlay` 批准 → 切走/锁屏 → 返回目标 App 后只读重建并执行，以及通知允许拦截/拒绝/超时负例）。
+- **已全部收口的阶段（PA2553 实机闭环）**：
+  - 阶段 6A（冷启、4-Tab 控制台安全只读派单与现场 2 项人工目视）、阶段 6B-1（语义意图审批生产接线、`ConfirmOverlay` 底部防遮挡与锁屏自动隐藏修复，以及离场重建/伪造拦截/锁屏通知拒绝/90s 超时真机全量验证）与阶段 6B-2（7 枚系统内置 App 只读宏）均已在 PA2553 验收闭环。
 - **阶段 6B-3（按需排期）**：M1b 通知只读通道或其余实测系统内置 App（天气/录音机等）按需扩展。
 
 - **M3 已验样板与扩展**：`taobao_readonly_prepare`、`wechat_readonly_prepare`、`xhs_search_prepare`、`bili_readonly_prepare`（`verified: "2026-11-25"`）、`bili_readonly_feed_prepare`、`taobao_orders_prepare`（`verified: "2026-11-26"`）与 7 枚系统内置 App 只读宏（`settings_state_readonly_check`、`calculator_readonly_prepare`、`clock_readonly_prepare`、`calendar_readonly_prepare`、`filemanager_readonly_prepare`、`notes_readonly_prepare`、`gallery_readonly_prepare`，`verified: "2026-11-27"`）总计 **13 枚**前置只读宏已转正（仅 `jd_readonly_prepare` 因不可登录保持 `""`；`bili_readonly_feed_prepare` 推送弹窗实际弹出分支待后续自然复现时补充观测）；阶段 5A（[PR #91](https://github.com/MaginaLW/agent-for-mobile/pull/91)）已完成收尾并合入 `main`。
