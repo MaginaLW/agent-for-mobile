@@ -40,4 +40,8 @@ object SafetyFallbacks {
     /** 确认通道本身坏了（主线程、Handler、窗口管理器）。 */
     const val OVERLAY_CHANNEL_DOWN: String =
         "$TERMINAL。并写明确认通道不可用的具体表现，供人排查"
+
+    /** 设备处于锁屏或息屏状态，禁止在锁屏上展示确认卡（避免明文泄漏与免解锁交互）。 */
+    const val OVERLAY_LOCKED: String =
+        "$TERMINAL。并写明：设备处于锁屏或息屏状态，禁止在锁屏上展示确认卡，本次危险动作未执行"
 }

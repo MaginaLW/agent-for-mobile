@@ -70,6 +70,36 @@ class ConfirmCardCaptureTest {
         )
     }
 
+    @Test
+    fun `bottom centered tablet card is detected by its screen bounds`() {
+        val tabletTarget = ConfirmCardTarget(
+            left = 500,
+            top = 1080,
+            right = 2300,
+            bottom = 1880,
+            backgroundColor = cardColor,
+        )
+        assertTrue(
+            confirmCardVisibleInCapture(
+                target = tabletTarget,
+                width = 2800,
+                height = 1968,
+                pixelAt = { x, y ->
+                    if (x in 500 until 2300 && y in 1080 until 1880) cardColor else 0xFFEDEDED.toInt()
+                },
+            )
+        )
+        // 若顶部有深色但底部确认卡位置没有卡，仍必须判不可见。
+        assertFalse(
+            confirmCardVisibleInCapture(
+                target = tabletTarget,
+                width = 2800,
+                height = 1968,
+                pixelAt = { _, y -> if (y < 700) cardColor else 0xFFEDEDED.toInt() },
+            )
+        )
+    }
+
     private fun visible(pixelAt: (Int, Int) -> Int): Boolean = confirmCardVisibleInCapture(
         target = target,
         width = 1260,
