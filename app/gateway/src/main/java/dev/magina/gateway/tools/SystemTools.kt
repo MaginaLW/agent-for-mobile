@@ -15,6 +15,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
+import dev.magina.gateway.BuildConfig
 import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.core.ErrorCode
@@ -51,7 +52,7 @@ object SystemTools {
             .put("density", ctx.resources.displayMetrics.density.toDouble())
             .put("battery_pct", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
             .put("caps", JSONArray(Gateway.caps()))
-            .put("gateway_version", "0.1.0-m1a")
+            .put("gateway_version", BuildConfig.VERSION_NAME)
     }
 
     fun getState(key: String): JSONObject = when (key) {

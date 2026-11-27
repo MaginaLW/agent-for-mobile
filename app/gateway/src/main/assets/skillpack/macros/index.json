@@ -6,6 +6,13 @@
     "jd_readonly_prepare.json",
     "bili_readonly_prepare.json",
     "bili_readonly_feed_prepare.json",
-    "taobao_orders_prepare.json"
+    "taobao_orders_prepare.json",
+    "settings_state_readonly_check.json",
+    "gallery_readonly_prepare.json",
+    "clock_readonly_prepare.json",
+    "calendar_readonly_prepare.json",
+    "notes_readonly_prepare.json",
+    "filemanager_readonly_prepare.json",
+    "calculator_readonly_prepare.json"
   ]
 }

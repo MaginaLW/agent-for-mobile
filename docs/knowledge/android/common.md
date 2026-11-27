@@ -88,6 +88,7 @@
 - **#21 自家确认卡必须 `FLAG_NOT_FOCUSABLE`**（2026-07-26）：可获焦的卡会抢走窗口焦点——App 窗口不再 active/focused → 确认后前台身份复核 `E_BLOCKED`；InputConnection 被拆掉重建 → IME 会话 id 换新 → `E_STALE_REF`。不可获焦窗口照样收触摸。**任何在被操作 App 处于关键状态时弹出的自家 UI，默认都该不可获焦。**
 - **自有 overlay 必须从执行面排除**：确认卡若进入 `windows/snapshot/ref`，Agent 可能经 `ui_action` 自确认。窗口遍历、ref 注册、动作解析统一拒绝网关自有窗口；只认按钮回调为真人决定源。
 - **遮挡判定（`hasBlockingOverlay`）两个实现坑**（2026-07-23）：① 状态栏/导航栏是常驻 `TYPE_SYSTEM` 窗口，与顶部探测带几何必相交，不排除就**任意时刻恒判有遮挡**；② 默认参数在耗时 OCR 之后才重新查询前台窗口 id，前台标志一抖就把 App 自己的主窗口当成浮层——要显式复用同一次快照已算好的 `fgWinId`。
+- **`TYPE_ACCESSIBILITY_OVERLAY` 高于状态栏与 Keyguard 锁屏，必须显式防遮挡与锁屏隐藏**（2026-11-27 PA2553 / Android 16）：系统无障碍浮层层级同时压过顶部下拉通知栏与 Keyguard 锁屏。`ConfirmOverlay`（commit `eb5abad`）采用底部居中布局并从 `fitInsetsTypes` 中排除 `WindowInsets.Type.ime()`（避免软键盘弹出将底部确认卡顶回顶部通知区），同时结合 `KeyguardManager`/`PowerManager` 实时判定做 fail-closed 锁屏隐藏与解锁恢复，并以 `ContextCompat.RECEIVER_EXPORTED` 注册 `ACTION_USER_PRESENT`（`targetSdk >= 34` 上 `RECEIVER_NOT_EXPORTED` 会静默漏收 `com.android.systemui` 发出的解锁广播）。详见 [2026-11-27 阶段 6B-1 真机验收](../../runs/2026-11-27-PA2553-阶段6B-1语义意图审批真机验收.md)。
 
 ## App 屏蔽无障碍树与 IME 单命名空间降级
 

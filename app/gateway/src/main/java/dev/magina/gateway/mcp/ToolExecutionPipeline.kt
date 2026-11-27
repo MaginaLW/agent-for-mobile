@@ -9,16 +9,25 @@ import dev.magina.gateway.Gateway
 import dev.magina.gateway.a11y.GatewayA11yService
 import dev.magina.gateway.a11y.isExactNavLabelEligible
 import dev.magina.gateway.core.ApprovalChannel
+import dev.magina.gateway.core.ApprovalIntent
+import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.core.Envelope
 import dev.magina.gateway.core.ErrorCode
+import dev.magina.gateway.core.EvidenceRebuild
+import dev.magina.gateway.core.FocusIdentity
 import dev.magina.gateway.core.GatewayError
+import dev.magina.gateway.core.IntentApprovalDependencies
+import dev.magina.gateway.core.IntentApprovalTiming
+import dev.magina.gateway.core.IntentConfirmationResult
 import dev.magina.gateway.core.Level
 import dev.magina.gateway.core.PreparedTargetEvidence
+import dev.magina.gateway.core.RiskTier
 import dev.magina.gateway.core.SafetyContext
 import dev.magina.gateway.core.SafetyDecision
 import dev.magina.gateway.core.SafetyGate
 import dev.magina.gateway.core.SafetyPolicy
 import dev.magina.gateway.core.SafetyTarget
+import dev.magina.gateway.core.SemanticIntentConfig
 import dev.magina.gateway.core.StaleReconfirmGuard
 import dev.magina.gateway.core.guardPreparedTargetTypeTextArgs
 import dev.magina.gateway.core.invalidateInputEvidenceForMutation
@@ -31,7 +40,6 @@ import dev.magina.gateway.overlay.ConfirmNotificationRequest
 import dev.magina.gateway.overlay.ConfirmOverlay
 import dev.magina.gateway.overlay.ConfirmOverlayWindowHost
 import dev.magina.gateway.overlay.confirmCardVisibleInCapture
-import dev.magina.gateway.core.ConfirmApprovalArbiter
 import dev.magina.gateway.testing.ConfirmationIdGenerator
 import dev.magina.gateway.testing.TestConfirmationAttempt
 import dev.magina.gateway.testing.TestConfirmationCapture
@@ -48,6 +56,10 @@ internal enum class CallOrigin(val wireName: String) {
     MODEL("model"),
     MACRO("macro"),
 }
+
+internal fun isInitialContextRead(contextReads: Int): Boolean = contextReads == 1
+
+internal fun isRecheckContextRead(contextReads: Int): Boolean = contextReads > 1
 
 /**
  * 统一工具执行与安全门管线（MODEL 与 MACRO 共用同一道黑名单、SafetyGate、ConfirmOverlay 与 Audit）。
@@ -128,109 +140,220 @@ internal class ToolExecutionPipeline(
         }
     }
 
-    private fun newSafetyGate(call: ToolRegistry.CallScope, policy: SafetyPolicy): SafetyGate = SafetyGate(
-        policy = policy,
-        confirmer = { decision ->
-            if (Gateway.staleReconfirmGuard.isExhausted(call.staleKey)) {
-                Gateway.staleReconfirmGuard.clear(call.staleKey)
-                call.appendSafetyNote("reconfirm=exhausted")
-                throw GatewayError(
-                    ErrorCode.E_CONFIRM_REQUIRED,
-                    StaleReconfirmGuard.EXHAUSTED_MESSAGE,
-                    channel = "safety",
-                    fallback = StaleReconfirmGuard.EXHAUSTED_FALLBACK,
-                )
-            }
-            call.appendSafetyNote("risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested")
-            val attempt = TestConfirmationAttempt(
-                confirmationId = ConfirmationIdGenerator.next(),
-                toolName = decision.toolName,
-                action = decision.action,
-                initialPackage = decision.initialPackage,
-                inputLength = decision.inputLength,
-                inputSha256 = decision.inputSha256,
-            )
-            call.testAttempt = attempt
-            var decidedVia: ApprovalChannel? = null
-            try {
-                val overlayHost = GatewayA11yService.instance?.let { service ->
-                    ConfirmOverlayWindowHost(context = service)
-                }
-                ConfirmOverlay.ask(
-                    context = Gateway.appContext,
-                    actionDesc = decision.cardText(attempt.confirmationId),
-                    overlayHost = overlayHost,
-                    onShownBeforeButtonsEnabled = { cardTarget ->
-                        call.testSession = Gateway.testControl.onConfirmationShown(attempt) {
-                            captureConfirmCardEvidence(cardTarget)
-                        }
-                    },
-                    onDecisionObserved = { observed, channel ->
-                        decidedVia = channel
-                        Gateway.testControl.onConfirmationDecision(call.testSession, observed, channel)
-                    },
-                    notification = ConfirmNotificationRequest(
-                        confirmationId = attempt.confirmationId,
-                        nonce = ConfirmApprovalArbiter.newNonce(),
-                        riskTier = decision.riskTier,
-                        action = confirmActionPhrase(decision),
-                        target = call.targetLabel.ifBlank { "${decision.initialPackage}（未绑定会话标题）" },
-                        targetPackage = decision.initialPackage,
-                        preview = call.inputPreview,
-                    ),
-                ).also { confirmed ->
-                    call.appendSafetyNote("confirmation=${if (confirmed) "allowed" else "denied"}")
-                    decidedVia?.let { call.appendSafetyNote("decided_via=${it.wireName}") }
-                }
-            } catch (error: Throwable) {
-                call.appendSafetyNote("confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}")
-                throw error
-            }
-        },
-        contextProvider = { frozenArgs ->
-            call.readContext { safetyContext(call.toolName, frozenArgs, call, policy) }
-        },
-        onExecutionFailure = { error ->
-            if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
-                Gateway.retryGuard.recordFailure(call.toolName, call.argsFingerprint)
-            }
-        },
-        afterConfirmationAllowed = { _, _, _ ->
-            val attempt = call.testAttempt ?: throw GatewayError(
-                ErrorCode.E_INTERNAL,
-                "确认完成但缺少同一次确认编号",
+    private fun runOverlayConfirmation(
+        decision: SafetyDecision.ConfirmationRequired,
+        call: ToolRegistry.CallScope,
+        confirmationId: String,
+        nonce: String,
+        timeoutMs: Long = ConfirmOverlay.DEFAULT_CONFIRM_TIMEOUT_MS,
+    ): Pair<Boolean, ApprovalChannel?> {
+        if (Gateway.staleReconfirmGuard.isExhausted(call.staleKey)) {
+            Gateway.staleReconfirmGuard.clear(call.staleKey)
+            call.appendSafetyNote("reconfirm=exhausted")
+            throw GatewayError(
+                ErrorCode.E_CONFIRM_REQUIRED,
+                StaleReconfirmGuard.EXHAUSTED_MESSAGE,
                 channel = "safety",
+                fallback = StaleReconfirmGuard.EXHAUSTED_FALLBACK,
             )
-            val a11y = GatewayA11yService.require()
-            Gateway.testControl.afterAllowed(
-                session = call.testSession,
-                attempt = attempt,
-                performHome = { a11y.globalKey("home") },
-                foreground = {
-                    val current = a11y.ctx(Gateway.caps())
-                    TestForeground(
-                        known = current.optBoolean("foreground_known", false),
-                        packageName = current.optString("app"),
-                    )
+        }
+        call.appendSafetyNote("risk=confirmation_required;args_fp=${decision.argsFingerprint};confirmation=requested")
+        val attempt = TestConfirmationAttempt(
+            confirmationId = confirmationId,
+            toolName = decision.toolName,
+            action = decision.action,
+            initialPackage = decision.initialPackage,
+            inputLength = decision.inputLength,
+            inputSha256 = decision.inputSha256,
+        )
+        call.testAttempt = attempt
+        var decidedVia: ApprovalChannel? = null
+        return try {
+            val overlayHost = GatewayA11yService.instance?.let { service ->
+                ConfirmOverlayWindowHost(context = service)
+            }
+            val confirmed = ConfirmOverlay.ask(
+                context = Gateway.appContext,
+                actionDesc = decision.cardText(attempt.confirmationId),
+                overlayHost = overlayHost,
+                timeoutMs = timeoutMs,
+                onShownBeforeButtonsEnabled = { cardTarget ->
+                    call.testSession = Gateway.testControl.onConfirmationShown(attempt) {
+                        captureConfirmCardEvidence(cardTarget)
+                    }
                 },
+                onDecisionObserved = { observed, channel ->
+                    decidedVia = channel
+                    Gateway.testControl.onConfirmationDecision(call.testSession, observed, channel)
+                },
+                notification = ConfirmNotificationRequest(
+                    confirmationId = attempt.confirmationId,
+                    nonce = nonce,
+                    riskTier = decision.riskTier,
+                    action = confirmActionPhrase(decision),
+                    target = call.targetLabel.ifBlank { "${decision.initialPackage}（未绑定会话标题）" },
+                    targetPackage = decision.initialPackage,
+                    preview = call.inputPreview,
+                ),
             )
-        },
-        afterExecutionSuccess = { executedTool, executedContext ->
-            if (call.staleKey.isNotEmpty()) Gateway.staleReconfirmGuard.clear(call.staleKey)
-            if (
-                executedTool == "press_key" &&
-                executedContext.target?.preparedTargetEvidence != null
-            ) {
-                Gateway.preparedTargetEvidence.clear()
-            }
-        },
-        onStaleAfterApproval = { _, _ ->
-            if (call.staleKey.isNotEmpty()) {
-                Gateway.staleReconfirmGuard.recordStaleAfterApproval(call.staleKey)
-                call.appendSafetyNote("reconfirm=${Gateway.staleReconfirmGuard.reconfirmCount(call.staleKey)}")
-            }
-        },
-    )
+            call.appendSafetyNote("confirmation=${if (confirmed) "allowed" else "denied"}")
+            decidedVia?.let { call.appendSafetyNote("decided_via=${it.wireName}") }
+            confirmed to decidedVia
+        } catch (error: Throwable) {
+            call.appendSafetyNote("confirmation=error:${(error as? GatewayError)?.code ?: error.javaClass.simpleName}")
+            throw error
+        }
+    }
+
+    private fun installRebuiltSessionAndInputEvidence(
+        approvedIntent: ApprovalIntent,
+        rebuilt: EvidenceRebuild.Rebuilt,
+    ): Boolean {
+        val a11y = GatewayA11yService.instance ?: return false
+        val focused = UiTools.focusedInputSnapshot(a11y)
+        val identity = focused.identity ?: return false
+        val bounds = focused.bounds?.let(::boundsString)
+        if (!FocusIdentity.boundsConsistent(identity.source, bounds)) return false
+        val topology = runCatching { a11y.ctx(Gateway.caps()).optString("window_topology") }.getOrNull()
+        if (topology == "same_app_multi" &&
+            (identity.source == dev.magina.gateway.core.IdentitySource.IME_ONLY ||
+                bounds == null ||
+                (focused.windowPane ?: a11y.paneForBounds(focused.bounds)).isNullOrBlank())
+        ) {
+            return false
+        }
+        Gateway.inputCommitEvidence.installRebuilt(
+            rebuilt = rebuilt,
+            preview = approvedIntent.preview,
+            ocrBaseline = approvedIntent.ocrBaseline,
+            identity = identity,
+            // 重建门已校验通过（a11y 精确摘要或 OCR 归一包含）；降级链据此具备可信落框读回。
+            readbackVerified = true,
+        )
+        Gateway.preparedTargetEvidence.installRebuilt(
+            rebuilt = rebuilt,
+            identity = identity,
+            bounds = bounds,
+        )
+        return true
+    }
+
+    private fun newSafetyGate(call: ToolRegistry.CallScope, policy: SafetyPolicy): SafetyGate {
+        val intentTiming = IntentApprovalTiming()
+        val semanticIntent = SemanticIntentConfig(
+            timing = intentTiming,
+            dependenciesForTier = { tier ->
+                if (tier == RiskTier.RETRACTABLE) {
+                    IntentApprovalDependencies(
+                        riskTier = RiskTier.RETRACTABLE,
+                        timing = intentTiming,
+                        evidenceReader = AndroidIntentEvidenceReader(
+                            a11yProvider = { GatewayA11yService.instance },
+                            targetPaneProvider = { call.targetWindowPane },
+                        ),
+                    )
+                } else {
+                    IntentApprovalDependencies(
+                        riskTier = RiskTier.IRREVERSIBLE,
+                        timing = intentTiming,
+                    )
+                }
+            },
+            clock = Gateway.monotonicClock,
+            confirmationIdGenerator = ConfirmationIdGenerator::next,
+            nonceGenerator = ConfirmApprovalArbiter::newNonce,
+            intentConfirmer = { decision, _, confirmationId, nonce ->
+                val (confirmed, channel) = runOverlayConfirmation(
+                    decision = decision,
+                    call = call,
+                    confirmationId = confirmationId,
+                    nonce = nonce,
+                    timeoutMs = intentTiming.decisionTimeoutMs,
+                )
+                IntentConfirmationResult(
+                    allowed = confirmed,
+                    channel = channel,
+                    confirmationId = confirmationId,
+                    nonce = nonce,
+                )
+            },
+            currentForegroundPackage = {
+                GatewayA11yService.instance?.let { service ->
+                    runCatching { service.foregroundDiagnostics() }.getOrNull()
+                        ?.takeIf { diag -> diag.optBoolean("foreground_known", false) }
+                        ?.optString("package")
+                        ?.takeIf(String::isNotBlank)
+                }
+            },
+            installRebuiltEvidence = ::installRebuiltSessionAndInputEvidence,
+            onAuditNote = call::appendSafetyNote,
+            disableForegroundWait = { call.debugStaleInjected },
+        )
+        return SafetyGate(
+            policy = policy,
+            confirmer = { decision ->
+                runOverlayConfirmation(
+                    decision = decision,
+                    call = call,
+                    confirmationId = ConfirmationIdGenerator.next(),
+                    nonce = ConfirmApprovalArbiter.newNonce(),
+                ).first
+            },
+            contextProvider = { frozenArgs ->
+                call.readContext { safetyContext(call.toolName, frozenArgs, call, policy) }
+            },
+            onExecutionFailure = { error ->
+                if (error !is GatewayError || error.code != ErrorCode.E_RETRY_EXHAUSTED) {
+                    Gateway.retryGuard.recordFailure(call.toolName, call.argsFingerprint)
+                }
+            },
+            afterConfirmationAllowed = { _, _, _ ->
+                val attempt = call.testAttempt ?: throw GatewayError(
+                    ErrorCode.E_INTERNAL,
+                    "确认完成但缺少同一次确认编号",
+                    channel = "safety",
+                )
+                val a11y = GatewayA11yService.require()
+                Gateway.testControl.afterAllowed(
+                    session = call.testSession,
+                    attempt = attempt,
+                    performHome = { a11y.globalKey("home") },
+                    foreground = {
+                        val current = a11y.ctx(Gateway.caps())
+                        TestForeground(
+                            known = current.optBoolean("foreground_known", false),
+                            packageName = current.optString("app"),
+                        )
+                    },
+                )
+                if (call.testSession.armed) {
+                    val afterTestCtx = runCatching { a11y.ctx(Gateway.caps()) }.getOrNull()
+                    if (afterTestCtx != null && afterTestCtx.optString("app") != attempt.initialPackage) {
+                        call.debugStaleInjected = true
+                    }
+                }
+            },
+            afterExecutionSuccess = { executedTool, executedContext ->
+                if (call.staleKey.isNotEmpty()) Gateway.staleReconfirmGuard.clear(call.staleKey)
+                if (
+                    (executedTool == "press_key" || executedTool == "ui_action") &&
+                    executedContext.target?.preparedTargetEvidence != null
+                ) {
+                    Gateway.preparedTargetEvidence.clear()
+                }
+                if (executedTool == "ui_action" && executedContext.target?.inputCommitEvidence != null) {
+                    Gateway.inputCommitEvidence.clear()
+                }
+            },
+            onStaleAfterApproval = { _, _ ->
+                if (call.staleKey.isNotEmpty()) {
+                    Gateway.staleReconfirmGuard.recordStaleAfterApproval(call.staleKey)
+                    call.appendSafetyNote("reconfirm=${Gateway.staleReconfirmGuard.reconfirmCount(call.staleKey)}")
+                }
+            },
+            semanticIntent = semanticIntent,
+        )
+    }
 
     private fun ctxSnapshot(): JSONObject {
         val ctx = GatewayA11yService.instance?.ctx(Gateway.caps())
@@ -245,13 +368,23 @@ internal class ToolExecutionPipeline(
 
     private fun callInternal(name: String, args: JSONObject, origin: CallOrigin): ToolResult {
         val spec = byNameProvider()[name]
+        val policy = currentSafetyPolicy()
+        val actionArg = args.optString("action").ifEmpty { null }
+        val isRetractableSendAction = name == "ui_action" &&
+            actionArg in setOf("click", "long_click") &&
+            GatewayA11yService.instance?.peekCachedRef(args.optString("ref"))?.let { cached ->
+                policy.isRetractableSendLabel(
+                    listOf(cached.label, cached.desc).filter { it.isNotBlank() }.joinToString(" "),
+                )
+            } == true
         invalidateInputEvidenceForMutation(
             store = Gateway.inputCommitEvidence,
             level = spec?.level,
             toolName = name,
             key = args.optString("key").ifEmpty { null },
-            action = args.optString("action").ifEmpty { null },
+            action = actionArg,
             scrollSearch = args.optBoolean("scroll_search", false),
+            isRetractableSendAction = isRetractableSendAction,
         )
         invalidatePreparedTargetForMutation(
             store = Gateway.preparedTargetEvidence,
@@ -259,6 +392,8 @@ internal class ToolExecutionPipeline(
             toolName = name,
             key = args.optString("key").ifEmpty { null },
             scrollSearch = args.optBoolean("scroll_search", false),
+            action = actionArg,
+            isRetractableSendAction = isRetractableSendAction,
         )
         val auditId = Gateway.audit.nextId()
         val start = SystemClock.elapsedRealtime()
@@ -300,7 +435,6 @@ internal class ToolExecutionPipeline(
                     fallback = "press_key(home) 离开后继续任务，并在报告中说明",
                 )
             }
-            val policy = currentSafetyPolicy()
             val gate = newSafetyGate(call, policy)
             val data = gate.execute(name, spec.level, args) { frozenArgs, validatedContext ->
                 Gateway.retryGuard.checkAllowed(name, call.argsFingerprint)
@@ -401,33 +535,107 @@ internal class ToolExecutionPipeline(
         )
         val target = when {
             name == "ui_action" -> {
-                val ref = args.getString("ref")
+                val originalRef = args.getString("ref")
                 val action = args.optString("action")
-                val cached = a11y.peekCachedRef(ref)
-                val allowExactNav = cached != null && isExactNavFallbackEligible(
-                    policy = policy,
-                    action = action,
-                    isOcrOnly = cached.isOcrOnly,
-                    label = cached.label,
-                    desc = cached.desc,
-                    bounds = boundsString(cached.bounds),
-                    source = cached.source,
-                    windowPane = cached.pane.takeIf { sameAppMulti },
-                    baseContext = baseContext,
-                    args = args,
-                )
-                val resolved = a11y.resolve(
-                    ref = ref,
-                    allowExactNavFallback = allowExactNav,
-                    hasProtectedKeyword = policy::containsProtectedActionKeyword,
-                )
+                var effectiveRef = originalRef
+                var resolved = try {
+                    val cached = a11y.peekCachedRef(originalRef)
+                    val allowExactNav = cached != null && isExactNavFallbackEligible(
+                        policy = policy,
+                        action = action,
+                        isOcrOnly = cached.isOcrOnly,
+                        label = cached.label,
+                        desc = cached.desc,
+                        bounds = boundsString(cached.bounds),
+                        source = cached.source,
+                        windowPane = cached.pane.takeIf { sameAppMulti },
+                        baseContext = baseContext,
+                        args = args,
+                    )
+                    a11y.resolve(
+                        ref = originalRef,
+                        allowExactNavFallback = allowExactNav,
+                        hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                    )
+                } catch (error: GatewayError) {
+                    if (error.code != ErrorCode.E_STALE_REF || !call.semanticIntentActive || !isRecheckContextRead(call.contextReads)) {
+                        throw error
+                    }
+                    val expectedText = call.initialUiLabelText.orEmpty()
+                    val expectedDesc = call.initialUiLabelDesc.orEmpty()
+                    if (expectedText.isEmpty() && expectedDesc.isEmpty()) throw error
+                    val matches = a11y.find(
+                        text = expectedText.ifEmpty { null },
+                        role = null,
+                        desc = expectedDesc.ifEmpty { null },
+                    )
+                    val candidates = (0 until matches.length()).mapNotNull { idx ->
+                        val item = matches.optJSONObject(idx) ?: return@mapNotNull null
+                        if (item.optString("text") != expectedText || item.optString("desc") != expectedDesc) {
+                            return@mapNotNull null
+                        }
+                        if (sameAppMulti && item.optString("pane") != call.targetWindowPane) {
+                            return@mapNotNull null
+                        }
+                        item.optString("ref").takeIf(String::isNotBlank)
+                    }
+                    if (candidates.size != 1) throw error
+                    effectiveRef = candidates.first()
+                    a11y.resolve(
+                        ref = effectiveRef,
+                        allowExactNavFallback = false,
+                        hasProtectedKeyword = policy::containsProtectedActionKeyword,
+                    )
+                }
+                val resolvedPane = resolved.pane.takeIf { sameAppMulti }
+                val labelForSendCheck = listOf(resolved.text, resolved.desc)
+                    .filter { it.isNotBlank() }.joinToString(" ")
+                val isRetractableSend = action in setOf("click", "long_click") &&
+                    policy.isRetractableSendLabel(labelForSendCheck)
+                var focusIdentity: FocusIdentity? = null
+                var focusedInputBounds: String? = null
+                var inputEvidence: dev.magina.gateway.core.InputCommitEvidence? = null
+                var preparedEvidence: PreparedTargetEvidence? = null
+                if (isRetractableSend) {
+                    val focused = UiTools.focusedInputSnapshot(a11y)
+                    val focusBoundsStr = focused.bounds?.let(::boundsString)
+                    focusIdentity = focused.identity
+                    focusedInputBounds = focusBoundsStr
+                    inputEvidence = Gateway.inputCommitEvidence.current(focused.identity, focused.readableText)
+                    preparedEvidence = Gateway.preparedTargetEvidence.current(
+                        packageName,
+                        focused.identity,
+                        focusBoundsStr,
+                    )
+                    if (
+                        isInitialContextRead(call.contextReads) &&
+                        preparedEvidence == null &&
+                        inputEvidence != null &&
+                        focused.identity != null &&
+                        FocusIdentity.boundsConsistent(focused.identity.source, focusBoundsStr)
+                    ) {
+                        val titleObs = a11y.currentSnapshotTitle(resolvedPane)
+                        if (titleObs != null) {
+                            preparedEvidence = Gateway.preparedTargetEvidence.record(
+                                label = titleObs.label,
+                                packageName = packageName,
+                                identity = focused.identity,
+                                bounds = focusBoundsStr,
+                            )
+                        }
+                    }
+                }
                 val resolvedTarget = SafetyTarget(
-                    ref = ref,
+                    ref = effectiveRef,
                     text = resolved.text,
                     description = resolved.desc,
                     bounds = boundsString(resolved.bounds),
                     source = resolved.source,
-                    windowPane = resolved.pane.takeIf { sameAppMulti },
+                    focusIdentity = focusIdentity,
+                    focusedInputBounds = focusedInputBounds,
+                    inputCommitEvidence = inputEvidence,
+                    preparedTargetEvidence = preparedEvidence,
+                    windowPane = resolvedPane,
                 )
                 if (resolved.usedExactNavFallback) {
                     requireExactNavStillAllowed(policy, args, baseContext.copy(target = resolvedTarget))
@@ -471,14 +679,14 @@ internal class ToolExecutionPipeline(
             args.optString("component").ifEmpty { null }, call.intentObservation,
         )
         "ui_action" -> {
-            val ref = args.getString("ref")
+            val expected = validatedContext.target ?: throw GatewayError(
+                ErrorCode.E_STALE_REF, "安全门未提供已复核的 UI 目标", channel = "safety",
+            )
+            val effectiveRef = expected.ref ?: args.getString("ref")
             val action = args.getString("action")
             val params = JSONObject()
                 .put("text", args.optString("text"))
                 .put("direction", args.optString("direction", "forward"))
-            val expected = validatedContext.target ?: throw GatewayError(
-                ErrorCode.E_STALE_REF, "安全门未提供已复核的 UI 目标", channel = "safety",
-            )
             val allowExactNav = isExactNavFallbackEligible(
                 policy = policy,
                 action = action,
@@ -492,7 +700,7 @@ internal class ToolExecutionPipeline(
                 args = args,
             )
             UiTools.uiAction(
-                ref = ref,
+                ref = effectiveRef,
                 action = action,
                 params = params,
                 expected = expected,
@@ -500,7 +708,7 @@ internal class ToolExecutionPipeline(
                 hasProtectedKeyword = policy::containsProtectedActionKeyword,
                 onExactNavUsed = { resolved ->
                     val resolvedTarget = SafetyTarget(
-                        ref = ref,
+                        ref = effectiveRef,
                         text = resolved.text,
                         description = resolved.desc,
                         bounds = boundsString(resolved.bounds),

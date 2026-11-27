@@ -99,4 +99,32 @@ class InputCommitEvidenceTest {
         assertTrue(first.commitId != second.commitId)
         assertEquals(second, store.current(strict))
     }
+
+    @Test
+    fun `record populates ocrBaseline and installRebuilt issues fresh ttl without exposing preview in toString`() {
+        val secret = "待重建输入内容-5510"
+        val recorded = store.record(secret, strict, readbackVerified = true)
+        assertEquals(TextNorm.ocr(secret), recorded.ocrBaseline?.normalized)
+        assertFalse(recorded.toString().contains(secret))
+
+        now += 600L
+        assertNull(store.current(strict))
+
+        val rebuilt = EvidenceRebuild.Rebuilt(
+            packageName = "com.tencent.mm",
+            targetLabel = "文件传输助手",
+            sha256 = recorded.sha256,
+            length = recorded.length,
+        )
+        val reinstalled = store.installRebuilt(
+            rebuilt = rebuilt,
+            preview = recorded.preview,
+            ocrBaseline = recorded.ocrBaseline,
+            identity = strict,
+            readbackVerified = true,
+        )
+        assertEquals(recorded.sha256, reinstalled.sha256)
+        assertEquals(now + 500L, reinstalled.expiresAtMs)
+        assertEquals(reinstalled, store.current(strict))
+    }
 }

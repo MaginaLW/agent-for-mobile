@@ -9,7 +9,12 @@
     "支付宝": "com.eg.android.AlipayGphone",
     "设置": "com.android.settings",
     "相册": "com.vivo.gallery",
-    "哔哩哔哩": "tv.danmaku.bili"
+    "哔哩哔哩": "tv.danmaku.bili",
+    "闹钟时钟": "com.android.BBKClock",
+    "日历": "com.bbk.calendar",
+    "原子笔记": "com.android.notes",
+    "文件管理": "com.android.filemanager",
+    "计算器": "com.android.bbkcalculator"
   },
   "share_components": {
     "com.tencent.mm": "com.tencent.mm.ui.tools.ShareImgUI"
@@ -71,11 +76,84 @@
       "app": "设置",
       "prefer_api_first": ["bluetooth", "wifi", "airplane", "battery", "network", "screen", "volume", "brightness"],
       "pre_guards": [
-        "只读查询系统状态优先调用 system_get_state，无需进入设置 UI",
+        "只读查询系统状态优先调用 settings_state_readonly_check 或 system_get_state，无需进入设置 UI",
         "在系统设置前台时安全中心会监控并撤销第三方无障碍，遇权限失效/弹窗立即停止并如实报告"
       ],
       "readonly_rules": [
         "禁止用 android.settings.BLUETOOTH_SETTINGS 直达蓝牙页（OriginOS 不可靠）；改用 app_launch(\"设置\") 或 android.settings.SETTINGS 后 UI 导航"
+      ]
+    },
+    "com.vivo.gallery": {
+      "app": "相册",
+      "known_blockers": ["com.vivo.appfilter"],
+      "prefer_api_first": ["media_query"],
+      "pre_guards": [
+        "核对当前前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "仅查询最新照片或截图元数据时优先调用 media_query，无需进入相册 UI；需浏览相册界面时用 gallery_readonly_prepare 安全拉起"
+      ],
+      "readonly_rules": [
+        "仅只读浏览相册目录与照片元信息；严禁删除、移动、重命名、编辑或分享照片/视频",
+        "遇系统权限弹窗或私人内容遮挡立即停止；严禁向任何第三方应用外发图片"
+      ]
+    },
+    "com.android.BBKClock": {
+      "app": "闹钟时钟",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "启动前核对前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "启动后核对前台包名为 com.android.BBKClock 且无遮挡弹窗后再读取时钟或闹钟列表"
+      ],
+      "readonly_rules": [
+        "仅只读查看闹钟、世界时钟、秒表或计时器列表；严禁新增、修改、开关、删除闹钟或启动/重置计时器",
+        "遇权限弹窗或系统遮挡立即停止并如实报告"
+      ]
+    },
+    "com.bbk.calendar": {
+      "app": "日历",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "启动前核对前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "启动后核对前台包名为 com.bbk.calendar 且无遮挡弹窗后再读取日历视图"
+      ],
+      "readonly_rules": [
+        "仅只读查看日期、节假日或当前页面可见日程标题；严禁新建、编辑、删除日程或订阅/导入日历",
+        "遇权限弹窗或隐私遮挡立即停止并如实报告"
+      ]
+    },
+    "com.android.notes": {
+      "app": "原子笔记",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "启动前核对前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "启动后核对前台包名为 com.android.notes 且无遮挡弹窗后再读取结构概览"
+      ],
+      "readonly_rules": [
+        "仅在明确授权范围内只读核对笔记列表结构；严禁新建、编辑、删除、置顶、加密或分享笔记，不摘录无关私人笔记正文",
+        "遇应用锁、指纹/密码验证或权限弹窗立即停止并交现场用户处理"
+      ]
+    },
+    "com.android.filemanager": {
+      "app": "文件管理",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "启动前核对前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "启动后核对前台包名为 com.android.filemanager 且无遮挡弹窗后再读取目录或分类概览"
+      ],
+      "readonly_rules": [
+        "仅只读浏览目录结构与文件元信息；严禁删除、移动、重命名、压缩、解压、安装 APK 或分享文件",
+        "遇存储权限弹窗或系统清理建议确认框立即停止，严禁触发一键清理或删除操作"
+      ]
+    },
+    "com.android.bbkcalculator": {
+      "app": "计算器",
+      "known_blockers": ["com.vivo.appfilter"],
+      "pre_guards": [
+        "启动前核对前台包名，若被 com.vivo.appfilter 等系统弹窗拦截立即停止交现场用户处理",
+        "启动后核对前台包名为 com.android.bbkcalculator 且无遮挡弹窗后再读取当前面板状态"
+      ],
+      "readonly_rules": [
+        "仅只读核对计算器拉起状态、模式与当前可见显示区；未获明确计算任务指示时不主动按键或清空历史记录",
+        "遇权限或弹窗遮挡立即停止并如实报告"
       ]
     },
     "tv.danmaku.bili": {

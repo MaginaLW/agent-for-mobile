@@ -18,23 +18,31 @@ internal fun shouldSerializeUiCall(
     level != Level.R || (toolName == "ui_find" && scrollSearch)
     )
 
-/** 不可读输入无法证明未被间接改写：所有写边界先清证据，Enter 为执行前复检的唯一例外。 */
+/**
+ * 不可读输入无法证明未被间接改写：所有写边界先清证据，Enter 与 II 级发送点击（含会话与输入锚点）为
+ * 执行前复检的唯一例外。
+ */
 internal fun invalidateInputEvidenceForMutation(
     store: InputCommitEvidenceStore,
     level: Level?,
     toolName: String,
     key: String? = null,
-    @Suppress("UNUSED_PARAMETER") action: String? = null,
+    action: String? = null,
     scrollSearch: Boolean = false,
+    isRetractableSendAction: Boolean = false,
 ): Boolean {
+    val preservesSendClick = isRetractableSendAction &&
+        toolName == "ui_action" &&
+        action in setOf("click", "long_click")
     val invalidates = shouldSerializeUiCall(level, toolName, scrollSearch) &&
-        !(toolName == "press_key" && key.equals("enter", ignoreCase = true))
+        !(toolName == "press_key" && key.equals("enter", ignoreCase = true)) &&
+        !preservesSendClick
     if (invalidates) store.clear()
     return invalidates
 }
 
 /**
- * 已准备业务目标只允许沿 macro -> type_text -> press_key(enter) 链路存活。
+ * 已准备业务目标沿 macro -> type_text -> press_key(enter) / II 级发送点击 链路存活。
  * macro 自身在开始时清旧值，成功后再记录新值；其他 UI mutation 一律失效。
  */
 internal fun invalidatePreparedTargetForMutation(
@@ -43,9 +51,15 @@ internal fun invalidatePreparedTargetForMutation(
     toolName: String,
     key: String? = null,
     scrollSearch: Boolean = false,
+    action: String? = null,
+    isRetractableSendAction: Boolean = false,
 ): Boolean {
+    val preservesSendClick = isRetractableSendAction &&
+        toolName == "ui_action" &&
+        action in setOf("click", "long_click")
     val preserves = toolName == "type_text" ||
-        (toolName == "press_key" && key.equals("enter", ignoreCase = true))
+        (toolName == "press_key" && key.equals("enter", ignoreCase = true)) ||
+        preservesSendClick
     val invalidates = shouldSerializeUiCall(level, toolName, scrollSearch) && !preserves
     if (invalidates) store.clear()
     return invalidates

@@ -39,9 +39,12 @@ object Gateway {
      * 详见 [StaleReconfirmGuard] 的类注释，别以为它在工作。
      * 仍是进程级的：真有重试时每次都是一次**全新**的 `callInternal`，计数放在调用内就永远是 1。
      */
+    /** 证据仓、意图仓与网关单调时钟统一同源。 */
+    internal val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000L }
+
     val staleReconfirmGuard = StaleReconfirmGuard()
-    val inputCommitEvidence = InputCommitEvidenceStore()
-    val preparedTargetEvidence = PreparedTargetEvidenceStore()
+    val inputCommitEvidence = InputCommitEvidenceStore(clock = monotonicClock)
+    val preparedTargetEvidence = PreparedTargetEvidenceStore(clock = monotonicClock)
     val uiMutationCoordinator = UiMutationCoordinator()
 
     fun init(context: Context) {

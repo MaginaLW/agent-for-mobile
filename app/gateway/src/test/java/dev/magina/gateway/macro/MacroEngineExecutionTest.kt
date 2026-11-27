@@ -900,4 +900,114 @@ class MacroEngineExecutionTest {
         assertTrue(multiRes.has("final_snapshot"))
         assertEquals(listOf("e-my"), multiCalls.filter { it.first == "ui_action" }.map { it.second.getString("ref") })
     }
+
+    @Test
+    fun `settings_state_readonly_check queries system_get_state via L1 API without launching UI`() {
+        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val engine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { emptyList() },
+        ) { tool, args ->
+            calls.add(tool to args)
+            when (tool) {
+                "system_get_state" -> {
+                    val key = args.getString("key")
+                    if (key == "bluetooth") {
+                        Envelope.ok(
+                            JSONObject()
+                                .put("value", "on")
+                                .put("source", "BluetoothAdapter.isEnabled")
+                                .put("cross_checked", false),
+                            ctx("com.android.launcher"),
+                            "st-1",
+                        )
+                    } else {
+                        Envelope.err(
+                            GatewayError(ErrorCode.E_UNSUPPORTED_KEY, "key「$key」不在白名单"),
+                            ctx("com.android.launcher"),
+                            "st-2",
+                        )
+                    }
+                }
+                else -> error("settings_state_readonly_check 不得调用 UI 工具：$tool")
+            }
+        }
+
+        val okRes = engine.run(
+            JSONObject()
+                .put("name", "settings_state_readonly_check")
+                .put("params", JSONObject().put("key", "bluetooth")),
+        )
+        assertEquals("completed", okRes.getString("status"))
+        assertEquals(1, okRes.getInt("steps_executed"))
+        assertEquals(listOf("system_get_state"), calls.map { it.first })
+        assertEquals("bluetooth", calls[0].second.getString("key"))
+        assertEquals("on", okRes.getJSONObject("final_snapshot").getString("value"))
+        assertEquals("BluetoothAdapter.isEnabled", okRes.getJSONObject("final_snapshot").getString("source"))
+
+        val badKeyRes = engine.run(
+            JSONObject()
+                .put("name", "settings_state_readonly_check")
+                .put("params", JSONObject().put("key", "unknown_key")),
+        )
+        assertEquals("handoff_required", badKeyRes.getString("status"))
+        assertEquals("E_UNSUPPORTED_KEY", badKeyRes.getString("failure_code"))
+        assertTrue(badKeyRes.getBoolean("handoff_allowed"))
+    }
+
+    @Test
+    fun `builtin system app readonly prepare macros launch target package cleanly and hand off on blocker`() {
+        val targets = listOf(
+            Triple("gallery_readonly_prepare", "相册", "com.vivo.gallery"),
+            Triple("clock_readonly_prepare", "闹钟时钟", "com.android.BBKClock"),
+            Triple("calendar_readonly_prepare", "日历", "com.bbk.calendar"),
+            Triple("notes_readonly_prepare", "原子笔记", "com.android.notes"),
+            Triple("filemanager_readonly_prepare", "文件管理", "com.android.filemanager"),
+            Triple("calculator_readonly_prepare", "计算器", "com.android.bbkcalculator"),
+        )
+        for ((macroId, alias, pkg) in targets) {
+            val calls = mutableListOf<Pair<String, JSONObject>>()
+            val okEngine = MacroEngine(
+                catalog = loadRealCatalog(),
+                isBlockedApp = { false },
+                loginWallKeywordsForPackage = { emptyList() },
+            ) { tool, args ->
+                calls.add(tool to args)
+                when (tool) {
+                    "foreground_app" -> Envelope.ok(JSONObject().put("package", "com.android.launcher"), ctx("com.android.launcher"), "bi-1")
+                    "app_launch" -> Envelope.ok(JSONObject().put("launched", true).put("foreground_verified", true), ctx(pkg), "bi-2")
+                    "wait_for" -> Envelope.ok(JSONObject().put("met", true), ctx(pkg), "bi-3")
+                    "ui_snapshot" -> Envelope.ok(
+                        JSONObject()
+                            .put("blocking_overlay", false)
+                            .put("count", 1)
+                            .put("elements", JSONArray().put(JSONObject().put("ref", "e1").put("text", alias).put("desc", ""))),
+                        ctx(pkg),
+                        "bi-4",
+                    )
+                    else -> error("unexpected tool: $tool")
+                }
+            }
+            val res = okEngine.run(JSONObject().put("name", macroId).put("params", JSONObject()))
+            assertEquals("$macroId 应完成", "completed", res.getString("status"))
+            assertEquals(5, res.getInt("steps_executed"))
+            assertTrue(res.has("final_snapshot"))
+            assertEquals(listOf("foreground_app", "app_launch", "wait_for", "wait_for", "ui_snapshot"), calls.map { it.first })
+            assertEquals(alias, calls[1].second.getString("name"))
+            assertEquals(pkg, calls[2].second.getString("package"))
+        }
+
+        val blockerEngine = MacroEngine(
+            catalog = loadRealCatalog(),
+            isBlockedApp = { false },
+            loginWallKeywordsForPackage = { emptyList() },
+        ) { _, _ ->
+            Envelope.ok(JSONObject().put("package", "com.vivo.appfilter"), ctx("com.vivo.appfilter"), "bi-b1")
+        }
+        val blockerRes = blockerEngine.run(JSONObject().put("name", "gallery_readonly_prepare").put("params", JSONObject()))
+        assertEquals("handoff_required", blockerRes.getString("status"))
+        assertEquals("SYSTEM_BLOCKER", blockerRes.getString("failure_code"))
+        assertTrue(blockerRes.getBoolean("blocker_detected"))
+    }
 }

@@ -105,7 +105,13 @@ class SkillPackAssetAndLookupTest {
             "com.jingdong.app.mall",
             "com.taobao.taobao",
             "com.android.settings",
+            "com.vivo.gallery",
             "tv.danmaku.bili",
+            "com.android.BBKClock",
+            "com.bbk.calendar",
+            "com.android.notes",
+            "com.android.filemanager",
+            "com.android.bbkcalculator",
         )
         assertTrue(
             "app_guides 必须覆盖目标 App 集合",
@@ -152,6 +158,18 @@ class SkillPackAssetAndLookupTest {
         assertEquals("tv.danmaku.bili", bili.getString("package"))
         assertFalse(bili.getBoolean("blocked"))
         assertTrue(bili.has("app_guide"))
+
+        val gallery = pack.lookupForBrain("相册")
+        assertTrue(gallery.getBoolean("matched"))
+        assertEquals("com.vivo.gallery", gallery.getString("package"))
+        assertFalse(gallery.getBoolean("blocked"))
+        assertTrue(gallery.has("app_guide"))
+
+        val clock = pack.lookupForBrain("闹钟时钟")
+        assertTrue(clock.getBoolean("matched"))
+        assertEquals("com.android.BBKClock", clock.getString("package"))
+        assertFalse(clock.getBoolean("blocked"))
+        assertTrue(clock.has("app_guide"))
 
         val alipay = pack.lookupForBrain("支付宝")
         assertTrue(alipay.getBoolean("matched"))

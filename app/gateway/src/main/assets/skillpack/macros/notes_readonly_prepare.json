@@ -1,0 +1,57 @@
+{
+  "id": "notes_readonly_prepare",
+  "version": 1,
+  "app": "原子笔记",
+  "expect_package": "com.android.notes",
+  "description": "纯只读检查前台非系统拦截后拉起原子笔记，等待前台与页面稳定并采集完整快照交回大脑核对结构；严禁新建、编辑、删除或分享笔记，不摘录私人正文。",
+  "readonly": true,
+  "verified": "2026-11-27",
+  "params": {},
+  "steps": [
+    {
+      "id": "check_foreground",
+      "tool": "foreground_app",
+      "args": {},
+      "assertions": {
+        "not_packages": ["com.vivo.appfilter"]
+      }
+    },
+    {
+      "id": "launch_notes",
+      "tool": "app_launch",
+      "args": {
+        "name": "原子笔记"
+      }
+    },
+    {
+      "id": "wait_notes_foreground",
+      "tool": "wait_for",
+      "args": {
+        "condition": "app_foreground",
+        "package": "com.android.notes",
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "wait_notes_settle",
+      "tool": "wait_for",
+      "args": {
+        "condition": "idle",
+        "quiet_ms": 800,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "read_notes_snapshot",
+      "tool": "ui_snapshot",
+      "args": {
+        "scope": "full"
+      },
+      "capture_as_final_snapshot": true,
+      "assertions": {
+        "package_equals": "com.android.notes",
+        "blocking_overlay_false": true
+      }
+    }
+  ]
+}

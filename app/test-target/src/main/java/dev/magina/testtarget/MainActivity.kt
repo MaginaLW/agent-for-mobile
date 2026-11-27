@@ -59,8 +59,17 @@ class MainActivity : Activity() {
             setPadding(32, 40, 32, 32)
         }
         setContentView(ScrollView(this).apply { addView(content) })
-        label("本地测试靶标 · $route", R.id.target_title)
-        label("仅含合成文本；没有真实联系人或外发功能。")
+        if (route in setOf("conversation", "stale-conversation", "ime")) {
+            // 让会话标题独占顶部工具栏带，其余合成文案移出 12% Y 带外，不放宽网关唯一标题判据。
+            label("测试联系人甲", R.id.target_title)
+            val spacerHeight = (resources.displayMetrics.heightPixels * 0.14f).toInt().coerceAtLeast(240)
+            content.addView(View(this), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, spacerHeight))
+            label("本地测试靶标 · $route")
+            label("仅含合成文本；没有真实联系人或外发功能。")
+        } else {
+            label("本地测试靶标 · $route", R.id.target_title)
+            label("仅含合成文本；没有真实联系人或外发功能。")
+        }
 
         when (route) {
             "list" -> {
@@ -106,7 +115,6 @@ class MainActivity : Activity() {
     }
 
     private fun conversation(showIme: Boolean, recordStaleCallbacks: Boolean = false) {
-        label("测试联系人甲")
         label("合成消息：列表中的同名项不能代替当前会话标题。")
         val editor = input("输入测试消息", R.id.target_composer)
         var actionCount = 0

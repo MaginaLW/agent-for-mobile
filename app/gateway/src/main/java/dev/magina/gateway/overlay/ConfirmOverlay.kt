@@ -1,17 +1,27 @@
 package dev.magina.gateway.overlay
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import dev.magina.gateway.core.ApprovalChannel
 import dev.magina.gateway.core.ApprovalChannelRecorder
 import dev.magina.gateway.core.ConfirmApprovalArbiter
@@ -21,6 +31,8 @@ import dev.magina.gateway.core.SafetyFallbacks
 import dev.magina.gateway.testing.TestConfirmationDecision
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.roundToLong
 
 /**
  * 确认卡窗口宿主。无障碍服务可用时优先用 `TYPE_ACCESSIBILITY_OVERLAY`，尝试绕开 vivo 对后台
@@ -41,12 +53,110 @@ internal fun chooseConfirmOverlayWindowKind(
     else -> ConfirmOverlayWindowKind.UNAVAILABLE
 }
 
+internal const val CONFIRM_OVERLAY_MAX_WIDTH_DP: Int = 720
+internal const val CONFIRM_OVERLAY_BOTTOM_OFFSET_DP: Int = 12
+internal const val CONFIRM_OVERLAY_HORIZONTAL_MARGIN_DP: Int = 16
+internal const val CONFIRM_OVERLAY_MAX_HEIGHT_FRACTION: Double = 0.50
+private const val CONFIRM_OVERLAY_CARD_VERTICAL_PADDING_PX: Int = 80
+private const val CONFIRM_OVERLAY_CHROME_RESERVE_DP: Int = 80
+private const val CONFIRM_OVERLAY_MIN_BODY_HEIGHT_DP: Int = 80
+
+/**
+ * 锁屏/亮屏系统广播接收器标志。
+ *
+ * `ACTION_USER_PRESENT` 由 `com.android.systemui`（非 `Process.SYSTEM_UID`）发出；
+ * 在 targetSdk 34+ 上使用 `RECEIVER_NOT_EXPORTED` 会导致该解锁广播被系统静默跳过。
+ * 三个监听 action 均为框架 `<protected-broadcast>`，且回调仍严格白名单过滤并实时复核
+ * `KeyguardManager` / `PowerManager`。
+ */
+internal const val CONFIRM_OVERLAY_LOCK_RECEIVER_FLAGS: Int = ContextCompat.RECEIVER_EXPORTED
+
+internal data class ConfirmOverlayWindowLayout(
+    val width: Int,
+    val height: Int,
+    val gravity: Int,
+    val yOffsetPx: Int,
+    val flags: Int,
+    val fitSystemBarsAndCutout: Boolean,
+    val fitIme: Boolean,
+    val maxBodyHeightPx: Int?,
+)
+
+/**
+ * 确认卡窗口布局策略（纯函数，JVM 可测）。
+ *
+ * `TYPE_ACCESSIBILITY_OVERLAY` 的窗口层级高于状态栏与通知中心：
+ * 1. 锚定底部居中并仅避让系统栏与刘海，**不避让 IME**——若避让输入法，微信键盘展开时会把底部卡片
+ *    直接顶回屏幕上沿，再次遮住通知中心；确认期间用户不输入，覆盖软键盘区不影响 `FLAG_NOT_FOCUSABLE`
+ *    的焦点与 InputConnection 身份。
+ * 2. 限制正文滚动区最大高度，确保整张卡片始终留在屏幕下半区、顶部通知中心与会话标题栏恒可触达，
+ *    同时保持标题与「拒绝 / 允许本次」按钮始终固定可见。
+ * 3. 宽屏平板限制最大宽度为 `720dp`，避免铺满全宽。
+ */
+internal fun confirmOverlayWindowLayout(
+    displayWidthPx: Int,
+    displayHeightPx: Int = 0,
+    density: Float,
+): ConfirmOverlayWindowLayout {
+    val validDensity = density.isFinite() && density > 0f
+    val safeDensity = if (validDensity) density.toDouble() else 1.0
+    val width = if (!validDensity || displayWidthPx <= 0) {
+        WindowManager.LayoutParams.MATCH_PARENT
+    } else {
+        val maxWidthLong = (CONFIRM_OVERLAY_MAX_WIDTH_DP.toDouble() * safeDensity).roundToLong()
+        val marginLong = (CONFIRM_OVERLAY_HORIZONTAL_MARGIN_DP.toDouble() * safeDensity).roundToLong()
+        if (maxWidthLong in 1L..Int.MAX_VALUE.toLong() &&
+            marginLong in 0L..Int.MAX_VALUE.toLong() &&
+            displayWidthPx.toLong() > maxWidthLong + marginLong * 2L
+        ) {
+            maxWidthLong.toInt()
+        } else {
+            WindowManager.LayoutParams.MATCH_PARENT
+        }
+    }
+    val rawOffsetLong = (CONFIRM_OVERLAY_BOTTOM_OFFSET_DP.toDouble() * safeDensity)
+        .roundToLong()
+        .coerceIn(1L, Int.MAX_VALUE.toLong())
+    val bottomOffsetPx = if (displayHeightPx > 0) {
+        rawOffsetLong.coerceAtMost((displayHeightPx / 8).coerceAtLeast(1).toLong()).toInt()
+    } else {
+        rawOffsetLong.toInt()
+    }
+    val maxBodyHeightPx = if (displayHeightPx > 0) {
+        val maxCardHeightPx = (displayHeightPx.toDouble() * CONFIRM_OVERLAY_MAX_HEIGHT_FRACTION)
+            .roundToLong()
+            .coerceIn(1L, displayHeightPx.toLong())
+        val chromeLong = CONFIRM_OVERLAY_CARD_VERTICAL_PADDING_PX.toLong() +
+            (CONFIRM_OVERLAY_CHROME_RESERVE_DP.toDouble() * safeDensity).roundToLong().coerceAtLeast(0L)
+        val minBodyLong = (CONFIRM_OVERLAY_MIN_BODY_HEIGHT_DP.toDouble() * safeDensity)
+            .roundToLong()
+            .coerceIn(1L, (displayHeightPx / 3).coerceAtLeast(1).toLong())
+        (maxCardHeightPx - chromeLong)
+            .coerceAtLeast(minBodyLong)
+            .coerceAtMost(maxCardHeightPx)
+            .toInt()
+    } else {
+        null
+    }
+    return ConfirmOverlayWindowLayout(
+        width = width,
+        height = WindowManager.LayoutParams.WRAP_CONTENT,
+        gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+        yOffsetPx = bottomOffsetPx,
+        flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+        fitSystemBarsAndCutout = true,
+        fitIme = false,
+        maxBodyHeightPx = maxBodyHeightPx,
+    )
+}
+
 /**
  * 统一安全门内部的确认悬浮窗（不暴露为 MCP 工具，harness §5.3 带内确认）。
  * 危险动作弹网关生成的卡片，人在手机上点头。
  *
  * **本类抛出的每一个错误都是 safety 终态**（`E_CONFIRM_TIMEOUT` / `E_PERM_MISSING` /
- * `E_CHANNEL_DOWN`）：它们全都发生在危险工具**已经在调用中**，大脑必须按站规常规失败，
+ * `E_CHANNEL_DOWN` / `E_BLOCKED`）：它们全都发生在危险工具**已经在调用中**，大脑必须按站规常规失败，
  * **不得输出 `[AWAIT_CONFIRM]`**。措辞集中在 [SafetyFallbacks]，由离线用例逐条钉住。
  */
 object ConfirmOverlay {
@@ -59,8 +169,66 @@ object ConfirmOverlay {
     /** 默认确认超时（2026-11-16 对齐 backlog 决策为 90s）。 */
     internal const val DEFAULT_CONFIRM_TIMEOUT_MS: Long = 90_000L
 
+    /** 锁屏/息屏状态兜底轮询间隔：广播负责瞬时响应，轮询兜底厂商延迟或非标准锁屏。 */
+    private const val LOCK_STATE_POLL_INTERVAL_MS: Long = 200L
+
     /** 卡片底色；取证判据按它比对，改颜色必须两处一起改，故只留这一处定义。 */
     val CARD_BACKGROUND_COLOR: Int = Color.parseColor("#F2222222")
+
+    private class MaxHeightScrollView(
+        context: Context,
+        private val maxHeightPx: Int,
+    ) : ScrollView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val cappedHeightSpec = if (maxHeightPx > 0) {
+                val mode = MeasureSpec.getMode(heightMeasureSpec)
+                val size = MeasureSpec.getSize(heightMeasureSpec)
+                val bounded = if (mode == MeasureSpec.UNSPECIFIED) maxHeightPx else minOf(size, maxHeightPx)
+                MeasureSpec.makeMeasureSpec(bounded, MeasureSpec.AT_MOST)
+            } else {
+                heightMeasureSpec
+            }
+            super.onMeasure(widthMeasureSpec, cappedHeightSpec)
+        }
+    }
+
+    private class FrameFenceHandle(private val card: LinearLayout) {
+        var preDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+        var drawListener: ViewTreeObserver.OnDrawListener? = null
+        var frameCommitCallback: Runnable? = null
+        var isDetached: Boolean = false
+            private set
+
+        fun detach() {
+            isDetached = true
+            val observer = card.viewTreeObserver
+            val preDraw = preDrawListener
+            preDrawListener = null
+            if (preDraw != null && observer.isAlive) {
+                runCatching { observer.removeOnPreDrawListener(preDraw) }
+            }
+            val listener = drawListener
+            drawListener = null
+            if (listener != null && observer.isAlive) {
+                try {
+                    observer.removeOnDrawListener(listener)
+                } catch (_: IllegalStateException) {
+                    // ViewTreeObserver 禁止在 onDraw 派发期同步移除监听；延迟到下一帧消息再摘除。
+                    card.post {
+                        val currentObserver = card.viewTreeObserver
+                        if (currentObserver.isAlive) {
+                            runCatching { currentObserver.removeOnDrawListener(listener) }
+                        }
+                    }
+                }
+            }
+            val commit = frameCommitCallback
+            frameCommitCallback = null
+            if (commit != null && observer.isAlive) {
+                runCatching { observer.unregisterFrameCommitCallback(commit) }
+            }
+        }
+    }
 
     /** 阻塞调用方线程（工具线程，非主线程）直到 允许/拒绝/超时。 */
     @Synchronized
@@ -98,6 +266,7 @@ object ConfirmOverlay {
             ErrorCode.E_PERM_MISSING, "悬浮窗权限未授予，带内确认不可用",
             channel = "overlay", fallback = SafetyFallbacks.OVERLAY_PERMISSION_MISSING,
         )
+        val appContext = context.applicationContext ?: context
         val windowContext = if (windowKind == ConfirmOverlayWindowKind.ACCESSIBILITY_OVERLAY) {
             overlayHost!!.context
         } else {
@@ -118,34 +287,40 @@ object ConfirmOverlay {
         var cardTarget: ConfirmCardTarget? = null
         val buttonsEnabled = CompletableFuture<Unit>()
         val readiness = ConfirmationReadinessGate()
+        val visibility = ConfirmOverlayVisibilityController()
         val main = Handler(Looper.getMainLooper())
         val wm = windowContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val keyguardManager = appContext.getSystemService(KeyguardManager::class.java)
+        val powerManager = appContext.getSystemService(PowerManager::class.java)
         android.util.Log.i(
             "GatewayApproval",
             "confirm overlay host=${if (overlayHost != null) "accessibility" else "application"} type=$windowType",
         )
         isAwaitingDecision = true
-        var view: LinearLayout? = null
-        var pendingView: LinearLayout? = null
-        var preDrawListener: ViewTreeObserver.OnPreDrawListener? = null
-        var drawListener: ViewTreeObserver.OnDrawListener? = null
-        var frameCommitCallback: Runnable? = null
+        var attachedView: LinearLayout? = null
+        var activeFence: FrameFenceHandle? = null
+        val terminalError = AtomicReference<Throwable?>(null)
+        var lockReceiverRegistered = false
+        var lockMonitoringActive = false
 
-        fun removeFrameFence(card: LinearLayout?) {
-            val observer = card?.viewTreeObserver
-            val preDraw = preDrawListener
-            if (preDraw != null && observer?.isAlive == true) observer.removeOnPreDrawListener(preDraw)
-            preDrawListener = null
-            val listener = drawListener
-            if (listener != null && observer?.isAlive == true) observer.removeOnDrawListener(listener)
-            drawListener = null
-            val commit = frameCommitCallback
-            if (commit != null && observer?.isAlive == true) observer.unregisterFrameCommitCallback(commit)
-            frameCommitCallback = null
-        }
+        fun readDeviceState(broadcastAction: String? = null): ConfirmOverlayDeviceState =
+            resolveConfirmOverlayDeviceState(
+                isKeyguardLocked = keyguardManager?.isKeyguardLocked,
+                isDeviceLocked = keyguardManager?.isDeviceLocked,
+                isInteractive = powerManager?.isInteractive,
+                broadcastAction = broadcastAction,
+            )
+
+        fun lockedBeforeShownError(): GatewayError = GatewayError(
+            ErrorCode.E_BLOCKED,
+            "设备处于锁屏或息屏状态，禁止在锁屏上展示确认卡",
+            channel = "overlay",
+            fallback = SafetyFallbacks.OVERLAY_LOCKED,
+        )
 
         fun mappedFailure(operation: String, cause: Throwable): GatewayError {
             val root = (cause as? java.util.concurrent.ExecutionException)?.cause ?: cause
+            if (root is GatewayError) return root
             val code = if (root is SecurityException) ErrorCode.E_PERM_MISSING else ErrorCode.E_CHANNEL_DOWN
             return GatewayError(
                 code,
@@ -159,37 +334,438 @@ object ConfirmOverlay {
             ).apply { initCause(root) }
         }
 
+        fun setButtonsEnabled(group: LinearLayout, enabled: Boolean) {
+            for (i in 0 until group.childCount) {
+                when (val child = group.getChildAt(i)) {
+                    is Button -> child.isEnabled = enabled
+                    is LinearLayout -> setButtonsEnabled(child, enabled)
+                }
+            }
+        }
+
+        fun resolveWindowLayout(): ConfirmOverlayWindowLayout {
+            val bounds = wm.currentWindowMetrics.bounds
+            val density = windowContext.resources.displayMetrics.density
+            return confirmOverlayWindowLayout(
+                displayWidthPx = bounds.width(),
+                displayHeightPx = bounds.height(),
+                density = density,
+            )
+        }
+
+        fun createLayoutParams(layout: ConfirmOverlayWindowLayout): WindowManager.LayoutParams {
+            // NOT_FOCUSABLE 是必须的：可获焦的 overlay 会从 App 手里抢走窗口输入焦点，
+            // 于是 ①App 窗口在卡显示期间既非 active 也非 focused，前台身份被判 unknown；
+            // ②被操作 App 的 InputConnection 被拆掉重建，IME 会话 id 换新，确认后的
+            // 焦点身份复核必判 stale——2026-07-26 真机两种症状先后各撞了一次。
+            // 不可获焦的窗口照样收得到触摸事件，卡上的两个按钮不受影响。
+            return WindowManager.LayoutParams(
+                layout.width,
+                layout.height,
+                windowType,
+                layout.flags,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = layout.gravity
+                y = layout.yOffsetPx
+                var insets = 0
+                if (layout.fitSystemBarsAndCutout) {
+                    insets = insets or WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+                }
+                if (layout.fitIme) {
+                    insets = insets or WindowInsets.Type.ime()
+                }
+                fitInsetsTypes = insets
+            }
+        }
+
+        fun detachAttachedView(target: LinearLayout) {
+            activeFence?.detach()
+            activeFence = null
+            setButtonsEnabled(target, false)
+            target.visibility = View.GONE
+            target.alpha = 0f
+            try {
+                wm.removeView(target)
+                attachedView = null
+            } catch (removeError: Throwable) {
+                try {
+                    // 已在主线程；立即移除作为普通 removeView 失败后的最后 fail-closed 清理。
+                    wm.removeViewImmediate(target)
+                    attachedView = null
+                } catch (immediateError: Throwable) {
+                    immediateError.addSuppressed(removeError)
+                    throw immediateError
+                }
+            }
+        }
+
+        lateinit var lockReceiver: BroadcastReceiver
+        lateinit var lockSyncRunnable: Runnable
+        lateinit var syncLockState: (ConfirmOverlayDeviceState, Boolean) -> Unit
+
+        fun stopLockMonitoring() {
+            lockMonitoringActive = false
+            main.removeCallbacks(lockSyncRunnable)
+            if (lockReceiverRegistered) {
+                lockReceiverRegistered = false
+                runCatching { appContext.unregisterReceiver(lockReceiver) }
+            }
+        }
+
+        fun failSessionOnMain(error: Throwable) {
+            terminalError.compareAndSet(null, error)
+            stopLockMonitoring()
+            visibility.close()
+            readiness.fail()
+            attachedView?.let { target ->
+                runCatching { detachAttachedView(target) }
+            }
+            cardShown.completeExceptionally(error)
+            buttonsEnabled.completeExceptionally(error)
+            future.completeExceptionally(error)
+        }
+
+        fun buildCardView(generation: Int, maxBodyHeightPx: Int?): LinearLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(CARD_BACKGROUND_COLOR)
+            setPadding(48, 40, 48, 40)
+
+            addView(TextView(context).apply {
+                text = "⚠ Agent 请求执行危险操作"
+                setTextColor(Color.parseColor("#FFB74D"))
+                textSize = 16f
+            })
+            val bodyView = TextView(context).apply {
+                text = actionDesc
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                setPadding(0, 16, 0, 24)
+            }
+            if (maxBodyHeightPx != null && maxBodyHeightPx > 0) {
+                addView(
+                    MaxHeightScrollView(context, maxBodyHeightPx).apply {
+                        isFillViewport = false
+                        isVerticalScrollBarEnabled = true
+                        addView(
+                            bodyView,
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ),
+                        )
+                    },
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+            } else {
+                addView(bodyView)
+            }
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(Button(context).apply {
+                    text = "拒绝"
+                    isEnabled = false
+                    setOnClickListener {
+                        val liveState = readDeviceState()
+                        if (!visibility.canAcceptOverlayDecision(generation, liveState)) {
+                            if (liveState.shouldHideOverlay) syncLockState(liveState, false)
+                            return@setOnClickListener
+                        }
+                        approval.decide(ApprovalChannel.OVERLAY, false)
+                    }
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Button(context).apply {
+                    text = "允许本次"
+                    isEnabled = false
+                    setOnClickListener {
+                        val liveState = readDeviceState()
+                        if (!visibility.canAcceptOverlayDecision(generation, liveState)) {
+                            if (liveState.shouldHideOverlay) syncLockState(liveState, false)
+                            return@setOnClickListener
+                        }
+                        approval.decide(ApprovalChannel.OVERLAY, true)
+                    }
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            })
+        }
+
+        fun attachCard(generation: Int, initial: Boolean) {
+            val layout = resolveWindowLayout()
+            val card = buildCardView(generation, layout.maxBodyHeightPx)
+            val fence = FrameFenceHandle(card)
+            val lp = createLayoutParams(layout)
+            try {
+                if (initial) {
+                    fun completeCommittedFrame(fromOnDraw: Boolean) {
+                        if (readiness.state() != ConfirmationReadinessGate.State.FRAME_COMMITTED) return
+                        val liveState = readDeviceState()
+                        if (liveState.shouldHideOverlay) {
+                            if (fromOnDraw) {
+                                main.post { syncLockState(liveState, false) }
+                            } else {
+                                syncLockState(liveState, false)
+                            }
+                            return
+                        }
+                        if (!visibility.onInitialFrameCommitted(generation)) return
+                        val origin = IntArray(2).also(card::getLocationOnScreen)
+                        cardTarget = ConfirmCardTarget(
+                            left = origin[0],
+                            top = origin[1],
+                            right = origin[0] + card.width,
+                            bottom = origin[1] + card.height,
+                            backgroundColor = CARD_BACKGROUND_COLOR,
+                        )
+                        if (cardShown.complete(Unit)) {
+                            card.post { fence.detach() }
+                        }
+                    }
+                    val beforeDraw = object : ViewTreeObserver.OnPreDrawListener {
+                        override fun onPreDraw(): Boolean {
+                            if (!readiness.registerFrameCommit()) return true
+                            if (!card.isHardwareAccelerated) {
+                                fence.detach()
+                                failSessionOnMain(
+                                    IllegalStateException("确认卡窗口未启用硬件加速，无法建立 frame commit fence"),
+                                )
+                                return true
+                            }
+                            val observer = card.viewTreeObserver
+                            if (!observer.isAlive) {
+                                fence.detach()
+                                failSessionOnMain(IllegalStateException("确认卡 ViewTreeObserver 已失效"))
+                                return true
+                            }
+                            try {
+                                val committed = Runnable {
+                                    try {
+                                        fence.frameCommitCallback = null
+                                        if (visibility.currentGeneration() != generation) return@Runnable
+                                        readiness.frameCommitted()
+                                        completeCommittedFrame(fromOnDraw = false)
+                                    } catch (error: Throwable) {
+                                        fence.detach()
+                                        failSessionOnMain(error)
+                                    }
+                                }
+                                fence.frameCommitCallback = committed
+                                observer.registerFrameCommitCallback(committed)
+                                observer.removeOnPreDrawListener(this)
+                                fence.preDrawListener = null
+                            } catch (error: Throwable) {
+                                fence.detach()
+                                failSessionOnMain(error)
+                            }
+                            return true
+                        }
+                    }
+                    val listener = object : ViewTreeObserver.OnDrawListener {
+                        override fun onDraw() {
+                            if (fence.isDetached || visibility.currentGeneration() != generation) return
+                            readiness.observeDraw()
+                            completeCommittedFrame(fromOnDraw = true)
+                        }
+                    }
+                    fence.preDrawListener = beforeDraw
+                    fence.drawListener = listener
+                    card.viewTreeObserver.addOnPreDrawListener(beforeDraw)
+                    card.viewTreeObserver.addOnDrawListener(listener)
+                } else {
+                    fun finishReattachEnable(targetGeneration: Int) {
+                        if (attachedView !== card || visibility.currentGeneration() != targetGeneration) return
+                        val liveState = readDeviceState()
+                        if (liveState.shouldHideOverlay) {
+                            syncLockState(liveState, false)
+                            return
+                        }
+                        if (!visibility.canAcceptOverlayDecision(targetGeneration, liveState)) return
+                        setButtonsEnabled(card, true)
+                        if (activeFence === fence) activeFence = null
+                        fence.detach()
+                    }
+                    fun applyReattachAction(
+                        action: ConfirmOverlayVisibilityController.Action,
+                        fromOnDraw: Boolean,
+                    ) {
+                        if (action !is ConfirmOverlayVisibilityController.Action.EnableButtons) return
+                        if (fromOnDraw) {
+                            // 避开在 onDraw 派发期修改按钮/摘除监听或卸载窗口。
+                            main.post { finishReattachEnable(action.generation) }
+                        } else {
+                            finishReattachEnable(action.generation)
+                        }
+                    }
+                    val beforeDraw = object : ViewTreeObserver.OnPreDrawListener {
+                        override fun onPreDraw(): Boolean {
+                            if (!visibility.registerReattachFrameCommit(generation)) return true
+                            if (!card.isHardwareAccelerated) {
+                                fence.detach()
+                                failSessionOnMain(
+                                    IllegalStateException("确认卡解锁恢复窗口未启用硬件加速，无法建立 frame commit fence"),
+                                )
+                                return true
+                            }
+                            val observer = card.viewTreeObserver
+                            if (!observer.isAlive) {
+                                fence.detach()
+                                failSessionOnMain(IllegalStateException("确认卡解锁恢复 ViewTreeObserver 已失效"))
+                                return true
+                            }
+                            try {
+                                val committed = Runnable {
+                                    try {
+                                        fence.frameCommitCallback = null
+                                        if (visibility.currentGeneration() != generation) return@Runnable
+                                        val liveState = readDeviceState()
+                                        if (liveState.shouldHideOverlay) {
+                                            syncLockState(liveState, false)
+                                            return@Runnable
+                                        }
+                                        applyReattachAction(
+                                            visibility.observeReattachFrameCommitted(generation),
+                                            fromOnDraw = false,
+                                        )
+                                    } catch (error: Throwable) {
+                                        fence.detach()
+                                        failSessionOnMain(error)
+                                    }
+                                }
+                                fence.frameCommitCallback = committed
+                                observer.registerFrameCommitCallback(committed)
+                                observer.removeOnPreDrawListener(this)
+                                fence.preDrawListener = null
+                            } catch (error: Throwable) {
+                                fence.detach()
+                                failSessionOnMain(error)
+                            }
+                            return true
+                        }
+                    }
+                    val listener = object : ViewTreeObserver.OnDrawListener {
+                        override fun onDraw() {
+                            if (fence.isDetached || visibility.currentGeneration() != generation) return
+                            applyReattachAction(
+                                visibility.observeReattachDraw(generation),
+                                fromOnDraw = true,
+                            )
+                        }
+                    }
+                    fence.preDrawListener = beforeDraw
+                    fence.drawListener = listener
+                    card.viewTreeObserver.addOnPreDrawListener(beforeDraw)
+                    card.viewTreeObserver.addOnDrawListener(listener)
+                }
+                wm.addView(card, lp)
+                attachedView = card
+                activeFence = fence
+            } catch (error: Throwable) {
+                fence.detach()
+                throw error
+            }
+        }
+
+        syncLockState = { deviceState, allowReattach ->
+            when (val action = visibility.onDeviceStateChanged(deviceState, allowReattach = allowReattach)) {
+                ConfirmOverlayVisibilityController.Action.NoOp,
+                is ConfirmOverlayVisibilityController.Action.AttachInitial,
+                is ConfirmOverlayVisibilityController.Action.EnableButtons,
+                -> Unit
+                ConfirmOverlayVisibilityController.Action.FailLockedBeforeShown -> {
+                    android.util.Log.i("GatewayApproval", "confirm overlay blocked: device locked before attach")
+                    failSessionOnMain(lockedBeforeShownError())
+                }
+                is ConfirmOverlayVisibilityController.Action.DetachAndFailLocked -> {
+                    android.util.Log.i("GatewayApproval", "confirm overlay aborted: device locked before frame commit")
+                    failSessionOnMain(lockedBeforeShownError())
+                }
+                is ConfirmOverlayVisibilityController.Action.DetachForLock -> {
+                    val target = attachedView
+                    if (target != null) {
+                        try {
+                            detachAttachedView(target)
+                            android.util.Log.i("GatewayApproval", "confirm overlay hidden for lockscreen")
+                        } catch (error: Throwable) {
+                            failSessionOnMain(error)
+                        }
+                    }
+                }
+                is ConfirmOverlayVisibilityController.Action.ReattachAfterUnlock -> {
+                    try {
+                        attachCard(action.generation, initial = false)
+                        android.util.Log.i("GatewayApproval", "confirm overlay restored after unlock")
+                    } catch (error: Throwable) {
+                        failSessionOnMain(error)
+                    }
+                }
+            }
+        }
+
+        lockReceiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (!lockMonitoringActive || visibility.phase() == ConfirmOverlayVisibilityController.Phase.CLOSED) {
+                    return
+                }
+                val action = intent?.action
+                if (!isConfirmOverlayLockBroadcastAction(action)) return
+                syncLockState(
+                    readDeviceState(broadcastAction = action),
+                    shouldAllowOverlayReattachOnBroadcast(action),
+                )
+            }
+        }
+
+        lockSyncRunnable = object : Runnable {
+            override fun run() {
+                if (!lockMonitoringActive || visibility.phase() == ConfirmOverlayVisibilityController.Phase.CLOSED) {
+                    return
+                }
+                syncLockState(readDeviceState(), true)
+                if (lockMonitoringActive && visibility.phase() != ConfirmOverlayVisibilityController.Phase.CLOSED) {
+                    main.postDelayed(this, LOCK_STATE_POLL_INTERVAL_MS)
+                }
+            }
+        }
+
+        fun startLockMonitoring() {
+            val filter = IntentFilter().apply {
+                CONFIRM_OVERLAY_LOCK_BROADCAST_ACTIONS.forEach(::addAction)
+            }
+            ContextCompat.registerReceiver(
+                appContext,
+                lockReceiver,
+                filter,
+                CONFIRM_OVERLAY_LOCK_RECEIVER_FLAGS,
+            )
+            lockReceiverRegistered = true
+            lockMonitoringActive = true
+            main.postDelayed(lockSyncRunnable, LOCK_STATE_POLL_INTERVAL_MS)
+        }
+
         fun dismissBlocking(): GatewayError? {
             val dismissed = CompletableFuture<Unit>()
             // 即使此刻 view 仍为空也必须排队：同一 main Handler 的 FIFO 保证 pending show 先执行，
             // cleanup 随后移除它，避免等待超时后迟到显示一张孤儿确认卡。
             val posted = main.post {
-                val target = view
+                stopLockMonitoring()
+                visibility.close()
+                val target = attachedView
                 if (target == null) {
+                    activeFence?.detach()
+                    activeFence = null
                     readiness.fail()
                     isAwaitingDecision = false
                     dismissed.complete(Unit)
                 } else try {
-                    removeFrameFence(target)
                     readiness.fail()
-                    wm.removeView(target)
-                    view = null
+                    detachAttachedView(target)
                     isAwaitingDecision = false
                     dismissed.complete(Unit)
-                } catch (removeError: Throwable) {
-                    try {
-                        removeFrameFence(target)
-                        readiness.fail()
-                        // 已在主线程；立即移除作为普通 removeView 失败后的最后 fail-closed 清理。
-                        wm.removeViewImmediate(target)
-                        view = null
-                        isAwaitingDecision = false
-                        dismissed.complete(Unit)
-                    } catch (immediateError: Throwable) {
-                        immediateError.addSuppressed(removeError)
-                        // 保留 view 引用，明确表示清理未成功；调用方会收到结构化失败且不得执行动作。
-                        dismissed.completeExceptionally(immediateError)
-                    }
+                } catch (error: Throwable) {
+                    // 保留 attachedView 引用，明确表示清理未成功；调用方会收到结构化失败且不得执行动作。
+                    dismissed.completeExceptionally(error)
                 }
             }
             if (!posted) return mappedFailure("移除", IllegalStateException("主线程 Handler 已停止"))
@@ -208,127 +784,25 @@ object ConfirmOverlay {
 
         val posted = main.post {
             try {
-                val card = LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setBackgroundColor(CARD_BACKGROUND_COLOR)
-                    setPadding(48, 40, 48, 40)
-
-                    addView(TextView(context).apply {
-                        text = "⚠ Agent 请求执行危险操作"
-                        setTextColor(Color.parseColor("#FFB74D"))
-                        textSize = 16f
-                    })
-                    addView(TextView(context).apply {
-                        text = actionDesc
-                        setTextColor(Color.WHITE)
-                        textSize = 15f
-                        setPadding(0, 16, 0, 24)
-                    })
-                    addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        addView(Button(context).apply {
-                            text = "拒绝"
-                            isEnabled = false
-                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, false) }
-                        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                        addView(Button(context).apply {
-                            text = "允许本次"
-                            isEnabled = false
-                            setOnClickListener { approval.decide(ApprovalChannel.OVERLAY, true) }
-                        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                    })
-                }
-                pendingView = card
-                val lp = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    windowType,
-                    // NOT_FOCUSABLE 是必须的：可获焦的 overlay 会从 App 手里抢走窗口输入焦点，
-                    // 于是 ①App 窗口在卡显示期间既非 active 也非 focused，前台身份被判 unknown；
-                    // ②被操作 App 的 InputConnection 被拆掉重建，IME 会话 id 换新，确认后的
-                    // 焦点身份复核必判 stale——2026-07-26 真机两种症状先后各撞了一次。
-                    // 不可获焦的窗口照样收得到触摸事件，卡上的两个按钮不受影响。
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                    PixelFormat.TRANSLUCENT,
-                ).apply { gravity = Gravity.TOP }
-                fun completeCommittedFrame() {
-                    if (readiness.state() != ConfirmationReadinessGate.State.FRAME_COMMITTED) return
-                    val origin = IntArray(2).also(card::getLocationOnScreen)
-                    cardTarget = ConfirmCardTarget(
-                        left = origin[0],
-                        top = origin[1],
-                        right = origin[0] + card.width,
-                        bottom = origin[1] + card.height,
-                        backgroundColor = CARD_BACKGROUND_COLOR,
-                    )
-                    if (cardShown.complete(Unit)) {
-                        card.post { removeFrameFence(card) }
+                startLockMonitoring()
+                when (val action = visibility.beginInitialAttach(readDeviceState())) {
+                    is ConfirmOverlayVisibilityController.Action.AttachInitial -> {
+                        attachCard(action.generation, initial = true)
                     }
-                }
-                val beforeDraw = object : ViewTreeObserver.OnPreDrawListener {
-                    override fun onPreDraw(): Boolean {
-                        if (!readiness.registerFrameCommit()) return true
-                        if (!card.isHardwareAccelerated) {
-                            readiness.fail()
-                            cardShown.completeExceptionally(
-                                IllegalStateException("确认卡窗口未启用硬件加速，无法建立 frame commit fence"),
-                            )
-                            return true
-                        }
-                        val observer = card.viewTreeObserver
-                        if (!observer.isAlive) {
-                            readiness.fail()
-                            cardShown.completeExceptionally(IllegalStateException("确认卡 ViewTreeObserver 已失效"))
-                            return true
-                        }
-                        try {
-                            val committed = Runnable {
-                                try {
-                                    frameCommitCallback = null
-                                    readiness.frameCommitted()
-                                    completeCommittedFrame()
-                                } catch (error: Throwable) {
-                                    readiness.fail()
-                                    cardShown.completeExceptionally(error)
-                                }
-                            }
-                            frameCommitCallback = committed
-                            observer.registerFrameCommitCallback(committed)
-                            observer.removeOnPreDrawListener(this)
-                            preDrawListener = null
-                        } catch (error: Throwable) {
-                            removeFrameFence(card)
-                            readiness.fail()
-                            cardShown.completeExceptionally(error)
-                        }
-                        return true
+                    ConfirmOverlayVisibilityController.Action.FailLockedBeforeShown -> {
+                        android.util.Log.i("GatewayApproval", "confirm overlay blocked: device locked before attach")
+                        failSessionOnMain(lockedBeforeShownError())
                     }
+                    else -> Unit
                 }
-                val listener = object : ViewTreeObserver.OnDrawListener {
-                    override fun onDraw() {
-                        readiness.observeDraw()
-                        completeCommittedFrame()
-                    }
-                }
-                preDrawListener = beforeDraw
-                drawListener = listener
-                card.viewTreeObserver.addOnPreDrawListener(beforeDraw)
-                card.viewTreeObserver.addOnDrawListener(listener)
-                wm.addView(card, lp)
-                view = card
-                pendingView = null
             } catch (error: Throwable) {
-                removeFrameFence(view ?: pendingView)
-                pendingView = null
-                readiness.fail()
-                cardShown.completeExceptionally(error)
-                future.completeExceptionally(error)
+                failSessionOnMain(error)
             }
         }
         if (!posted) {
             val error = IllegalStateException("主线程 Handler 已停止")
             cardShown.completeExceptionally(error)
+            buttonsEnabled.completeExceptionally(error)
             future.completeExceptionally(error)
         }
 
@@ -339,26 +813,48 @@ object ConfirmOverlay {
         var notificationOpened: String? = null
         try {
             cardShown.get(2, TimeUnit.SECONDS)
-            readiness.beginEvidence()
+            terminalError.get()?.let { throw it }
+            try {
+                readiness.beginEvidence()
+            } catch (error: IllegalStateException) {
+                terminalError.get()?.let { throw it }
+                throw error
+            }
             // 可选的附加证据在首帧 draw fence 后同步准备；失败时按钮从未启用。
             onShownBeforeButtonsEnabled(cardTarget)
-            readiness.evidenceReady()
+            terminalError.get()?.let { throw it }
+            try {
+                readiness.evidenceReady()
+            } catch (error: IllegalStateException) {
+                terminalError.get()?.let { throw it }
+                throw error
+            }
             val enablePosted = main.post {
-                val card = view
-                if (card == null) {
-                    buttonsEnabled.completeExceptionally(IllegalStateException("确认卡已不存在"))
+                syncLockState(readDeviceState(), true)
+                if (visibility.phase() != ConfirmOverlayVisibilityController.Phase.EVIDENCE_PENDING) {
+                    val reason = terminalError.get() ?: if (visibility.isLocked()) {
+                        lockedBeforeShownError()
+                    } else {
+                        IllegalStateException("确认卡已不存在")
+                    }
+                    buttonsEnabled.completeExceptionally(reason)
                 } else {
                     try {
                         readiness.enableButtons()
-                        fun enableButtons(group: LinearLayout) {
-                            for (i in 0 until group.childCount) {
-                                when (val child = group.getChildAt(i)) {
-                                    is Button -> child.isEnabled = true
-                                    is LinearLayout -> enableButtons(child)
+                        when (val action = visibility.onEvidenceReady()) {
+                            is ConfirmOverlayVisibilityController.Action.EnableButtons -> {
+                                val card = attachedView
+                                if (card != null && visibility.currentGeneration() == action.generation) {
+                                    setButtonsEnabled(card, true)
+                                    val fence = activeFence
+                                    if (fence != null) {
+                                        activeFence = null
+                                        card.post { fence.detach() }
+                                    }
                                 }
                             }
+                            else -> Unit
                         }
-                        enableButtons(card)
                         buttonsEnabled.complete(Unit)
                     } catch (error: Throwable) {
                         readiness.fail()

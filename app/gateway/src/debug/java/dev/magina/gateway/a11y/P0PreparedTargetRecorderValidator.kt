@@ -51,15 +51,12 @@ internal object P0PreparedTargetRecorderValidator {
         val exactTitle = snapshot.elements.any { element ->
             val exact = element.text.trim().contains(P0_FILE_TRANSFER_ASSISTANT) ||
                 element.description.trim().contains(P0_FILE_TRANSFER_ASSISTANT)
-            val trusted = element.source == "a11y" ||
-                (element.source in setOf("ocr", "fused") &&
-                    element.confidence?.let {
-                        it.isFinite() && it >= MIN_RECOGNITION_OCR_CONFIDENCE
-                    } == true)
+            val trusted = ConversationTitlePolicy.isTrustedForRecognition(element.source, element.confidence)
             exact && trusted && element.stage == P0ElementStage.TOOLBAR &&
-                validBounds(element.bounds, w, h) &&
-                element.bounds.centerY in (h * 0.02).toInt()..(h * 0.12).toInt() &&
-                element.bounds.centerX in (w * 0.30).toInt()..(w * 0.70).toInt()
+                ConversationTitlePolicy.isInToolbarBand(
+                    element.bounds.left, element.bounds.top, element.bounds.right, element.bounds.bottom,
+                    0, 0, w, h,
+                )
         }
         val focusedId = state.uiFocusedInputId
         val imeSessionId = state.imeFocusedInputId

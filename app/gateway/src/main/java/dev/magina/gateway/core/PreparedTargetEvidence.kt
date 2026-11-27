@@ -56,6 +56,18 @@ class PreparedTargetEvidenceStore(
         ).also { latest = it }
     }
 
+    @Synchronized
+    fun installRebuilt(
+        rebuilt: EvidenceRebuild.Rebuilt,
+        identity: FocusIdentity,
+        bounds: String?,
+    ): PreparedTargetEvidence = record(
+        label = rebuilt.targetLabel,
+        packageName = rebuilt.packageName,
+        identity = identity,
+        bounds = bounds,
+    )
+
     /**
      * 读取必须同时证明 package、身份（含来源）与几何仍相同；任何不匹配都会销毁旧目标，
      * 避免稍后复活。身份来源不同一律视为不匹配——严格链与降级链是两条独立的链。
