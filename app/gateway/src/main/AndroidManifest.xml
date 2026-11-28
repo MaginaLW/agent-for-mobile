@@ -107,5 +107,16 @@
                 android:name="android.view.im"
                 android:resource="@xml/ime_method" />
         </service>
+
+        <!-- L3：通知只读监听通道（仅只读快照，不暴露回复或拦截器） -->
+        <service
+            android:name=".notification.GatewayNotificationListenerService"
+            android:exported="true"
+            android:label="执行网关通知读取"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

@@ -14,6 +14,7 @@ import dev.magina.gateway.core.TokenStore
 import dev.magina.gateway.core.UiMutationCoordinator
 import dev.magina.gateway.ime.ImeBridge
 import dev.magina.gateway.macro.MacroCatalog
+import dev.magina.gateway.notification.GatewayNotificationListenerService
 import dev.magina.gateway.testing.TestControl
 import dev.magina.gateway.testing.TestControlProvider
 
@@ -77,7 +78,8 @@ object Gateway {
         if (ImeBridge.active) out.add("ime_active")
         if (Settings.canDrawOverlays(appContext)) out.add("overlay")
         out.add("ocr")
-        // "shizuku" / "notif"：M1b 接入后上报
+        if (GatewayNotificationListenerService.isConnectedAndGranted(appContext)) out.add("notif")
+        // "shizuku"：M1b 仍待按需接入后上报
         return out
     }
 
