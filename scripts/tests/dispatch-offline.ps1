@@ -714,6 +714,11 @@ public static class Program {
         string server = scenario == "wrong-server" ? "evil" : "gateway";
         Console.WriteLine("{\"type\":\"item.started\",\"item\":{\"id\":\"call-1\",\"type\":\"mcp_tool_call\",\"server\":\"" + server + "\",\"tool\":\"foreground_app\",\"arguments\":{}}}");
         if (scenario == "exit-partial") return 23;
+        if (scenario == "timeout-in-flight") {
+            Console.Out.Flush();
+            Thread.Sleep(30000);
+            return 0;
+        }
         string ok = scenario == "gateway-ok-false" ? "false" : "true";
         string outcome = (scenario == "transport-failure" || scenario == "stale-error-then-transport-failure")
             ? "\"result\":null,\"error\":{\"message\":\"fixture connection closed\"},\"status\":\"failed\""
@@ -1529,6 +1534,36 @@ public static class Program {
                 Assert-True ($floodRow.Count -eq 1 -and $floodRow[0].result -ceq 'fail' -and
                     $floodRow[0].note -match 'brain-output-limit') `
                     "$floodSlug 未稳定记为 brain-output-limit。"
+            }
+
+            $fixtureBeforeTimeout = [IO.File]::ReadAllText($DispatchPath)
+            $timeoutNeedle = '$timeoutMilliseconds = [int]([long]$TimeoutMin * 60L * 1000L)'
+            Assert-True ($fixtureBeforeTimeout.Contains($timeoutNeedle)) '测试设施错误：缺少 timeoutMilliseconds seam。'
+            try {
+                [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeTimeout.Replace(
+                    $timeoutNeedle, '$timeoutMilliseconds = 2000'))
+                $env:DISPATCH_TEST_CODEX_SCENARIO = 'timeout-in-flight'
+                $timeoutInFlightSlug = 'offline-codex-timeout-in-flight'
+                $timeoutResult = Invoke-Dispatch @(
+                    '-Task','offline fake codex timeout in-flight','-Slug',$timeoutInFlightSlug,
+                    '-Brain','codex','-Executor','gateway'
+                )
+                Assert-ExitCode $timeoutResult 1
+                Assert-Contains $timeoutResult.Text '派单结果：timeout'
+                Assert-Matches $timeoutResult.Text '(?m)^note: .*partial-trace.*in-flight-tool-interrupted'
+                Assert-NotMatches $timeoutResult.Text 'mcp-transport-failure|health_snapshot:'
+                Assert-Matches $timeoutResult.Text '(?m)^fail_reason: dispatch-timeout\r?$'
+                $timeoutSnapFiles = @(Get-ChildItem -LiteralPath $TracesDir -Filter "*-$timeoutInFlightSlug-gateway-codex-leg1.transport-health.json" -ErrorAction SilentlyContinue)
+                Assert-True ($timeoutSnapFiles.Count -eq 0) 'timeout-in-flight 不应生成 transport-health.json。'
+                $timeoutRow = @(Import-Csv -LiteralPath $LedgerPath | Where-Object { $_.slug -ceq $timeoutInFlightSlug } | Select-Object -Last 1)
+                Assert-True ($timeoutRow.Count -eq 1 -and $timeoutRow[0].result -ceq 'timeout' -and
+                    $timeoutRow[0].fail_reason -ceq 'dispatch-timeout' -and
+                    $timeoutRow[0].note -match 'in-flight-tool-interrupted' -and
+                    $timeoutRow[0].note -notmatch 'mcp-transport-failure') `
+                    "timeout-in-flight 台账记录不符：$($timeoutRow[0] | ConvertTo-Json -Compress)"
+            }
+            finally {
+                [IO.File]::WriteAllText($DispatchPath, $fixtureBeforeTimeout)
             }
         }
         finally {

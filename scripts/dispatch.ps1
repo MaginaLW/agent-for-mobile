@@ -1111,7 +1111,15 @@ try {
         if ('gateway-tool-failure' -in $transcript.Calls.Outcome) {
             $policyProblems.Add('gateway-tool-failure')
         }
-        if (@($transcript.Calls | Where-Object { $_.Outcome -notin @('success','gateway-tool-failure') }).Count -gt 0) {
+        if (-not $finished) {
+            if (@($transcript.Calls | Where-Object { $_.Outcome -notin @('success', 'gateway-tool-failure', 'started') }).Count -gt 0) {
+                $policyProblems.Add('mcp-transport-failure')
+            }
+            elseif (@($transcript.Calls | Where-Object { $_.Outcome -ceq 'started' }).Count -gt 0) {
+                $policyProblems.Add('in-flight-tool-interrupted')
+            }
+        }
+        elseif (@($transcript.Calls | Where-Object { $_.Outcome -notin @('success','gateway-tool-failure') }).Count -gt 0) {
             $policyProblems.Add('mcp-transport-failure')
         }
     }
@@ -1145,7 +1153,7 @@ try {
     if ($partialTrace) {
         $note = $(if ($note) { "$note | partial-trace" } else { 'partial-trace' })
     }
-    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure|gateway-tool-failure') {
+    if ($policyProblems.Count -gt 0 -and $note -notmatch 'unauthorized-mcp-server|mcp-transport-failure|gateway-tool-failure|in-flight-tool-interrupted') {
         $note += ' | ' + ($policyProblems -join '+')
     }
 

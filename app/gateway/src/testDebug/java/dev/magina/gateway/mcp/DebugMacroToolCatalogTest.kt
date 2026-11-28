@@ -20,11 +20,26 @@ class DebugMacroToolCatalogTest {
 
     @Test
     fun `unimplemented m1b stub tools are not exposed in tools list`() {
-        listOf("app_stop", "notifications_list", "notification_reply", "ui_diff").forEach { removed ->
+        listOf("app_stop", "notification_reply", "ui_diff").forEach { removed ->
             org.junit.Assert.assertFalse(
                 "不应继续发布占位工具 $removed",
                 ToolRegistry.tools.any { it.name == removed },
             )
         }
+    }
+
+    @Test
+    fun `notifications_list is registered as Level R on notif channel and excluded from blocked app bypass`() {
+        val spec = ToolRegistry.tools.firstOrNull { it.name == "notifications_list" }
+        assertNotNull("debug 目录应注册 notifications_list", spec)
+        assertEquals(Level.R, spec!!.level)
+        assertEquals("notif", ToolRegistry.channelOf("notifications_list"))
+        org.junit.Assert.assertFalse(
+            "notifications_list 不得加入 BLOCKED_APP_ALLOWED",
+            "notifications_list" in ToolRegistry.BLOCKED_APP_ALLOWED,
+        )
+        val listedNames = (0 until ToolRegistry.listToolsJson().length())
+            .map { ToolRegistry.listToolsJson().getJSONObject(it).getString("name") }
+        org.junit.Assert.assertTrue("tools/list 应包含 notifications_list", "notifications_list" in listedNames)
     }
 }

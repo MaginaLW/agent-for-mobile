@@ -28,6 +28,7 @@ import dev.magina.gateway.core.AuditFilter
 import dev.magina.gateway.core.AuditLogReader
 import dev.magina.gateway.core.AuditPage
 import dev.magina.gateway.mcp.McpServer
+import dev.magina.gateway.notification.GatewayNotificationListenerService
 import dev.magina.gateway.ui.GatewayDashboardModel
 import dev.magina.gateway.ui.GatewayHealthSnapshot
 import dev.magina.gateway.ui.PermissionCheckItem
@@ -205,6 +206,9 @@ class MainActivity : Activity() {
         }
         addActionButton("⑤ 电池优化 / 后台保活设置") { openBatteryOptimizationSettings() }
         addActionButton("⑥ 启动网关（开机自动恢复）") { serviceAction(start = true) }
+        addActionButton("开启通知使用权（L3 只读通道）") {
+            openSettingsScreen(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
         addActionButton("停止网关（同时关闭开机恢复）") { serviceAction(start = false) }
         addActionButton("刷新状态") { refreshStatus() }
         return container
@@ -488,6 +492,17 @@ class MainActivity : Activity() {
                 granted = batteryIgnored,
                 requiredForCore = false,
                 guidance = "点「电池优化 / 后台保活设置」放行执行网关",
+            ),
+            PermissionCheckItem(
+                key = "notif_listener",
+                label = "通知读取通道（L3 只读，可选）",
+                granted = GatewayNotificationListenerService.isConnectedAndGranted(this),
+                requiredForCore = false,
+                guidance = if (GatewayNotificationListenerService.isAccessGranted(this)) {
+                    "已授权但监听服务尚未连接；若刚开启可稍候或重新开关通知使用权"
+                } else {
+                    "点「开启通知使用权（L3 只读通道）」按需授权"
+                },
             ),
         )
     }

@@ -6,6 +6,7 @@ import dev.magina.gateway.core.GatewayError
 import dev.magina.gateway.core.Level
 import dev.magina.gateway.macro.MacroEngine
 import dev.magina.gateway.tools.IntentTools
+import dev.magina.gateway.tools.NotificationTools
 import dev.magina.gateway.tools.SystemTools
 import dev.magina.gateway.tools.UiTools
 import org.json.JSONArray
@@ -196,6 +197,18 @@ internal object ToolCatalog {
             ),
         ) { IntentTools.shareFile(it.getString("uri"), it.getString("mime"), it.optString("target").ifEmpty { null }) },
 
+        // ---------- L3 通知层（严格只读） ----------
+        ToolSpec(
+            "notifications_list",
+            "读取当前状态栏活动通知只读快照（L3）。默认隔离网关自身审批通知与敏感黑名单应用；支持按包名/别名过滤与 limit 截断。",
+            Level.R,
+            schema(
+                emptyList(),
+                "package" to prop("string", "可选：按 app 别名或包名过滤"),
+                "limit" to prop("integer", "可选：返回条数上限（1..50，默认 20）"),
+            ),
+        ) { NotificationTools.listNotifications(it) },
+
         // ---------- L4 UI 层 ----------
         ToolSpec(
             "ui_snapshot", "当前页面语义元素列表（带 revision；树空/稀疏自动融合 OCR，source=a11y|ocr|fused；ref 供后续操作寻址）。首选感知工具。",
@@ -312,6 +325,7 @@ internal object ToolCatalog {
             "skillpack_lookup", "skill_macro_list",
         ) -> "api"
         name in setOf("open_uri", "intent_send", "share_text", "share_file", "app_launch") -> "intent"
+        name == "notifications_list" -> "notif"
         name == "screen_capture" -> "vision"
         name == "skill_macro_exec" -> "macro"
         // 受控宏走 a11y + IME 复合通道；此前落到空串，写出的审计行 channel 为空，
