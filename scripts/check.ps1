@@ -353,8 +353,8 @@ Invoke-Check '凭据扫描' {
     # 时它还没入库、报了全绿，提交完才被抓出来。
     #
     # 工作树搜已跟踪和未跟踪文件，index 另搜下一次提交会带走的版本。
-    # 注意这仍然只是**提交前跑一下**的人工闸门，不是强制拦截——仓库没有装 git hook，
-    # 谁不跑 check.ps1 就绕过了。真要拦住提交得配 pre-commit hook（未做）。
+    # 注意这默认仍是**提交前跑一下**的人工闸门；仓库提供可选 .githooks/pre-commit
+    # （经 scripts/install-git-hooks.ps1 按需本地启用 check.ps1 -FastContentOnly），默认克隆不自动启用。
     # 仅记录 10-14 已在浏览器核对正文的四条公开文档链接；保留原始引用。
     # 按命中位置识别文档 ID，不豁免整行、文件、域名或同一个 ID 的其他用法。
     $reviewedPublicUrls = @(

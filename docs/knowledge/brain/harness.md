@@ -7,7 +7,7 @@
 ## 默认大脑迁移须核对 trace 消费者（2026-11-12）
 
 - 排查旧台账中的 `mcp-transport-failure` 时，用 `Read-DispatchTraceTranscript` 核对失败调用的结果和错误类型。自 2026-11-18 起，派单入口将有效网关响应中的 `ok=false` 或 `isError=true` 记作 `gateway-tool-failure`，发送请求出错且没有返回结果时记作 `mcp-transport-failure`。离线派单回归覆盖两类错误的退出码和台账标签。
-- **传输失败现场只读健康快照（2026-11-23，离线验证）**：自 2026-11-23 起，`scripts/dispatch.ps1` 在收尾拆除端口转发与网关服务之前，若识别到 `mcp-transport-failure`，自动调用 `scripts/lib/dispatch-forensics.ps1` 将无凭据只读健康快照（`adb forward --list`、无鉴权 `/health`、`GatewayService` 状态、`enabled_accessibility_services` 及 `dumpsys accessibility` 绑定摘要，不含 Bearer token 与 UI 文本）写入本地 `docs/runs/traces/<base>.transport-health.json`，保持原 `.jsonl` 与台账 `note: mcp-transport-failure` 契约兼容；当前仅经 `scripts/tests/dispatch-offline.ps1` 离线验证，尚未在真机复现采集。
+- **传输失败现场只读健康快照（2026-11-23 离线落地；2026-11-27 PA2553 首次采集；2026-11-28 归因修复）**：自 2026-11-23 起，`scripts/dispatch.ps1` 在收尾拆除端口转发与网关服务之前，若识别到 `mcp-transport-failure`，自动调用 `scripts/lib/dispatch-forensics.ps1` 将无凭据只读健康快照（`adb forward --list`、无鉴权 `/health`、`GatewayService` 状态、`enabled_accessibility_services` 及 `dumpsys accessibility` 绑定摘要，不含 Bearer token 与 UI 文本）写入本地 `docs/runs/traces/<base>.transport-health.json`，保持原 `.jsonl` 与台账 `note: mcp-transport-failure` 契约兼容。2026-11-27 `stage6b1-lockscreen-notify-deny-r4` 在 PA2553 首次触发并落盘 `.transport-health.json`（实证 8 分钟墙钟超时强杀现场 `adb_forward`、`/health` 200、`GatewayService` `foreground`、无障碍 `gateway_enabled=true` & `gateway_bound=true` 全部健康，从而定位为墙钟超时截断在途工具调用而非真实传输中断）；据此 2026-11-28 `dispatch.ps1` 已区分墙钟超时截断在途调用（`-not $finished` 且仅有 `Outcome='started'` 时记 `in-flight-tool-interrupted`，不误标 `mcp-transport-failure`、不写 `.transport-health.json`）与真实 `mcp-transport-failure`（`$finished -eq $true` 的 `exit-partial` 原契约不变）。
 
 - 适用条件：派单默认大脑或 JSONL schema 变化。只改默认参数和 DryRun 不能证明下游消费者仍可使用。
 - 有效做法：P0 复用 `Read-DispatchTraceTranscript` 解析 Codex 事件，再沿用已有调用顺序、结果数和完成时序判据；fake runner 必须产生真实大脑 schema。下方 Claude CLI 经验保留为已退役路线的历史资料，不作为当前调用指南。
@@ -237,7 +237,7 @@ doc 注释写着"那条在调用方"，而调用方行为刚被改反。改动�
 |---|---|
 | 放宽 `requireKnownForeground` | 直接拆掉 D1，反对 |
 | keyguard 视作"前台被遮住"而非"未知" | 需新概念，且放宽批准时/执行时前台的硬相等 |
-| 审批对象上移到语义意图，批准后重走严格链 | 已有[语义意图设计](../../specs/2026-08-02-语义意图审批-design.md)与离线基础模块；生产接线未完成 |
+| 审批对象上移到语义意图，批准后重走严格链 | 已有[语义意图设计](../../specs/2026-08-02-语义意图审批-design.md)；阶段 6B-1 语义意图生产接线已落地（2026-11-26）并通过 PA2553 真机验收（2026-11-27，PR #93） |
 | 目标缩到"屏幕亮着但没盯着" | 零安全代价，但偏离原诉求 |
 
 第二道障碍：确认卡是 `TYPE_APPLICATION_OVERLAY`，**不显示在 keyguard 之上**。当时考虑过通知审批；2026-08-28 已撤销通知批准，现行批准只来自可见 `ConfirmOverlay`，不恢复锁屏通知批准。

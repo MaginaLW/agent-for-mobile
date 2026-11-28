@@ -33,6 +33,7 @@ function Get-LedgerTaskCategory {
         'wechat' { return 'wechat' }
         '^p0-' { return 'p0' }
         'bili' { return 'bili' }
+        '^stage6' { return 'stage6' }
         default { return 'other' }
     }
 }
@@ -47,6 +48,7 @@ function Get-LedgerMacroSubcategory {
         'wechat' { return 'macro:wechat' }
         'jd' { return 'macro:jd' }
         'bili' { return 'macro:bili' }
+        'settings|calculator|clock|calendar|filemanager|notes|gallery' { return 'macro:system' }
         default { return 'macro:other' }
     }
 }
@@ -161,11 +163,11 @@ function Get-LedgerReportData {
         $filtered.Add($row)
     }
 
-    $order = @('xhs', 'taobao_jd', 'bluetooth', 'wechat', 'p0', 'bili', 'macro', 'other')
+    $order = @('xhs', 'taobao_jd', 'bluetooth', 'wechat', 'p0', 'bili', 'macro', 'stage6', 'other')
     $grouped = @{}
     foreach ($cat in $order) { $grouped[$cat] = [Collections.Generic.List[object]]::new() }
 
-    $macroOrder = @('macro:xhs', 'macro:taobao', 'macro:wechat', 'macro:jd', 'macro:bili', 'macro:other')
+    $macroOrder = @('macro:xhs', 'macro:taobao', 'macro:wechat', 'macro:jd', 'macro:bili', 'macro:system', 'macro:other')
     $macroGrouped = @{}
     foreach ($sub in $macroOrder) { $macroGrouped[$sub] = [Collections.Generic.List[object]]::new() }
 

@@ -85,6 +85,41 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
         Assert-True ($tableOut.Contains('macro:bili', [StringComparison]::Ordinal)) '-ByMacro 应输出 macro:bili 细分行'
     }
 
+    Test-Case 'categorizes_stage6_and_macro_system_runs' {
+        Assert-True ((Get-LedgerTaskCategory 'stage6b1-intent-away-rebuild-20261127') -ceq 'stage6') 'stage6* 应归类为 stage6'
+        Assert-True ((Get-LedgerTaskCategory 'stage6a-console-readonly-20261127') -ceq 'stage6') 'stage6a* 应归类为 stage6'
+        foreach ($sysApp in @('settings', 'calculator', 'clock', 'calendar', 'filemanager', 'notes', 'gallery')) {
+            $slug = "m3-$sysApp-readonly-20261127"
+            Assert-True ((Get-LedgerTaskCategory $slug) -ceq 'macro') "$slug 应归类为 macro"
+            Assert-True ((Get-LedgerMacroSubcategory $slug) -ceq 'macro:system') "$slug 应归类为 macro:system"
+        }
+
+        $sysCsvPath = Join-Path $scratch 'ledger-stage6-sys.csv'
+        @"
+time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,dur_s,result,session_id,trace_file,note,fail_reason
+2026-11-27T00:38:17,m3-settings-state-20261127,1,codex,,1,1000,50,500,0,,22,success,,,,
+2026-11-27T00:41:47,m3-notes-readonly-20261127,1,codex,,1,1200,60,600,0,,19,fail,,,,safety-denied
+2026-11-27T00:45:00,m3-unknown-app-20261127,1,codex,,1,900,40,300,0,,15,success,,,,
+2026-11-27T07:46:21,stage6a-console-readonly-20261127,1,codex,,1,2000,100,1000,0,,63,success,,,,
+2026-11-27T22:57:17,stage6b1-lockscreen-notify-deny-r4-20261127,1,codex,,1,,,,,,480,timeout,,,,dispatch-timeout
+2026-11-27T23:10:00,misc-unclassified-run,1,codex,,1,500,20,100,0,,10,success,,,,
+"@ | Set-Content -LiteralPath $sysCsvPath -Encoding utf8
+        $sysData = Get-LedgerReportData -Path $sysCsvPath -SinceDate '2026-11-27' -BrainFilter 'codex'
+        $catNames = @($sysData.categories | ForEach-Object { $_.category })
+        $stage6Idx = [Array]::IndexOf($catNames, 'stage6')
+        $otherIdx = [Array]::IndexOf($catNames, 'other')
+        Assert-True ($stage6Idx -ge 0 -and $otherIdx -gt $stage6Idx) 'categories 中 stage6 应位于 other 之前'
+        $stage6Cat = @($sysData.categories | Where-Object { $_.category -ceq 'stage6' })[0]
+        Assert-True ($stage6Cat.runs -eq 2 -and $stage6Cat.success -eq 1 -and $stage6Cat.timeout -eq 1) 'stage6 聚合统计不符'
+
+        $macroNames = @($sysData.macro_breakdown | ForEach-Object { $_.category })
+        $macroSysIdx = [Array]::IndexOf($macroNames, 'macro:system')
+        $macroOtherIdx = [Array]::IndexOf($macroNames, 'macro:other')
+        Assert-True ($macroSysIdx -ge 0 -and $macroOtherIdx -gt $macroSysIdx) 'macro_breakdown 中 macro:system 应位于 macro:other 之前'
+        $macroSys = @($sysData.macro_breakdown | Where-Object { $_.category -ceq 'macro:system' })[0]
+        Assert-True ($macroSys.runs -eq 2 -and $macroSys.success -eq 1 -and $macroSys.fail -eq 1) 'macro:system 聚合统计不符'
+    }
+
     Test-Case 'rejects_invalid_since_format' {
         $err = $null
         try { Get-LedgerReportData -Path $csvPath -SinceDate '2026/11/18' | Out-Null } catch { $err = $_ }
@@ -107,6 +142,16 @@ time,slug,leg,brain,model,turns,in_tok,out_tok,cache_read,cache_write,cost_usd,d
         foreach ($item in $byMacroParsed.macro_breakdown) { $bySub[$item.category] = $item }
         Assert-True ($bySub.ContainsKey('macro:taobao') -and $bySub['macro:taobao'].success -ge 1) '真实 ledger.csv 2026-11-26 macro_breakdown 缺少 macro:taobao 或 success < 1'
         Assert-True ($bySub.ContainsKey('macro:bili') -and $bySub['macro:bili'].success -ge 1) '真实 ledger.csv 2026-11-26 macro_breakdown 缺少 macro:bili 或 success < 1'
+
+        $since27Out = & $pwshPath -NoProfile -File $scriptPath -Since '2026-11-27' -ByMacro -Json
+        if ($LASTEXITCODE -ne 0) { throw "report-ledger.ps1 -Since '2026-11-27' -ByMacro -Json 执行失败，exit=$LASTEXITCODE" }
+        $since27Parsed = ($since27Out -join "`n") | ConvertFrom-Json -Depth 8
+        $byCat27 = @{}
+        foreach ($item in $since27Parsed.categories) { $byCat27[$item.category] = $item }
+        Assert-True ($byCat27.ContainsKey('stage6') -and $byCat27['stage6'].runs -ge 1) '真实 ledger.csv 2026-11-27 categories 缺少 stage6'
+        $bySub27 = @{}
+        foreach ($item in $since27Parsed.macro_breakdown) { $bySub27[$item.category] = $item }
+        Assert-True ($bySub27.ContainsKey('macro:system') -and $bySub27['macro:system'].runs -ge 1 -and $bySub27['macro:system'].success -ge 1) '真实 ledger.csv 2026-11-27 macro_breakdown 缺少 macro:system'
     }
 
     Write-Host "report ledger offline: $passed passed, 0 failed"
