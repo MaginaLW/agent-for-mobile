@@ -89,7 +89,7 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 ## 下一步
 
 - **已全部收口的阶段（PA2553 实机闭环）**：
-  - 阶段 6A（冷启、4-Tab 控制台安全只读派单与现场 2 项人工目视）、阶段 6B-1（语义意图审批生产接线、`ConfirmOverlay` 底部防遮挡与锁屏自动隐藏修复，以及离场重建/伪造拦截/锁屏通知拒绝/90s 超时真机全量验证）、阶段 6B-2（7 枚系统内置 App 只读宏）均已在 PA2553 验收闭环，并随 [PR #93](https://github.com/MaginaLW/agent-for-mobile/pull/93) 合并至 `main`（合并提交 `f008aa6`）；**阶段 6B-3a（M1b L3 通知只读通道 `notifications_list` R）**已于 2026-11-28 在 PA2553（`1a772ef`）完成未授权 → 授权隔离 → 黑名单拦截 → 撤销复测全链真机验收（[11-28 验收](docs/runs/2026-11-28-PA2553-阶段6B-3a通知只读通道真机验收.md) · [PR #95](https://github.com/MaginaLW/agent-for-mobile/pull/95)）。
+  - 阶段 6A（冷启、4-Tab 控制台安全只读派单与现场 2 项人工目视）、阶段 6B-1（语义意图审批生产接线、`ConfirmOverlay` 底部防遮挡与锁屏自动隐藏修复，以及离场重建/伪造拦截/锁屏通知拒绝/90s 超时真机全量验证）、阶段 6B-2（7 枚系统内置 App 只读宏）均已在 PA2553 验收闭环，并随 [PR #93](https://github.com/MaginaLW/agent-for-mobile/pull/93) 合并至 `main`（合并提交 `f008aa6`）；**阶段 6B-3a（M1b L3 通知只读通道 `notifications_list` R）**已于 2026-11-28 在 PA2553（`1a772ef`）完成未授权 → 授权隔离 → 黑名单拦截 → 撤销复测全链真机验收，并随 [PR #95](https://github.com/MaginaLW/agent-for-mobile/pull/95) 合并至 `main`（[11-28 验收](docs/runs/2026-11-28-PA2553-阶段6B-3a通知只读通道真机验收.md)）。
 - **阶段 6B-3b（按需排期）**：其余实测系统内置 App（天气/录音机等）或 `notification_reply`（须先做 S5 RemoteInput 核定）按需扩展；`notification_reply`、`ui_diff`、`app_stop` 维持下架未注册。
 - **Wave 0 运维与归因收尾（离线已完成）**：完成 `dispatch.ps1` 墙钟超时在途调用归因修复（`-not $finished` 且仅有 `Outcome='started'` 时记 `in-flight-tool-interrupted`，不误标 `mcp-transport-failure` 且不写 `.transport-health.json`，保持 `exit-partial` 原契约不变）、`report-ledger.ps1` 新增 `stage6` 与 `macro:system` 细分统计，以及 2026-11-27 `stage6b1-lockscreen-notify-deny-r4` `.transport-health.json` 首次真机快照归因（实证超时强杀现场转发、`/health` 200、`GatewayService`、无障碍全部健康，见 [harness 知识](docs/knowledge/brain/harness.md)）。
 
@@ -112,7 +112,7 @@ PA2553 微信横屏的 `IME_CURSOR_ANCHOR` 生产接线与横屏就位宿主回�
 | 里程碑 | 状态 |
 |---|---|
 | M0 mobile-mcp 真机验收 | 完成（2026-07-16，4.5/5，[记录](docs/runs/2026-07-16-M0.md)） |
-| M1 自研网关 | PA2553 非微信三项主验收已执行（首次无干预完成率 1/3，历史 M0 为 3/3）；2026-11-24/25 在 PA2553 上真机验通 PR #86 无障碍重绑与基线精确还原、新版 `skillpack_lookup` 与 `ocr` 上报，淘宝「查看物流」回弹已归因闪购/外卖订单并收口（`交易关闭` 仅含 `删除订单`），`mcp-transport-failure` 快照待传输失败复现采集 |
+| M1 自研网关 | PA2553 非微信三项主验收已执行（首次无干预完成率 1/3，历史 M0 为 3/3）；2026-11-24/25 在 PA2553 上真机验通 PR #86 无障碍重绑与基线精确还原、新版 `skillpack_lookup` 与 `ocr` 上报，淘宝「查看物流」回弹已归因闪购/外卖订单并收口（`交易关闭` 仅含 `删除订单`）；2026-11-27/28 已完成首份 `.transport-health.json` 真机归因、超时在途调用分流修复，以及阶段 6B-3a `notifications_list`（R）只读通知通道 PA2553 真机闭环（PR #95） |
 | M1-T 平板 | T0-L 入场完成；微信双窗研究路线放弃，生产网关支持单窗口与同应用平行视界（跨应用/未知多窗 fail-closed）；2026-11-22 PA2553 横屏微信三起点（已聚焦右窗 / 桌面启动 / 左窗导航+冷启聚焦）与 `ConfirmOverlay` 发送投递全链真机闭环（PR #47、#79–#83）；标准竖屏 P0 独立暂缓 |
 | M2 大脑上机 | 取消 |
 | M3 宏、入口、技能包 | 引擎及 14 个前置宏已就绪并上机验证：**13 枚前置只读宏已转正**（`taobao_readonly_prepare` 20s、`wechat_readonly_prepare` 24s、`xhs_search_prepare` 34s、`bili_readonly_prepare` 35s 为 `2026-11-25`；`bili_readonly_feed_prepare` 27s/32s、`taobao_orders_prepare` 25s 为 `2026-11-26`；系统内置 App 7 枚 `settings_state_readonly_check` 22s、`calculator_readonly_prepare` 20s、`clock_readonly_prepare` 17s、`calendar_readonly_prepare` 18s、`filemanager_readonly_prepare` 18s、`notes_readonly_prepare` 21s、`gallery_readonly_prepare` 21s 为 `2026-11-27`），仅 `jd_readonly_prepare`（5/5 子步验通、因京东不可登录暂搁）保持 `verified: ""`；`skip_if_ref_missing`、`SubtreeLabelPolicy`、瞬态空包名多窗重读及 `report-ledger.ps1` `m3-*` / `-ByMacro` 均已落地 |
